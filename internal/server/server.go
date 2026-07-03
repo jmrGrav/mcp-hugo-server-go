@@ -15,6 +15,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -29,14 +30,25 @@ type Server struct {
 }
 
 func New(cfg config.Config, idx *site.Index) (*Server, error) {
-	s := mcp.NewServer(&mcp.Implementation{Name: Name, Version: Version}, nil)
-	anonymous.Register(s, idx, cfg)
+	impl := &mcp.Implementation{Name: Name, Version: Version}
+
+	anonServer := mcp.NewServer(impl, nil)
+	anonymous.Register(anonServer, idx, cfg)
+
+	readServer := mcp.NewServer(impl, nil)
+	anonymous.Register(readServer, idx, cfg)
+	read.Register(readServer, idx, cfg)
+
 	opts := &mcp.StreamableHTTPOptions{
 		Stateless:                  true,
 		DisableLocalhostProtection: true,
 	}
-	streaming := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
-		return s
+	streaming := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		scope, _ := r.Context().Value(oauth.CtxScope).(string)
+		if scope != "" {
+			return readServer
+		}
+		return anonServer
 	}, opts)
 
 	var oauthSvc *oauth.Service
