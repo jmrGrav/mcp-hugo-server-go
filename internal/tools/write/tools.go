@@ -149,14 +149,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: boolPtr(true),
-			IdempotentHint:  false,
+			IdempotentHint:  true,
 			OpenWorldHint:   boolPtr(false),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
-		if !deleteLimiter.Allow() {
-			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute")
-		}
-
 		if in.Slug == "" {
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -167,14 +163,18 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		filePath := filepath.Join(dir, "index.md")
 
-		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
-		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
-		if err := appendAuditLog(auditLog, entry); err != nil {
-			return nil, deletePageOutput{}, fmt.Errorf("audit_error: %w", err)
+		if !deleteLimiter.Allow() {
+			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute")
 		}
 
 		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 			return nil, deletePageOutput{}, fmt.Errorf("delete_error: %w", err)
+		}
+
+		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
+		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
+		if err := appendAuditLog(auditLog, entry); err != nil {
+			return nil, deletePageOutput{}, fmt.Errorf("audit_error: %w", err)
 		}
 
 		return nil, deletePageOutput{Slug: in.Slug}, nil
