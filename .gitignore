@@ -1,5 +1,5 @@
 # binaries
-mcp-hugo-server-go
+/mcp-hugo-server-go
 *.exe
 
 # test cache
@@ -8,3 +8,6 @@ mcp-hugo-server-go
 # secrets
 *.env
 config.local.yaml
+
+# superpowers sdd workspace
+.superpowers/
