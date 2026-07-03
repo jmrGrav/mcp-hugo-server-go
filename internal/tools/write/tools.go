@@ -3,6 +3,7 @@ package write
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,14 +83,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		dir, err := pg.SafeJoin(in.Slug)
 		if err != nil {
-			return nil, createPageOutput{}, fmt.Errorf("invalid_params: %w", err)
+			slog.Warn("create_page: path validation failed", "slug", in.Slug, "error", err)
+			return nil, createPageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
 
 		filePath := filepath.Join(dir, "index.md")
 		content := buildFrontmatter(in.Title, in.Tags, in.Categories, in.Body)
 
 		if err := atomicWrite(filePath, content); err != nil {
-			return nil, createPageOutput{}, fmt.Errorf("write_error: %w", err)
+			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
+			return nil, createPageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
 
 		return nil, createPageOutput{Slug: in.Slug, Path: filePath}, nil
@@ -117,7 +120,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		dir, err := pg.SafeJoin(in.Slug)
 		if err != nil {
-			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: %w", err)
+			slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
 		filePath := filepath.Join(dir, "index.md")
 
@@ -136,7 +140,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		content := buildFrontmatterFromMap(fm, body)
 		if err := atomicWrite(filePath, content); err != nil {
-			return nil, updatePageOutput{}, fmt.Errorf("write_error: %w", err)
+			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
 
 		return nil, updatePageOutput{Slug: in.Slug}, nil
@@ -159,7 +164,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		dir, err := pg.SafeJoin(in.Slug)
 		if err != nil {
-			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: %w", err)
+			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
+			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
 		filePath := filepath.Join(dir, "index.md")
 
@@ -168,13 +174,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-			return nil, deletePageOutput{}, fmt.Errorf("delete_error: %w", err)
+			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
+			return nil, deletePageOutput{}, fmt.Errorf("delete_error: failed to delete page")
 		}
 
 		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
 		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
 		if err := appendAuditLog(auditLog, entry); err != nil {
-			return nil, deletePageOutput{}, fmt.Errorf("audit_error: %w", err)
+			slog.Error("delete_page: audit log write failed", "slug", in.Slug, "error", err)
+			return nil, deletePageOutput{}, fmt.Errorf("audit_error: failed to write audit log")
 		}
 
 		return nil, deletePageOutput{Slug: in.Slug}, nil

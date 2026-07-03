@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -61,7 +62,8 @@ func runSRICheck(ctx context.Context, cfg config.Config) ([]sriCheckEntry, error
 	layoutsDir := filepath.Join(cfg.HugoRoot, "layouts")
 	pairs, err := scanLayoutsForSRI(layoutsDir)
 	if err != nil {
-		return nil, fmt.Errorf("scan_error: %w", err)
+		slog.Error("check_sri_versions: layout scan failed", "error", err)
+		return nil, fmt.Errorf("scan_error: failed to scan layouts")
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}

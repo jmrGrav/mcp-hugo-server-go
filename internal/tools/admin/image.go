@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,13 +63,15 @@ func Register(s *mcp.Server, cfg config.Config) {
 
 		pg, err := security.New(cfg.SiteRoot, false)
 		if err != nil {
-			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: site root: %w", err)
+			slog.Error("generate_featured_image: could not initialize path guard", "error", err)
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 		}
 
 		relPath := filepath.Join("images", "featured", in.Slug+".jpg")
 		destPath, err := pg.SafeJoin(relPath)
 		if err != nil {
-			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: %w", err)
+			slog.Warn("generate_featured_image: path validation failed", "slug", in.Slug, "error", err)
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
 
 		imgBytes, err := fetchImage(ctx, cfg.ImageGenURL, cfg.ImageGenKey, in.Prompt)
@@ -77,7 +80,8 @@ func Register(s *mcp.Server, cfg config.Config) {
 		}
 
 		if err := atomicWriteBytes(destPath, imgBytes); err != nil {
-			return nil, generateFeaturedImageOutput{}, fmt.Errorf("write_error: %w", err)
+			slog.Error("generate_featured_image: write failed", "slug", in.Slug, "error", err)
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("write_error: failed to write image")
 		}
 
 		return nil, generateFeaturedImageOutput{Path: destPath}, nil
