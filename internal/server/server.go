@@ -34,6 +34,16 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	}, opts)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/.well-known/oauth-authorization-server":
+			handleOAuthAuthServer(w, r, cfg)
+		case "/.well-known/oauth-protected-resource":
+			handleOAuthProtectedResource(w, r, cfg)
+		case "/robots.txt":
+			handleRobotsTxt(w, r, cfg)
+		case "/llms.txt":
+			handleLLMsTxt(w, r, cfg)
+		case "/auth.md":
+			handleAuthMd(w, r, cfg)
 		case "/mcp":
 			if r.Method != http.MethodPost {
 				w.Header().Set("Allow", http.MethodPost)
