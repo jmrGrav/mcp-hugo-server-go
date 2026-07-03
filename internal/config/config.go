@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	SiteRoot         string      `yaml:"site_root"`
+	ContentRoot      string      `yaml:"content_root"`
 	SiteURL          string      `yaml:"site_url"`
 	SiteName         string      `yaml:"site_name"`
 	DefaultLanguage  string      `yaml:"language_default"`

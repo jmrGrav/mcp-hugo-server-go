@@ -37,6 +37,19 @@ func TestLoadConfig(t *testing.T) {
 	}
 }
 
+func TestLoadConfigContentRoot(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("content_root: /tmp/content\n")
+	f.Close()
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ContentRoot != "/tmp/content" {
+		t.Fatalf("want /tmp/content, got %s", cfg.ContentRoot)
+	}
+}
+
 func TestLoadMissingFileUsesDefaults(t *testing.T) {
 	cfg, err := config.Load("")
 	if err != nil {
