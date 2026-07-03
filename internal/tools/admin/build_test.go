@@ -130,7 +130,7 @@ func TestBuildSiteTimeout(t *testing.T) {
 
 	res, err := callTool(t, session, "build_site", map[string]any{})
 	if err != nil {
-		return
+		t.Fatalf("unexpected transport error: %v", err)
 	}
 	if !res.IsError {
 		t.Fatal("expected timeout error, got success")
