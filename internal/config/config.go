@@ -23,6 +23,8 @@ type Config struct {
 	MaxRequestBytes  int64       `yaml:"max_request_bytes"`
 	RejectSymlinks   bool        `yaml:"reject_symlinks"`
 	RejectHiddenPath bool        `yaml:"reject_hidden_paths"`
+	ImageGenURL      string      `yaml:"image_gen_url"`
+	ImageGenKey      string      `yaml:"image_gen_key"`
 	OAuth            OAuthConfig `yaml:"oauth"`
 }
 
