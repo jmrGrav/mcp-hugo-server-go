@@ -26,6 +26,7 @@ type Config struct {
 	ImageGenURL            string      `yaml:"image_gen_url"`
 	ImageGenKey            string      `yaml:"image_gen_key"`
 	BuildTimeoutSeconds    int         `yaml:"build_timeout_seconds"`
+	PostBuildHooks         []string    `yaml:"post_build_hooks"`
 	OAuth                  OAuthConfig `yaml:"oauth"`
 }
 
