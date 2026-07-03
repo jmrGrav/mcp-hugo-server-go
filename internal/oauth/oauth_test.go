@@ -81,6 +81,15 @@ func TestDynamicClientRegistrationDisabled(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d want 400", rec.Code)
 	}
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &errResp); err != nil {
+		t.Fatalf("decode error response: %v", err)
+	}
+	if errResp.Error != "invalid_request" {
+		t.Fatalf("error = %q want invalid_request", errResp.Error)
+	}
 }
 
 func TestPKCEFlow(t *testing.T) {

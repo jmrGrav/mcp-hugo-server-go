@@ -253,7 +253,7 @@ func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.registerClient(req)
 	if err != nil {
-		writeOAuthError(w, "invalid_redirect_uri", http.StatusBadRequest)
+		writeOAuthError(w, oauthRegisterErrorCode(err), http.StatusBadRequest)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -443,6 +443,18 @@ func oauthTokenErrorStatus(err error) int {
 		return http.StatusUnauthorized
 	}
 	return http.StatusBadRequest
+}
+
+func oauthRegisterErrorCode(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "registration_disabled") || strings.Contains(msg, "dynamic_client_registration_disabled"):
+		return "invalid_request"
+	case strings.Contains(msg, "redirect_uri"):
+		return "invalid_redirect_uri"
+	default:
+		return "invalid_client_metadata"
+	}
 }
 
 func CodeChallengeS256(verifier string) string {
