@@ -37,7 +37,7 @@ func (m *memoryStore) ValidateAccessToken(token string) (string, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	e, ok := m.tokens[token]
-	if !ok || time.Now().After(e.expiresAt) {
+	if !ok || !time.Now().Before(e.expiresAt) {
 		return "", false
 	}
 	return e.scope, true
@@ -48,7 +48,7 @@ func (m *memoryStore) PurgeExpiredTokens() error {
 	defer m.mu.Unlock()
 	now := time.Now()
 	for k, e := range m.tokens {
-		if now.After(e.expiresAt) {
+		if !now.Before(e.expiresAt) {
 			delete(m.tokens, k)
 		}
 	}

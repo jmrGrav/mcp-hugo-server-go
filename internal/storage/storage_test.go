@@ -35,6 +35,14 @@ func testStore(t *testing.T, s storage.Store) {
 		t.Fatal("expected tok-expired to be invalid")
 	}
 
+	// token expires exactly now — should be invalid
+	boundaryPast := time.Now().Add(-1 * time.Millisecond)
+	s.AddAccessToken("boundary-token", "test", boundaryPast)
+	_, ok = s.ValidateAccessToken("boundary-token")
+	if ok {
+		t.Fatal("token expired at past should not be valid")
+	}
+
 	if err := s.PurgeExpiredTokens(); err != nil {
 		t.Fatalf("PurgeExpiredTokens: %v", err)
 	}
