@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+var validSlug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_/-]*$`)
 
 type generateFeaturedImageInput struct {
 	Slug   string `json:"slug"`
@@ -36,12 +39,15 @@ func Register(s *mcp.Server, cfg config.Config) {
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: boolPtr(false),
-			IdempotentHint:  true,
+			IdempotentHint:  false,
 			OpenWorldHint:   boolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
 		if in.Slug == "" {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
+		}
+		if !validSlug.MatchString(in.Slug) {
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: slug contains invalid characters")
 		}
 		if in.Prompt == "" {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: prompt must not be empty")

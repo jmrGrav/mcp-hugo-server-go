@@ -156,12 +156,36 @@ func TestGenerateFeaturedImage_Timeout(t *testing.T) {
 			"prompt": "timeout test",
 		},
 	})
-	// A timeout may surface as a transport-level error or as res.IsError — both are acceptable.
+	// timeout: transport error or IsError both acceptable
 	if err != nil {
-		// context deadline exceeded at transport level: pass
 		return
 	}
 	if !res.IsError {
 		t.Fatal("expected tool to return error on timeout, got success")
+	}
+}
+
+func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
+	siteRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.ImageGenURL = "http://127.0.0.1:0" // unreachable; validation must fire first
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+		"slug":   "../../etc/passwd",
+		"prompt": "traversal test",
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error for traversal slug, got success")
+	}
+	text := resultText(res)
+	if !strings.Contains(text, "invalid_params") {
+		t.Fatalf("error text %q does not contain 'invalid_params'", text)
 	}
 }
