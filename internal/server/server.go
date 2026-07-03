@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -32,6 +35,12 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	streaming := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return s
 	}, opts)
+
+	var oauthSvc *oauth.Service
+	if cfg.OAuth.Enabled {
+		oauthSvc = oauth.NewService(cfg.OAuth, storage.NewMemory())
+	}
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-authorization-server":
@@ -44,11 +53,65 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			handleLLMsTxt(w, r, cfg)
 		case "/auth.md":
 			handleAuthMd(w, r, cfg)
+		case "/register":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleRegister(w, r)
+		case "/authorize":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAuthorize(w, r)
+		case "/token":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleToken(w, r)
+		case "/agent/identity":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAgentIdentity(w, r)
+		case "/agent/identity/claim":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAgentClaim(w, r)
+		case "/agent/event/notify":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAgentEvent(w, r)
 		case "/mcp":
 			if r.Method != http.MethodPost {
 				w.Header().Set("Allow", http.MethodPost)
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
+			}
+			if oauthSvc != nil {
+				auth := strings.TrimSpace(r.Header.Get("Authorization"))
+				if auth != "" {
+					if !strings.HasPrefix(auth, "Bearer ") {
+						w.Header().Set("WWW-Authenticate", `Bearer realm="mcp"`)
+						http.Error(w, "unauthorized", http.StatusUnauthorized)
+						return
+					}
+					token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+					scope, ok := oauthSvc.ValidateBearer(token)
+					if !ok {
+						w.Header().Set("WWW-Authenticate", `Bearer realm="mcp"`)
+						http.Error(w, "unauthorized", http.StatusUnauthorized)
+						return
+					}
+					r = r.WithContext(context.WithValue(r.Context(), oauth.CtxScope, scope))
+				}
 			}
 			streaming.ServeHTTP(w, r)
 		default:
