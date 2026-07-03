@@ -23,9 +23,10 @@ type Config struct {
 	MaxRequestBytes  int64       `yaml:"max_request_bytes"`
 	RejectSymlinks   bool        `yaml:"reject_symlinks"`
 	RejectHiddenPath bool        `yaml:"reject_hidden_paths"`
-	ImageGenURL      string      `yaml:"image_gen_url"`
-	ImageGenKey      string      `yaml:"image_gen_key"`
-	OAuth            OAuthConfig `yaml:"oauth"`
+	ImageGenURL            string      `yaml:"image_gen_url"`
+	ImageGenKey            string      `yaml:"image_gen_key"`
+	BuildTimeoutSeconds    int         `yaml:"build_timeout_seconds"`
+	OAuth                  OAuthConfig `yaml:"oauth"`
 }
 
 type OAuthConfig struct {
@@ -46,11 +47,12 @@ func Default() Config {
 		HTTPBindPort:     8088,
 		StreamingEnabled: true,
 		DefaultLanguage:  "en",
-		MaxIndexEntries:  5000,
-		MaxResultItems:   50,
-		MaxRequestBytes:  1 << 20,
-		RejectSymlinks:   true,
-		RejectHiddenPath: true,
+		MaxIndexEntries:     5000,
+		MaxResultItems:      50,
+		MaxRequestBytes:     1 << 20,
+		RejectSymlinks:      true,
+		RejectHiddenPath:    true,
+		BuildTimeoutSeconds: 120,
 	}
 }
 
