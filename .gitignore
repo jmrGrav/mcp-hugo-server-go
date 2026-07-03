@@ -1,0 +1,10 @@
+# binaries
+mcp-hugo-server-go
+*.exe
+
+# test cache
+/tmp/
+
+# secrets
+*.env
+config.local.yaml
