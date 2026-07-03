@@ -30,10 +30,6 @@ type sriCheckEntry struct {
 	Error        string `json:"error,omitempty"`
 }
 
-type sriCheckOutput struct {
-	Results []sriCheckEntry `json:"results"`
-}
-
 func RegisterSRI(s *mcp.Server, cfg config.Config) {
 	if s == nil {
 		return
@@ -49,12 +45,12 @@ func RegisterSRI(s *mcp.Server, cfg config.Config) {
 			IdempotentHint:  true,
 			OpenWorldHint:   boolPtr(true),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ sriCheckInput) (*mcp.CallToolResult, sriCheckOutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ sriCheckInput) (*mcp.CallToolResult, any, error) {
 		results, err := runSRICheck(ctx, cfg)
 		if err != nil {
-			return nil, sriCheckOutput{}, err
+			return nil, nil, err
 		}
-		return nil, sriCheckOutput{Results: results}, nil
+		return nil, results, nil
 	})
 }
 
@@ -122,15 +118,58 @@ func extractSRIPairs(content string) []sriPair {
 			continue
 		}
 		hash := sub[1]
-		start := m[0] - 500
-		if start < 0 {
-			start = 0
+		pos := m[0]
+
+		// Look backward 500 chars from integrity match
+		backStart := pos - 500
+		if backStart < 0 {
+			backStart = 0
 		}
-		urlMatches := sriURLRe.FindAllStringSubmatch(content[start:m[0]], -1)
-		if len(urlMatches) == 0 {
-			continue
+		backwardMatches := sriURLRe.FindAllStringSubmatchIndex(content[backStart:pos], -1)
+
+		// Look forward 500 chars from integrity match
+		forwardEnd := pos + 500
+		if forwardEnd > len(content) {
+			forwardEnd = len(content)
 		}
-		pairs = append(pairs, sriPair{URL: urlMatches[len(urlMatches)-1][1], Hash: hash})
+		forwardMatches := sriURLRe.FindAllStringSubmatchIndex(content[pos:forwardEnd], -1)
+
+		// Find the closest URL (forward or backward)
+		var bestURL string
+		var bestDistance int = 1000000
+
+		// Check backward matches
+		if len(backwardMatches) > 0 {
+			// Get the last backward match (closest to integrity)
+			lastMatch := backwardMatches[len(backwardMatches)-1]
+			// lastMatch[0] and lastMatch[1] are the bounds in the substring
+			distance := pos - (backStart + lastMatch[1])
+			if distance < bestDistance {
+				bestDistance = distance
+				// Extract the URL from the submatch
+				urlStart := backStart + lastMatch[2]
+				urlEnd := backStart + lastMatch[3]
+				bestURL = content[urlStart:urlEnd]
+			}
+		}
+
+		// Check forward matches
+		if len(forwardMatches) > 0 {
+			// Get the first forward match (closest to integrity)
+			firstMatch := forwardMatches[0]
+			distance := (pos + firstMatch[0]) - pos
+			if distance < bestDistance {
+				bestDistance = distance
+				// Extract the URL from the submatch
+				urlStart := pos + firstMatch[2]
+				urlEnd := pos + firstMatch[3]
+				bestURL = content[urlStart:urlEnd]
+			}
+		}
+
+		if bestURL != "" {
+			pairs = append(pairs, sriPair{URL: bestURL, Hash: hash})
+		}
 	}
 	return pairs
 }

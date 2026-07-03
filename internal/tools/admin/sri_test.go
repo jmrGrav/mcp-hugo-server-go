@@ -27,9 +27,6 @@ type sriResult struct {
 	Error        string `json:"error"`
 }
 
-type sriOutput struct {
-	Results []sriResult `json:"results"`
-}
 
 func setupSRILayout(t *testing.T, url, hash string) string {
 	t.Helper()
@@ -71,14 +68,14 @@ func TestSRIMatchingHash(t *testing.T) {
 	}
 
 	text := resultText(res)
-	var out sriOutput
+	var out []sriResult
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatalf("response not JSON: %v — got %q", err, text)
 	}
-	if len(out.Results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(out.Results))
+	if len(out) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(out))
 	}
-	r := out.Results[0]
+	r := out[0]
 	if r.Error != "" {
 		t.Fatalf("unexpected error in result: %s", r.Error)
 	}
@@ -113,14 +110,14 @@ func TestSRIMismatchHash(t *testing.T) {
 	}
 
 	text := resultText(res)
-	var out sriOutput
+	var out []sriResult
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatalf("response not JSON: %v — got %q", err, text)
 	}
-	if len(out.Results) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(out.Results))
+	if len(out) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(out))
 	}
-	r := out.Results[0]
+	r := out[0]
 	if r.Error != "" {
 		t.Fatalf("unexpected error in result: %s", r.Error)
 	}
