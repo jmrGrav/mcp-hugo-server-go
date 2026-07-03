@@ -102,6 +102,27 @@ func TestScopeInclusion(t *testing.T) {
 	}
 }
 
+func TestScopeRank(t *testing.T) {
+	cases := []struct {
+		scope string
+		want  int
+	}{
+		{"", 0},
+		{"content.read", 1},
+		{"content.write", 2},
+		{"site.admin", 3},
+		{"system.admin", 4},
+		{"mcp", 0},
+		{"unknown", 0},
+	}
+	for _, tc := range cases {
+		got := tools.ScopeRank(tc.scope)
+		if got != tc.want {
+			t.Errorf("ScopeRank(%q) = %d, want %d", tc.scope, got, tc.want)
+		}
+	}
+}
+
 func TestUnknownScopeSeesOnlyPublicTools(t *testing.T) {
 	r := tools.NewRegistry()
 	populateRegistry(r)

@@ -231,12 +231,12 @@ func (s *Service) exchangeToken(grantType, clientID, redirectURI, code, codeVeri
 	}
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	_ = s.store.AddAccessToken(HashToken(token), "mcp", time.Now().Add(ttl))
+	_ = s.store.AddAccessToken(HashToken(token), "content.read", time.Now().Add(ttl))
 	return &TokenResponse{
 		AccessToken: token,
 		TokenType:   "Bearer",
 		ExpiresIn:   s.cfg.AccessTokenTTLSeconds,
-		Scope:       "mcp",
+		Scope:       "content.read",
 	}, nil
 }
 

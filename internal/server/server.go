@@ -14,6 +14,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -45,7 +46,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	}
 	streaming := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		scope, _ := r.Context().Value(oauth.CtxScope).(string)
-		if scope != "" {
+		if tools.ScopeRank(scope) >= 1 { // content.read or higher
 			return readServer
 		}
 		return anonServer

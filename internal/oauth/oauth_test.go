@@ -398,8 +398,8 @@ func TestBearerValidationViaTokenEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatal("freshly issued token must validate")
 	}
-	if scope != "mcp" {
-		t.Fatalf("scope = %q want mcp", scope)
+	if scope != "content.read" {
+		t.Fatalf("scope = %q want content.read", scope)
 	}
 
 	if _, ok := svc.ValidateBearer("completely-wrong-token"); ok {

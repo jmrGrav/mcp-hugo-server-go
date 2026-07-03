@@ -44,3 +44,19 @@ func scopeRank(scope string) int {
 	}
 	return -1
 }
+
+// ScopeRank returns the integer rank of a known scope:
+//
+//	0  anonymous / ""
+//	1  content.read
+//	2  content.write
+//	3  site.admin
+//	4  system.admin
+//	0  unknown scope (treated as anonymous)
+func ScopeRank(scope string) int {
+	r := scopeRank(scope)
+	if r < 0 {
+		return 0
+	}
+	return r
+}
