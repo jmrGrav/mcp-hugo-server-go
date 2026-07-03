@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -40,6 +43,11 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	if cfg.OAuth.Enabled {
 		oauthSvc = oauth.NewService(cfg.OAuth, storage.NewMemory())
 	}
+
+	aclPolicy := oauth.NewACLPolicy([]string{
+		"list_pages", "get_page", "search_pages", "get_recent_posts",
+		"list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
+	})
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -111,6 +119,24 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 						return
 					}
 					r = r.WithContext(context.WithValue(r.Context(), oauth.CtxScope, scope))
+				} else {
+					body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+					if err != nil {
+						http.Error(w, "bad request", http.StatusBadRequest)
+						return
+					}
+					if !aclPolicy.AllowRequest(body) {
+						reason := aclPolicy.DenyReason(body)
+						w.Header().Set("Content-Type", "application/json; charset=utf-8")
+						w.WriteHeader(http.StatusForbidden)
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"jsonrpc": "2.0",
+							"id":      nil,
+							"error":   map[string]any{"code": -32001, "message": reason},
+						})
+						return
+					}
+					r.Body = io.NopCloser(bytes.NewReader(body))
 				}
 			}
 			streaming.ServeHTTP(w, r)
