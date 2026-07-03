@@ -34,6 +34,7 @@ func Register(s *mcp.Server, cfg config.Config) {
 
 	RegisterBuild(s, cfg)
 	RegisterHooks(s, cfg)
+	RegisterSRI(s, cfg)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "generate_featured_image",
