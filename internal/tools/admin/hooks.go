@@ -3,7 +3,7 @@ package admin
 import (
 	"bytes"
 	"context"
-	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -41,27 +41,24 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 			OpenWorldHint:   boolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ runPostBuildHooksInput) (*mcp.CallToolResult, runPostBuildHooksOutput, error) {
-		results, err := fireHooks(cfg, hookClient)
-		if err != nil {
-			return nil, runPostBuildHooksOutput{}, fmt.Errorf("hook_error: %w", err)
-		}
+		results := fireHooks(ctx, cfg, hookClient)
 		return nil, runPostBuildHooksOutput{Results: results}, nil
 	})
 }
 
-func fireHooks(cfg config.Config, client *http.Client) ([]hookResult, error) {
+func fireHooks(ctx context.Context, cfg config.Config, client *http.Client) []hookResult {
 	results := make([]hookResult, 0, len(cfg.PostBuildHooks))
 	body := []byte(`{"event":"post_build"}`)
 
 	for _, url := range cfg.PostBuildHooks {
-		r := fireHook(client, url, body)
+		r := fireHook(ctx, client, url, body)
 		results = append(results, r)
 	}
-	return results, nil
+	return results
 }
 
-func fireHook(client *http.Client, url string, body []byte) hookResult {
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+func fireHook(ctx context.Context, client *http.Client, url string, body []byte) hookResult {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return hookResult{URL: url, Error: err.Error()}
 	}
@@ -71,6 +68,7 @@ func fireHook(client *http.Client, url string, body []byte) hookResult {
 	if err != nil {
 		return hookResult{URL: url, Error: err.Error()}
 	}
+	_, _ = io.Copy(io.Discard, resp.Body)
 	defer resp.Body.Close()
 
 	return hookResult{URL: url, Status: resp.StatusCode}

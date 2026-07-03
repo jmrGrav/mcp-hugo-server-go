@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,10 +21,7 @@ func TestHookAllowlisted(t *testing.T) {
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	RegisterHooks(s, cfg)
 
-	results, err := fireHooks(cfg, hookClient)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	results := fireHooks(context.Background(), cfg, hookClient)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
@@ -40,10 +38,7 @@ func TestHookNotAllowlisted(t *testing.T) {
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	RegisterHooks(s, cfg)
 
-	results, err := fireHooks(cfg, hookClient)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	results := fireHooks(context.Background(), cfg, hookClient)
 	if len(results) != 0 {
 		t.Errorf("expected 0 results for empty hook list (SSRF protection), got %d", len(results))
 	}
@@ -59,10 +54,7 @@ func TestHookTimeout(t *testing.T) {
 	cfg := config.Config{PostBuildHooks: []string{srv.URL}}
 	shortClient := &http.Client{Timeout: 100 * time.Millisecond}
 
-	results, err := fireHooks(cfg, shortClient)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+	results := fireHooks(context.Background(), cfg, shortClient)
 	if len(results) != 1 {
 		t.Fatalf("expected 1 result, got %d", len(results))
 	}
