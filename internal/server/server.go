@@ -12,6 +12,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/observability"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
@@ -157,7 +158,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			http.NotFound(w, r)
 		}
 	})
-	return &Server{cfg: cfg, handler: handler}, nil
+	logger := observability.NewLogger()
+	return &Server{cfg: cfg, handler: observability.RequestMiddleware(handler, logger)}, nil
 }
 
 func (s *Server) Handler() http.Handler {
