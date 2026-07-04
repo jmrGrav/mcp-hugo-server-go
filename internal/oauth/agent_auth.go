@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -232,6 +233,12 @@ func (s *Service) verifyAgentClaim(claimToken string) error {
 	return nil
 }
 
+// isAdminScope returns true when scope carries site.admin or system.admin
+// privileges — rank 3 or 4 in the 5-tier hierarchy.
+func isAdminScope(scope string) bool {
+	return scope == "site.admin" || scope == "system.admin"
+}
+
 func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -243,17 +250,38 @@ func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 <html lang="en"><head><meta charset="utf-8"><title>Agent Identity Verification</title></head>
 <body>
 <h1>Agent Identity Verification</h1>
-<p>An agent is requesting access. Review the claim token and approve if trusted.</p>
+<p>An agent is requesting access. Operator approval is required (site.admin or system.admin token).</p>
 <form method="POST" action="/agent/identity/verify">
+  <label>Admin token: <input type="password" name="admin_token" size="40" required></label><br>
   <label>Claim token: <input type="text" name="claim_token" value="%s" size="40" required></label><br>
   <button type="submit">Approve</button>
 </form>
 </body></html>`, claimToken)
 	case http.MethodPost:
-		if err := r.ParseForm(); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
+		// Operator must authenticate with a site.admin or system.admin Bearer token.
+		// Accept it via Authorization header (API callers) or admin_token form field
+		// (browser form submissions, which cannot set custom headers).
+		adminToken := strings.TrimSpace(strings.TrimPrefix(
+			strings.TrimSpace(r.Header.Get("Authorization")), "Bearer "))
+		if adminToken == "" {
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			adminToken = r.FormValue("admin_token")
+		}
+		if adminToken == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-verify"`)
+			http.Error(w, "operator authentication required", http.StatusUnauthorized)
 			return
 		}
+		scope, _, ok := s.ValidateBearerDetails(adminToken)
+		if !ok || !isAdminScope(scope) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-verify", error="insufficient_scope"`)
+			http.Error(w, "forbidden: site.admin or system.admin scope required", http.StatusForbidden)
+			return
+		}
+
 		claimToken := r.FormValue("claim_token")
 		if claimToken == "" {
 			http.Error(w, "missing claim_token", http.StatusBadRequest)

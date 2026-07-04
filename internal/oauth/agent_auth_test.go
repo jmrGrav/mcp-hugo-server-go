@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 )
@@ -57,6 +58,26 @@ func TestHandleAgentVerifyGET(t *testing.T) {
 }
 
 func TestHandleAgentVerifyPOST(t *testing.T) {
+	svc, store := newTestService(t)
+	resp := registerAgentAnonymous(t, svc)
+
+	// Operator must authenticate with a site.admin token.
+	adminRaw := "admin-token-site-admin"
+	_ = store.AddAccessToken(oauth.HashToken(adminRaw), "site.admin", time.Now().Add(time.Hour))
+
+	form := "claim_token=" + resp.ClaimToken
+	req := httptest.NewRequest(http.MethodPost, "/agent/identity/verify", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+adminRaw)
+	rec := httptest.NewRecorder()
+	svc.HandleAgentVerify(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST verify: status = %d body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleAgentVerifyPOSTNoAuth(t *testing.T) {
 	svc, _ := newTestService(t)
 	resp := registerAgentAnonymous(t, svc)
 
@@ -66,22 +87,46 @@ func TestHandleAgentVerifyPOST(t *testing.T) {
 	rec := httptest.NewRecorder()
 	svc.HandleAgentVerify(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("POST verify: status = %d body = %q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("POST verify unauthenticated: status = %d want 401", rec.Code)
 	}
 }
 
-func TestHandleAgentVerifyPOSTInvalidToken(t *testing.T) {
-	svc, _ := newTestService(t)
+func TestHandleAgentVerifyPOSTInsufficientScope(t *testing.T) {
+	svc, store := newTestService(t)
+	resp := registerAgentAnonymous(t, svc)
+
+	// content.read is not enough — must be site.admin or system.admin.
+	lowRaw := "low-scope-token"
+	_ = store.AddAccessToken(oauth.HashToken(lowRaw), "content.read", time.Now().Add(time.Hour))
+
+	form := "claim_token=" + resp.ClaimToken
+	req := httptest.NewRequest(http.MethodPost, "/agent/identity/verify", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+lowRaw)
+	rec := httptest.NewRecorder()
+	svc.HandleAgentVerify(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("POST verify insufficient scope: status = %d want 403", rec.Code)
+	}
+}
+
+func TestHandleAgentVerifyPOSTInvalidClaimToken(t *testing.T) {
+	svc, store := newTestService(t)
+
+	adminRaw := "admin-token-for-bad-claim"
+	_ = store.AddAccessToken(oauth.HashToken(adminRaw), "site.admin", time.Now().Add(time.Hour))
 
 	form := "claim_token=invalid_token_xyz"
 	req := httptest.NewRequest(http.MethodPost, "/agent/identity/verify", strings.NewReader(form))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Authorization", "Bearer "+adminRaw)
 	rec := httptest.NewRecorder()
 	svc.HandleAgentVerify(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("POST verify bad token: status = %d want 400", rec.Code)
+		t.Fatalf("POST verify bad claim token: status = %d want 400", rec.Code)
 	}
 }
 
