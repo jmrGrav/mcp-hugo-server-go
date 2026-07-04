@@ -30,6 +30,7 @@ type Config struct {
 	ImageGenKey         string          `yaml:"image_gen_key"`
 	BuildTimeoutSeconds int             `yaml:"build_timeout_seconds"`
 	PostBuildHooks      []string        `yaml:"post_build_hooks"`
+	SecurityContact     string          `yaml:"security_contact"`
 	OAuth               OAuthConfig     `yaml:"oauth"`
 	RateLimit           RateLimitConfig `yaml:"rate_limit"`
 }

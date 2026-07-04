@@ -397,6 +397,50 @@ func TestAuthMdNotFound(t *testing.T) {
 	}
 }
 
+func TestSecurityTxtServed(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.SiteURL = "https://www.arleo.eu"
+	cfg.SecurityContact = "mailto:security@example.com"
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/security.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Contact: mailto:security@example.com") {
+		t.Errorf("security.txt missing Contact, got: %q", body)
+	}
+	if !strings.Contains(body, "Expires:") {
+		t.Errorf("security.txt missing Expires, got: %q", body)
+	}
+	if !strings.Contains(body, "Canonical:") {
+		t.Errorf("security.txt missing Canonical, got: %q", body)
+	}
+}
+
+func TestSecurityTxtNotFoundWhenUnconfigured(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/security.txt", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d want 404 when SecurityContact not configured", rec.Code)
+	}
+}
+
 func TestOAuthServerServedWithOAuthDisabled(t *testing.T) {
 	cfg := config.Default()
 	cfg.SiteRoot = t.TempDir()

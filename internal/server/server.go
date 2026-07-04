@@ -230,6 +230,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				return
 			}
 			_, _ = io.WriteString(w, metrics.RenderPrometheus())
+		case "/.well-known/security.txt":
+			handleSecurityTxt(w, r, cfg)
 		case "/robots.txt":
 			handleRobotsTxt(w, r, cfg)
 		case "/llms.txt":
@@ -260,6 +262,12 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				return
 			}
 			rateLimitOAuth(oauthSvc.HandleAgentIdentity)(w, r)
+		case "/agent/identity/verify":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAgentVerify(w, r)
 		case "/agent/identity/claim":
 			if oauthSvc == nil {
 				http.NotFound(w, r)

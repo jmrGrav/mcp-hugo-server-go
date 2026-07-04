@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
@@ -261,6 +262,18 @@ func handleOAuthAuthServer(w http.ResponseWriter, r *http.Request, cfg config.Co
 
 func handleOAuthProtectedResource(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 	serveDiscoveryJSON(w, r, buildProtectedResourceMeta(cfg))
+}
+
+func handleSecurityTxt(w http.ResponseWriter, r *http.Request, cfg config.Config) {
+	if cfg.SecurityContact == "" {
+		http.NotFound(w, r)
+		return
+	}
+	siteURL := strings.TrimRight(cfg.SiteURL, "/")
+	expires := time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339)
+	body := fmt.Sprintf("Contact: %s\nExpires: %s\nCanonical: %s/.well-known/security.txt\n",
+		cfg.SecurityContact, expires, siteURL)
+	serveDiscoveryText(w, r, "text/plain; charset=utf-8", body)
 }
 
 func handleRobotsTxt(w http.ResponseWriter, r *http.Request, cfg config.Config) {
