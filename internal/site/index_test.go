@@ -1,7 +1,6 @@
 package site
 
 import (
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -130,16 +129,5 @@ func TestGetBySlugEmptySlug(t *testing.T) {
 	_, ok := idx.GetBySlug("")
 	if ok {
 		t.Fatal("GetBySlug('') should return not found")
-	}
-}
-
-func writePage(t *testing.T, root, rel, raw string) {
-	t.Helper()
-	full := filepath.Join(root, rel)
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
-		t.Fatal(err)
 	}
 }

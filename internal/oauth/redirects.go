@@ -18,9 +18,7 @@ func validateRegisteredRedirectURI(raw string) error {
 	if strings.Contains(raw, "*") && !strings.HasSuffix(raw, "*") {
 		return fmt.Errorf("invalid redirect_uri")
 	}
-	if strings.HasSuffix(raw, "*") {
-		raw = strings.TrimSuffix(raw, "*")
-	}
+	raw = strings.TrimSuffix(raw, "*")
 	u, err := url.Parse(raw)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("invalid redirect_uri")

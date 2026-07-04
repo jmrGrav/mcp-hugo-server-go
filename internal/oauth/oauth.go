@@ -199,26 +199,6 @@ func (s *Service) resolveClientScope(clientID, requested string) (string, error)
 	return scope, nil
 }
 
-
-func (s *Service) supportedTokenAuthMethods() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	methods := make([]string, 0, 3)
-	if s.cfg.DynamicClientEnabled {
-		methods = append(methods, "none")
-	}
-	for _, c := range s.clients {
-		if c.SecretHash != "" {
-			methods = append(methods, "client_secret_basic", "client_secret_post")
-			break
-		}
-	}
-	if len(methods) == 0 {
-		methods = append(methods, "none")
-	}
-	return methods
-}
-
 func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse, error) {
 	if !s.cfg.DynamicClientEnabled {
 		return nil, fmt.Errorf("invalid_request: dynamic_client_registration_disabled")

@@ -50,4 +50,3 @@ func TestExtractMarkdownCoversCommonElements(t *testing.T) {
 		t.Fatalf("ExtractMarkdown() should ignore structural elements, got %q", got)
 	}
 }
-

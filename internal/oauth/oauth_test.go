@@ -429,7 +429,6 @@ func TestBearerValidationViaTokenEndpoint(t *testing.T) {
 	}
 }
 
-
 func TestAuthorizeUntrustedSource(t *testing.T) {
 	svc, _ := newTestService(t, "10.0.0.1/32")
 	clientID := registerClient(t, svc, []string{"https://client.test/callback"})

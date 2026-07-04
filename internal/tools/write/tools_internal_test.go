@@ -51,4 +51,3 @@ func TestWriteHelpers(t *testing.T) {
 		t.Fatalf("Defs() = %#v", defs)
 	}
 }
-

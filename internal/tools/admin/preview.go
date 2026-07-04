@@ -59,4 +59,3 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		return nil, previewBuildOutput{Status: "ok", DurationMs: durationMs}, nil
 	})
 }
-

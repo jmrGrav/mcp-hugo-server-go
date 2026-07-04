@@ -213,7 +213,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, fmt.Errorf("audit_error: failed to write audit log")
 		}
 
-		return nil, deletePageOutput{Slug: in.Slug}, nil
+		return nil, deletePageOutput(in), nil
 	})
 }
 
