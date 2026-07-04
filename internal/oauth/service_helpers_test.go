@@ -43,25 +43,25 @@ func TestServiceHelperValidationBranches(t *testing.T) {
 		t.Fatalf("validateClientRedirect valid redirect error = %v", err)
 	}
 
-	if _, err := svc.issueAuthCode("203.0.113.10", "code", resp.ClientID, "https://client.test/callback", "state", "", ""); err == nil {
+	if _, err := svc.issueAuthCode("203.0.113.10", "code", resp.ClientID, "https://client.test/callback", "state", "", "", ""); err == nil {
 		t.Fatal("issueAuthCode should reject untrusted source")
 	}
-	if _, err := svc.issueAuthCode("127.0.0.1", "token", resp.ClientID, "https://client.test/callback", "state", "", ""); err == nil {
+	if _, err := svc.issueAuthCode("127.0.0.1", "token", resp.ClientID, "https://client.test/callback", "state", "", "", ""); err == nil {
 		t.Fatal("issueAuthCode should reject unsupported response type")
 	}
-	if _, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "", "", ""); err == nil {
+	if _, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "", "", "", ""); err == nil {
 		t.Fatal("issueAuthCode should reject missing state")
 	}
-	if _, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "state", "", ""); err == nil {
+	if _, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "state", "", "", ""); err == nil {
 		t.Fatal("issueAuthCode should require PKCE when configured")
 	}
-	if _, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "state", "abc", "plain"); err == nil {
+	if _, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "state", "", "abc", "plain"); err == nil {
 		t.Fatal("issueAuthCode should reject unsupported PKCE method")
 	}
-	if _, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "state", "abcd", "S256"); err == nil {
+	if _, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "state", "", "abcd", "S256"); err == nil {
 		t.Fatal("issueAuthCode should reject short code challenge")
 	}
-	code, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "state", CodeChallengeS256("verifier-verifier-verifier-verifier"), "S256")
+	code, err := svc.issueAuthCode("127.0.0.1", "code", resp.ClientID, "https://client.test/callback", "state", "", CodeChallengeS256("verifier-verifier-verifier-verifier"), "S256")
 	if err != nil {
 		t.Fatalf("issueAuthCode valid request error = %v", err)
 	}

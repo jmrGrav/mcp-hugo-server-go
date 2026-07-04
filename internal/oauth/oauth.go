@@ -36,15 +36,21 @@ type Service struct {
 	agentClaims      map[string]agentClaim
 }
 
+type oauthClientPersister interface {
+	UpsertOAuthClient(clientID, secretHash string, enabled bool, redirectURIs, scopes []string) error
+}
+
 type client struct {
 	RedirectURIs []string
 	SecretHash   string
 	Scope        string
+	Enabled      bool
 }
 
 type authCode struct {
 	ClientID            string
 	RedirectURI         string
+	Scope               string
 	ExpiresAt           time.Time
 	CodeChallenge       string
 	CodeChallengeMethod string
@@ -105,37 +111,47 @@ func (s *Service) LoadClientRegistry(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, entry := range registry.Clients {
-		if entry.ClientID == "" {
+		clientID := firstNonEmpty(entry.ID, entry.ClientID)
+		if clientID == "" {
 			return fmt.Errorf("invalid_client_registry: client_id missing")
 		}
-		if _, exists := s.clients[entry.ClientID]; exists {
-			return fmt.Errorf("invalid_client_registry: duplicate client_id %q", entry.ClientID)
+		if _, exists := s.clients[clientID]; exists {
+			return fmt.Errorf("invalid_client_registry: duplicate client_id %q", clientID)
 		}
 		redirects := make([]string, 0, len(entry.RedirectURIs))
 		for _, uri := range entry.RedirectURIs {
-			if !isAllowedRedirectURI(uri) {
-				return fmt.Errorf("invalid_client_registry: invalid redirect_uri for %q", entry.ClientID)
+			if err := validateRegisteredRedirectURI(uri); err != nil {
+				return fmt.Errorf("invalid_client_registry: invalid redirect_uri for %q", clientID)
 			}
 			redirects = append(redirects, uri)
 		}
-		scope := CanonicalScope(strings.TrimSpace(entry.Scope))
-		if scope == "" {
-			scope = "content.read"
+		scopes, err := normalizeConfiguredScopes(entry.Scopes, entry.Scope)
+		if err != nil {
+			return fmt.Errorf("invalid_client_registry: %w", err)
 		}
-		if tools.ScopeRank(scope) < tools.ScopeRank("content.read") {
-			return fmt.Errorf("invalid_client_registry: unsupported scope %q", entry.Scope)
+		scope := highestConfiguredScope(scopes)
+		enabled := true
+		if entry.Enabled != nil {
+			enabled = *entry.Enabled
 		}
 		secretHash := strings.TrimSpace(entry.SecretHash)
-		if secretHash == "" && strings.TrimSpace(entry.ClientSecret) != "" {
-			secretHash = HashToken(entry.ClientSecret)
+		secret := firstNonEmpty(entry.Secret, entry.ClientSecret)
+		if secretHash == "" && secret != "" {
+			secretHash = HashToken(secret)
 		}
 		if secretHash == "" {
-			return fmt.Errorf("invalid_client_registry: client_secret or client_secret_hash required for %q", entry.ClientID)
+			return fmt.Errorf("invalid_client_registry: client_secret or client_secret_hash required for %q", clientID)
 		}
-		s.clients[entry.ClientID] = client{
+		s.clients[clientID] = client{
 			RedirectURIs: redirects,
 			SecretHash:   secretHash,
 			Scope:        scope,
+			Enabled:      enabled,
+		}
+		if persister, ok := s.store.(oauthClientPersister); ok {
+			if err := persister.UpsertOAuthClient(clientID, secretHash, enabled, redirects, scopes); err != nil {
+				return fmt.Errorf("invalid_client_registry: persist client %q: %w", clientID, err)
+			}
 		}
 	}
 	return nil
@@ -155,6 +171,33 @@ func (s *Service) ValidateBearerDetails(token string) (string, bool, bool) {
 		return "", false, false
 	}
 	return CanonicalScope(scope), IsLegacyScope(scope), true
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func (s *Service) resolveClientScope(clientID, requested string) (string, error) {
+	c, ok := s.lookupClient(clientID)
+	if !ok {
+		return "", fmt.Errorf("unauthorized_client")
+	}
+	scope, err := requestedScope(requested)
+	if err != nil {
+		return "", fmt.Errorf("invalid_scope")
+	}
+	if scope == "" {
+		scope = c.Scope
+	}
+	if !allowedScope(scope, c.Scope) {
+		return "", fmt.Errorf("invalid_scope")
+	}
+	return scope, nil
 }
 
 func (s *Service) AuthorizationServerMetadata() map[string]any {
@@ -193,11 +236,18 @@ func (s *Service) AuthorizationServerMetadata() map[string]any {
 func (s *Service) supportedTokenAuthMethods() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	methods := []string{"none"}
+	methods := make([]string, 0, 3)
+	if s.cfg.DynamicClientEnabled {
+		methods = append(methods, "none")
+	}
 	for _, c := range s.clients {
 		if c.SecretHash != "" {
-			return []string{"none", "client_secret_basic", "client_secret_post"}
+			methods = append(methods, "client_secret_basic", "client_secret_post")
+			break
 		}
+	}
+	if len(methods) == 0 {
+		methods = append(methods, "none")
 	}
 	return methods
 }
@@ -210,13 +260,13 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		return nil, fmt.Errorf("invalid_request: redirect_uris missing or empty")
 	}
 	for _, uri := range req.RedirectURIs {
-		if !isAllowedRedirectURI(uri) {
+		if err := validateRegisteredRedirectURI(uri); err != nil {
 			return nil, fmt.Errorf("invalid_redirect_uri")
 		}
 	}
 	id := randomString(24)
 	s.mu.Lock()
-	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...), Scope: "content.read"}
+	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...), Scope: "content.read", Enabled: true}
 	s.mu.Unlock()
 	return &RegistrationResponse{
 		ClientID:                      id,
@@ -236,8 +286,8 @@ func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {
 		return "", fmt.Errorf("unauthorized_client")
 	}
 	for _, r := range c.RedirectURIs {
-		if r == uri {
-			return r, nil
+		if matchRedirectURI(r, uri) {
+			return uri, nil
 		}
 	}
 	return "", fmt.Errorf("invalid_redirect_uri")
@@ -247,10 +297,13 @@ func (s *Service) lookupClient(clientID string) (client, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	c, ok := s.clients[clientID]
-	return c, ok
+	if !ok || !c.Enabled {
+		return client{}, false
+	}
+	return c, true
 }
 
-func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, state, codeChallenge, codeChallengeMethod string) (string, error) {
+func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, state, requestedScope, codeChallenge, codeChallengeMethod string) (string, error) {
 	if !s.sourceAllowed(sourceIP) {
 		return "", fmt.Errorf("access_denied: authorize source is not trusted")
 	}
@@ -274,11 +327,16 @@ func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, s
 	if _, err := s.validateClientRedirect(clientID, redirectURI); err != nil {
 		return "", err
 	}
+	scope, err := s.resolveClientScope(clientID, requestedScope)
+	if err != nil {
+		return "", err
+	}
 	code := randomString(32)
 	s.mu.Lock()
 	s.codes[code] = authCode{
 		ClientID:            clientID,
 		RedirectURI:         redirectURI,
+		Scope:               scope,
 		ExpiresAt:           time.Now().Add(time.Duration(s.cfg.AuthCodeTTLSeconds) * time.Second),
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
@@ -320,7 +378,7 @@ func (s *Service) exchangeToken(grantType, clientID, clientSecret, redirectURI, 
 	}
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	scope := CanonicalScope(c.Scope)
+	scope := CanonicalScope(data.Scope)
 	if scope == "" {
 		scope = "content.read"
 	}
@@ -377,6 +435,7 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		clientID,
 		safeRedirectURI,
 		r.Form.Get("state"),
+		r.Form.Get("scope"),
 		r.Form.Get("code_challenge"),
 		r.Form.Get("code_challenge_method"),
 	)
@@ -458,24 +517,6 @@ func (s *Service) sourceAllowed(ipText string) bool {
 	return false
 }
 
-func isAllowedRedirectURI(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	if u.Scheme == "https" {
-		return true
-	}
-	if u.Scheme != "http" {
-		return false
-	}
-	if u.Hostname() == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(u.Hostname())
-	return ip != nil && ip.IsLoopback()
-}
-
 func requestSourceIP(r *http.Request) string {
 	if r == nil {
 		return ""
@@ -528,6 +569,8 @@ func oauthAuthorizeErrorCode(err error) string {
 		return "access_denied"
 	case strings.HasPrefix(msg, "unauthorized_client"):
 		return "unauthorized_client"
+	case strings.HasPrefix(msg, "invalid_scope"):
+		return "invalid_scope"
 	default:
 		return "invalid_request"
 	}
@@ -552,6 +595,8 @@ func oauthTokenErrorCode(err error) string {
 		return "invalid_client"
 	case strings.HasPrefix(msg, "invalid_grant"):
 		return "invalid_grant"
+	case strings.HasPrefix(msg, "invalid_scope"):
+		return "invalid_scope"
 	default:
 		return "invalid_request"
 	}

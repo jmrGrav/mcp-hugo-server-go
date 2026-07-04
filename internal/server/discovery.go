@@ -80,10 +80,17 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 }
 
 func tokenEndpointAuthMethods(cfg config.Config) []string {
-	if strings.TrimSpace(cfg.OAuth.ClientRegistryPath) != "" {
-		return []string{"none", "client_secret_basic", "client_secret_post"}
+	methods := make([]string, 0, 3)
+	if cfg.OAuth.DynamicClientEnabled {
+		methods = append(methods, "none")
 	}
-	return []string{"none"}
+	if strings.TrimSpace(cfg.OAuth.ClientRegistryPath) != "" {
+		methods = append(methods, "client_secret_basic", "client_secret_post")
+	}
+	if len(methods) == 0 {
+		methods = append(methods, "none")
+	}
+	return methods
 }
 
 func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {

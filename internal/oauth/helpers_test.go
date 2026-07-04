@@ -16,14 +16,39 @@ func TestRedirectURIValidationHelpers(t *testing.T) {
 		ok  bool
 	}{
 		{"https://client.test/callback", true},
+		{"https://chatgpt.com/connector/oauth/*", true},
+		{"https://claude.ai/*", true},
 		{"http://localhost/callback", true},
 		{"http://127.0.0.1/callback", true},
 		{"ftp://client.test/callback", false},
+		{"https://chatgpt.com/connector/*/callback", false},
+		{"http://example.com/callback", false},
 		{"", false},
 	}
 	for _, tc := range cases {
-		if got := isAllowedRedirectURI(tc.uri); got != tc.ok {
-			t.Fatalf("isAllowedRedirectURI(%q) = %v, want %v", tc.uri, got, tc.ok)
+		if got := validateRegisteredRedirectURI(tc.uri); (got == nil) != tc.ok {
+			t.Fatalf("validateRegisteredRedirectURI(%q) = %v, want ok=%v", tc.uri, got, tc.ok)
+		}
+	}
+}
+
+func TestRedirectURIMatching(t *testing.T) {
+	cases := []struct {
+		registered string
+		actual     string
+		ok         bool
+	}{
+		{"https://chatgpt.com/connector/oauth/*", "https://chatgpt.com/connector/oauth/callback", true},
+		{"https://chatgpt.com/connector/oauth/*", "https://evil.chatgpt.com/connector/oauth/callback", false},
+		{"https://chatgpt.com/connector/oauth/*", "http://chatgpt.com/connector/oauth/callback", false},
+		{"https://chatgpt.com/connector/oauth/*", "https://chatgpt.com/connector/other/callback", false},
+		{"https://claude.ai/*", "https://claude.ai/oauth/callback", true},
+		{"https://client.test/callback", "https://client.test/callback", true},
+		{"https://client.test/callback", "https://client.test/other", false},
+	}
+	for _, tc := range cases {
+		if got := matchRedirectURI(tc.registered, tc.actual); got != tc.ok {
+			t.Fatalf("matchRedirectURI(%q, %q) = %v, want %v", tc.registered, tc.actual, got, tc.ok)
 		}
 	}
 }
@@ -52,8 +77,8 @@ func TestRequestSourceIP(t *testing.T) {
 
 func TestOAuthErrorMapping(t *testing.T) {
 	cases := []struct {
-		err   error
-		code  string
+		err    error
+		code   string
 		status int
 	}{
 		{errors.New("unsupported_response_type"), "unsupported_response_type", http.StatusBadRequest},

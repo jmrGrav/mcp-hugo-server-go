@@ -618,3 +618,98 @@ clients:
 		t.Fatalf("build_site response missing status: %q", callRec.Body.String())
 	}
 }
+
+func TestSystemAdminClientSeesWriteAndAdminTools(t *testing.T) {
+	mockDir := t.TempDir()
+	mockHugo := filepath.Join(mockDir, "hugo")
+	if err := os.WriteFile(mockHugo, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write mock hugo: %v", err)
+	}
+	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
+
+	registryPath := filepath.Join(t.TempDir(), "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - id: claude-admin
+    secret: admin-secret-value
+    scopes: ["read", "write", "admin"]
+    redirect_uris:
+      - https://claude.ai/*
+    enabled: true
+`), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	srv := mustOAuthServerWithRegistry(t, registryPath)
+
+	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
+		"response_type": {"code"},
+		"client_id":     {"claude-admin"},
+		"redirect_uri":  {"https://claude.ai/oauth/callback"},
+		"state":         {"admin-state"},
+		"code_challenge": {func() string {
+			sum := sha256.Sum256([]byte("verifier-verifier-verifier-verifier-verifier"))
+			return base64.RawURLEncoding.EncodeToString(sum[:])
+		}()},
+		"code_challenge_method": {"S256"},
+	}.Encode(), nil)
+	authReq.RemoteAddr = "127.0.0.1:1234"
+	authRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatal("authorize missing code")
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {"claude-admin"},
+		"client_secret": {"admin-secret-value"},
+		"redirect_uri":  {"https://claude.ai/oauth/callback"},
+		"code":          {code},
+		"code_verifier": {"verifier-verifier-verifier-verifier-verifier"},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	if tokenResp.Scope != "system.admin" {
+		t.Fatalf("token scope = %q want system.admin", tokenResp.Scope)
+	}
+
+	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
+	found := false
+	writeFound := false
+	for _, name := range names {
+		if name == "build_site" {
+			found = true
+		}
+		if name == "create_page" {
+			writeFound = true
+		}
+	}
+	if !found {
+		t.Fatalf("system.admin token missing build_site; got %v", names)
+	}
+	if !writeFound {
+		t.Fatalf("system.admin token missing create_page; got %v", names)
+	}
+}
