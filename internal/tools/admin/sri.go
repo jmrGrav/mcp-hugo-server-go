@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -42,9 +43,9 @@ func RegisterSRI(s *mcp.Server, cfg config.Config) {
 		Description: "[RequiredScope: system.admin] Scan Hugo layouts for CDN integrity attributes and verify each URL's current SHA-384 hash matches the template.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    true,
-			DestructiveHint: boolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  true,
-			OpenWorldHint:   boolPtr(true),
+			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ sriCheckInput) (*mcp.CallToolResult, any, error) {
 		results, err := runSRICheck(ctx, cfg)

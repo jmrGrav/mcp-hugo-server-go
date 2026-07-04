@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -30,9 +31,9 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 		Description: "[RequiredScope: site.admin] Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: boolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   boolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
 		if !hugosite.ContentMu.TryLock() {

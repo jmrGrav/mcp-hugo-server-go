@@ -6,13 +6,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -70,9 +70,9 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		Description: "[RequiredScope: site.admin] Generate a featured image for a page using the configured image generation API and save it to {SiteRoot}/images/featured/{slug}.jpg.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: boolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   boolPtr(true),
+			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
 		if in.Slug == "" {
@@ -106,7 +106,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, err
 		}
 
-		if err := atomicWriteBytes(destPath, imgBytes); err != nil {
+		if err := fileutil.AtomicWriteBytes(destPath, imgBytes); err != nil {
 			slog.Error("generate_featured_image: write failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("write_error: failed to write image")
 		}
@@ -154,29 +154,3 @@ func fetchImage(ctx context.Context, url, key, prompt string) ([]byte, error) {
 	return data, nil
 }
 
-// atomicWriteBytes writes data to path atomically using a unique temp file.
-// On failure the temp file is removed.
-func atomicWriteBytes(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".mcp-write-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		_ = os.Remove(tmpName)
-	}()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
-}
-
-func boolPtr(v bool) *bool { return &v }

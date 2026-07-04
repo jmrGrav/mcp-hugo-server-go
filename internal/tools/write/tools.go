@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
@@ -67,9 +68,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		Description: "[RequiredScope: content.write] Create a new Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: boolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   boolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in createPageInput) (*mcp.CallToolResult, createPageOutput, error) {
 		if in.Slug == "" {
@@ -94,7 +95,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		hugosite.ContentMu.Lock()
 		defer hugosite.ContentMu.Unlock()
 
-		if err := atomicWrite(filePath, content); err != nil {
+		if err := fileutil.AtomicWrite(filePath, content); err != nil {
 			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
@@ -116,9 +117,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		Description: "[RequiredScope: content.write] Update an existing Hugo content page while preserving existing front matter fields. Use this to revise title or body content.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: boolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   boolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
 		if in.Slug == "" {
@@ -154,7 +155,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		content := buildFrontmatterFromMap(fm, body)
-		if err := atomicWrite(filePath, content); err != nil {
+		if err := fileutil.AtomicWrite(filePath, content); err != nil {
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
@@ -177,9 +178,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		Description: "[RequiredScope: content.write] Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: boolPtr(true),
+			DestructiveHint: fileutil.BoolPtr(true),
 			IdempotentHint:  true,
-			OpenWorldHint:   boolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
 		if in.Slug == "" {
@@ -264,35 +265,6 @@ func buildFrontmatterFromMap(fm map[string]any, body string) string {
 	return sb.String()
 }
 
-// atomicWrite writes content to path atomically using a unique temp file in the
-// same directory. On failure the temp file is removed; partial writes are never
-// promoted to the target path.
-func atomicWrite(path, content string) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".mcp-write-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer func() {
-		_ = os.Remove(tmpName)
-	}()
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return err
-	}
-	return nil
-}
-
 // Defs returns the tool definitions for this package (used to build the global registry).
 func Defs() []tools.ToolDef {
 	return []tools.ToolDef{
@@ -312,4 +284,3 @@ func appendAuditLog(path, entry string) error {
 	return err
 }
 
-func boolPtr(v bool) *bool { return &v }

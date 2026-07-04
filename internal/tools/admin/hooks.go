@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -36,9 +37,9 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 		Description: "[RequiredScope: site.admin] Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Only configured URLs are contacted.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: boolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   boolPtr(true),
+			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ runPostBuildHooksInput) (*mcp.CallToolResult, runPostBuildHooksOutput, error) {
 		results := fireHooks(ctx, cfg, hookClient)

@@ -269,10 +269,19 @@ func handleSecurityTxt(w http.ResponseWriter, r *http.Request, cfg config.Config
 		http.NotFound(w, r)
 		return
 	}
-	siteURL := strings.TrimRight(cfg.SiteURL, "/")
+	canonical := strings.TrimRight(cfg.SiteURL, "/")
+	if canonical == "" {
+		canonical = strings.TrimRight(cfg.OAuth.Issuer, "/")
+	}
 	expires := time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339)
-	body := fmt.Sprintf("Contact: %s\nExpires: %s\nCanonical: %s/.well-known/security.txt\n",
-		cfg.SecurityContact, expires, siteURL)
+	var body string
+	if canonical != "" {
+		body = fmt.Sprintf("Contact: %s\nExpires: %s\nCanonical: %s/.well-known/security.txt\n",
+			cfg.SecurityContact, expires, canonical)
+	} else {
+		body = fmt.Sprintf("Contact: %s\nExpires: %s\n",
+			cfg.SecurityContact, expires)
+	}
 	serveDiscoveryText(w, r, "text/plain; charset=utf-8", body)
 }
 

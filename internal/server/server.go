@@ -26,15 +26,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const (
-	Name    = "mcp-hugo-server-go"
-	Version = "v1.0.0"
-)
+const Name = "mcp-hugo-server-go"
+
+// Version is set at build time via -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=..."
+var Version = "dev"
 
 type Server struct {
-	cfg     config.Config
-	handler http.Handler
-	store   storage.Store
+	cfg          config.Config
+	handler      http.Handler
+	store        storage.Store
+	oauthSvc     *oauth.Service
+	resetIPCounts func()
 }
 
 // buildRegistry returns a registry populated from every known tool package.
@@ -344,7 +346,18 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			http.NotFound(w, r)
 		}
 	})
-	return &Server{cfg: cfg, handler: observability.RequestMiddleware(handler, logger), store: tokenStore}, nil
+	resetIP := func() {
+		oauthIPMu.Lock()
+		oauthIPCounts = make(map[string]int)
+		oauthIPMu.Unlock()
+	}
+	return &Server{
+		cfg:           cfg,
+		handler:       observability.RequestMiddleware(handler, logger),
+		store:         tokenStore,
+		oauthSvc:      oauthSvc,
+		resetIPCounts: resetIP,
+	}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -368,6 +381,34 @@ func (s *Server) Run(ctx context.Context) error {
 			}
 		}()
 	}
+
+	if s.oauthSvc != nil {
+		go func() {
+			t := time.NewTicker(5 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					s.oauthSvc.PurgeExpired()
+				}
+			}
+		}()
+	}
+
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.resetIPCounts()
+			}
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.cfg.HTTPBindAddr, s.cfg.HTTPBindPort),

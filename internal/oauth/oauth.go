@@ -156,6 +156,30 @@ func (s *Service) LoadClientRegistry(path string) error {
 	return nil
 }
 
+// PurgeExpired removes expired auth codes and agent state.
+// Call periodically (e.g., every 5 minutes) to prevent unbounded map growth.
+func (s *Service) PurgeExpired() {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for code, data := range s.codes {
+		if data.ExpiresAt.Before(now) {
+			delete(s.codes, code)
+		}
+	}
+	for assertion, reg := range s.agentRegs {
+		if reg.AssertionExpires.Before(now) {
+			delete(s.agentClaimTokens, reg.ClaimToken)
+			delete(s.agentRegs, assertion)
+		}
+	}
+	for attemptID, claim := range s.agentClaims {
+		if claim.ExpiresAt.Before(now) {
+			delete(s.agentClaims, attemptID)
+		}
+	}
+}
+
 func (s *Service) ValidateBearer(token string) (string, bool) {
 	scope, _, ok := s.ValidateBearerDetails(token)
 	return scope, ok

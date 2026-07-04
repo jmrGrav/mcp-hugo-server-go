@@ -199,8 +199,8 @@ func TestWellKnownMCPServerCard(t *testing.T) {
 	if serverInfo["name"] != "mcp-hugo-server-go" {
 		t.Fatalf("serverInfo.name = %v", serverInfo["name"])
 	}
-	if serverInfo["version"] != "v1.0.0" {
-		t.Fatalf("serverInfo.version = %v", serverInfo["version"])
+	if serverInfo["version"] == "" {
+		t.Fatalf("serverInfo.version is empty")
 	}
 
 	transport, ok := got["transport"].(map[string]any)
