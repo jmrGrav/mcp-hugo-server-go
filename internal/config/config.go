@@ -40,6 +40,12 @@ type RateLimitConfig struct {
 	DestructivePerMin  int `yaml:"destructive_per_min"`
 }
 
+// OAuthConfig holds OAuth 2.0 server configuration.
+// StorageBackend selects the token persistence backend: "memory" (default),
+// "json", or "sqlite". StoragePath is required for json and sqlite backends.
+// Access tokens are persisted via the backend; in-Service state (clients,
+// auth codes, agent registrations) is intentionally ephemeral and resets on
+// restart. See issue #26 for the rationale.
 type OAuthConfig struct {
 	Enabled               bool     `yaml:"enabled"`
 	Issuer                string   `yaml:"issuer"`
@@ -49,6 +55,8 @@ type OAuthConfig struct {
 	TrustedAuthorizeCIDRs []string `yaml:"trusted_authorize_cidrs"`
 	AuthCodeTTLSeconds    int      `yaml:"auth_code_ttl_seconds"`
 	AccessTokenTTLSeconds int      `yaml:"access_token_ttl_seconds"`
+	StorageBackend        string   `yaml:"storage_backend"`
+	StoragePath           string   `yaml:"storage_path"`
 }
 
 func Default() Config {

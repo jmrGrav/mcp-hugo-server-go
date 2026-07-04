@@ -12,6 +12,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
@@ -78,7 +79,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, createPageOutput{}, fmt.Errorf("invalid_params: title must not be empty")
 		}
 		if reservedSlugs[in.Slug] {
-			return nil, createPageOutput{}, fmt.Errorf("invalid_params: slug %q is reserved", in.Slug)
+			return nil, createPageOutput{}, fmt.Errorf("invalid_params: slug is reserved")
 		}
 
 		dir, err := pg.SafeJoin(in.Slug)
@@ -90,10 +91,21 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		filePath := filepath.Join(dir, "index.md")
 		content := buildFrontmatter(in.Title, in.Tags, in.Categories, in.Body)
 
+		hugosite.ContentMu.Lock()
+		defer hugosite.ContentMu.Unlock()
+
 		if err := atomicWrite(filePath, content); err != nil {
 			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
+		idx.Upsert(hugosite.SourcePage{
+			Slug:           in.Slug,
+			Title:          in.Title,
+			Tags:           in.Tags,
+			Categories:     in.Categories,
+			Body:           in.Body,
+			FrontmatterRaw: map[string]any{"title": in.Title},
+		})
 
 		return nil, createPageOutput{Slug: in.Slug, Path: filePath}, nil
 	})
@@ -113,9 +125,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
 
+		hugosite.ContentMu.Lock()
+		defer hugosite.ContentMu.Unlock()
+
 		existing, ok := idx.GetBySlug(in.Slug)
 		if !ok {
-			return nil, updatePageOutput{}, fmt.Errorf("not_found: page not found for slug %q", in.Slug)
+			return nil, updatePageOutput{}, fmt.Errorf("not_found: page not found")
 		}
 
 		dir, err := pg.SafeJoin(in.Slug)
@@ -143,6 +158,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
+		updated := *existing
+		if in.Title != "" {
+			updated.Title = in.Title
+			updated.FrontmatterRaw = fm
+		}
+		if in.Body != "" {
+			updated.Body = in.Body
+		}
+		idx.Upsert(updated)
 
 		return nil, updatePageOutput{Slug: in.Slug}, nil
 	})
@@ -173,10 +197,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute")
 		}
 
+		hugosite.ContentMu.Lock()
+		defer hugosite.ContentMu.Unlock()
+
 		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
 			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
 			return nil, deletePageOutput{}, fmt.Errorf("delete_error: failed to delete page")
 		}
+		idx.Delete(in.Slug)
 
 		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
 		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
@@ -236,16 +264,42 @@ func buildFrontmatterFromMap(fm map[string]any, body string) string {
 	return sb.String()
 }
 
+// atomicWrite writes content to path atomically using a unique temp file in the
+// same directory. On failure the temp file is removed; partial writes are never
+// promoted to the target path.
 func atomicWrite(path, content string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, ".mcp-write-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmpName := tmp.Name()
+	defer func() {
+		_ = os.Remove(tmpName)
+	}()
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Defs returns the tool definitions for this package (used to build the global registry).
+func Defs() []tools.ToolDef {
+	return []tools.ToolDef{
+		{Name: "create_page", RequiredScope: "content.write"},
+		{Name: "update_page", RequiredScope: "content.write"},
+		{Name: "delete_page", RequiredScope: "content.write"},
+	}
 }
 
 func appendAuditLog(path, entry string) error {

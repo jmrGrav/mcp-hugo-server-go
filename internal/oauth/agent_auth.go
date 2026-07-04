@@ -16,6 +16,14 @@ type agentRegistration struct {
 	ClaimToken       string
 	AssertionExpires time.Time
 	ClaimExpires     time.Time
+	// Claimed is set to true only when the operator has verified the claim via
+	// an out-of-band verification step. Until then the assertion cannot be
+	// exchanged for a privileged token.
+	// NOTE: no verification endpoint exists yet — this gate always blocks token
+	// issuance, which is the secure-by-default posture. A future PR must add a
+	// verification endpoint (e.g. /agent/identity/verify) that sets Claimed=true
+	// after human or automated validation. See issue #27.
+	Claimed bool
 }
 
 type agentClaim struct {
@@ -77,11 +85,11 @@ func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 		RegistrationType:  "anonymous",
 		IdentityAssertion: assertion,
 		AssertionExpires:  assertionExpires.UTC().Format(time.RFC3339Nano),
-		PreClaimScopes:    []string{"mcp"},
+		PreClaimScopes:    []string{},
 		ClaimURL:          issuer + "/agent/identity/claim",
 		ClaimToken:        claimToken,
 		ClaimTokenExpires: claimExpires.UTC().Format(time.RFC3339Nano),
-		PostClaimScopes:   []string{"mcp"},
+		PostClaimScopes:   []string{"content.read"},
 		Claim: &AgentClaimInfo{
 			UserCode:        randomDigits(6),
 			ExpiresIn:       600,
@@ -100,6 +108,14 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 	}
 	if time.Now().After(reg.AssertionExpires) {
 		return nil, fmt.Errorf("invalid_grant")
+	}
+	if !reg.Claimed {
+		// The assertion has not been verified by a human or automated claim
+		// verification step. Issuing a privileged token without claim verification
+		// would allow any anonymous caller to escalate scope.
+		// TODO(#27): Add a /agent/identity/verify endpoint that sets Claimed=true
+		// after operator validation, then remove this guard.
+		return nil, fmt.Errorf("invalid_grant: claim_required")
 	}
 
 	token := randomString(32)

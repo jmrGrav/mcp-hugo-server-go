@@ -2,6 +2,9 @@ package tools
 
 var scopeOrder = []string{"", "content.read", "content.write", "site.admin", "system.admin"}
 
+// KnownScopes lists every scope this server may issue or enforce.
+var KnownScopes = []string{"content.read", "content.write", "site.admin", "system.admin"}
+
 type ToolDef struct {
 	Name          string
 	Description   string
@@ -10,15 +13,23 @@ type ToolDef struct {
 }
 
 type Registry struct {
-	defs []ToolDef
+	defs   []ToolDef
+	byName map[string]ToolDef
 }
 
 func NewRegistry() *Registry {
-	return &Registry{}
+	return &Registry{byName: make(map[string]ToolDef)}
 }
 
 func (r *Registry) Register(def ToolDef) {
 	r.defs = append(r.defs, def)
+	r.byName[def.Name] = def
+}
+
+// RequiredScopeFor returns the scope required to call name, and whether name is known.
+func (r *Registry) RequiredScopeFor(name string) (string, bool) {
+	d, ok := r.byName[name]
+	return d.RequiredScope, ok
 }
 
 func (r *Registry) ForScope(scope string) []ToolDef {

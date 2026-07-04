@@ -237,7 +237,9 @@ func TestAgentIdentityUnknownType(t *testing.T) {
 	}
 }
 
-func TestAgentTokenExchange(t *testing.T) {
+// TestAgentTokenExchangeRequiresClaim verifies that an unclaimed assertion
+// cannot be exchanged for a privileged token (issue #27).
+func TestAgentTokenExchangeRequiresClaim(t *testing.T) {
 	svc, _ := newTestService(t)
 
 	identityBody := []byte(`{"type":"anonymous"}`)
@@ -261,22 +263,23 @@ func TestAgentTokenExchange(t *testing.T) {
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenRec := httptest.NewRecorder()
 	svc.HandleToken(tokenRec, tokenReq)
-	if tokenRec.Code != http.StatusOK {
-		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	if tokenRec.Code != http.StatusBadRequest {
+		t.Fatalf("unclaimed assertion must be rejected: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
 	}
-	var tokenResp struct {
-		AccessToken string `json:"access_token"`
-		TokenType   string `json:"token_type"`
+	var errBody struct {
+		Error string `json:"error"`
 	}
-	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
-		t.Fatalf("token: decode: %v", err)
+	_ = json.Unmarshal(tokenRec.Body.Bytes(), &errBody)
+	if errBody.Error != "invalid_grant" {
+		t.Fatalf("expected invalid_grant error, got: %q", errBody.Error)
 	}
-	if tokenResp.AccessToken == "" {
-		t.Fatal("token: empty access_token")
-	}
-	if tokenResp.TokenType != "Bearer" {
-		t.Fatalf("token: token_type = %q want Bearer", tokenResp.TokenType)
-	}
+}
+
+// TestAgentTokenExchange kept for backward-compat reference; now documents that
+// unclaimed assertions are rejected. The old behaviour (immediate exchange) was
+// removed by the #27 fix.
+func TestAgentTokenExchange(t *testing.T) {
+	TestAgentTokenExchangeRequiresClaim(t)
 }
 
 func TestAgentTokenExchangeInvalidAssertion(t *testing.T) {
@@ -371,19 +374,31 @@ func TestBearerValidation(t *testing.T) {
 	}
 }
 
+// TestBearerValidationViaTokenEndpoint verifies bearer validation using a token
+// obtained via the authorization_code flow (agent assertions require claim
+// verification per issue #27 and can no longer issue tokens directly).
 func TestBearerValidationViaTokenEndpoint(t *testing.T) {
 	svc, _ := newTestService(t)
+	clientID := registerClient(t, svc, []string{"https://client.test/callback"})
 
-	identityBody := []byte(`{"type":"anonymous"}`)
-	identityReq := httptest.NewRequest(http.MethodPost, "/agent/identity", bytes.NewReader(identityBody))
-	identityRec := httptest.NewRecorder()
-	svc.HandleAgentIdentity(identityRec, identityReq)
-	var identity oauth.AgentIdentityResponse
-	_ = json.Unmarshal(identityRec.Body.Bytes(), &identity)
+	authURL := "/authorize?" + url.Values{
+		"response_type": {"code"},
+		"client_id":     {clientID},
+		"redirect_uri":  {"https://client.test/callback"},
+		"state":         {"s"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	location, _ := url.Parse(authRec.Header().Get("Location"))
+	code := location.Query().Get("code")
 
 	tokenForm := url.Values{
-		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
-		"assertion":  {identity.IdentityAssertion},
+		"grant_type":   {"authorization_code"},
+		"client_id":    {clientID},
+		"code":         {code},
+		"redirect_uri": {"https://client.test/callback"},
 	}
 	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")

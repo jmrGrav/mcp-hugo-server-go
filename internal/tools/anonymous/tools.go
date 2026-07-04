@@ -6,6 +6,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -312,5 +313,20 @@ func toPageDetailDTO(p site.Page) pageDetailDTO {
 		URL:        p.URL,
 		Lang:       p.Lang,
 		HTML:       p.RawHTML,
+	}
+}
+
+// Defs returns the tool definitions for this package (used to build the global registry).
+func Defs() []tools.ToolDef {
+	return []tools.ToolDef{
+		{Name: "list_pages", RequiredScope: ""},
+		{Name: "get_page", RequiredScope: ""},
+		{Name: "search_pages", RequiredScope: ""},
+		{Name: "get_recent_posts", RequiredScope: ""},
+		{Name: "list_tags", RequiredScope: ""},
+		{Name: "list_categories", RequiredScope: ""},
+		{Name: "get_sitemap", RequiredScope: ""},
+		{Name: "get_feed", RequiredScope: ""},
+		{Name: "get_site_information", RequiredScope: ""},
 	}
 }

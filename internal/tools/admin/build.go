@@ -5,16 +5,11 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-)
-
-var (
-	buildMu         sync.Mutex
-	buildInProgress bool
 )
 
 type buildSiteInput struct{}
@@ -32,7 +27,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "build_site",
 		Title:       "Build site",
-		Description: "[RequiredScope: site.admin] Build the Hugo site. Returns duration in milliseconds. Returns build_in_progress error if a build is already running.",
+		Description: "[RequiredScope: site.admin] Build the Hugo site. Returns duration in milliseconds. Returns build_in_progress error if a build is already running. Serialized with content mutations via ContentMu.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: boolPtr(false),
@@ -40,19 +35,10 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 			OpenWorldHint:   boolPtr(false),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
-		buildMu.Lock()
-		if buildInProgress {
-			buildMu.Unlock()
-			return nil, buildSiteOutput{}, fmt.Errorf("build_in_progress")
+		if !hugosite.ContentMu.TryLock() {
+			return nil, buildSiteOutput{}, fmt.Errorf("build_in_progress: a content mutation or build is already running")
 		}
-		buildInProgress = true
-		buildMu.Unlock()
-
-		defer func() {
-			buildMu.Lock()
-			buildInProgress = false
-			buildMu.Unlock()
-		}()
+		defer hugosite.ContentMu.Unlock()
 
 		timeout := cfg.BuildTimeoutSeconds
 		if timeout <= 0 {

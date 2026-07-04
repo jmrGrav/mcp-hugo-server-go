@@ -7,10 +7,17 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+// ContentMu is a global read-write mutex that serializes all content mutations
+// (create, update, delete) and site builds. Write operations must acquire the
+// write lock; build operations must also acquire the write lock so that Hugo
+// always sees a consistent snapshot. See issues #35 and #36.
+var ContentMu sync.RWMutex
 
 type SourcePage struct {
 	Slug           string
@@ -117,6 +124,34 @@ func (idx *SourceIndex) ListPages(limit, offset int) []SourcePage {
 	result := make([]SourcePage, end-offset)
 	copy(result, idx.pages[offset:end])
 	return result
+}
+
+// Upsert adds or replaces the index entry for page. It must be called while
+// ContentMu is held for writing, so callers (create_page, update_page) must
+// acquire the write lock before the filesystem write and index update.
+func (idx *SourceIndex) Upsert(page SourcePage) {
+	if i, ok := idx.bySlug[page.Slug]; ok {
+		idx.pages[i] = page
+		return
+	}
+	idx.pages = append(idx.pages, page)
+	idx.bySlug[page.Slug] = len(idx.pages) - 1
+}
+
+// Delete removes the index entry for slug. It must be called while ContentMu
+// is held for writing.
+func (idx *SourceIndex) Delete(slug string) {
+	i, ok := idx.bySlug[slug]
+	if !ok {
+		return
+	}
+	last := len(idx.pages) - 1
+	if i != last {
+		idx.pages[i] = idx.pages[last]
+		idx.bySlug[idx.pages[i].Slug] = i
+	}
+	idx.pages = idx.pages[:last]
+	delete(idx.bySlug, slug)
 }
 
 func slugFromRel(rel string) string {

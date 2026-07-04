@@ -18,6 +18,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
 type ctxKey string
@@ -109,7 +110,7 @@ func (s *Service) AuthorizationServerMetadata() map[string]any {
 		"grant_types_supported":                 []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"token_endpoint_auth_methods_supported": []string{"none"},
-		"scopes_supported":                      []string{"mcp"},
+		"scopes_supported":                      tools.KnownScopes,
 		"service_documentation":                 resource,
 		"agent_auth": map[string]any{
 			"skill":                    issuer + "/auth.md",
@@ -151,7 +152,7 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		ResponseTypes:                 []string{"code"},
 		TokenEndpointAuthMethod:       "none",
 		CodeChallengeMethodsSupported: []string{"S256"},
-		Scope:                         "mcp",
+		Scope:                         "content.read",
 	}, nil
 }
 
@@ -322,7 +323,8 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 	if grantType == "urn:ietf:params:oauth:grant-type:jwt-bearer" {
 		resp, err := s.exchangeAgentAssertion(r.FormValue("assertion"))
 		if err != nil {
-			writeOAuthError(w, "invalid_grant", http.StatusBadRequest)
+			errCode := oauthTokenErrorCode(err)
+			writeOAuthError(w, errCode, http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

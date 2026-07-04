@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
 type discoveryIdentityAssertion struct {
@@ -62,7 +63,7 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 		GrantTypesSupported:               []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: []string{"none"},
-		ScopesSupported:                   []string{"mcp"},
+		ScopesSupported:                   tools.KnownScopes,
 		ServiceDocumentation:              resource,
 		AgentAuth: discoveryAgentAuth{
 			Skill:                  issuer + "/auth.md",

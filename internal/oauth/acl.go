@@ -3,33 +3,20 @@ package oauth
 import (
 	"encoding/json"
 	"strings"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
-var knownProtectedTools = map[string]bool{
-	"get_full_page_markdown":  true,
-	"get_page_frontmatter":    true,
-	"get_related_content":     true,
-	"build_agent_context":     true,
-	"export_agent_context":    true,
-	"create_page":             true,
-	"update_page":             true,
-	"delete_page":             true,
-	"generate_featured_image": true,
-	"build_site":              true,
-	"run_post_build_hooks":    true,
-	"check_sri_versions":      true,
+// ScopePolicy enforces per-tool scope requirements for all MCP requests.
+// It is the single source of truth for tools/call authorization; the registry
+// is populated at startup from each tool package's Defs() function.
+type ScopePolicy struct {
+	reg *tools.Registry
 }
 
-type AnonymousMCPPolicy struct {
-	public map[string]bool
-}
-
-func NewACLPolicy(publicTools []string) *AnonymousMCPPolicy {
-	m := make(map[string]bool, len(publicTools))
-	for _, t := range publicTools {
-		m[t] = true
-	}
-	return &AnonymousMCPPolicy{public: m}
+// NewScopePolicy returns a ScopePolicy backed by reg.
+func NewScopePolicy(reg *tools.Registry) *ScopePolicy {
+	return &ScopePolicy{reg: reg}
 }
 
 type rpcEnvelope struct {
@@ -41,7 +28,7 @@ type rpcParams struct {
 	Name string `json:"name"`
 }
 
-func (p *AnonymousMCPPolicy) checkOne(env rpcEnvelope) (allow bool, reason string) {
+func (p *ScopePolicy) checkOne(env rpcEnvelope, callerScope string) (allow bool, reason string) {
 	if env.Method != "tools/call" {
 		return true, ""
 	}
@@ -49,16 +36,17 @@ func (p *AnonymousMCPPolicy) checkOne(env rpcEnvelope) (allow bool, reason strin
 	if err := json.Unmarshal(env.Params, &params); err != nil || params.Name == "" {
 		return false, "unknown_tool"
 	}
-	if p.public[params.Name] {
-		return true, ""
+	requiredScope, known := p.reg.RequiredScopeFor(params.Name)
+	if !known {
+		return false, "unknown_tool"
 	}
-	if knownProtectedTools[params.Name] {
+	if tools.ScopeRank(callerScope) < tools.ScopeRank(requiredScope) {
 		return false, "forbidden_tool"
 	}
-	return false, "unknown_tool"
+	return true, ""
 }
 
-func (p *AnonymousMCPPolicy) parse(body []byte) ([]rpcEnvelope, bool) {
+func (p *ScopePolicy) parse(body []byte) ([]rpcEnvelope, bool) {
 	body = []byte(strings.TrimSpace(string(body)))
 	if len(body) == 0 {
 		return nil, false
@@ -77,26 +65,28 @@ func (p *AnonymousMCPPolicy) parse(body []byte) ([]rpcEnvelope, bool) {
 	return []rpcEnvelope{single}, true
 }
 
-func (p *AnonymousMCPPolicy) AllowRequest(body []byte) bool {
+// AllowRequest returns true when all tools/call entries in body are permitted for callerScope.
+func (p *ScopePolicy) AllowRequest(body []byte, callerScope string) bool {
 	envs, ok := p.parse(body)
 	if !ok {
 		return false
 	}
 	for _, env := range envs {
-		if allow, _ := p.checkOne(env); !allow {
+		if allow, _ := p.checkOne(env, callerScope); !allow {
 			return false
 		}
 	}
 	return true
 }
 
-func (p *AnonymousMCPPolicy) DenyReason(body []byte) string {
+// DenyReason returns the deny reason for the first blocked request entry, or "".
+func (p *ScopePolicy) DenyReason(body []byte, callerScope string) string {
 	envs, ok := p.parse(body)
 	if !ok {
 		return "unknown_tool"
 	}
 	for _, env := range envs {
-		if allow, reason := p.checkOne(env); !allow {
+		if allow, reason := p.checkOne(env, callerScope); !allow {
 			return reason
 		}
 	}

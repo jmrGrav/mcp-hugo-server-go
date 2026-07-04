@@ -8,6 +8,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -361,4 +362,15 @@ func sliceContains(slice []string, v string) bool {
 		}
 	}
 	return false
+}
+
+// Defs returns the tool definitions for this package (used to build the global registry).
+func Defs() []tools.ToolDef {
+	return []tools.ToolDef{
+		{Name: "get_full_page_markdown", RequiredScope: "content.read"},
+		{Name: "get_page_frontmatter", RequiredScope: "content.read"},
+		{Name: "get_related_content", RequiredScope: "content.read"},
+		{Name: "build_agent_context", RequiredScope: "content.read"},
+		{Name: "export_agent_context", RequiredScope: "content.read"},
+	}
 }

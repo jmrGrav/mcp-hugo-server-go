@@ -290,3 +290,104 @@ func TestToolsListAuthenticatedReturnsFourteenTools(t *testing.T) {
 		}
 	}
 }
+
+// TestContentReadCannotCallWriteTool proves that a content.read bearer cannot
+// invoke a content.write tool (issue #25 acceptance criterion 1).
+func TestContentReadCannotCallWriteTool(t *testing.T) {
+	srv := mustOAuthServer(t)
+	bearer := obtainBearerToken(t, srv)
+
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("content.read must not call create_page: status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "forbidden_tool") {
+		t.Fatalf("expected forbidden_tool in response, got: %q", rec.Body.String())
+	}
+}
+
+// TestContentReadCannotCallSiteAdminTool proves that a content.read bearer cannot
+// invoke a site.admin tool (issue #25 acceptance criterion 2).
+func TestContentReadCannotCallSiteAdminTool(t *testing.T) {
+	srv := mustOAuthServer(t)
+	bearer := obtainBearerToken(t, srv)
+
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_site"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("content.read must not call build_site: status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "forbidden_tool") {
+		t.Fatalf("expected forbidden_tool in response, got: %q", rec.Body.String())
+	}
+}
+
+// TestAnonymousCannotCallSystemAdminTool verifies the unknown unknown_tool response
+// for anonymous callers trying to invoke system.admin tools.
+func TestAnonymousCannotCallSystemAdminTool(t *testing.T) {
+	srv := mustOAuthServer(t)
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_sri_versions"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("anonymous must not call check_sri_versions: status = %d body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+// TestScopesSupported verifies that the server discovery announces the actual granular
+// scopes (issue #28 acceptance criterion).
+func TestScopesSupported(t *testing.T) {
+	srv := mustOAuthServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	var meta struct {
+		ScopesSupported []string `json:"scopes_supported"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	wantScopes := []string{"content.read", "content.write", "site.admin", "system.admin"}
+	for _, want := range wantScopes {
+		found := false
+		for _, got := range meta.ScopesSupported {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("scopes_supported missing %q; got %v", want, meta.ScopesSupported)
+		}
+	}
+	for _, bad := range []string{"mcp"} {
+		for _, got := range meta.ScopesSupported {
+			if got == bad {
+				t.Errorf("scopes_supported should not contain legacy scope %q", bad)
+			}
+		}
+	}
+}
