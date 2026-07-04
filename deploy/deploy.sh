@@ -18,7 +18,7 @@ ssh "$REMOTE" "sudo systemctl disable hugo-public-mcp 2>/dev/null || true"
 scp deploy/systemd/mcp-hugo-server-go.service "$REMOTE:/tmp/mcp-hugo-server-go.service"
 ssh "$REMOTE" "sudo mv /tmp/mcp-hugo-server-go.service /etc/systemd/system/mcp-hugo-server-go.service"
 
-ssh "$REMOTE" "sudo systemctl daemon-reload && sudo systemctl enable --now mcp-hugo-server-go"
+ssh "$REMOTE" "sudo systemctl daemon-reload && sudo systemctl enable mcp-hugo-server-go && sudo systemctl restart mcp-hugo-server-go"
 
 rm -f "$BINARY"
 
