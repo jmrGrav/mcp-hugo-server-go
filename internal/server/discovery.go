@@ -94,6 +94,42 @@ func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
 	}
 }
 
+type mcpJSON struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	MCPServers  map[string]mcpJSONServer `json:"mcpServers"`
+}
+
+type mcpJSONServer struct {
+	URL  string `json:"url"`
+	Type string `json:"type"`
+}
+
+func buildMCPJSON(cfg config.Config) mcpJSON {
+	name := cfg.SiteName
+	if name == "" {
+		name = cfg.SiteURL
+	}
+	mcpBase := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	if mcpBase == "" {
+		mcpBase = strings.TrimRight(cfg.SiteURL, "/")
+	}
+	return mcpJSON{
+		Name:        name,
+		Description: name + " — a Hugo-published site available via MCP.",
+		MCPServers: map[string]mcpJSONServer{
+			"default": {
+				URL:  mcpBase + "/mcp",
+				Type: "http",
+			},
+		},
+	}
+}
+
+func handleMCPJSON(w http.ResponseWriter, r *http.Request, cfg config.Config) {
+	serveDiscoveryJSON(w, r, buildMCPJSON(cfg))
+}
+
 func buildLLMsTxt(cfg config.Config) string {
 	name := cfg.SiteName
 	if name == "" {

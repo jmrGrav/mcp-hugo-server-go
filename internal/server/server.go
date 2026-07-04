@@ -28,7 +28,7 @@ import (
 
 const (
 	Name    = "mcp-hugo-server-go"
-	Version = "v0.1.0"
+	Version = "v1.0.0"
 )
 
 type Server struct {
@@ -191,6 +191,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			handleOAuthAuthServer(w, r, cfg)
 		case "/.well-known/oauth-protected-resource":
 			handleOAuthProtectedResource(w, r, cfg)
+		case "/.well-known/mcp.json":
+			handleMCPJSON(w, r, cfg)
 		case "/robots.txt":
 			handleRobotsTxt(w, r, cfg)
 		case "/llms.txt":
