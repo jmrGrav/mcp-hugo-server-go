@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +49,31 @@ func mustOAuthServer(t *testing.T) *server.Server {
 		AuthCodeTTLSeconds:    300,
 		AccessTokenTTLSeconds: 3600,
 		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32", "::1/128"},
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	return srv
+}
+
+func mustOAuthServerWithRegistry(t *testing.T, registryPath string) *server.Server {
+	t.Helper()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
+	cfg.OAuth = config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		DynamicClientEnabled:  true,
+		AuthCodeTTLSeconds:    300,
+		AccessTokenTTLSeconds: 3600,
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32", "::1/128"},
+		ClientRegistryPath:    registryPath,
 	}
 	idx, err := site.NewIndex(cfg)
 	if err != nil {
@@ -488,5 +514,107 @@ func TestScopesSupported(t *testing.T) {
 				t.Errorf("scopes_supported should not contain legacy scope %q", bad)
 			}
 		}
+	}
+}
+
+func TestConfidentialClientCanAccessSiteAdminTools(t *testing.T) {
+	mockDir := t.TempDir()
+	mockHugo := filepath.Join(mockDir, "hugo")
+	if err := os.WriteFile(mockHugo, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write mock hugo: %v", err)
+	}
+	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
+
+	registryPath := filepath.Join(t.TempDir(), "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - client_id: claude-admin
+    client_secret: admin-secret-value
+    redirect_uris:
+      - https://client.test/callback
+    scope: site.admin
+`), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	srv := mustOAuthServerWithRegistry(t, registryPath)
+
+	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
+		"response_type": {"code"},
+		"client_id":     {"claude-admin"},
+		"redirect_uri":  {"https://client.test/callback"},
+		"state":         {"site-admin"},
+		"code_challenge": {func() string {
+			sum := sha256.Sum256([]byte("verifier-verifier-verifier-verifier-verifier"))
+			return base64.RawURLEncoding.EncodeToString(sum[:])
+		}()},
+		"code_challenge_method": {"S256"},
+	}.Encode(), nil)
+	authReq.RemoteAddr = "127.0.0.1:1234"
+	authRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatal("authorize missing code")
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {"claude-admin"},
+		"client_secret": {"admin-secret-value"},
+		"redirect_uri":  {"https://client.test/callback"},
+		"code":          {code},
+		"code_verifier": {"verifier-verifier-verifier-verifier-verifier"},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	if tokenResp.Scope != "site.admin" {
+		t.Fatalf("token scope = %q want site.admin", tokenResp.Scope)
+	}
+
+	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
+	found := false
+	writeFound := false
+	for _, name := range names {
+		if name == "build_site" {
+			found = true
+		}
+		if name == "create_page" {
+			writeFound = true
+		}
+	}
+	if !found {
+		t.Fatalf("site.admin token missing build_site; got %v", names)
+	}
+	if !writeFound {
+		t.Fatalf("site.admin token missing create_page; got %v", names)
+	}
+
+	callRec := doMCPCall(t, srv, tokenResp.AccessToken, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_site","arguments":{}}}`))
+	if callRec.Code != http.StatusOK {
+		t.Fatalf("build_site status = %d body = %q", callRec.Code, callRec.Body.String())
+	}
+	if !strings.Contains(callRec.Body.String(), "status") {
+		t.Fatalf("build_site response missing status: %q", callRec.Body.String())
 	}
 }

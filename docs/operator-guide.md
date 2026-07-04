@@ -87,6 +87,7 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 | `oauth.issuer` | string | (required if enabled) | OAuth issuer URL (e.g., `https://mcp.arleo.eu`). |
 | `oauth.resource` | string | (empty) | Resource URI for scopes. |
 | `oauth.dynamic_client_registration` | boolean | `false` | Allow dynamic client registration (RFC 7591). |
+| `oauth.client_registry_path` | string | (empty) | Optional host-local YAML file with preconfigured confidential clients and canonical scopes. |
 | `oauth.require_pkce` | boolean | `false` | Require PKCE for authorization code flow. |
 | `oauth.trusted_authorize_cidrs` | array of strings | (empty) | CIDR blocks allowed to call `/authorize` without authentication. |
 | `oauth.auth_code_ttl_seconds` | int | (default) | Lifetime of authorization codes. |
@@ -99,6 +100,8 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 The server exposes tools across five access tiers. Each tier is a superset of lower tiers: agents with `content.write` access can call all `content.read` tools, and so on.
 
 Legacy clients may still send `mcp` as a scope. It is accepted as a deprecated alias for `content.read` for backward compatibility, but it is not advertised as a canonical scope and should not be used by new clients.
+
+To enable confidential OAuth clients for `content.write`, `site.admin`, or `system.admin`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry must include a `client_id`, a `client_secret` or `client_secret_hash`, redirect URIs, and a canonical scope.
 
 The server exposes a migration metric at `/metrics`:
 

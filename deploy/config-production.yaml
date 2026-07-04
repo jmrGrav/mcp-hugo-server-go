@@ -4,6 +4,7 @@
 # SECRET FIELDS — replace placeholders before deploying:
 #   oauth.issuer     → your public base URL (e.g. https://mcp.example.com)
 #   oauth.resource   → same as issuer (or a distinct resource indicator URL)
+#   oauth.client_registry_path → optional host-local YAML file for confidential clients
 #   image_gen_url    → your image-generation API endpoint (optional)
 #   image_gen_key    → your image-generation API key (optional)
 #   post_build_hooks → webhook URLs called after a Hugo build (optional)
@@ -48,6 +49,7 @@ oauth:
   issuer: https://mcp.example.com          # REPLACE — public base URL of this server
   resource: https://mcp.example.com        # REPLACE — usually same as issuer
   dynamic_client_registration: true
+  client_registry_path: /etc/mcp-hugo-server-go/oauth-clients.yaml
   require_pkce: true
   trusted_authorize_cidrs:
     - 127.0.0.1/32                         # loopback; add Cloudflare IPs if needed

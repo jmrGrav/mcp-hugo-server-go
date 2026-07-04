@@ -168,6 +168,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			return nil, err
 		}
 		oauthSvc = oauth.NewService(cfg.OAuth, store)
+		if err := oauthSvc.LoadClientRegistry(cfg.OAuth.ClientRegistryPath); err != nil {
+			return nil, fmt.Errorf("server: oauth client registry: %w", err)
+		}
 	}
 
 	rateLimitedStreaming := oauth.NewRateLimiter(cfg.RateLimit).Middleware(streaming)

@@ -104,6 +104,57 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	}
 }
 
+func TestWellKnownOAuthServerWithClientRegistry(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - client_id: claude-admin
+    client_secret: admin-secret-value
+    redirect_uris:
+      - https://client.test/callback
+    scope: site.admin
+`), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = dir
+	cfg.SiteURL = "https://www.arleo.eu"
+	cfg.SiteName = "arleo.eu"
+	cfg.OAuth.Issuer = "https://mcp.arleo.eu"
+	cfg.OAuth.Resource = "https://mcp.arleo.eu/mcp"
+	cfg.OAuth.ClientRegistryPath = registryPath
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	var meta struct {
+		TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	found := false
+	for _, m := range meta.TokenEndpointAuthMethodsSupported {
+		if m == "client_secret_basic" || m == "client_secret_post" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("token_endpoint_auth_methods_supported = %v, want client_secret_* support", meta.TokenEndpointAuthMethodsSupported)
+	}
+}
+
 func TestWellKnownMCPServerCard(t *testing.T) {
 	srv := mustDiscoveryServer(t, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/mcp/server-card.json", nil)

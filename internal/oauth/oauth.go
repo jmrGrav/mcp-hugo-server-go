@@ -38,6 +38,8 @@ type Service struct {
 
 type client struct {
 	RedirectURIs []string
+	SecretHash   string
+	Scope        string
 }
 
 type authCode struct {
@@ -91,6 +93,54 @@ func NewService(cfg config.OAuthConfig, store storage.Store) *Service {
 	}
 }
 
+func (s *Service) LoadClientRegistry(path string) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	registry, err := loadClientRegistry(path)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, entry := range registry.Clients {
+		if entry.ClientID == "" {
+			return fmt.Errorf("invalid_client_registry: client_id missing")
+		}
+		if _, exists := s.clients[entry.ClientID]; exists {
+			return fmt.Errorf("invalid_client_registry: duplicate client_id %q", entry.ClientID)
+		}
+		redirects := make([]string, 0, len(entry.RedirectURIs))
+		for _, uri := range entry.RedirectURIs {
+			if !isAllowedRedirectURI(uri) {
+				return fmt.Errorf("invalid_client_registry: invalid redirect_uri for %q", entry.ClientID)
+			}
+			redirects = append(redirects, uri)
+		}
+		scope := CanonicalScope(strings.TrimSpace(entry.Scope))
+		if scope == "" {
+			scope = "content.read"
+		}
+		if tools.ScopeRank(scope) < tools.ScopeRank("content.read") {
+			return fmt.Errorf("invalid_client_registry: unsupported scope %q", entry.Scope)
+		}
+		secretHash := strings.TrimSpace(entry.SecretHash)
+		if secretHash == "" && strings.TrimSpace(entry.ClientSecret) != "" {
+			secretHash = HashToken(entry.ClientSecret)
+		}
+		if secretHash == "" {
+			return fmt.Errorf("invalid_client_registry: client_secret or client_secret_hash required for %q", entry.ClientID)
+		}
+		s.clients[entry.ClientID] = client{
+			RedirectURIs: redirects,
+			SecretHash:   secretHash,
+			Scope:        scope,
+		}
+	}
+	return nil
+}
+
 func (s *Service) ValidateBearer(token string) (string, bool) {
 	scope, _, ok := s.ValidateBearerDetails(token)
 	return scope, ok
@@ -121,7 +171,7 @@ func (s *Service) AuthorizationServerMetadata() map[string]any {
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
 		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": []string{"none"},
+		"token_endpoint_auth_methods_supported": s.supportedTokenAuthMethods(),
 		"scopes_supported":                      tools.KnownScopes,
 		"service_documentation":                 resource,
 		"agent_auth": map[string]any{
@@ -140,6 +190,18 @@ func (s *Service) AuthorizationServerMetadata() map[string]any {
 	}
 }
 
+func (s *Service) supportedTokenAuthMethods() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	methods := []string{"none"}
+	for _, c := range s.clients {
+		if c.SecretHash != "" {
+			return []string{"none", "client_secret_basic", "client_secret_post"}
+		}
+	}
+	return methods
+}
+
 func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse, error) {
 	if !s.cfg.DynamicClientEnabled {
 		return nil, fmt.Errorf("invalid_request: dynamic_client_registration_disabled")
@@ -154,7 +216,7 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 	}
 	id := randomString(24)
 	s.mu.Lock()
-	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...)}
+	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...), Scope: "content.read"}
 	s.mu.Unlock()
 	return &RegistrationResponse{
 		ClientID:                      id,
@@ -169,9 +231,7 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 }
 
 func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {
-	s.mu.RLock()
-	c, ok := s.clients[clientID]
-	s.mu.RUnlock()
+	c, ok := s.lookupClient(clientID)
 	if !ok {
 		return "", fmt.Errorf("unauthorized_client")
 	}
@@ -181,6 +241,13 @@ func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("invalid_redirect_uri")
+}
+
+func (s *Service) lookupClient(clientID string) (client, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	c, ok := s.clients[clientID]
+	return c, ok
 }
 
 func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, state, codeChallenge, codeChallengeMethod string) (string, error) {
@@ -220,9 +287,18 @@ func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, s
 	return code, nil
 }
 
-func (s *Service) exchangeToken(grantType, clientID, redirectURI, code, codeVerifier string) (*TokenResponse, error) {
+func (s *Service) exchangeToken(grantType, clientID, clientSecret, redirectURI, code, codeVerifier string) (*TokenResponse, error) {
 	if grantType != "authorization_code" {
 		return nil, fmt.Errorf("unsupported_grant_type")
+	}
+	c, ok := s.lookupClient(clientID)
+	if !ok {
+		return nil, fmt.Errorf("invalid_client")
+	}
+	if c.SecretHash != "" {
+		if clientSecret == "" || subtle.ConstantTimeCompare([]byte(HashToken(clientSecret)), []byte(c.SecretHash)) != 1 {
+			return nil, fmt.Errorf("invalid_client")
+		}
 	}
 	s.mu.Lock()
 	data, ok := s.codes[code]
@@ -244,12 +320,16 @@ func (s *Service) exchangeToken(grantType, clientID, redirectURI, code, codeVeri
 	}
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	_ = s.store.AddAccessToken(HashToken(token), "content.read", time.Now().Add(ttl))
+	scope := CanonicalScope(c.Scope)
+	if scope == "" {
+		scope = "content.read"
+	}
+	_ = s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(ttl))
 	return &TokenResponse{
 		AccessToken: token,
 		TokenType:   "Bearer",
 		ExpiresIn:   s.cfg.AccessTokenTTLSeconds,
-		Scope:       "content.read",
+		Scope:       scope,
 	}, nil
 }
 
@@ -347,6 +427,7 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.exchangeToken(
 		grantType,
 		r.FormValue("client_id"),
+		tokenClientSecret(r),
 		r.FormValue("redirect_uri"),
 		r.FormValue("code"),
 		r.FormValue("code_verifier"),
@@ -420,6 +501,16 @@ func requestSourceIP(r *http.Request) string {
 		}
 	}
 	return host
+}
+
+func tokenClientSecret(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	if user, pass, ok := r.BasicAuth(); ok && user != "" && pass != "" {
+		return pass
+	}
+	return r.FormValue("client_secret")
 }
 
 func writeOAuthError(w http.ResponseWriter, code string, status int) {

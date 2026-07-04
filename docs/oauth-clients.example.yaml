@@ -1,0 +1,12 @@
+clients:
+  - client_id: claude-admin
+    client_secret: REPLACE_WITH_A_LONG_RANDOM_SECRET
+    redirect_uris:
+      - https://claude.ai/api/oauth/callback
+    scope: site.admin
+
+  - client_id: chatgpt-write
+    client_secret: REPLACE_WITH_A_LONG_RANDOM_SECRET
+    redirect_uris:
+      - https://chatgpt.com/aip/oauth/callback
+    scope: content.write

@@ -65,11 +65,10 @@ func TestServiceHelperValidationBranches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issueAuthCode valid request error = %v", err)
 	}
-	if _, err := svc.exchangeToken("password", resp.ClientID, "https://client.test/callback", code, "verifier-verifier-verifier-verifier"); err == nil {
+	if _, err := svc.exchangeToken("password", resp.ClientID, "", "https://client.test/callback", code, "verifier-verifier-verifier-verifier"); err == nil {
 		t.Fatal("exchangeToken should reject unsupported grant type")
 	}
-	if _, err := svc.exchangeToken("authorization_code", "wrong", "https://client.test/callback", code, "verifier-verifier-verifier-verifier"); err == nil {
+	if _, err := svc.exchangeToken("authorization_code", "wrong", "", "https://client.test/callback", code, "verifier-verifier-verifier-verifier"); err == nil {
 		t.Fatal("exchangeToken should reject wrong client")
 	}
 }
-

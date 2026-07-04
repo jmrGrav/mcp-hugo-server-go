@@ -62,7 +62,7 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
-		TokenEndpointAuthMethodsSupported: []string{"none"},
+		TokenEndpointAuthMethodsSupported: tokenEndpointAuthMethods(cfg),
 		ScopesSupported:                   tools.KnownScopes,
 		ServiceDocumentation:              resource,
 		AgentAuth: discoveryAgentAuth{
@@ -77,6 +77,13 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 			EventsSupported: []string{"https://schemas.workos.com/events/agent/auth/identity/assertion/revoked"},
 		},
 	}
+}
+
+func tokenEndpointAuthMethods(cfg config.Config) []string {
+	if strings.TrimSpace(cfg.OAuth.ClientRegistryPath) != "" {
+		return []string{"none", "client_secret_basic", "client_secret_post"}
+	}
+	return []string{"none"}
 }
 
 func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
@@ -110,11 +117,11 @@ type mcpServerCard struct {
 }
 
 type agentCard struct {
-	Schema      string   `json:"$schema"`
-	Version     string   `json:"version"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	URL         string   `json:"url"`
+	Schema       string   `json:"$schema"`
+	Version      string   `json:"version"`
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	URL          string   `json:"url"`
 	Capabilities []string `json:"capabilities"`
 }
 
@@ -228,11 +235,11 @@ func buildAgentCard(cfg config.Config) agentCard {
 		base = strings.TrimRight(cfg.OAuth.Issuer, "/")
 	}
 	return agentCard{
-		Schema:      "https://a2a.google.com/schemas/agent-card/v1.json",
-		Version:     "1.0",
-		Name:        name,
-		Description: name + " exposed through MCP and OAuth-backed discovery.",
-		URL:         base,
+		Schema:       "https://a2a.google.com/schemas/agent-card/v1.json",
+		Version:      "1.0",
+		Name:         name,
+		Description:  name + " exposed through MCP and OAuth-backed discovery.",
+		URL:          base,
 		Capabilities: []string{"chat", "tools"},
 	}
 }
