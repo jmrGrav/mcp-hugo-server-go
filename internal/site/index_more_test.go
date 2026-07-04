@@ -1,0 +1,187 @@
+package site
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/net/html"
+)
+
+func TestSiteIndexHelpers(t *testing.T) {
+	t.Run("slug and path helpers", func(t *testing.T) {
+		if got := slugFromRel("posts/hello/index.html"); got != "/posts/hello/" {
+			t.Fatalf("slugFromRel() = %q", got)
+		}
+		if got := slugFromRel("about.html"); got != "/about/" {
+			t.Fatalf("slugFromRel() = %q", got)
+		}
+		if got := slugFromCanonical("https://example.test/posts/hello"); got != "/posts/hello/" {
+			t.Fatalf("slugFromCanonical() = %q", got)
+		}
+		if got := normalizeSlug("posts/hello"); got != "/posts/hello/" {
+			t.Fatalf("normalizeSlug() = %q", got)
+		}
+		if got := normalizeSlug(""); got != "/" {
+			t.Fatalf("normalizeSlug(\"\") = %q", got)
+		}
+		if got := pathClean("posts//hello/../world"); got != "/posts/world" {
+			t.Fatalf("pathClean() = %q", got)
+		}
+		if got := joinURL("https://example.test/", "/posts/hello/"); got != "https://example.test/posts/hello/" {
+			t.Fatalf("joinURL() = %q", got)
+		}
+		if got := slugTitleFallback("/posts/my_first-post/"); got != "My first post" {
+			t.Fatalf("slugTitleFallback() = %q", got)
+		}
+		if !isHTMLFile("index.HTM") || isHTMLFile("index.md") {
+			t.Fatal("isHTMLFile() failed expected cases")
+		}
+		if !isPost(Page{Slug: "/posts/hello/"}) || isPost(Page{Slug: "/about/"}) {
+			t.Fatal("isPost() failed expected cases")
+		}
+	})
+
+	t.Run("string helpers", func(t *testing.T) {
+		if got := firstNonEmptyStr(" ", "hello", "world"); got != "hello" {
+			t.Fatalf("firstNonEmptyStr() = %q", got)
+		}
+		if got := firstNonZeroTime(time.Time{}, time.Unix(100, 0)); got.Unix() != 100 {
+			t.Fatalf("firstNonZeroTime() = %v", got)
+		}
+		if got := uniqueStrs([]string{"Go", " go ", "", "Rust", "rust"}); len(got) != 2 || got[0] != "Go" || got[1] != "Rust" {
+			t.Fatalf("uniqueStrs() = %#v", got)
+		}
+		if got := splitCSV("alpha, beta, ,gamma"); len(got) != 3 || got[1] != "beta" {
+			t.Fatalf("splitCSV() = %#v", got)
+		}
+	})
+
+	t.Run("HTML helpers", func(t *testing.T) {
+		raw := []byte(`
+<!doctype html>
+<html lang="fr">
+  <head>
+    <title>Example title</title>
+    <meta name="description" content="Example summary">
+    <meta property="og:title" content="OG title">
+    <meta property="og:description" content="OG summary">
+    <meta property="article:section" content="News">
+    <meta property="article:published_time" content="2026-07-04T06:00:00Z">
+    <meta property="article:modified_time" content="2026-07-04">
+    <meta property="article:tag" content="Go">
+    <meta property="article:tag" content="go">
+    <meta name="keywords" content="alpha, beta">
+    <link rel="canonical" href="https://example.test/posts/hello/">
+  </head>
+  <body>
+    <article>
+      <h1>Body heading</h1>
+      <p>Body text</p>
+    </article>
+  </body>
+</html>`)
+		pg, parsed, err := parseHTMLPage(raw, "posts/hello/index.html", time.Unix(0, 0), "https://example.test", "en")
+		if err != nil {
+			t.Fatalf("parseHTMLPage() error = %v", err)
+		}
+		if pg.Slug != "/posts/hello/" || pg.Title != "OG title" || pg.Summary != "OG summary" {
+			t.Fatalf("parseHTMLPage() page = %#v", pg)
+		}
+		if pg.Lang != "fr" || pg.URL != "https://example.test/posts/hello/" {
+			t.Fatalf("parseHTMLPage() lang/url = %#v", pg)
+		}
+		if len(pg.Tags) != 1 || pg.Tags[0] != "Go" {
+			t.Fatalf("parseHTMLPage() tags = %#v", pg.Tags)
+		}
+		if len(pg.Categories) != 2 || pg.Categories[0] != "alpha" || pg.Categories[1] != "beta" {
+			t.Fatalf("parseHTMLPage() categories = %#v", pg.Categories)
+		}
+		if parsed.IsZero() {
+			t.Fatal("parseHTMLPage() parsed date should not be zero")
+		}
+		if body := bodyHTML(raw); !strings.Contains(body, "<h1>Body heading</h1>") {
+			t.Fatalf("bodyHTML() = %q", body)
+		}
+		doc, err := htmlParseForTest(raw)
+		if err != nil {
+			t.Fatalf("html parse helper: %v", err)
+		}
+		meta := collectMeta(doc)
+		if meta.title != "Example title" || meta.description != "Example summary" {
+			t.Fatalf("collectMeta() = %#v", meta)
+		}
+		if nodeAttr(findElement(doc, "html"), "lang") != "fr" {
+			t.Fatal("nodeAttr() did not read lang")
+		}
+		if txt := textContent(findElement(doc, "title")); txt != "Example title" {
+			t.Fatalf("textContent() = %q", txt)
+		}
+	})
+}
+
+func TestSiteIndexCollectionsAndBoundaries(t *testing.T) {
+	idx := &Index{
+		entries: []entry{
+			{page: Page{Slug: "/posts/b/", Date: "2026-07-02", Tags: []string{"go"}, Categories: []string{"docs"}}},
+			{page: Page{Slug: "/posts/a/", Date: "2026-07-03", Tags: []string{"mcp"}, Categories: []string{"docs"}}},
+			{page: Page{Slug: "/about/", Date: "2026-07-01", Tags: []string{"about"}, Categories: []string{"pages"}}},
+		},
+		bySlug: map[string]int{
+			"/posts/b/": 0,
+			"/posts/a/": 1,
+			"/about/":   2,
+		},
+		tags:       []string{"about", "go", "mcp"},
+		categories: []string{"docs", "pages"},
+		info:       map[string]string{"name": "example", "url": "https://example.test", "lang": "en"},
+	}
+
+	if got := idx.AllCategories(); len(got) != 2 || got[0] != "docs" || got[1] != "pages" {
+		t.Fatalf("AllCategories() = %#v", got)
+	}
+	if got := idx.SiteInfo(); got["name"] != "example" {
+		t.Fatalf("SiteInfo() = %#v", got)
+	}
+	if got := idx.GetFeed(2); len(got) != 2 {
+		t.Fatalf("GetFeed() = %#v", got)
+	}
+	if got := idx.GetFeed(0); len(got) != 3 {
+		t.Fatalf("GetFeed(0) should return all pages, got %#v", got)
+	}
+	if got := idx.RecentPosts(1); len(got) != 1 || got[0].Slug != "/posts/b/" {
+		t.Fatalf("RecentPosts() = %#v", got)
+	}
+	if got := idx.Search("", 1); len(got) != 1 {
+		t.Fatalf("Search() with empty query should still return ranked results, got %#v", got)
+	}
+	if got := idx.Sitemap(); len(got) != 3 {
+		t.Fatalf("Sitemap() = %#v", got)
+	}
+}
+
+func TestCanonicalDirAndHiddenPath(t *testing.T) {
+	root := t.TempDir()
+	if _, err := canonicalDir(root); err != nil {
+		t.Fatalf("canonicalDir() error = %v", err)
+	}
+	if !isHiddenPath(".well-known/robots.txt") {
+		t.Fatal("isHiddenPath() should detect hidden component")
+	}
+	if isHiddenPath("public/robots.txt") {
+		t.Fatal("isHiddenPath() should not flag visible path")
+	}
+
+	symlink := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(root, symlink); err == nil {
+		if _, err := canonicalDir(symlink); err == nil {
+			t.Fatal("canonicalDir() should reject symlinks")
+		}
+	}
+}
+
+func htmlParseForTest(raw []byte) (*html.Node, error) {
+	return html.Parse(strings.NewReader(string(raw)))
+}

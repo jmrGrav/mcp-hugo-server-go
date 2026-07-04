@@ -209,6 +209,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			handleMCPServerCard(w, r, cfg)
 		case "/.well-known/mcp.json":
 			handleMCPJSON(w, r, cfg)
+		case "/.well-known/agent.json":
+			handleAgentJSON(w, r, cfg)
 		case "/metrics":
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)

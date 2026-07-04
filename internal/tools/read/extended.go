@@ -3,6 +3,7 @@ package read
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/net/html"
 )
 
 const toolResultVersion = "v1.0.0"
@@ -107,6 +109,35 @@ type validateOutput struct {
 	Data        validateOutputData `json:"data"`
 	Warnings    []string           `json:"warnings"`
 	Errors      []string           `json:"errors"`
+}
+
+type brokenLinkInput struct {
+	Limit  int `json:"limit,omitempty"`
+	Offset int `json:"offset,omitempty"`
+}
+
+type brokenLinkDTO struct {
+	PageSlug string `json:"page_slug"`
+	Link     string `json:"link"`
+	Target   string `json:"target,omitempty"`
+	Reason   string `json:"reason"`
+}
+
+type brokenLinkData struct {
+	TotalPages  int             `json:"total_pages"`
+	BrokenLinks int             `json:"broken_links"`
+	Limit       int             `json:"limit"`
+	Offset      int             `json:"offset"`
+	Links       []brokenLinkDTO `json:"links"`
+}
+
+type brokenLinkOutput struct {
+	Success     bool           `json:"success"`
+	Version     string         `json:"version"`
+	GeneratedAt string         `json:"generated_at"`
+	Data        brokenLinkData `json:"data"`
+	Warnings    []string       `json:"warnings"`
+	Errors      []string       `json:"errors"`
 }
 
 // RegisterWithSourceIndex wires additional read-only tools that benefit from the
@@ -231,6 +262,33 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}
 			pages := srcIdx.ListPages(0, 0)
 			return nil, validatePagesWithIssues(pages, 0, 0), nil
+		})
+
+	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. Returns a limited sample of missing internal targets and requires content.read.",
+		func(_ context.Context, _ *mcp.CallToolRequest, in brokenLinkInput) (*mcp.CallToolResult, brokenLinkOutput, error) {
+			if idx == nil {
+				return nil, brokenLinkOutput{}, fmt.Errorf("index not initialized")
+			}
+			issues := collectBrokenLinks(idx)
+			limit := clampLimit(in.Limit, 25, 100)
+			offset := in.Offset
+			if offset < 0 {
+				offset = 0
+			}
+			return nil, brokenLinkOutput{
+				Success:     true,
+				Version:     toolResultVersion,
+				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+				Data: brokenLinkData{
+					TotalPages:  len(idx.Sitemap()),
+					BrokenLinks: len(issues),
+					Limit:       limit,
+					Offset:      offset,
+					Links:       sliceBrokenLinks(issues, offset, limit),
+				},
+				Warnings: []string{},
+				Errors:   []string{},
+			}, nil
 		})
 }
 
@@ -373,6 +431,101 @@ func sliceContentPages(pages []site.Page, offset, limit int) []site.Page {
 		return []site.Page{}
 	}
 	out := pages[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func collectBrokenLinks(idx *site.Index) []brokenLinkDTO {
+	if idx == nil {
+		return nil
+	}
+	var issues []brokenLinkDTO
+	for _, page := range idx.Sitemap() {
+		base, err := url.Parse(page.URL)
+		if err != nil {
+			continue
+		}
+		for _, href := range extractLinks(page.RawHTML) {
+			target, ok := resolveInternalLink(base, href)
+			if !ok {
+				continue
+			}
+			if _, found := idx.GetBySlug(target.Path); found {
+				continue
+			}
+			issues = append(issues, brokenLinkDTO{
+				PageSlug: page.Slug,
+				Link:     href,
+				Target:   target.String(),
+				Reason:   "missing target page",
+			})
+		}
+	}
+	return issues
+}
+
+func extractLinks(rawHTML string) []string {
+	if strings.TrimSpace(rawHTML) == "" {
+		return nil
+	}
+	doc, err := html.Parse(strings.NewReader(rawHTML))
+	if err != nil {
+		return nil
+	}
+	var links []string
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n == nil {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "a" {
+			if href := strings.TrimSpace(htmlAttr(n, "href")); href != "" {
+				links = append(links, href)
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return links
+}
+
+func resolveInternalLink(base *url.URL, raw string) (*url.URL, bool) {
+	if base == nil {
+		return nil, false
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "#") || strings.HasPrefix(raw, "mailto:") || strings.HasPrefix(raw, "tel:") {
+		return nil, false
+	}
+	ref, err := url.Parse(raw)
+	if err != nil {
+		return nil, false
+	}
+	target := base.ResolveReference(ref)
+	if target.Host != "" && target.Host != base.Host {
+		return nil, false
+	}
+	return target, true
+}
+
+func htmlAttr(n *html.Node, key string) string {
+	for _, a := range n.Attr {
+		if strings.EqualFold(a.Key, key) {
+			return a.Val
+		}
+	}
+	return ""
+}
+
+func sliceBrokenLinks(issues []brokenLinkDTO, offset, limit int) []brokenLinkDTO {
+	if offset >= len(issues) {
+		return []brokenLinkDTO{}
+	}
+	out := issues[offset:]
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}

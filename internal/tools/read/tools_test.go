@@ -353,7 +353,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 	for i := range tools.Tools {
 		got[tools.Tools[i].Name] = tools.Tools[i]
 	}
-	for _, name := range []string{"search_content", "explain_site_structure", "get_site_health", "validate_front_matter", "validate_site"} {
+	for _, name := range []string{"search_content", "explain_site_structure", "get_site_health", "get_broken_links", "validate_front_matter", "validate_site"} {
 		tool, ok := got[name]
 		if !ok {
 			t.Fatalf("missing tool %q", name)
@@ -370,5 +370,27 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
 			t.Fatalf("tool %q: OpenWorldHint should be false", name)
 		}
+	}
+}
+
+func TestGetBrokenLinks(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_broken_links", map[string]any{"limit": 5, "offset": 0})
+	if res.IsError {
+		t.Fatalf("get_broken_links returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_broken_links data type = %T", m["data"])
+	}
+	if _, ok := data["total_pages"]; !ok {
+		t.Fatal("get_broken_links missing total_pages")
+	}
+	if _, ok := data["broken_links"]; !ok {
+		t.Fatal("get_broken_links missing broken_links")
 	}
 }

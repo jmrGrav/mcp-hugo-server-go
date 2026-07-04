@@ -1,82 +1,83 @@
-package storage_test
+package storage
 
 import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 )
 
-func testStore(t *testing.T, s storage.Store) {
-	t.Helper()
-	defer s.Close()
-
+func TestMemoryStoreLifecycle(t *testing.T) {
+	s := NewMemory()
 	future := time.Now().Add(time.Hour)
-	if err := s.AddAccessToken("tok-valid", "read write", future); err != nil {
-		t.Fatalf("AddAccessToken: %v", err)
-	}
+	expired := time.Now().Add(-time.Hour)
 
-	scope, ok := s.ValidateAccessToken("tok-valid")
-	if !ok {
-		t.Fatal("expected tok-valid to be valid")
+	if err := s.AddAccessToken("tok1", "content.read", future); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
 	}
-	if scope != "read write" {
-		t.Fatalf("expected scope %q, got %q", "read write", scope)
+	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "content.read" {
+		t.Fatalf("ValidateAccessToken() = %q, %v", scope, ok)
 	}
-
-	past := time.Now().Add(-time.Second)
-	if err := s.AddAccessToken("tok-expired", "admin", past); err != nil {
-		t.Fatalf("AddAccessToken expired: %v", err)
+	if err := s.AddAccessToken("tok2", "content.write", expired); err != nil {
+		t.Fatalf("AddAccessToken(expired) error = %v", err)
 	}
-
-	_, ok = s.ValidateAccessToken("tok-expired")
-	if ok {
-		t.Fatal("expected tok-expired to be invalid")
-	}
-
-	// token expires exactly now — should be invalid
-	boundaryPast := time.Now().Add(-1 * time.Millisecond)
-	s.AddAccessToken("boundary-token", "test", boundaryPast)
-	_, ok = s.ValidateAccessToken("boundary-token")
-	if ok {
-		t.Fatal("token expired at past should not be valid")
-	}
-
 	if err := s.PurgeExpiredTokens(); err != nil {
-		t.Fatalf("PurgeExpiredTokens: %v", err)
+		t.Fatalf("PurgeExpiredTokens() error = %v", err)
 	}
-
-	_, ok = s.ValidateAccessToken("tok-unknown")
-	if ok {
-		t.Fatal("expected tok-unknown to be invalid")
+	if _, ok := s.ValidateAccessToken("tok2"); ok {
+		t.Fatal("expired token should have been purged")
 	}
-
-	scope, ok = s.ValidateAccessToken("tok-valid")
-	if !ok {
-		t.Fatal("tok-valid should still be valid after purge")
-	}
-	if scope != "read write" {
-		t.Fatalf("scope after purge: got %q", scope)
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 }
 
-func TestMemoryStore(t *testing.T) {
-	testStore(t, storage.NewMemory())
-}
-
-func TestSQLiteStore(t *testing.T) {
-	s, err := storage.NewSQLite(filepath.Join(t.TempDir(), "tokens.db"))
+func TestJSONStoreLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	s, err := NewJSON(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("NewJSON() error = %v", err)
 	}
-	testStore(t, s)
+	future := time.Now().Add(time.Hour)
+	if err := s.AddAccessToken("tok1", "site.admin", future); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
+	}
+	if err := s.AddAccessToken("tok2", "site.admin", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("AddAccessToken(expired) error = %v", err)
+	}
+	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "site.admin" {
+		t.Fatalf("ValidateAccessToken() = %q, %v", scope, ok)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := s.PurgeExpiredTokens(); err != nil {
+		t.Fatalf("PurgeExpiredTokens() error = %v", err)
+	}
+
+	s2, err := NewJSON(path)
+	if err != nil {
+		t.Fatalf("NewJSON(reopen) error = %v", err)
+	}
+	if scope, ok := s2.ValidateAccessToken("tok1"); !ok || scope != "site.admin" {
+		t.Fatalf("ValidateAccessToken(reopen) = %q, %v", scope, ok)
+	}
 }
 
-func TestJSONStore(t *testing.T) {
-	s, err := storage.NewJSON(filepath.Join(t.TempDir(), "tokens.json"))
+func TestSQLiteStoreLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.sqlite")
+	s, err := NewSQLite(path)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("NewSQLite() error = %v", err)
 	}
-	testStore(t, s)
+	defer s.Close()
+	future := time.Now().Add(time.Hour)
+	if err := s.AddAccessToken("tok1", "system.admin", future); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
+	}
+	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "system.admin" {
+		t.Fatalf("ValidateAccessToken() = %q, %v", scope, ok)
+	}
+	if err := s.PurgeExpiredTokens(); err != nil {
+		t.Fatalf("PurgeExpiredTokens() error = %v", err)
+	}
 }

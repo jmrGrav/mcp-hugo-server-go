@@ -375,6 +375,7 @@ func Defs() []tools.ToolDef {
 		{Name: "search_content", RequiredScope: "content.read"},
 		{Name: "explain_site_structure", RequiredScope: "content.read"},
 		{Name: "get_site_health", RequiredScope: "content.read"},
+		{Name: "get_broken_links", RequiredScope: "content.read"},
 		{Name: "validate_front_matter", RequiredScope: "content.read"},
 		{Name: "validate_site", RequiredScope: "content.read"},
 	}

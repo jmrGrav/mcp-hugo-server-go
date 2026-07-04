@@ -293,6 +293,24 @@ func TestLLMsTxt(t *testing.T) {
 	}
 }
 
+func TestAgentJSON(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/agent.json", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got["name"] == "" || got["url"] == "" {
+		t.Fatalf("agent.json missing required fields: %#v", got)
+	}
+}
+
 func TestAuthMdServed(t *testing.T) {
 	dir := t.TempDir()
 	const content = "# auth.md protocol\n\nAgent authentication instructions.\n"

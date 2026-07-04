@@ -47,6 +47,7 @@ func RegisterSiteAdmin(s *mcp.Server, cfg config.Config) {
 		return
 	}
 	RegisterBuild(s, cfg)
+	RegisterPreviewBuild(s, cfg)
 	RegisterHooks(s, cfg)
 	registerGenerateFeaturedImage(s, cfg)
 }
@@ -55,6 +56,7 @@ func RegisterSiteAdmin(s *mcp.Server, cfg config.Config) {
 func Defs() []tools.ToolDef {
 	return []tools.ToolDef{
 		{Name: "build_site", RequiredScope: "site.admin"},
+		{Name: "preview_build", RequiredScope: "site.admin"},
 		{Name: "run_post_build_hooks", RequiredScope: "site.admin"},
 		{Name: "generate_featured_image", RequiredScope: "site.admin"},
 		{Name: "check_sri_versions", RequiredScope: "system.admin"},

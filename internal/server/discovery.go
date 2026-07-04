@@ -109,6 +109,15 @@ type mcpServerCard struct {
 	Prompts          []string          `json:"prompts,omitempty"`
 }
 
+type agentCard struct {
+	Schema      string   `json:"$schema"`
+	Version     string   `json:"version"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	URL         string   `json:"url"`
+	Capabilities []string `json:"capabilities"`
+}
+
 type mcpServerInfo struct {
 	Name    string `json:"name"`
 	Title   string `json:"title"`
@@ -206,6 +215,28 @@ func buildLLMsTxt(cfg config.Config) string {
 	return fmt.Sprintf("# %s\n\n> %s — a Hugo-published site available via MCP.\n\nMCP endpoint: %s/mcp\n", name, siteURL, mcpBase)
 }
 
+func buildAgentCard(cfg config.Config) agentCard {
+	name := cfg.SiteName
+	if name == "" {
+		name = cfg.SiteURL
+	}
+	if name == "" {
+		name = "MCP Hugo Server"
+	}
+	base := strings.TrimRight(cfg.SiteURL, "/")
+	if base == "" {
+		base = strings.TrimRight(cfg.OAuth.Issuer, "/")
+	}
+	return agentCard{
+		Schema:      "https://a2a.google.com/schemas/agent-card/v1.json",
+		Version:     "1.0",
+		Name:        name,
+		Description: name + " exposed through MCP and OAuth-backed discovery.",
+		URL:         base,
+		Capabilities: []string{"chat", "tools"},
+	}
+}
+
 func handleOAuthAuthServer(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 	serveDiscoveryJSON(w, r, buildAuthServerMeta(cfg))
 }
@@ -222,6 +253,10 @@ func handleRobotsTxt(w http.ResponseWriter, r *http.Request, cfg config.Config) 
 
 func handleLLMsTxt(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 	serveDiscoveryText(w, r, "text/plain; charset=utf-8", buildLLMsTxt(cfg))
+}
+
+func handleAgentJSON(w http.ResponseWriter, r *http.Request, cfg config.Config) {
+	serveDiscoveryJSON(w, r, buildAgentCard(cfg))
 }
 
 func handleAuthMd(w http.ResponseWriter, r *http.Request, cfg config.Config) {

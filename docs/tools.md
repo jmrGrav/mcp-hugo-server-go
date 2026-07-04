@@ -24,6 +24,7 @@ This document reflects the current MCP registry. Tool IDs are stable; titles and
 - `search_content` - Search content
 - `explain_site_structure` - Explain site structure
 - `get_site_health` - Get site health
+- `get_broken_links` - Get broken links
 - `validate_front_matter` - Validate front matter
 - `validate_site` - Validate site
 
@@ -36,6 +37,7 @@ This document reflects the current MCP registry. Tool IDs are stable; titles and
 ## `site.admin`
 
 - `build_site` - Build website
+- `preview_build` - Preview build
 - `run_post_build_hooks` - Run post-build hooks
 - `generate_featured_image` - Generate featured image
 
@@ -43,3 +45,6 @@ This document reflects the current MCP registry. Tool IDs are stable; titles and
 
 - `check_sri_versions` - Verify SRI integrity
 
+## Discovery
+
+- `/.well-known/agent.json` - A2A agent card for Google-compatible discovery
