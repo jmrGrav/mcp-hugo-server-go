@@ -66,3 +66,53 @@ func TestLoadNonexistentFileErrors(t *testing.T) {
 		t.Fatal("expected error for missing file")
 	}
 }
+
+func TestOAuthEnabledWithoutIssuerFails(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("oauth:\n  enabled: true\n")
+	f.Close()
+	_, err := config.Load(f.Name())
+	if err == nil {
+		t.Fatal("expected error: oauth.enabled requires oauth.issuer")
+	}
+}
+
+func TestOAuthEnabledWithIssuerSucceeds(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("oauth:\n  enabled: true\n  issuer: https://mcp.test\n")
+	f.Close()
+	_, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrivateIPHookRejected(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("post_build_hooks:\n  - http://127.0.0.1/hook\n")
+	f.Close()
+	_, err := config.Load(f.Name())
+	if err == nil {
+		t.Fatal("expected error: hook URL with localhost/private IP should be rejected")
+	}
+}
+
+func TestLinkLocalIPHookRejected(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("post_build_hooks:\n  - http://169.254.169.254/latest/meta-data/\n")
+	f.Close()
+	_, err := config.Load(f.Name())
+	if err == nil {
+		t.Fatal("expected error: link-local hook URL should be rejected")
+	}
+}
+
+func TestNonHTTPHookRejected(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("post_build_hooks:\n  - file:///etc/passwd\n")
+	f.Close()
+	_, err := config.Load(f.Name())
+	if err == nil {
+		t.Fatal("expected error: file:// scheme should be rejected")
+	}
+}

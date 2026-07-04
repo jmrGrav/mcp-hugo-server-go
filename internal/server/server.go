@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -162,6 +163,28 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 		maxBody = 1 << 20
 	}
 
+	// rateLimitedOAuth applies a simple per-IP call counter to allocation
+	// endpoints (/register, /agent/identity) to mitigate unbounded map growth
+	// (issue #30). The limit is coarse — 100 calls per unique remote addr.
+	var oauthIPMu sync.Mutex
+	oauthIPCounts := make(map[string]int)
+	const oauthIPMax = 100
+	rateLimitOAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			host, _, _ := strings.Cut(r.RemoteAddr, ":")
+			oauthIPMu.Lock()
+			n := oauthIPCounts[host] + 1
+			oauthIPCounts[host] = n
+			oauthIPMu.Unlock()
+			if n > oauthIPMax {
+				http.Error(w, "too many requests", http.StatusTooManyRequests)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+			next(w, r)
+		}
+	}
+
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/.well-known/oauth-authorization-server":
@@ -179,7 +202,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				http.NotFound(w, r)
 				return
 			}
-			oauthSvc.HandleRegister(w, r)
+			rateLimitOAuth(oauthSvc.HandleRegister)(w, r)
 		case "/authorize":
 			if oauthSvc == nil {
 				http.NotFound(w, r)
@@ -197,7 +220,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				http.NotFound(w, r)
 				return
 			}
-			oauthSvc.HandleAgentIdentity(w, r)
+			rateLimitOAuth(oauthSvc.HandleAgentIdentity)(w, r)
 		case "/agent/identity/claim":
 			if oauthSvc == nil {
 				http.NotFound(w, r)

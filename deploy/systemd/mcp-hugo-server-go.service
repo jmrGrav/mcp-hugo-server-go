@@ -1,3 +1,10 @@
+# Unified mode: supports content.write, site.admin, system.admin tools.
+# ReadWritePaths must include site_root, content_root, and the OAuth storage
+# path (if using json/sqlite backend). Adjust to your deployment paths.
+#
+# To run in read-only mode (anonymous + content.read only): remove the
+# ReadWritePaths lines and re-add ProtectSystem=strict.
+
 [Unit]
 Description=Hugo unified MCP server
 Documentation=https://github.com/jmrGrav/mcp-hugo-server-go
@@ -14,8 +21,10 @@ Restart=on-failure
 RestartSec=2
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
+# ProtectSystem=full allows writes to /var and /run but not /etc or /usr.
+# Use "strict" here only for read-only mode; write/admin mode needs write access.
+ProtectSystem=full
+ProtectHome=true
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
@@ -28,7 +37,12 @@ RestrictNamespaces=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-ReadOnlyPaths=/home/jm/hugo-site/public
+# Grant write access to the Hugo site directories and OAuth token store.
+# Adjust these paths to match your deployment (site_root, content_root,
+# and oauth.storage_path from config.yaml).
+ReadWritePaths=/var/lib/mcp-hugo-server-go /srv/hugo-site
+# Hugo needs to read layouts, static, and themes too.
+ReadOnlyPaths=/etc/mcp-hugo-server-go
 
 [Install]
 WantedBy=multi-user.target

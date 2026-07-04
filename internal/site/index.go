@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -116,6 +117,7 @@ func NewIndex(cfg config.Config) (*Index, error) {
 			return nil
 		}
 		if _, exists := idx.bySlug[pg.Slug]; exists {
+			slog.Warn("site index: duplicate slug detected, skipping", "slug", pg.Slug, "path", p)
 			return nil
 		}
 

@@ -159,3 +159,74 @@ func TestListPagesLimitOffset(t *testing.T) {
 		t.Fatalf("want 0 pages at offset 10, got %d", len(pages3))
 	}
 }
+
+// TestSourceIndexUpsertAndDelete verifies that mutations are reflected without
+// restart (issue #35).
+func TestSourceIndexUpsertAndDelete(t *testing.T) {
+	_, filename, _, _ := runtime.Caller(0)
+	dir := filepath.Join(filepath.Dir(filename), "..", "..", "testdata", "fixtures", "content")
+	idx, err := hugosite.NewSourceIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newPage := hugosite.SourcePage{
+		Slug:           "new-post",
+		Title:          "New Post",
+		Body:           "hello",
+		FrontmatterRaw: map[string]any{"title": "New Post"},
+	}
+	idx.Upsert(newPage)
+
+	got, ok := idx.GetBySlug("new-post")
+	if !ok {
+		t.Fatal("Upsert: page not found after insert")
+	}
+	if got.Title != "New Post" {
+		t.Fatalf("Upsert: title = %q want New Post", got.Title)
+	}
+
+	updated := *got
+	updated.Title = "Updated"
+	idx.Upsert(updated)
+
+	got2, ok := idx.GetBySlug("new-post")
+	if !ok {
+		t.Fatal("Upsert(update): page not found")
+	}
+	if got2.Title != "Updated" {
+		t.Fatalf("Upsert(update): title = %q want Updated", got2.Title)
+	}
+
+	idx.Delete("new-post")
+	if _, ok := idx.GetBySlug("new-post"); ok {
+		t.Fatal("Delete: page still found after deletion")
+	}
+}
+
+// TestSourceIndexUpsertCreateThenUpdate mimics the create->update multi-step
+// workflow that used to fail when the index was never refreshed (issue #35).
+func TestSourceIndexUpsertCreateThenUpdate(t *testing.T) {
+	_, filename, _, _ := runtime.Caller(0)
+	dir := filepath.Join(filepath.Dir(filename), "..", "..", "testdata", "fixtures", "content")
+	idx, err := hugosite.NewSourceIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate create_page
+	idx.Upsert(hugosite.SourcePage{Slug: "fresh", Title: "Fresh", FrontmatterRaw: map[string]any{"title": "Fresh"}})
+
+	// Simulate update_page using same index (no restart)
+	existing, ok := idx.GetBySlug("fresh")
+	if !ok {
+		t.Fatal("create->update: page not visible in index after create")
+	}
+	existing.Title = "Refreshed"
+	idx.Upsert(*existing)
+
+	got, _ := idx.GetBySlug("fresh")
+	if got.Title != "Refreshed" {
+		t.Fatalf("title = %q want Refreshed", got.Title)
+	}
+}

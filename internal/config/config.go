@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strings"
 
@@ -97,5 +99,82 @@ func Load(path string) (Config, error) {
 	if cfg.Transport != "stdio" && cfg.Transport != "http" {
 		return Config{}, fmt.Errorf("config: invalid transport %q", cfg.Transport)
 	}
+	if err := cfg.validate(); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
+}
+
+// validate performs fail-fast checks on cross-field invariants.
+func (c *Config) validate() error {
+	if c.OAuth.Enabled {
+		if strings.TrimSpace(c.OAuth.Issuer) == "" {
+			return fmt.Errorf("config: oauth.issuer is required when oauth.enabled is true")
+		}
+	}
+	for _, hookURL := range c.PostBuildHooks {
+		if err := validateHookURL(hookURL); err != nil {
+			return fmt.Errorf("config: post_build_hooks: %w", err)
+		}
+	}
+	if c.ImageGenURL != "" {
+		if err := validateExternalURL(c.ImageGenURL); err != nil {
+			return fmt.Errorf("config: image_gen_url: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateHookURL rejects non-HTTP(S) schemes and private/link-local IP ranges.
+func validateHookURL(raw string) error {
+	return validateExternalURL(raw)
+}
+
+// validateExternalURL rejects non-HTTP(S) schemes and private/link-local addresses.
+func validateExternalURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid URL %q: %w", raw, err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("URL %q: only http/https schemes are allowed", raw)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("URL %q: missing host", raw)
+	}
+	ips, err := net.LookupHost(host)
+	if err != nil {
+		// Accept hostnames that cannot be resolved at load time (e.g. DNS may not
+		// be ready), but reject literal private IPs.
+		ip := net.ParseIP(host)
+		if ip != nil && isPrivateOrLinkLocal(ip) {
+			return fmt.Errorf("URL %q: private/link-local IP addresses are not allowed", raw)
+		}
+		return nil
+	}
+	for _, ipStr := range ips {
+		ip := net.ParseIP(ipStr)
+		if ip != nil && isPrivateOrLinkLocal(ip) {
+			return fmt.Errorf("URL %q resolves to private/link-local address %s", raw, ipStr)
+		}
+	}
+	return nil
+}
+
+func isPrivateOrLinkLocal(ip net.IP) bool {
+	private4 := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8"}
+	private6 := []string{"::1/128", "fc00::/7"}
+	linkLocal := []string{"169.254.0.0/16", "fe80::/10"}
+	all := append(append(private4, private6...), linkLocal...)
+	for _, cidr := range all {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			continue
+		}
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }

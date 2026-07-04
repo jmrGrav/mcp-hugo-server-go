@@ -3,6 +3,7 @@ package hugosite
 import (
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -89,6 +90,12 @@ func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
 
 	bySlug := make(map[string]int, len(pages))
 	for i, p := range pages {
+		if prev, exists := bySlug[p.Slug]; exists {
+			slog.Warn("hugosite source index: duplicate slug detected, last-write wins",
+				"slug", p.Slug,
+				"prev_index", prev,
+				"current_index", i)
+		}
 		bySlug[p.Slug] = i
 	}
 
