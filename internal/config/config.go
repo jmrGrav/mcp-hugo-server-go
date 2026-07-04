@@ -28,7 +28,16 @@ type Config struct {
 	ImageGenKey            string      `yaml:"image_gen_key"`
 	BuildTimeoutSeconds    int         `yaml:"build_timeout_seconds"`
 	PostBuildHooks         []string    `yaml:"post_build_hooks"`
-	OAuth                  OAuthConfig `yaml:"oauth"`
+	OAuth                  OAuthConfig     `yaml:"oauth"`
+	RateLimit              RateLimitConfig `yaml:"rate_limit"`
+}
+
+type RateLimitConfig struct {
+	AnonymousPerMin    int `yaml:"anonymous_per_min"`
+	ContentReadPerMin  int `yaml:"content_read_per_min"`
+	ContentWritePerMin int `yaml:"content_write_per_min"`
+	SiteAdminPerMin    int `yaml:"site_admin_per_min"`
+	DestructivePerMin  int `yaml:"destructive_per_min"`
 }
 
 type OAuthConfig struct {
@@ -55,6 +64,13 @@ func Default() Config {
 		RejectSymlinks:      true,
 		RejectHiddenPath:    true,
 		BuildTimeoutSeconds: 120,
+		RateLimit: RateLimitConfig{
+			AnonymousPerMin:    60,
+			ContentReadPerMin:  120,
+			ContentWritePerMin: 30,
+			SiteAdminPerMin:    10,
+			DestructivePerMin:  5,
+		},
 	}
 }
 

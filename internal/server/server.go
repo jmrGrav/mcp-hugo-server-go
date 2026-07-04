@@ -58,6 +58,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 		oauthSvc = oauth.NewService(cfg.OAuth, storage.NewMemory())
 	}
 
+	rateLimitedStreaming := oauth.NewRateLimiter(cfg.RateLimit).Middleware(streaming)
+
 	aclPolicy := oauth.NewACLPolicy([]string{
 		"list_pages", "get_page", "search_pages", "get_recent_posts",
 		"list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
@@ -153,7 +155,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 					r.Body = io.NopCloser(bytes.NewReader(body))
 				}
 			}
-			streaming.ServeHTTP(w, r)
+			rateLimitedStreaming.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
