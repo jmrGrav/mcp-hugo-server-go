@@ -1,0 +1,259 @@
+package read
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+var errFoundSourceFile = errors.New("found")
+
+type diffPageInput struct {
+	Slug string `json:"slug"`
+}
+
+type diffPageData struct {
+	Slug       string `json:"slug"`
+	Path       string `json:"path"`
+	Status     string `json:"status"`
+	BaseCommit string `json:"base_commit"`
+	HeadCommit string `json:"head_commit"`
+	Diff       string `json:"diff"`
+}
+
+type diffPageOutput struct {
+	Success     bool         `json:"success"`
+	Version     string       `json:"version"`
+	GeneratedAt string       `json:"generated_at"`
+	Data        diffPageData `json:"data"`
+	Warnings    []string     `json:"warnings"`
+	Errors      []string     `json:"errors"`
+}
+
+func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
+	if s == nil {
+		return
+	}
+	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository, a configured content root, and content.read. Use this before editing or reviewing a page.",
+		func(ctx context.Context, _ *mcp.CallToolRequest, in diffPageInput) (*mcp.CallToolResult, diffPageOutput, error) {
+			if srcIdx == nil {
+				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: source index not initialized")
+			}
+			slug := normalizeSourceSlug(in.Slug)
+			if slug == "" {
+				return nil, diffPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
+			}
+			if _, ok := srcIdx.GetBySlug(slug); !ok {
+				return nil, diffPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+			}
+			contentRoot := strings.TrimSpace(cfg.ContentRoot)
+			if contentRoot == "" {
+				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: content root not configured")
+			}
+			gitRoot, err := findGitRoot(ctx, contentRoot)
+			if err != nil {
+				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: repository root not found")
+			}
+			absPath, relPath, err := findSourceFile(contentRoot, slug)
+			if err != nil {
+				return nil, diffPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+			}
+			relRepoPath, err := filepath.Rel(gitRoot, absPath)
+			if err != nil || strings.HasPrefix(relRepoPath, "..") {
+				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: source page is outside the repository root")
+			}
+			headCommit, err := gitOutput(ctx, gitRoot, "rev-parse", "--short", "HEAD")
+			if err != nil {
+				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: unable to read repository HEAD")
+			}
+			baseContent, baseExists, err := gitShowFile(ctx, gitRoot, relRepoPath)
+			if err != nil && !isGitPathMissing(err) {
+				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: unable to read tracked version")
+			}
+			if !baseExists {
+				baseContent = nil
+			}
+			currentContent, err := os.ReadFile(absPath)
+			if err != nil {
+				return nil, diffPageOutput{}, fmt.Errorf("content_not_found: page not readable for slug %q", in.Slug)
+			}
+			status := diffStatus(baseExists, currentContent, baseContent)
+			diffText, err := unifiedDiff(relPath, baseContent, currentContent)
+			if err != nil {
+				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: unable to compute diff")
+			}
+			return nil, diffPageOutput{
+				Success:     true,
+				Version:     toolResultVersion,
+				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+				Data: diffPageData{
+					Slug:       slug,
+					Path:       relPath,
+					Status:     status,
+					BaseCommit: strings.TrimSpace(headCommit),
+					HeadCommit: "working-tree",
+					Diff:       diffText,
+				},
+				Warnings: []string{},
+				Errors:   []string{},
+			}, nil
+		})
+}
+
+func normalizeSourceSlug(slug string) string {
+	slug = strings.TrimSpace(slug)
+	slug = strings.TrimPrefix(slug, "/")
+	slug = strings.TrimSuffix(slug, "/")
+	return slug
+}
+
+func findGitRoot(ctx context.Context, start string) (string, error) {
+	return gitOutput(ctx, start, "rev-parse", "--show-toplevel")
+}
+
+func gitShowFile(ctx context.Context, gitRoot, relPath string) ([]byte, bool, error) {
+	out, err := gitBytes(ctx, gitRoot, "show", "HEAD:"+filepath.ToSlash(relPath))
+	if err == nil {
+		return out, true, nil
+	}
+	if isGitPathMissing(err) {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+
+func gitOutput(ctx context.Context, gitRoot string, args ...string) (string, error) {
+	out, err := gitBytes(ctx, gitRoot, args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func gitBytes(ctx context.Context, gitRoot string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", gitRoot}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
+func isGitPathMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "path") && strings.Contains(msg, "exists on disk, but not in")
+}
+
+func diffStatus(baseExists bool, current, base []byte) string {
+	switch {
+	case baseExists && bytes.Equal(current, base):
+		return "unchanged"
+	case baseExists:
+		return "modified"
+	case len(current) == 0:
+		return "deleted"
+	default:
+		return "added"
+	}
+}
+
+func unifiedDiff(relPath string, base, current []byte) (string, error) {
+	baseFile, err := os.CreateTemp("", "mcp-diff-base-*.md")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(baseFile.Name())
+	defer baseFile.Close()
+
+	currentFile, err := os.CreateTemp("", "mcp-diff-current-*.md")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(currentFile.Name())
+	defer currentFile.Close()
+
+	if _, err := baseFile.Write(base); err != nil {
+		return "", err
+	}
+	if _, err := currentFile.Write(current); err != nil {
+		return "", err
+	}
+	if err := baseFile.Close(); err != nil {
+		return "", err
+	}
+	if err := currentFile.Close(); err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command("git", "diff", "--no-index", "--unified=3", "--no-renames", "--", baseFile.Name(), currentFile.Name())
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			return "", err
+		}
+		if exitErr.ExitCode() != 1 {
+			return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+		}
+	}
+	diff := string(out)
+	diff = strings.ReplaceAll(diff, baseFile.Name(), "a/"+filepath.ToSlash(relPath))
+	diff = strings.ReplaceAll(diff, currentFile.Name(), "b/"+filepath.ToSlash(relPath))
+	return diff, nil
+}
+
+func findSourceFile(contentRoot, slug string) (string, string, error) {
+	var absPath string
+	var relPath string
+	target := normalizeSourceSlug(slug)
+	err := filepath.WalkDir(contentRoot, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
+			return nil
+		}
+		rel, err := filepath.Rel(contentRoot, path)
+		if err != nil {
+			return nil
+		}
+		if normalizeSourceSlug(sourceSlugFromRel(rel)) != target {
+			return nil
+		}
+		absPath = path
+		relPath = rel
+		return errFoundSourceFile
+	})
+	if err != nil && !errors.Is(err, errFoundSourceFile) {
+		return "", "", err
+	}
+	if absPath == "" {
+		return "", "", fmt.Errorf("not found")
+	}
+	return absPath, relPath, nil
+}
+
+func sourceSlugFromRel(rel string) string {
+	rel = filepath.ToSlash(rel)
+	if strings.HasSuffix(rel, "/index.md") {
+		return strings.TrimSuffix(rel, "/index.md")
+	}
+	return strings.TrimSuffix(rel, ".md")
+}

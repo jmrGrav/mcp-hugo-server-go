@@ -14,7 +14,7 @@ var anonymousToolNames = []string{
 var readToolNames = []string{
 	"get_full_page_markdown", "get_page_frontmatter",
 	"get_related_content", "build_agent_context", "export_agent_context",
-	"search_content", "explain_site_structure", "get_site_health",
+	"search_content", "explain_site_structure", "get_site_health", "diff_page",
 	"validate_front_matter", "validate_site",
 }
 
@@ -73,8 +73,8 @@ func TestContentReadScopeSeesReadTools(t *testing.T) {
 	got := r.ForScope("content.read")
 	names := toolNames(got)
 
-	if len(got) != 19 {
-		t.Fatalf("ForScope(\"content.read\") = %d tools, want 19; names: %v", len(got), names)
+	if len(got) != 20 {
+		t.Fatalf("ForScope(\"content.read\") = %d tools, want 20; names: %v", len(got), names)
 	}
 	for _, name := range anonymousToolNames {
 		if !containsName(names, name) {

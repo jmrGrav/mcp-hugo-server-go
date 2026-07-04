@@ -353,7 +353,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 	for i := range tools.Tools {
 		got[tools.Tools[i].Name] = tools.Tools[i]
 	}
-	for _, name := range []string{"search_content", "explain_site_structure", "get_site_health", "get_broken_links", "validate_front_matter", "validate_site"} {
+	for _, name := range []string{"search_content", "explain_site_structure", "get_site_health", "get_broken_links", "diff_page", "validate_front_matter", "validate_site"} {
 		tool, ok := got[name]
 		if !ok {
 			t.Fatalf("missing tool %q", name)

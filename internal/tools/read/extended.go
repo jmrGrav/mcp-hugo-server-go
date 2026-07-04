@@ -142,10 +142,12 @@ type brokenLinkOutput struct {
 
 // RegisterWithSourceIndex wires additional read-only tools that benefit from the
 // source index. Existing tools remain registered via Register.
-func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, _ config.Config) {
+func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
 	if s == nil {
 		return
 	}
+
+	RegisterDiffPage(s, idx, srcIdx, cfg)
 
 	addReadOnlyTool(s, "search_content", "Search content", "Search Hugo content with filters for type, tag, category, language, pagination, and sort order. Returns page metadata only. Requires content.read.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, contentEnvelope, error) {

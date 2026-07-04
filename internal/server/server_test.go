@@ -334,14 +334,14 @@ func TestToolsListAnonymousReturnsNineTools(t *testing.T) {
 	}
 }
 
-func TestToolsListAuthenticatedReturnsTwentyTools(t *testing.T) {
+func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 20 {
-		t.Fatalf("authenticated tools/list = %d tools, want 20; got %v", len(names), names)
+	if len(names) != 21 {
+		t.Fatalf("authenticated tools/list = %d tools, want 21; got %v", len(names), names)
 	}
-	for _, name := range []string{"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_site_structure", "get_site_health", "validate_front_matter", "validate_site"} {
+	for _, name := range []string{"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_site_structure", "get_site_health", "diff_page", "validate_front_matter", "validate_site"} {
 		found := false
 		for _, n := range names {
 			if n == name {
@@ -362,8 +362,8 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	rewriteTokenScopeToLegacyMCP(t, storePath, bearer)
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 20 {
-		t.Fatalf("legacy mcp tools/list = %d tools, want 20; got %v", len(names), names)
+	if len(names) != 21 {
+		t.Fatalf("legacy mcp tools/list = %d tools, want 21; got %v", len(names), names)
 	}
 	for _, bad := range []string{"create_page", "update_page", "delete_page", "build_site"} {
 		for _, n := range names {
