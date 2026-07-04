@@ -120,7 +120,9 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	_ = s.store.AddAccessToken(HashToken(token), "content.read", time.Now().Add(ttl))
+	if err := s.store.AddAccessToken(HashToken(token), "content.read", time.Now().Add(ttl)); err != nil {
+		return nil, fmt.Errorf("server_error: store token: %w", err)
+	}
 
 	return &TokenResponse{
 		AccessToken: token,

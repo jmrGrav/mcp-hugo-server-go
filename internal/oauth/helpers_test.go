@@ -54,24 +54,19 @@ func TestRedirectURIMatching(t *testing.T) {
 }
 
 func TestRequestSourceIP(t *testing.T) {
+	// requestSourceIP uses RemoteAddr only (not proxy headers) so that
+	// CF-Connecting-IP/X-Forwarded-For injection cannot bypass CIDR checks (#54).
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.RemoteAddr = "203.0.113.9:1234"
 	if got := requestSourceIP(req); got != "203.0.113.9" {
-		t.Fatalf("requestSourceIP(remote) = %q", got)
+		t.Fatalf("requestSourceIP(remote) = %q, want 203.0.113.9", got)
 	}
+	// Proxy headers must NOT change the result.
 	req.Header.Set("CF-Connecting-IP", "198.51.100.1")
-	if got := requestSourceIP(req); got != "198.51.100.1" {
-		t.Fatalf("requestSourceIP(CF) = %q", got)
-	}
-	req.Header.Del("CF-Connecting-IP")
 	req.Header.Set("X-Real-IP", "198.51.100.2")
-	if got := requestSourceIP(req); got != "198.51.100.2" {
-		t.Fatalf("requestSourceIP(real) = %q", got)
-	}
-	req.Header.Del("X-Real-IP")
 	req.Header.Set("X-Forwarded-For", "198.51.100.3, 10.0.0.1")
-	if got := requestSourceIP(req); got != "198.51.100.3" {
-		t.Fatalf("requestSourceIP(xff) = %q", got)
+	if got := requestSourceIP(req); got != "203.0.113.9" {
+		t.Fatalf("requestSourceIP with proxy headers = %q, want 203.0.113.9 (headers must not override)", got)
 	}
 }
 

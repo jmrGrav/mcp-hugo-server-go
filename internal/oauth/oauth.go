@@ -382,7 +382,9 @@ func (s *Service) exchangeToken(grantType, clientID, clientSecret, redirectURI, 
 	if scope == "" {
 		scope = "content.read"
 	}
-	_ = s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(ttl))
+	if err := s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(ttl)); err != nil {
+		return nil, fmt.Errorf("server_error: store token: %w", err)
+	}
 	return &TokenResponse{
 		AccessToken: token,
 		TokenType:   "Bearer",
@@ -483,10 +485,11 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
+	clientID, clientSecret := tokenClientCredentials(r)
 	resp, err := s.exchangeToken(
 		grantType,
-		r.FormValue("client_id"),
-		tokenClientSecret(r),
+		clientID,
+		clientSecret,
 		r.FormValue("redirect_uri"),
 		r.FormValue("code"),
 		r.FormValue("code_verifier"),
@@ -517,23 +520,12 @@ func (s *Service) sourceAllowed(ipText string) bool {
 	return false
 }
 
+// requestSourceIP returns the network-level source IP from RemoteAddr only.
+// This is used for the trusted-CIDR authorization check; proxy headers are
+// intentionally ignored to prevent CIDR bypass via header injection (#54).
 func requestSourceIP(r *http.Request) string {
 	if r == nil {
 		return ""
-	}
-	// Prefer real-client IP headers set by trusted proxies (Cloudflare, nginx).
-	// CF-Connecting-IP is the most reliable when behind Cloudflare.
-	for _, hdr := range []string{"CF-Connecting-IP", "X-Real-IP"} {
-		if v := strings.TrimSpace(r.Header.Get(hdr)); v != "" {
-			return v
-		}
-	}
-	// X-Forwarded-For may be a comma-separated list; take the first entry.
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		if idx := strings.Index(xff, ","); idx > 0 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return xff
 	}
 	host := r.RemoteAddr
 	if strings.Contains(host, ":") {
@@ -544,14 +536,17 @@ func requestSourceIP(r *http.Request) string {
 	return host
 }
 
-func tokenClientSecret(r *http.Request) string {
+// tokenClientCredentials extracts client_id and client_secret per RFC 6749 §2.3.1.
+// HTTP Basic Auth takes precedence: username = client_id, password = client_secret.
+// Falls back to form parameters when Basic Auth is absent.
+func tokenClientCredentials(r *http.Request) (clientID, clientSecret string) {
 	if r == nil {
-		return ""
+		return "", ""
 	}
-	if user, pass, ok := r.BasicAuth(); ok && user != "" && pass != "" {
-		return pass
+	if user, pass, ok := r.BasicAuth(); ok && user != "" {
+		return user, pass
 	}
-	return r.FormValue("client_secret")
+	return r.FormValue("client_id"), r.FormValue("client_secret")
 }
 
 func writeOAuthError(w http.ResponseWriter, code string, status int) {
@@ -597,12 +592,17 @@ func oauthTokenErrorCode(err error) string {
 		return "invalid_grant"
 	case strings.HasPrefix(msg, "invalid_scope"):
 		return "invalid_scope"
+	case strings.HasPrefix(msg, "server_error"):
+		return "server_error"
 	default:
 		return "invalid_request"
 	}
 }
 
 func oauthTokenErrorStatus(err error) int {
+	if strings.HasPrefix(err.Error(), "server_error") {
+		return http.StatusInternalServerError
+	}
 	if strings.HasPrefix(err.Error(), "invalid_client") {
 		return http.StatusUnauthorized
 	}
