@@ -92,7 +92,19 @@ func NewService(cfg config.OAuthConfig, store storage.Store) *Service {
 }
 
 func (s *Service) ValidateBearer(token string) (string, bool) {
-	return s.store.ValidateAccessToken(HashToken(token))
+	scope, _, ok := s.ValidateBearerDetails(token)
+	return scope, ok
+}
+
+// ValidateBearerDetails validates a bearer token and returns the canonical
+// scope, whether the stored scope was a deprecated alias, and whether the token
+// was accepted.
+func (s *Service) ValidateBearerDetails(token string) (string, bool, bool) {
+	scope, ok := s.store.ValidateAccessToken(HashToken(token))
+	if !ok {
+		return "", false, false
+	}
+	return CanonicalScope(scope), IsLegacyScope(scope), true
 }
 
 func (s *Service) AuthorizationServerMetadata() map[string]any {

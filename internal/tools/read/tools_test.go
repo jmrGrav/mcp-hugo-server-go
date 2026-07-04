@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -30,10 +31,21 @@ func mustTestIndex(t *testing.T) *site.Index {
 	return idx
 }
 
+func mustTestSourceIndex(t *testing.T) *hugosite.SourceIndex {
+	t.Helper()
+	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	idx, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	return idx
+}
+
 func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	read.Register(s, idx, config.Default())
+	read.RegisterWithSourceIndex(s, idx, mustTestSourceIndex(t), config.Default())
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -231,5 +243,132 @@ func TestExportAgentContext(t *testing.T) {
 	slug1 := pages1[0].(map[string]any)["frontmatter"].(map[string]any)["slug"]
 	if slug0 == slug1 {
 		t.Fatalf("export_agent_context offset should skip pages: got same slug %v at offset 0 and 1", slug0)
+	}
+}
+
+func TestSearchContent(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_content", map[string]any{
+		"query": "hello",
+		"limit": 5,
+		"sort":  "relevance",
+		"order": "desc",
+	})
+	if res.IsError {
+		t.Fatalf("search_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	if m["success"] != true {
+		t.Fatalf("search_content success = %v, want true", m["success"])
+	}
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("search_content data type = %T", m["data"])
+	}
+	if data["total"] == nil {
+		t.Fatal("search_content missing total")
+	}
+	pages, ok := data["pages"].([]any)
+	if !ok {
+		t.Fatalf("search_content pages type = %T", data["pages"])
+	}
+	if len(pages) == 0 {
+		t.Fatal("search_content expected results")
+	}
+}
+
+func TestExplainSiteStructure(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	if res.IsError {
+		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("explain_site_structure data type = %T", m["data"])
+	}
+	if _, ok := data["sections"]; !ok {
+		t.Fatal("explain_site_structure missing sections")
+	}
+	if _, ok := data["summary"]; !ok {
+		t.Fatal("explain_site_structure missing summary")
+	}
+}
+
+func TestValidateFrontMatter(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_front_matter returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_front_matter data type = %T", m["data"])
+	}
+	if _, ok := data["pages"]; !ok {
+		t.Fatal("validate_front_matter missing pages")
+	}
+}
+
+func TestValidateSite(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_site data type = %T", m["data"])
+	}
+	if _, ok := data["total"]; !ok {
+		t.Fatal("validate_site missing total")
+	}
+}
+
+func TestExtendedReadAnnotations(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	got := map[string]*mcp.Tool{}
+	for i := range tools.Tools {
+		got[tools.Tools[i].Name] = tools.Tools[i]
+	}
+	for _, name := range []string{"search_content", "explain_site_structure", "get_site_health", "validate_front_matter", "validate_site"} {
+		tool, ok := got[name]
+		if !ok {
+			t.Fatalf("missing tool %q", name)
+		}
+		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+			t.Fatalf("tool %q: ReadOnlyHint not set", name)
+		}
+		if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+			t.Fatalf("tool %q: DestructiveHint should be false", name)
+		}
+		if !tool.Annotations.IdempotentHint {
+			t.Fatalf("tool %q: IdempotentHint should be true", name)
+		}
+		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
+			t.Fatalf("tool %q: OpenWorldHint should be false", name)
+		}
 	}
 }

@@ -104,6 +104,101 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	}
 }
 
+func TestWellKnownMCPServerCard(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/mcp/server-card.json", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q want application/json", ct)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin = %q want *", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET" {
+		t.Fatalf("Access-Control-Allow-Methods = %q want GET", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type" {
+		t.Fatalf("Access-Control-Allow-Headers = %q want Content-Type", got)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got["$schema"] != "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json" {
+		t.Fatalf("$schema = %v", got["$schema"])
+	}
+	if got["version"] != "1.0" {
+		t.Fatalf("version = %v", got["version"])
+	}
+	if got["protocolVersion"] != "2025-06-18" {
+		t.Fatalf("protocolVersion = %v", got["protocolVersion"])
+	}
+
+	serverInfo, ok := got["serverInfo"].(map[string]any)
+	if !ok {
+		t.Fatalf("serverInfo type = %T", got["serverInfo"])
+	}
+	if serverInfo["name"] != "mcp-hugo-server-go" {
+		t.Fatalf("serverInfo.name = %v", serverInfo["name"])
+	}
+	if serverInfo["version"] != "v1.0.0" {
+		t.Fatalf("serverInfo.version = %v", serverInfo["version"])
+	}
+
+	transport, ok := got["transport"].(map[string]any)
+	if !ok {
+		t.Fatalf("transport type = %T", got["transport"])
+	}
+	if transport["type"] != "streamable-http" {
+		t.Fatalf("transport.type = %v", transport["type"])
+	}
+	if transport["endpoint"] != "/mcp" {
+		t.Fatalf("transport.endpoint = %v", transport["endpoint"])
+	}
+
+	auth, ok := got["authentication"].(map[string]any)
+	if !ok {
+		t.Fatalf("authentication type = %T", got["authentication"])
+	}
+	if auth["required"] != true {
+		t.Fatalf("authentication.required = %v", auth["required"])
+	}
+	schemes, ok := auth["schemes"].([]any)
+	if !ok {
+		t.Fatalf("authentication.schemes type = %T", auth["schemes"])
+	}
+	if len(schemes) != 2 || schemes[0] != "bearer" || schemes[1] != "oauth2" {
+		t.Fatalf("authentication.schemes = %v", schemes)
+	}
+}
+
+func TestLegacyMCPJSONAliasStillServed(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/mcp.json", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q want application/json", ct)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got["version"] != "1.0" {
+		t.Fatalf("legacy alias should serve same server card version, got %v", got["version"])
+	}
+}
+
 func TestWellKnownOAuthServerMethodNotAllowed(t *testing.T) {
 	srv := mustDiscoveryServer(t, t.TempDir())
 	req := httptest.NewRequest(http.MethodPost, "/.well-known/oauth-authorization-server", nil)
@@ -139,6 +234,20 @@ func TestWellKnownProtectedResource(t *testing.T) {
 	}
 	if len(got.AuthorizationServers) != 1 || got.AuthorizationServers[0] != "https://mcp.arleo.eu" {
 		t.Errorf("authorization_servers = %v want [https://mcp.arleo.eu]", got.AuthorizationServers)
+	}
+
+	var meta struct {
+		ScopesSupported []string `json:"scopes_supported"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("invalid JSON for scopes_supported: %v", err)
+	}
+	for _, bad := range []string{"mcp"} {
+		for _, scope := range meta.ScopesSupported {
+			if scope == bad {
+				t.Fatalf("oauth-protected-resource scopes_supported should not contain legacy scope %q", bad)
+			}
+		}
 	}
 }
 

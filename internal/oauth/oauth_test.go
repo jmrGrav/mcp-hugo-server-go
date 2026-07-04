@@ -364,8 +364,15 @@ func TestBearerValidation(t *testing.T) {
 	if !ok {
 		t.Fatal("valid token must validate")
 	}
-	if scope != "mcp" {
-		t.Fatalf("scope = %q want mcp", scope)
+	if scope != "content.read" {
+		t.Fatalf("scope = %q want content.read", scope)
+	}
+	scope, legacy, ok := svc.ValidateBearerDetails("validtoken")
+	if !ok {
+		t.Fatal("valid token must validate via ValidateBearerDetails")
+	}
+	if scope != "content.read" || !legacy {
+		t.Fatalf("ValidateBearerDetails returned scope=%q legacy=%v; want content.read true", scope, legacy)
 	}
 
 	_ = store.AddAccessToken(oauth.HashToken("expiredtoken"), "mcp", time.Now().Add(-time.Second))

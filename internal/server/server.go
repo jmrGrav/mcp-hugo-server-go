@@ -78,6 +78,8 @@ func openStore(cfg config.OAuthConfig) (storage.Store, error) {
 
 func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	impl := &mcp.Implementation{Name: Name, Version: Version}
+	logger := observability.NewLogger()
+	metrics := observability.NewMetrics()
 
 	reg := buildRegistry()
 	scopePolicy := oauth.NewScopePolicy(reg)
@@ -103,10 +105,16 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	readServer := mcp.NewServer(impl, nil)
 	anonymous.Register(readServer, idx, cfg)
 	read.Register(readServer, idx, cfg)
+	if srcIdx != nil {
+		read.RegisterWithSourceIndex(readServer, idx, srcIdx, cfg)
+	}
 
 	writeServer := mcp.NewServer(impl, nil)
 	anonymous.Register(writeServer, idx, cfg)
 	read.Register(writeServer, idx, cfg)
+	if srcIdx != nil {
+		read.RegisterWithSourceIndex(writeServer, idx, srcIdx, cfg)
+	}
 	if writeEnabled {
 		toolswrite.Register(writeServer, pg, srcIdx, cfg)
 	}
@@ -114,6 +122,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	siteAdminServer := mcp.NewServer(impl, nil)
 	anonymous.Register(siteAdminServer, idx, cfg)
 	read.Register(siteAdminServer, idx, cfg)
+	if srcIdx != nil {
+		read.RegisterWithSourceIndex(siteAdminServer, idx, srcIdx, cfg)
+	}
 	if writeEnabled {
 		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg)
 	}
@@ -122,6 +133,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	sysAdminServer := mcp.NewServer(impl, nil)
 	anonymous.Register(sysAdminServer, idx, cfg)
 	read.Register(sysAdminServer, idx, cfg)
+	if srcIdx != nil {
+		read.RegisterWithSourceIndex(sysAdminServer, idx, srcIdx, cfg)
+	}
 	if writeEnabled {
 		toolswrite.Register(sysAdminServer, pg, srcIdx, cfg)
 	}
@@ -191,8 +205,23 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			handleOAuthAuthServer(w, r, cfg)
 		case "/.well-known/oauth-protected-resource":
 			handleOAuthProtectedResource(w, r, cfg)
+		case "/.well-known/mcp/server-card.json":
+			handleMCPServerCard(w, r, cfg)
 		case "/.well-known/mcp.json":
 			handleMCPJSON(w, r, cfg)
+		case "/metrics":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			if r.Method == http.MethodHead {
+				return
+			}
+			_, _ = io.WriteString(w, metrics.RenderPrometheus())
 		case "/robots.txt":
 			handleRobotsTxt(w, r, cfg)
 		case "/llms.txt":
@@ -258,14 +287,18 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 						return
 					}
 					token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-					scope, ok := oauthSvc.ValidateBearer(token)
+					scope, legacy, ok := oauthSvc.ValidateBearerDetails(token)
 					if !ok {
 						w.Header().Set("WWW-Authenticate", wwwAuth+`, error="invalid_token"`)
 						http.Error(w, "unauthorized", http.StatusUnauthorized)
 						return
 					}
 					callerScope = scope
-					r = r.WithContext(context.WithValue(r.Context(), oauth.CtxScope, scope))
+					if legacy {
+						metrics.RecordLegacyScope(scope)
+						logger.Warn("accepted deprecated legacy scope alias", "scope", oauth.LegacyScopeAlias, "canonical_scope", callerScope, "issuer", strings.TrimRight(cfg.OAuth.Issuer, "/"), "path", r.URL.Path)
+					}
+					r = r.WithContext(context.WithValue(r.Context(), oauth.CtxScope, callerScope))
 				}
 
 				// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
@@ -295,7 +328,6 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			http.NotFound(w, r)
 		}
 	})
-	logger := observability.NewLogger()
 	return &Server{cfg: cfg, handler: observability.RequestMiddleware(handler, logger)}, nil
 }
 

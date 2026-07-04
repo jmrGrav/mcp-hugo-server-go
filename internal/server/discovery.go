@@ -94,40 +94,103 @@ func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
 	}
 }
 
-type mcpJSON struct {
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	MCPServers  map[string]mcpJSONServer `json:"mcpServers"`
+type mcpServerCard struct {
+	Schema           string            `json:"$schema"`
+	Version          string            `json:"version"`
+	ProtocolVersion  string            `json:"protocolVersion"`
+	ServerInfo       mcpServerInfo     `json:"serverInfo"`
+	Description      string            `json:"description"`
+	Transport        mcpTransport      `json:"transport"`
+	Capabilities     mcpCapabilities   `json:"capabilities"`
+	Authentication   mcpAuthentication `json:"authentication"`
+	DocumentationURL string            `json:"documentationUrl,omitempty"`
+	Resources        []string          `json:"resources,omitempty"`
+	Tools            []string          `json:"tools,omitempty"`
+	Prompts          []string          `json:"prompts,omitempty"`
 }
 
-type mcpJSONServer struct {
-	URL  string `json:"url"`
-	Type string `json:"type"`
+type mcpServerInfo struct {
+	Name    string `json:"name"`
+	Title   string `json:"title"`
+	Version string `json:"version"`
 }
 
-func buildMCPJSON(cfg config.Config) mcpJSON {
+type mcpTransport struct {
+	Type     string `json:"type"`
+	Endpoint string `json:"endpoint"`
+}
+
+type mcpCapabilities struct {
+	Tools     map[string]any `json:"tools"`
+	Prompts   map[string]any `json:"prompts"`
+	Resources map[string]any `json:"resources"`
+}
+
+type mcpAuthentication struct {
+	Required bool     `json:"required"`
+	Schemes  []string `json:"schemes"`
+}
+
+func buildMCPServerCard(cfg config.Config) mcpServerCard {
 	name := cfg.SiteName
 	if name == "" {
 		name = cfg.SiteURL
 	}
-	mcpBase := strings.TrimRight(cfg.OAuth.Issuer, "/")
-	if mcpBase == "" {
-		mcpBase = strings.TrimRight(cfg.SiteURL, "/")
+	base := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	if base == "" {
+		base = strings.TrimRight(cfg.SiteURL, "/")
 	}
-	return mcpJSON{
-		Name:        name,
-		Description: name + " — a Hugo-published site available via MCP.",
-		MCPServers: map[string]mcpJSONServer{
-			"default": {
-				URL:  mcpBase + "/mcp",
-				Type: "http",
+	title := name
+	if title == "" {
+		title = "MCP Server"
+	}
+	description := name
+	if description == "" {
+		description = title
+	}
+	return mcpServerCard{
+		Schema:          "https://static.modelcontextprotocol.io/schemas/mcp-server-card/v1.json",
+		Version:         "1.0",
+		ProtocolVersion: "2025-06-18",
+		ServerInfo: mcpServerInfo{
+			Name:    "mcp-hugo-server-go",
+			Title:   title,
+			Version: Version,
+		},
+		Description: description + " — a Hugo-published site available via MCP.",
+		Transport: mcpTransport{
+			Type:     "streamable-http",
+			Endpoint: "/mcp",
+		},
+		Capabilities: mcpCapabilities{
+			Tools: map[string]any{
+				"listChanged": true,
+			},
+			Prompts: map[string]any{
+				"listChanged": true,
+			},
+			Resources: map[string]any{
+				"subscribe":   true,
+				"listChanged": true,
 			},
 		},
+		Authentication: mcpAuthentication{
+			Required: true,
+			Schemes:  []string{"bearer", "oauth2"},
+		},
+		DocumentationURL: base + "/auth.md",
+		Resources:        []string{"dynamic"},
+		Tools:            []string{"dynamic"},
+		Prompts:          []string{"dynamic"},
 	}
 }
 
+func handleMCPServerCard(w http.ResponseWriter, r *http.Request, cfg config.Config) {
+	serveDiscoveryJSON(w, r, buildMCPServerCard(cfg))
+}
+
 func handleMCPJSON(w http.ResponseWriter, r *http.Request, cfg config.Config) {
-	serveDiscoveryJSON(w, r, buildMCPJSON(cfg))
+	serveDiscoveryJSON(w, r, buildMCPServerCard(cfg))
 }
 
 func buildLLMsTxt(cfg config.Config) string {
@@ -187,7 +250,10 @@ func serveDiscoveryJSON(w http.ResponseWriter, r *http.Request, v interface{}) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodHead {

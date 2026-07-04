@@ -98,51 +98,13 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 
 The server exposes tools across five access tiers. Each tier is a superset of lower tiers: agents with `content.write` access can call all `content.read` tools, and so on.
 
-### Tier 0: Anonymous (no auth required)
+Legacy clients may still send `mcp` as a scope. It is accepted as a deprecated alias for `content.read` for backward compatibility, but it is not advertised as a canonical scope and should not be used by new clients.
 
-**9 tools** — available to all requests without authentication.
+The server exposes a migration metric at `/metrics`:
 
-- `list_pages` — List published pages with pagination.
-- `get_page` — Get a page by slug (summary, HTML, and metadata).
-- `search_pages` — Search index by title, tags, categories, and content.
-- `get_recent_posts` — Get the most recent posts.
-- `list_tags` — List all tags in the site.
-- `list_categories` — List all categories in the site.
-- `get_sitemap` — Get all pages with URL and date.
-- `get_feed` — Get recent items as a feed.
-- `get_site_information` — Get basic site metadata (name, URL, language).
+- `mcp_legacy_scope_requests_total{scope="mcp"}` tracks legacy alias usage so the alias can be removed only after production usage reaches zero.
 
-### Tier 1: Content Reader (`content.read`)
-
-**5 authenticated tools** — grant richer content access via OAuth or auth.md token exchange.
-
-- `get_full_page_markdown` — Return full Markdown content of a page (read-only).
-- `get_page_frontmatter` — Return page metadata (title, tags, date, reading time).
-- `get_related_content` — Return pages sharing tags or categories with a given page.
-- `build_agent_context` — Return a complete enriched bundle (metadata, Markdown, related pages).
-- `export_agent_context` — Paginated export of page bundles, optionally filtered by tag or category.
-
-### Tier 2: Content Writer (`content.write`)
-
-**3 tools** — grant write access to Hugo content.
-
-- `create_page` — Create a new page at `{slug}/index.md` with frontmatter.
-- `update_page` — Update an existing page (preserves frontmatter fields).
-- `delete_page` — Delete a page (rate limited to 5 deletions per minute, logged to audit trail).
-
-### Tier 3: Site Administrator (`site.admin`)
-
-**3 tools** — grant build and site management access.
-
-- `build_site` — Trigger Hugo build and return duration in milliseconds.
-- `run_post_build_hooks` — Fire all configured post-build webhooks.
-- `generate_featured_image` — Generate and save a featured image using the configured image API.
-
-### Tier 4: System Administrator (`system.admin`)
-
-**1 tool** — grant lowest-level infrastructure access.
-
-- `check_sri_versions` — Scan Hugo layouts for CDN integrity attributes and verify hashes match.
+The authoritative tool inventory is documented in [docs/tools.md](tools.md) and should be treated as the source of truth for names, titles, and scope mapping.
 
 ## Deployment
 
@@ -277,6 +239,12 @@ oauth:
 ```
 
 2. **Set the issuer URL** to match your deployment (used for discovery and token validation).
+
+Discovery surfaces:
+
+- `/.well-known/mcp/server-card.json` is the canonical MCP Server Card endpoint.
+- `/.well-known/mcp.json` is retained as a compatibility alias.
+- Both return the same public discovery document.
 
 3. **Choose a storage backend** for access tokens:
 

@@ -38,7 +38,7 @@ func RegisterSRI(s *mcp.Server, cfg config.Config) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "check_sri_versions",
-		Title:       "Check SRI versions",
+		Title:       "Verify SRI integrity",
 		Description: "[RequiredScope: system.admin] Scan Hugo layouts for CDN integrity attributes and verify each URL's current SHA-384 hash matches the template.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    true,

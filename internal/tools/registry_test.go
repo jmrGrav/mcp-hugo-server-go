@@ -14,6 +14,8 @@ var anonymousToolNames = []string{
 var readToolNames = []string{
 	"get_full_page_markdown", "get_page_frontmatter",
 	"get_related_content", "build_agent_context", "export_agent_context",
+	"search_content", "explain_site_structure", "get_site_health",
+	"validate_front_matter", "validate_site",
 }
 
 func populateRegistry(r *tools.Registry) {
@@ -71,8 +73,8 @@ func TestContentReadScopeSeesReadTools(t *testing.T) {
 	got := r.ForScope("content.read")
 	names := toolNames(got)
 
-	if len(got) != 14 {
-		t.Fatalf("ForScope(\"content.read\") = %d tools, want 14; names: %v", len(got), names)
+	if len(got) != 19 {
+		t.Fatalf("ForScope(\"content.read\") = %d tools, want 19; names: %v", len(got), names)
 	}
 	for _, name := range anonymousToolNames {
 		if !containsName(names, name) {
@@ -127,11 +129,28 @@ func TestUnknownScopeSeesOnlyPublicTools(t *testing.T) {
 	r := tools.NewRegistry()
 	populateRegistry(r)
 
+	got := r.ForScope("unknown")
+	names := toolNames(got)
+
+	if len(got) != 9 {
+		t.Fatalf("ForScope(\"unknown\") = %d tools, want 9 (public only); names: %v", len(got), names)
+	}
+	for _, name := range anonymousToolNames {
+		if !containsName(names, name) {
+			t.Fatalf("ForScope(\"unknown\") missing anonymous tool %q", name)
+		}
+	}
+}
+
+func TestLegacyMCPScopeStaysUnknownInRegistry(t *testing.T) {
+	r := tools.NewRegistry()
+	populateRegistry(r)
+
 	got := r.ForScope("mcp")
 	names := toolNames(got)
 
 	if len(got) != 9 {
-		t.Fatalf("ForScope(\"mcp\") = %d tools, want 9 (public only); names: %v", len(got), names)
+		t.Fatalf("ForScope(\"mcp\") = %d tools, want 9 (registry must not special-case legacy aliases); names: %v", len(got), names)
 	}
 	for _, name := range anonymousToolNames {
 		if !containsName(names, name) {

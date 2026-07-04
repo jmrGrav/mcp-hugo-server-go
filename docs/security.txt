@@ -1,0 +1,5 @@
+Contact: https://github.com/jmrGrav/mcp-hugo-server-go/security/advisories/new
+Expires: 2027-07-04T00:00:00Z
+Preferred-Languages: fr, en
+Policy: https://github.com/jmrGrav/mcp-hugo-server-go/blob/main/SECURITY.md
+Canonical: https://github.com/jmrGrav/mcp-hugo-server-go/blob/main/docs/security.txt

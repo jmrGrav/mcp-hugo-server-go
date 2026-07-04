@@ -63,8 +63,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create_page",
-		Title:       "Create page",
-		Description: "[RequiredScope: content.write] Create a new Hugo content page at {slug}/index.md.",
+		Title:       "Publish page",
+		Description: "[RequiredScope: content.write] Create a new Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: boolPtr(false),
@@ -113,7 +113,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_page",
 		Title:       "Update page",
-		Description: "[RequiredScope: content.write] Update an existing Hugo content page. Preserves existing frontmatter fields.",
+		Description: "[RequiredScope: content.write] Update an existing Hugo content page while preserving existing front matter fields. Use this to revise title or body content.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: boolPtr(false),
@@ -174,7 +174,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "delete_page",
 		Title:       "Delete page",
-		Description: "[RequiredScope: content.write] Delete a Hugo content page. Rate limited to 5 per minute.",
+		Description: "[RequiredScope: content.write] Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: boolPtr(true),

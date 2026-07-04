@@ -115,7 +115,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "list_pages", "List pages", "List published Hugo pages from the index.",
+	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published Hugo pages with pagination. Returns page metadata only and does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
 				return nil, listPagesOutput{}, fmt.Errorf("index not initialized")
@@ -136,7 +136,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			return nil, listPagesOutput{Pages: toPageDTOs(slice)}, nil
 		})
 
-	addReadOnlyTool(s, "get_page", "Get page", "Get a published page by slug.",
+	addReadOnlyTool(s, "get_page", "Read page", "Read a published Hugo page by slug. Returns metadata, rendered HTML, and a short summary. Does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
 			if idx == nil {
 				return nil, getPageOutput{}, fmt.Errorf("index not initialized")
@@ -151,7 +151,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			return nil, getPageOutput{Page: toPageDetailDTO(*p)}, nil
 		})
 
-	addReadOnlyTool(s, "search_pages", "Search pages", "Search the index by title, summary, tags, categories, and URL.",
+	addReadOnlyTool(s, "search_pages", "Search content", "Search the published index by title, summary, tags, categories, and URL. Use this for simple keyword lookup without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in searchPagesInput) (*mcp.CallToolResult, searchPagesOutput, error) {
 			if idx == nil {
 				return nil, searchPagesOutput{}, fmt.Errorf("index not initialized")
@@ -164,7 +164,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			return nil, searchPagesOutput{Pages: toPageDTOs(pages)}, nil
 		})
 
-	addReadOnlyTool(s, "get_recent_posts", "Get recent posts", "Return recent published posts from the index.",
+	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
 			if idx == nil {
 				return nil, getRecentPostsOutput{}, fmt.Errorf("index not initialized")
@@ -174,7 +174,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			return nil, getRecentPostsOutput{Pages: toPageDTOs(pages)}, nil
 		})
 
-	addReadOnlyTool(s, "list_tags", "List tags", "List tags discovered from the index.",
+	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listTagsOutput, error) {
 			if idx == nil {
 				return nil, listTagsOutput{}, fmt.Errorf("index not initialized")
@@ -186,7 +186,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			return nil, listTagsOutput{Tags: tags}, nil
 		})
 
-	addReadOnlyTool(s, "list_categories", "List categories", "List categories discovered from the index.",
+	addReadOnlyTool(s, "list_categories", "Browse categories", "List the categories discovered from the index. Returns a sorted category list and does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listCategoriesOutput, error) {
 			if idx == nil {
 				return nil, listCategoriesOutput{}, fmt.Errorf("index not initialized")
@@ -198,7 +198,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			return nil, listCategoriesOutput{Categories: cats}, nil
 		})
 
-	addReadOnlyTool(s, "get_sitemap", "Get sitemap", "Return all published pages with URL and date.",
+	addReadOnlyTool(s, "get_sitemap", "Read sitemap", "Return the published sitemap with URL and publication date. Useful for site-wide discovery without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, getSitemapOutput, error) {
 			if idx == nil {
 				return nil, getSitemapOutput{}, fmt.Errorf("index not initialized")
@@ -211,7 +211,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			return nil, getSitemapOutput{Entries: entries}, nil
 		})
 
-	addReadOnlyTool(s, "get_feed", "Get feed", "Return recent published items as a feed.",
+	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getFeedInput) (*mcp.CallToolResult, getFeedOutput, error) {
 			if idx == nil {
 				return nil, getFeedOutput{}, fmt.Errorf("index not initialized")
@@ -225,7 +225,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			return nil, getFeedOutput{Items: items}, nil
 		})
 
-	addReadOnlyTool(s, "get_site_information", "Get site information", "Return basic information about the indexed site.",
+	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, getSiteInformationOutput, error) {
 			if idx == nil {
 				return nil, getSiteInformationOutput{}, fmt.Errorf("index not initialized")

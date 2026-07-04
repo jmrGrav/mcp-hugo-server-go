@@ -26,8 +26,8 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "build_site",
-		Title:       "Build site",
-		Description: "[RequiredScope: site.admin] Build the Hugo site. Returns duration in milliseconds. Returns build_in_progress error if a build is already running. Serialized with content mutations via ContentMu.",
+		Title:       "Build website",
+		Description: "[RequiredScope: site.admin] Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: boolPtr(false),

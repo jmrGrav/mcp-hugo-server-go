@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -11,12 +12,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/server"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	_ "modernc.org/sqlite"
 )
 
 func mustTestServer(t *testing.T) *server.Server {
@@ -36,6 +39,8 @@ func mustTestServer(t *testing.T) *server.Server {
 func mustOAuthServer(t *testing.T) *server.Server {
 	t.Helper()
 	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth = config.OAuthConfig{
 		Enabled:               true,
 		Issuer:                "https://mcp.test",
@@ -43,6 +48,32 @@ func mustOAuthServer(t *testing.T) *server.Server {
 		AuthCodeTTLSeconds:    300,
 		AccessTokenTTLSeconds: 3600,
 		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32", "::1/128"},
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	return srv
+}
+
+func mustOAuthSQLiteServer(t *testing.T, storePath string) *server.Server {
+	t.Helper()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
+	cfg.OAuth = config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		DynamicClientEnabled:  true,
+		AuthCodeTTLSeconds:    300,
+		AccessTokenTTLSeconds: 3600,
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32", "::1/128"},
+		StorageBackend:        "sqlite",
+		StoragePath:           storePath,
 	}
 	idx, err := site.NewIndex(cfg)
 	if err != nil {
@@ -177,6 +208,19 @@ func doMCPToolsList(t *testing.T, srv *server.Server, bearer string) []string {
 	return toolsListNames(t, rec.Body.String())
 }
 
+func doMCPCall(t *testing.T, srv *server.Server, bearer string, payload []byte) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	return rec
+}
+
 func obtainBearerToken(t *testing.T, srv *server.Server) string {
 	t.Helper()
 
@@ -257,6 +301,24 @@ func obtainBearerToken(t *testing.T, srv *server.Server) string {
 	return tokenResp.AccessToken
 }
 
+func rewriteTokenScopeToLegacyMCP(t *testing.T, storePath, token string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatalf("open token store: %v", err)
+	}
+	defer db.Close()
+	key := oauthHashForTest(token)
+	if _, err := db.Exec(`UPDATE access_tokens SET scope = ? WHERE token = ?`, "mcp", key); err != nil {
+		t.Fatalf("update token scope: %v", err)
+	}
+}
+
+func oauthHashForTest(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return fmt.Sprintf("%x", sum[:])
+}
+
 func TestToolsListAnonymousReturnsNineTools(t *testing.T) {
 	srv := mustOAuthServer(t)
 	names := doMCPToolsList(t, srv, "")
@@ -272,14 +334,14 @@ func TestToolsListAnonymousReturnsNineTools(t *testing.T) {
 	}
 }
 
-func TestToolsListAuthenticatedReturnsFourteenTools(t *testing.T) {
+func TestToolsListAuthenticatedReturnsNineteenTools(t *testing.T) {
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 14 {
-		t.Fatalf("authenticated tools/list = %d tools, want 14; got %v", len(names), names)
+	if len(names) != 19 {
+		t.Fatalf("authenticated tools/list = %d tools, want 19; got %v", len(names), names)
 	}
-	for _, name := range []string{"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context"} {
+	for _, name := range []string{"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_site_structure", "get_site_health", "validate_front_matter", "validate_site"} {
 		found := false
 		for _, n := range names {
 			if n == name {
@@ -293,6 +355,53 @@ func TestToolsListAuthenticatedReturnsFourteenTools(t *testing.T) {
 	}
 }
 
+func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	srv := mustOAuthSQLiteServer(t, storePath)
+	bearer := obtainBearerToken(t, srv)
+	rewriteTokenScopeToLegacyMCP(t, storePath, bearer)
+
+	names := doMCPToolsList(t, srv, bearer)
+	if len(names) != 19 {
+		t.Fatalf("legacy mcp tools/list = %d tools, want 19; got %v", len(names), names)
+	}
+	for _, bad := range []string{"create_page", "update_page", "delete_page", "build_site"} {
+		for _, n := range names {
+			if n == bad {
+				t.Fatalf("legacy mcp tools/list must not include %q", bad)
+			}
+		}
+	}
+
+	readPayload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_full_page_markdown","arguments":{"slug":"/posts/hello"}}}`)
+	readRec := doMCPCall(t, srv, bearer, readPayload)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("legacy mcp must allow read tool: status = %d body = %q", readRec.Code, readRec.Body.String())
+	}
+	if readRec.Body.Len() == 0 {
+		t.Fatal("legacy mcp read tool returned empty body")
+	}
+
+	writePayload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page"}}`)
+	writeRec := doMCPCall(t, srv, bearer, writePayload)
+	if writeRec.Code != http.StatusForbidden {
+		t.Fatalf("legacy mcp must reject write tool: status = %d body = %q", writeRec.Code, writeRec.Body.String())
+	}
+	if !strings.Contains(writeRec.Body.String(), "forbidden_tool") {
+		t.Fatalf("expected forbidden_tool for legacy mcp write attempt, got %q", writeRec.Body.String())
+	}
+
+	metricsReq := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	metricsRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(metricsRec, metricsReq)
+	if metricsRec.Code != http.StatusOK {
+		t.Fatalf("/metrics status = %d body = %q", metricsRec.Code, metricsRec.Body.String())
+	}
+	if !strings.Contains(metricsRec.Body.String(), `mcp_legacy_scope_requests_total{scope="mcp"} 3`) {
+		t.Fatalf("metrics missing legacy scope counter: %q", metricsRec.Body.String())
+	}
+}
+
 // TestContentReadCannotCallWriteTool proves that a content.read bearer cannot
 // invoke a content.write tool (issue #25 acceptance criterion 1).
 func TestContentReadCannotCallWriteTool(t *testing.T) {
@@ -300,13 +409,7 @@ func TestContentReadCannotCallWriteTool(t *testing.T) {
 	bearer := obtainBearerToken(t, srv)
 
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page"}}`)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+bearer)
-	rec := httptest.NewRecorder()
-
-	srv.Handler().ServeHTTP(rec, req)
+	rec := doMCPCall(t, srv, bearer, body)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("content.read must not call create_page: status = %d body = %q", rec.Code, rec.Body.String())
@@ -323,13 +426,7 @@ func TestContentReadCannotCallSiteAdminTool(t *testing.T) {
 	bearer := obtainBearerToken(t, srv)
 
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_site"}}`)
-	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+bearer)
-	rec := httptest.NewRecorder()
-
-	srv.Handler().ServeHTTP(rec, req)
+	rec := doMCPCall(t, srv, bearer, body)
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("content.read must not call build_site: status = %d body = %q", rec.Code, rec.Body.String())

@@ -1,0 +1,588 @@
+package read
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+const toolResultVersion = "v1.0.0"
+
+type searchContentInput struct {
+	Query    string `json:"query,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Tag      string `json:"tag,omitempty"`
+	Category string `json:"category,omitempty"`
+	Language string `json:"language,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+	Offset   int    `json:"offset,omitempty"`
+	Sort     string `json:"sort,omitempty"`
+	Order    string `json:"order,omitempty"`
+}
+
+type contentEnvelopeData struct {
+	Pages    []pageDTO `json:"pages,omitempty"`
+	Total    int       `json:"total,omitempty"`
+	Limit    int       `json:"limit,omitempty"`
+	Offset   int       `json:"offset,omitempty"`
+	Sort     string    `json:"sort,omitempty"`
+	Order    string    `json:"order,omitempty"`
+	Query    string    `json:"query,omitempty"`
+	Type     string    `json:"type,omitempty"`
+	Tag      string    `json:"tag,omitempty"`
+	Category string    `json:"category,omitempty"`
+	Language string    `json:"language,omitempty"`
+
+	Status           string       `json:"status,omitempty"`
+	Score            int          `json:"score,omitempty"`
+	PublishedPages   int          `json:"published_pages,omitempty"`
+	SourcePages      int          `json:"source_pages,omitempty"`
+	DraftPages       int          `json:"draft_pages,omitempty"`
+	Tags             int          `json:"tags,omitempty"`
+	Categories       int          `json:"categories,omitempty"`
+	MissingTitles    int          `json:"missing_titles,omitempty"`
+	MissingDates     int          `json:"missing_dates,omitempty"`
+	ValidationErrors int          `json:"validation_errors,omitempty"`
+	Sections         []sectionDTO `json:"sections,omitempty"`
+	Languages        []string     `json:"languages,omitempty"`
+	Summary          string       `json:"summary,omitempty"`
+	RecentPages      []pageDTO    `json:"recent_pages,omitempty"`
+	Notes            []string     `json:"notes,omitempty"`
+}
+
+type contentEnvelope struct {
+	Success     bool                `json:"success"`
+	Version     string              `json:"version"`
+	GeneratedAt string              `json:"generated_at"`
+	Data        contentEnvelopeData `json:"data"`
+	Warnings    []string            `json:"warnings"`
+	Errors      []string            `json:"errors"`
+}
+
+type validateFrontMatterInput struct {
+	Slug   string `json:"slug,omitempty"`
+	Limit  int    `json:"limit,omitempty"`
+	Offset int    `json:"offset,omitempty"`
+}
+
+type frontMatterIssueDTO struct {
+	Slug   string   `json:"slug"`
+	Issues []string `json:"issues"`
+}
+
+type sectionDTO struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+type pageDTO struct {
+	Slug       string   `json:"slug"`
+	Title      string   `json:"title"`
+	Summary    string   `json:"summary"`
+	Tags       []string `json:"tags"`
+	Categories []string `json:"categories"`
+	Date       string   `json:"date"`
+	URL        string   `json:"url"`
+	Lang       string   `json:"lang"`
+}
+
+type validateOutputData struct {
+	Total   int                   `json:"total"`
+	Valid   int                   `json:"valid"`
+	Invalid int                   `json:"invalid"`
+	Pages   []frontMatterIssueDTO `json:"pages"`
+}
+
+type validateOutput struct {
+	Success     bool               `json:"success"`
+	Version     string             `json:"version"`
+	GeneratedAt string             `json:"generated_at"`
+	Data        validateOutputData `json:"data"`
+	Warnings    []string           `json:"warnings"`
+	Errors      []string           `json:"errors"`
+}
+
+// RegisterWithSourceIndex wires additional read-only tools that benefit from the
+// source index. Existing tools remain registered via Register.
+func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, _ config.Config) {
+	if s == nil {
+		return
+	}
+
+	addReadOnlyTool(s, "search_content", "Search content", "Search Hugo content with filters for type, tag, category, language, pagination, and sort order. Returns page metadata only. Requires content.read.",
+		func(_ context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, contentEnvelope, error) {
+			if idx == nil {
+				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
+			}
+			filtered := filterContentPages(idx.Sitemap(), in)
+			total := len(filtered)
+			limit := clampLimit(in.Limit, 20, 100)
+			offset := in.Offset
+			if offset < 0 {
+				offset = 0
+			}
+			pages := sliceContentPages(filtered, offset, limit)
+			now := time.Now().UTC().Format(time.RFC3339)
+			return nil, contentEnvelope{
+				Success:     true,
+				Version:     toolResultVersion,
+				GeneratedAt: now,
+				Data: contentEnvelopeData{
+					Pages:    toPageDTOs(pages),
+					Total:    total,
+					Limit:    limit,
+					Offset:   offset,
+					Sort:     effectiveSort(in),
+					Order:    canonicalOrder(in.Order),
+					Query:    strings.TrimSpace(in.Query),
+					Type:     strings.TrimSpace(in.Type),
+					Tag:      strings.TrimSpace(in.Tag),
+					Category: strings.TrimSpace(in.Category),
+					Language: strings.TrimSpace(in.Language),
+				},
+				Warnings: []string{},
+				Errors:   []string{},
+			}, nil
+		})
+
+	addReadOnlyTool(s, "explain_site_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Requires content.read.",
+		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
+			if idx == nil {
+				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
+			}
+			sections := countSections(idx.Sitemap())
+			languages := uniqueLanguages(idx.Sitemap())
+			recent := idx.Sitemap()
+			if len(recent) > 5 {
+				recent = recent[:5]
+			}
+			summary := fmt.Sprintf("%d published pages across %d sections, %d tags, and %d categories.",
+				len(idx.Sitemap()), len(sections), len(idx.AllTags()), len(idx.AllCategories()))
+			now := time.Now().UTC().Format(time.RFC3339)
+			return nil, contentEnvelope{
+				Success:     true,
+				Version:     toolResultVersion,
+				GeneratedAt: now,
+				Data: contentEnvelopeData{
+					Summary:     summary,
+					Sections:    sections,
+					Languages:   languages,
+					Tags:        len(idx.AllTags()),
+					Categories:  len(idx.AllCategories()),
+					RecentPages: toPageDTOs(recent),
+					Notes: []string{
+						"Top-level sections are derived from page slugs.",
+						"Posts are detected from the /posts/ path prefix.",
+					},
+				},
+				Warnings: []string{},
+				Errors:   []string{},
+			}, nil
+		})
+
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts and validation signals. Use this before publishing or reviewing content. Requires content.read.",
+		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
+			if idx == nil {
+				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
+			}
+			health := buildSiteHealth(idx, srcIdx)
+			now := time.Now().UTC().Format(time.RFC3339)
+			return nil, contentEnvelope{
+				Success:     true,
+				Version:     toolResultVersion,
+				GeneratedAt: now,
+				Data: contentEnvelopeData{
+					Status:           health.Status,
+					Score:            health.Score,
+					PublishedPages:   health.PublishedPages,
+					SourcePages:      health.SourcePages,
+					DraftPages:       health.DraftPages,
+					Tags:             health.Tags,
+					Categories:       health.Categories,
+					MissingTitles:    health.MissingTitles,
+					MissingDates:     health.MissingDates,
+					ValidationErrors: health.ValidationErrors,
+				},
+				Warnings: []string{},
+				Errors:   []string{},
+			}, nil
+		})
+
+	addReadOnlyTool(s, "validate_front_matter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. Requires content.read.",
+		func(_ context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
+			if srcIdx == nil {
+				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
+			}
+			pages := sourcePagesForValidation(srcIdx, in.Slug)
+			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit), nil
+		})
+
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Requires content.read.",
+		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, validateOutput, error) {
+			if srcIdx == nil {
+				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
+			}
+			pages := srcIdx.ListPages(0, 0)
+			return nil, validatePagesWithIssues(pages, 0, 0), nil
+		})
+}
+
+func filterContentPages(pages []site.Page, in searchContentInput) []site.Page {
+	out := make([]site.Page, 0, len(pages))
+	for _, p := range pages {
+		if !matchContentFilters(p, in) {
+			continue
+		}
+		out = append(out, p)
+	}
+	sortContentPages(out, in)
+	return out
+}
+
+func matchContentFilters(p site.Page, in searchContentInput) bool {
+	query := strings.TrimSpace(in.Query)
+	if query != "" && scoreContentPage(p, query) == 0 {
+		return false
+	}
+	if in.Tag != "" && !sliceContains(p.Tags, in.Tag) {
+		return false
+	}
+	if in.Category != "" && !sliceContains(p.Categories, in.Category) {
+		return false
+	}
+	if in.Language != "" && !strings.EqualFold(p.Lang, in.Language) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(in.Type)) {
+	case "", "all":
+		return true
+	case "post", "posts":
+		return strings.HasPrefix(strings.ToLower(p.Slug), "/posts/")
+	case "page", "pages":
+		return !strings.HasPrefix(strings.ToLower(p.Slug), "/posts/")
+	default:
+		return true
+	}
+}
+
+func scoreContentPage(p site.Page, query string) int {
+	terms := strings.Fields(strings.ToLower(query))
+	if len(terms) == 0 {
+		return 1
+	}
+	fields := []string{
+		strings.ToLower(p.Title),
+		strings.ToLower(p.Summary),
+		strings.ToLower(p.URL),
+		strings.ToLower(strings.Join(p.Tags, " ")),
+		strings.ToLower(strings.Join(p.Categories, " ")),
+		strings.ToLower(p.Lang),
+	}
+	score := 0
+	for _, term := range terms {
+		for _, field := range fields {
+			if strings.Contains(field, term) {
+				score++
+				break
+			}
+		}
+	}
+	return score
+}
+
+func sortContentPages(pages []site.Page, in searchContentInput) {
+	sortBy := canonicalSort(in.Sort)
+	if strings.TrimSpace(in.Sort) == "" && strings.TrimSpace(in.Query) != "" {
+		sortBy = "relevance"
+	}
+	order := canonicalOrder(in.Order)
+	sort.SliceStable(pages, func(i, j int) bool {
+		switch sortBy {
+		case "title":
+			if order == "asc" {
+				return strings.ToLower(pages[i].Title) < strings.ToLower(pages[j].Title)
+			}
+			return strings.ToLower(pages[i].Title) > strings.ToLower(pages[j].Title)
+		case "slug":
+			if order == "asc" {
+				return pages[i].Slug < pages[j].Slug
+			}
+			return pages[i].Slug > pages[j].Slug
+		case "relevance":
+			li := scoreContentPage(pages[i], in.Query)
+			lj := scoreContentPage(pages[j], in.Query)
+			if li != lj {
+				if order == "asc" {
+					return li < lj
+				}
+				return li > lj
+			}
+			if pages[i].Date != pages[j].Date {
+				if order == "asc" {
+					return pages[i].Date < pages[j].Date
+				}
+				return pages[i].Date > pages[j].Date
+			}
+			if order == "asc" {
+				return pages[i].Slug < pages[j].Slug
+			}
+			return pages[i].Slug > pages[j].Slug
+		default:
+			if order == "asc" {
+				return pages[i].Date < pages[j].Date
+			}
+			return pages[i].Date > pages[j].Date
+		}
+	})
+}
+
+func canonicalSort(sortBy string) string {
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "", "date":
+		return "date"
+	case "title":
+		return "title"
+	case "slug":
+		return "slug"
+	case "relevance":
+		return "relevance"
+	default:
+		return "date"
+	}
+}
+
+func canonicalOrder(order string) string {
+	if strings.ToLower(strings.TrimSpace(order)) == "asc" {
+		return "asc"
+	}
+	return "desc"
+}
+
+func sliceContentPages(pages []site.Page, offset, limit int) []site.Page {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(pages) {
+		return []site.Page{}
+	}
+	out := pages[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) validateOutput {
+	total := len(pages)
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = total
+	}
+	slice := pages
+	if offset < len(slice) {
+		slice = slice[offset:]
+	} else {
+		slice = []hugosite.SourcePage{}
+	}
+	if len(slice) > limit {
+		slice = slice[:limit]
+	}
+
+	results := make([]frontMatterIssueDTO, 0, len(slice))
+	invalid := 0
+	for _, p := range slice {
+		issues := validateFrontMatterPage(p)
+		if len(issues) > 0 {
+			invalid++
+		}
+		results = append(results, frontMatterIssueDTO{Slug: p.Slug, Issues: issues})
+	}
+	return validateOutput{
+		Success:     true,
+		Version:     toolResultVersion,
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Data: validateOutputData{
+			Total:   total,
+			Valid:   len(slice) - invalid,
+			Invalid: invalid,
+			Pages:   results,
+		},
+		Warnings: []string{},
+		Errors:   []string{},
+	}
+}
+
+func effectiveSort(in searchContentInput) string {
+	if strings.TrimSpace(in.Sort) == "" && strings.TrimSpace(in.Query) != "" {
+		return "relevance"
+	}
+	return canonicalSort(in.Sort)
+}
+
+func validateFrontMatterPage(p hugosite.SourcePage) []string {
+	var issues []string
+	if strings.TrimSpace(p.Title) == "" {
+		issues = append(issues, "missing title")
+	}
+	if strings.TrimSpace(p.Date) == "" {
+		issues = append(issues, "missing date")
+	}
+	if p.FrontmatterRaw != nil {
+		if _, ok := p.FrontmatterRaw["title"]; !ok {
+			issues = append(issues, "front matter missing title field")
+		}
+		if _, ok := p.FrontmatterRaw["date"]; !ok {
+			issues = append(issues, "front matter missing date field")
+		}
+	}
+	return issues
+}
+
+func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) []hugosite.SourcePage {
+	if idx == nil {
+		return nil
+	}
+	slug = strings.TrimSpace(slug)
+	if slug == "" {
+		return idx.ListPages(0, 0)
+	}
+	if p, ok := idx.GetBySlug(slug); ok {
+		return []hugosite.SourcePage{*p}
+	}
+	return []hugosite.SourcePage{}
+}
+
+func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex) contentEnvelopeData {
+	health := contentEnvelopeData{
+		Status: "healthy",
+	}
+	if idx != nil {
+		health.PublishedPages = len(idx.Sitemap())
+		health.Tags = len(idx.AllTags())
+		health.Categories = len(idx.AllCategories())
+	}
+	if srcIdx != nil {
+		pages := srcIdx.ListPages(0, 0)
+		health.SourcePages = len(pages)
+		for _, p := range pages {
+			if p.Draft {
+				health.DraftPages++
+			}
+			issues := validateFrontMatterPage(p)
+			if len(issues) > 0 {
+				health.ValidationErrors++
+				for _, issue := range issues {
+					switch issue {
+					case "missing title", "front matter missing title field":
+						health.MissingTitles++
+					case "missing date", "front matter missing date field":
+						health.MissingDates++
+					}
+				}
+			}
+		}
+	}
+	penalty := (health.ValidationErrors * 10) + (health.MissingTitles * 5) + (health.MissingDates * 5)
+	score := 100 - penalty
+	if score < 0 {
+		score = 0
+	}
+	health.Score = score
+	switch {
+	case score >= 90:
+		health.Status = "healthy"
+	case score >= 70:
+		health.Status = "degraded"
+	default:
+		health.Status = "critical"
+	}
+	return health
+}
+
+func countSections(pages []site.Page) []sectionDTO {
+	counts := map[string]int{}
+	for _, p := range pages {
+		seg := topSection(p.Slug)
+		counts[seg]++
+	}
+	out := make([]sectionDTO, 0, len(counts))
+	for name, count := range counts {
+		out = append(out, sectionDTO{Name: name, Count: count})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Count > out[j].Count
+	})
+	return out
+}
+
+func topSection(slug string) string {
+	slug = strings.TrimSpace(slug)
+	if slug == "" || slug == "/" {
+		return "root"
+	}
+	trimmed := strings.TrimPrefix(slug, "/")
+	parts := strings.Split(trimmed, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "root"
+	}
+	if parts[0] == "posts" {
+		return "posts"
+	}
+	return parts[0]
+}
+
+func uniqueLanguages(pages []site.Page) []string {
+	seen := map[string]struct{}{}
+	for _, p := range pages {
+		if strings.TrimSpace(p.Lang) != "" {
+			seen[p.Lang] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for lang := range seen {
+		out = append(out, lang)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func toPageDTO(p site.Page) pageDTO {
+	tags := p.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	cats := p.Categories
+	if cats == nil {
+		cats = []string{}
+	}
+	return pageDTO{
+		Slug:       p.Slug,
+		Title:      p.Title,
+		Summary:    p.Summary,
+		Tags:       tags,
+		Categories: cats,
+		Date:       p.Date,
+		URL:        p.URL,
+		Lang:       p.Lang,
+	}
+}
+
+func toPageDTOs(pages []site.Page) []pageDTO {
+	out := make([]pageDTO, len(pages))
+	for i, p := range pages {
+		out[i] = toPageDTO(p)
+	}
+	return out
+}
