@@ -247,17 +247,20 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 
 			callerScope := ""
 			if oauthSvc != nil {
+				issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
+				wwwAuth := fmt.Sprintf(`Bearer realm=%q, resource_metadata=%q`,
+					issuer, issuer+"/.well-known/oauth-protected-resource")
 				auth := strings.TrimSpace(r.Header.Get("Authorization"))
 				if auth != "" {
 					if !strings.HasPrefix(auth, "Bearer ") {
-						w.Header().Set("WWW-Authenticate", `Bearer realm="mcp"`)
+						w.Header().Set("WWW-Authenticate", wwwAuth)
 						http.Error(w, "unauthorized", http.StatusUnauthorized)
 						return
 					}
 					token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 					scope, ok := oauthSvc.ValidateBearer(token)
 					if !ok {
-						w.Header().Set("WWW-Authenticate", `Bearer realm="mcp"`)
+						w.Header().Set("WWW-Authenticate", wwwAuth+`, error="invalid_token"`)
 						http.Error(w, "unauthorized", http.StatusUnauthorized)
 						return
 					}
