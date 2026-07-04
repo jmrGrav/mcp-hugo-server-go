@@ -89,7 +89,7 @@ func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
 		Resource:               resource,
 		AuthorizationServers:   []string{issuer},
 		BearerMethodsSupported: []string{"header"},
-		ScopesSupported:        []string{"mcp"},
+		ScopesSupported:        tools.KnownScopes,
 		ResourceDocumentation:  resource,
 	}
 }
