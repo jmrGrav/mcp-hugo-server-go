@@ -8,6 +8,7 @@
 # secrets
 *.env
 config.local.yaml
+oauth-clients.yaml
 
 # superpowers sdd workspace
 .superpowers/
