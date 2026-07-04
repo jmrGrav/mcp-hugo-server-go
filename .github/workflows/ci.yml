@@ -1,0 +1,22 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - run: go test -cover -coverprofile=coverage.out ./...
+      - run: go test -race ./...
+      - run: go vet ./...
+      - name: Coverage gate
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
+          echo "Coverage: ${COVERAGE}%"
+          python3 -c "import sys; val=float('${COVERAGE}'); sys.exit(0 if val >= 80 else 1)" || (echo "Coverage ${COVERAGE}% is below 80%"; exit 1)
