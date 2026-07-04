@@ -159,10 +159,8 @@ func extractSRIPairs(content string) []sriPair {
 		if len(forwardMatches) > 0 {
 			// Get the first forward match (closest to integrity)
 			firstMatch := forwardMatches[0]
-			distance := (pos + firstMatch[0]) - pos
+			distance := firstMatch[0]
 			if distance < bestDistance {
-				bestDistance = distance
-				// Extract the URL from the submatch
 				urlStart := pos + firstMatch[2]
 				urlEnd := pos + firstMatch[3]
 				bestURL = content[urlStart:urlEnd]

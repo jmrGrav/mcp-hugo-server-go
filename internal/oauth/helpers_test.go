@@ -130,7 +130,7 @@ func TestPKCEAndHashHelpers(t *testing.T) {
 	}
 }
 
-func TestSourceAllowedAndMetadata(t *testing.T) {
+func TestSourceAllowed(t *testing.T) {
 	svc := NewService(config.OAuthConfig{
 		Enabled:               true,
 		Issuer:                "https://mcp.test",
@@ -142,12 +142,5 @@ func TestSourceAllowedAndMetadata(t *testing.T) {
 	}
 	if svc.sourceAllowed("203.0.113.10") {
 		t.Fatal("sourceAllowed should reject untrusted IP")
-	}
-	meta := svc.AuthorizationServerMetadata()
-	if meta["issuer"] != "https://mcp.test" {
-		t.Fatalf("AuthorizationServerMetadata issuer = %#v", meta["issuer"])
-	}
-	if _, ok := meta["agent_auth"].(map[string]any); !ok {
-		t.Fatalf("AuthorizationServerMetadata missing agent_auth: %#v", meta)
 	}
 }

@@ -30,7 +30,7 @@ type authServerMeta struct {
 	Issuer                            string             `json:"issuer"`
 	AuthorizationEndpoint             string             `json:"authorization_endpoint"`
 	TokenEndpoint                     string             `json:"token_endpoint"`
-	RegistrationEndpoint              string             `json:"registration_endpoint"`
+	RegistrationEndpoint              string             `json:"registration_endpoint,omitempty"`
 	ResponseTypesSupported            []string           `json:"response_types_supported"`
 	GrantTypesSupported               []string           `json:"grant_types_supported"`
 	CodeChallengeMethodsSupported     []string           `json:"code_challenge_methods_supported"`
@@ -54,11 +54,15 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 	if resource == "" {
 		resource = issuer + "/mcp"
 	}
+	registrationEndpoint := ""
+	if cfg.OAuth.DynamicClientEnabled {
+		registrationEndpoint = issuer + "/register"
+	}
 	return authServerMeta{
 		Issuer:                            issuer,
 		AuthorizationEndpoint:             issuer + "/authorize",
 		TokenEndpoint:                     issuer + "/token",
-		RegistrationEndpoint:              issuer + "/register",
+		RegistrationEndpoint:              registrationEndpoint,
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
@@ -198,7 +202,7 @@ func buildMCPServerCard(cfg config.Config) mcpServerCard {
 			},
 		},
 		Authentication: mcpAuthentication{
-			Required: true,
+			Required: cfg.OAuth.Enabled,
 			Schemes:  []string{"bearer", "oauth2"},
 		},
 		DocumentationURL: base + "/auth.md",

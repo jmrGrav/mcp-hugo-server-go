@@ -20,6 +20,7 @@ func mustDiscoveryServer(t *testing.T, siteRoot string) *server.Server {
 	cfg.SiteRoot = siteRoot
 	cfg.SiteURL = "https://www.arleo.eu"
 	cfg.SiteName = "arleo.eu"
+	cfg.OAuth.Enabled = true
 	cfg.OAuth.Issuer = "https://mcp.arleo.eu"
 	cfg.OAuth.Resource = "https://mcp.arleo.eu/mcp"
 	idx, err := site.NewIndex(cfg)

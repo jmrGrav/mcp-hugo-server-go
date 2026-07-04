@@ -18,7 +18,6 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
 type ctxKey string
@@ -200,38 +199,6 @@ func (s *Service) resolveClientScope(clientID, requested string) (string, error)
 	return scope, nil
 }
 
-func (s *Service) AuthorizationServerMetadata() map[string]any {
-	issuer := strings.TrimRight(s.cfg.Issuer, "/")
-	resource := strings.TrimSpace(s.cfg.Resource)
-	if resource == "" {
-		resource = issuer + "/mcp"
-	}
-	return map[string]any{
-		"issuer":                                issuer,
-		"authorization_endpoint":                issuer + "/authorize",
-		"token_endpoint":                        issuer + "/token",
-		"registration_endpoint":                 issuer + "/register",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": s.supportedTokenAuthMethods(),
-		"scopes_supported":                      tools.KnownScopes,
-		"service_documentation":                 resource,
-		"agent_auth": map[string]any{
-			"skill":                    issuer + "/auth.md",
-			"identity_endpoint":        issuer + "/agent/identity",
-			"claim_endpoint":           issuer + "/agent/identity/claim",
-			"events_endpoint":          issuer + "/agent/event/notify",
-			"identity_types_supported": []string{"anonymous"},
-			"identity_assertion": map[string]any{
-				"assertion_types_supported": []string{"urn:ietf:params:oauth:token-type:id-jag"},
-			},
-			"events_supported": []string{
-				"https://schemas.workos.com/events/agent/auth/identity/assertion/revoked",
-			},
-		},
-	}
-}
 
 func (s *Service) supportedTokenAuthMethods() []string {
 	s.mu.RLock()
