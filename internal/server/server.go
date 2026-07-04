@@ -234,8 +234,11 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			}
 			oauthSvc.HandleAgentEvent(w, r)
 		case "/mcp":
-			if r.Method != http.MethodPost {
-				w.Header().Set("Allow", http.MethodPost)
+			switch r.Method {
+			case http.MethodPost, http.MethodGet, http.MethodDelete:
+				// all three are valid per MCP Streamable HTTP spec
+			default:
+				w.Header().Set("Allow", "GET, POST, DELETE")
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
@@ -260,23 +263,26 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 					r = r.WithContext(context.WithValue(r.Context(), oauth.CtxScope, scope))
 				}
 
-				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
-				if err != nil {
-					http.Error(w, "bad request", http.StatusBadRequest)
-					return
+				// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
+				if r.Method == http.MethodPost {
+					body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+					if err != nil {
+						http.Error(w, "bad request", http.StatusBadRequest)
+						return
+					}
+					if !scopePolicy.AllowRequest(body, callerScope) {
+						reason := scopePolicy.DenyReason(body, callerScope)
+						w.Header().Set("Content-Type", "application/json; charset=utf-8")
+						w.WriteHeader(http.StatusForbidden)
+						_ = json.NewEncoder(w).Encode(map[string]any{
+							"jsonrpc": "2.0",
+							"id":      nil,
+							"error":   map[string]any{"code": -32001, "message": reason},
+						})
+						return
+					}
+					r.Body = io.NopCloser(bytes.NewReader(body))
 				}
-				if !scopePolicy.AllowRequest(body, callerScope) {
-					reason := scopePolicy.DenyReason(body, callerScope)
-					w.Header().Set("Content-Type", "application/json; charset=utf-8")
-					w.WriteHeader(http.StatusForbidden)
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"jsonrpc": "2.0",
-						"id":      nil,
-						"error":   map[string]any{"code": -32001, "message": reason},
-					})
-					return
-				}
-				r.Body = io.NopCloser(bytes.NewReader(body))
 			}
 
 			rateLimitedStreaming.ServeHTTP(w, r)

@@ -119,7 +119,8 @@ func TestACLAllowsPublicToolAnonymous(t *testing.T) {
 
 func TestMCPMethodNotAllowed(t *testing.T) {
 	srv := mustTestServer(t)
-	req := httptest.NewRequest(http.MethodGet, "/mcp", nil)
+	// PUT is not a valid MCP method (GET/POST/DELETE are all spec-valid)
+	req := httptest.NewRequest(http.MethodPut, "/mcp", nil)
 	rec := httptest.NewRecorder()
 
 	srv.Handler().ServeHTTP(rec, req)
@@ -127,8 +128,9 @@ func TestMCPMethodNotAllowed(t *testing.T) {
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("status = %d want 405", rec.Code)
 	}
-	if got := rec.Header().Get("Allow"); got != http.MethodPost {
-		t.Fatalf("Allow = %q want POST", got)
+	allow := rec.Header().Get("Allow")
+	if allow != "GET, POST, DELETE" {
+		t.Fatalf("Allow = %q want \"GET, POST, DELETE\"", allow)
 	}
 }
 
