@@ -387,6 +387,20 @@ func requestSourceIP(r *http.Request) string {
 	if r == nil {
 		return ""
 	}
+	// Prefer real-client IP headers set by trusted proxies (Cloudflare, nginx).
+	// CF-Connecting-IP is the most reliable when behind Cloudflare.
+	for _, hdr := range []string{"CF-Connecting-IP", "X-Real-IP"} {
+		if v := strings.TrimSpace(r.Header.Get(hdr)); v != "" {
+			return v
+		}
+	}
+	// X-Forwarded-For may be a comma-separated list; take the first entry.
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		if idx := strings.Index(xff, ","); idx > 0 {
+			return strings.TrimSpace(xff[:idx])
+		}
+		return xff
+	}
 	host := r.RemoteAddr
 	if strings.Contains(host, ":") {
 		if splitHost, _, err := net.SplitHostPort(host); err == nil {
