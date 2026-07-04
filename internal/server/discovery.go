@@ -100,7 +100,11 @@ func buildLLMsTxt(cfg config.Config) string {
 		name = cfg.SiteURL
 	}
 	siteURL := strings.TrimRight(cfg.SiteURL, "/")
-	return fmt.Sprintf("# %s\n\n> %s — a Hugo-published site available via MCP.\n\nMCP endpoint: %s/mcp\n", name, siteURL, siteURL)
+	mcpBase := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	if mcpBase == "" {
+		mcpBase = siteURL
+	}
+	return fmt.Sprintf("# %s\n\n> %s — a Hugo-published site available via MCP.\n\nMCP endpoint: %s/mcp\n", name, siteURL, mcpBase)
 }
 
 func handleOAuthAuthServer(w http.ResponseWriter, r *http.Request, cfg config.Config) {
