@@ -74,7 +74,10 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 
 		if err != nil {
 			slog.Error("build_site failed", "duration_ms", durationMs, "exit_code", exitCode, "error", err)
-			return nil, buildSiteOutput{}, fmt.Errorf("build_error: %w", err)
+			if tctx.Err() != nil {
+				return nil, buildSiteOutput{}, fmt.Errorf("build_error: build timeout exceeded")
+			}
+			return nil, buildSiteOutput{}, fmt.Errorf("build_error: hugo exited with error")
 		}
 
 		slog.Info("build_site completed", "duration_ms", durationMs, "exit_code", exitCode)
