@@ -18,7 +18,6 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
 type ctxKey string
@@ -36,15 +35,21 @@ type Service struct {
 	agentClaims      map[string]agentClaim
 }
 
+type oauthClientPersister interface {
+	UpsertOAuthClient(clientID, secretHash string, enabled bool, redirectURIs, scopes []string) error
+}
+
 type client struct {
 	RedirectURIs []string
 	SecretHash   string
 	Scope        string
+	Enabled      bool
 }
 
 type authCode struct {
 	ClientID            string
 	RedirectURI         string
+	Scope               string
 	ExpiresAt           time.Time
 	CodeChallenge       string
 	CodeChallengeMethod string
@@ -105,40 +110,74 @@ func (s *Service) LoadClientRegistry(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, entry := range registry.Clients {
-		if entry.ClientID == "" {
+		clientID := firstNonEmpty(entry.ID, entry.ClientID)
+		if clientID == "" {
 			return fmt.Errorf("invalid_client_registry: client_id missing")
 		}
-		if _, exists := s.clients[entry.ClientID]; exists {
-			return fmt.Errorf("invalid_client_registry: duplicate client_id %q", entry.ClientID)
+		if _, exists := s.clients[clientID]; exists {
+			return fmt.Errorf("invalid_client_registry: duplicate client_id %q", clientID)
 		}
 		redirects := make([]string, 0, len(entry.RedirectURIs))
 		for _, uri := range entry.RedirectURIs {
-			if !isAllowedRedirectURI(uri) {
-				return fmt.Errorf("invalid_client_registry: invalid redirect_uri for %q", entry.ClientID)
+			if err := validateRegisteredRedirectURI(uri); err != nil {
+				return fmt.Errorf("invalid_client_registry: invalid redirect_uri for %q", clientID)
 			}
 			redirects = append(redirects, uri)
 		}
-		scope := CanonicalScope(strings.TrimSpace(entry.Scope))
-		if scope == "" {
-			scope = "content.read"
+		scopes, err := normalizeConfiguredScopes(entry.Scopes, entry.Scope)
+		if err != nil {
+			return fmt.Errorf("invalid_client_registry: %w", err)
 		}
-		if tools.ScopeRank(scope) < tools.ScopeRank("content.read") {
-			return fmt.Errorf("invalid_client_registry: unsupported scope %q", entry.Scope)
+		scope := highestConfiguredScope(scopes)
+		enabled := true
+		if entry.Enabled != nil {
+			enabled = *entry.Enabled
 		}
 		secretHash := strings.TrimSpace(entry.SecretHash)
-		if secretHash == "" && strings.TrimSpace(entry.ClientSecret) != "" {
-			secretHash = HashToken(entry.ClientSecret)
+		secret := firstNonEmpty(entry.Secret, entry.ClientSecret)
+		if secretHash == "" && secret != "" {
+			secretHash = HashToken(secret)
 		}
 		if secretHash == "" {
-			return fmt.Errorf("invalid_client_registry: client_secret or client_secret_hash required for %q", entry.ClientID)
+			return fmt.Errorf("invalid_client_registry: client_secret or client_secret_hash required for %q", clientID)
 		}
-		s.clients[entry.ClientID] = client{
+		s.clients[clientID] = client{
 			RedirectURIs: redirects,
 			SecretHash:   secretHash,
 			Scope:        scope,
+			Enabled:      enabled,
+		}
+		if persister, ok := s.store.(oauthClientPersister); ok {
+			if err := persister.UpsertOAuthClient(clientID, secretHash, enabled, redirects, scopes); err != nil {
+				return fmt.Errorf("invalid_client_registry: persist client %q: %w", clientID, err)
+			}
 		}
 	}
 	return nil
+}
+
+// PurgeExpired removes expired auth codes and agent state.
+// Call periodically (e.g., every 5 minutes) to prevent unbounded map growth.
+func (s *Service) PurgeExpired() {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for code, data := range s.codes {
+		if data.ExpiresAt.Before(now) {
+			delete(s.codes, code)
+		}
+	}
+	for assertion, reg := range s.agentRegs {
+		if reg.AssertionExpires.Before(now) {
+			delete(s.agentClaimTokens, reg.ClaimToken)
+			delete(s.agentRegs, assertion)
+		}
+	}
+	for attemptID, claim := range s.agentClaims {
+		if claim.ExpiresAt.Before(now) {
+			delete(s.agentClaims, attemptID)
+		}
+	}
 }
 
 func (s *Service) ValidateBearer(token string) (string, bool) {
@@ -157,49 +196,31 @@ func (s *Service) ValidateBearerDetails(token string) (string, bool, bool) {
 	return CanonicalScope(scope), IsLegacyScope(scope), true
 }
 
-func (s *Service) AuthorizationServerMetadata() map[string]any {
-	issuer := strings.TrimRight(s.cfg.Issuer, "/")
-	resource := strings.TrimSpace(s.cfg.Resource)
-	if resource == "" {
-		resource = issuer + "/mcp"
-	}
-	return map[string]any{
-		"issuer":                                issuer,
-		"authorization_endpoint":                issuer + "/authorize",
-		"token_endpoint":                        issuer + "/token",
-		"registration_endpoint":                 issuer + "/register",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
-		"code_challenge_methods_supported":      []string{"S256"},
-		"token_endpoint_auth_methods_supported": s.supportedTokenAuthMethods(),
-		"scopes_supported":                      tools.KnownScopes,
-		"service_documentation":                 resource,
-		"agent_auth": map[string]any{
-			"skill":                    issuer + "/auth.md",
-			"identity_endpoint":        issuer + "/agent/identity",
-			"claim_endpoint":           issuer + "/agent/identity/claim",
-			"events_endpoint":          issuer + "/agent/event/notify",
-			"identity_types_supported": []string{"anonymous"},
-			"identity_assertion": map[string]any{
-				"assertion_types_supported": []string{"urn:ietf:params:oauth:token-type:id-jag"},
-			},
-			"events_supported": []string{
-				"https://schemas.workos.com/events/agent/auth/identity/assertion/revoked",
-			},
-		},
-	}
-}
-
-func (s *Service) supportedTokenAuthMethods() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	methods := []string{"none"}
-	for _, c := range s.clients {
-		if c.SecretHash != "" {
-			return []string{"none", "client_secret_basic", "client_secret_post"}
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
 		}
 	}
-	return methods
+	return ""
+}
+
+func (s *Service) resolveClientScope(clientID, requested string) (string, error) {
+	c, ok := s.lookupClient(clientID)
+	if !ok {
+		return "", fmt.Errorf("unauthorized_client")
+	}
+	scope, err := requestedScope(requested)
+	if err != nil {
+		return "", fmt.Errorf("invalid_scope")
+	}
+	if scope == "" {
+		scope = c.Scope
+	}
+	if !allowedScope(scope, c.Scope) {
+		return "", fmt.Errorf("invalid_scope")
+	}
+	return scope, nil
 }
 
 func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse, error) {
@@ -210,13 +231,13 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		return nil, fmt.Errorf("invalid_request: redirect_uris missing or empty")
 	}
 	for _, uri := range req.RedirectURIs {
-		if !isAllowedRedirectURI(uri) {
+		if err := validateRegisteredRedirectURI(uri); err != nil {
 			return nil, fmt.Errorf("invalid_redirect_uri")
 		}
 	}
 	id := randomString(24)
 	s.mu.Lock()
-	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...), Scope: "content.read"}
+	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...), Scope: "content.read", Enabled: true}
 	s.mu.Unlock()
 	return &RegistrationResponse{
 		ClientID:                      id,
@@ -236,8 +257,8 @@ func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {
 		return "", fmt.Errorf("unauthorized_client")
 	}
 	for _, r := range c.RedirectURIs {
-		if r == uri {
-			return r, nil
+		if matchRedirectURI(r, uri) {
+			return uri, nil
 		}
 	}
 	return "", fmt.Errorf("invalid_redirect_uri")
@@ -247,10 +268,13 @@ func (s *Service) lookupClient(clientID string) (client, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	c, ok := s.clients[clientID]
-	return c, ok
+	if !ok || !c.Enabled {
+		return client{}, false
+	}
+	return c, true
 }
 
-func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, state, codeChallenge, codeChallengeMethod string) (string, error) {
+func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, state, requestedScope, codeChallenge, codeChallengeMethod string) (string, error) {
 	if !s.sourceAllowed(sourceIP) {
 		return "", fmt.Errorf("access_denied: authorize source is not trusted")
 	}
@@ -274,11 +298,16 @@ func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, s
 	if _, err := s.validateClientRedirect(clientID, redirectURI); err != nil {
 		return "", err
 	}
+	scope, err := s.resolveClientScope(clientID, requestedScope)
+	if err != nil {
+		return "", err
+	}
 	code := randomString(32)
 	s.mu.Lock()
 	s.codes[code] = authCode{
 		ClientID:            clientID,
 		RedirectURI:         redirectURI,
+		Scope:               scope,
 		ExpiresAt:           time.Now().Add(time.Duration(s.cfg.AuthCodeTTLSeconds) * time.Second),
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
@@ -320,11 +349,13 @@ func (s *Service) exchangeToken(grantType, clientID, clientSecret, redirectURI, 
 	}
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	scope := CanonicalScope(c.Scope)
+	scope := CanonicalScope(data.Scope)
 	if scope == "" {
 		scope = "content.read"
 	}
-	_ = s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(ttl))
+	if err := s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(ttl)); err != nil {
+		return nil, fmt.Errorf("server_error: store token: %w", err)
+	}
 	return &TokenResponse{
 		AccessToken: token,
 		TokenType:   "Bearer",
@@ -377,6 +408,7 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		clientID,
 		safeRedirectURI,
 		r.Form.Get("state"),
+		r.Form.Get("scope"),
 		r.Form.Get("code_challenge"),
 		r.Form.Get("code_challenge_method"),
 	)
@@ -424,10 +456,11 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
+	clientID, clientSecret := tokenClientCredentials(r)
 	resp, err := s.exchangeToken(
 		grantType,
-		r.FormValue("client_id"),
-		tokenClientSecret(r),
+		clientID,
+		clientSecret,
 		r.FormValue("redirect_uri"),
 		r.FormValue("code"),
 		r.FormValue("code_verifier"),
@@ -458,41 +491,12 @@ func (s *Service) sourceAllowed(ipText string) bool {
 	return false
 }
 
-func isAllowedRedirectURI(raw string) bool {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	if u.Scheme == "https" {
-		return true
-	}
-	if u.Scheme != "http" {
-		return false
-	}
-	if u.Hostname() == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(u.Hostname())
-	return ip != nil && ip.IsLoopback()
-}
-
+// requestSourceIP returns the network-level source IP from RemoteAddr only.
+// This is used for the trusted-CIDR authorization check; proxy headers are
+// intentionally ignored to prevent CIDR bypass via header injection (#54).
 func requestSourceIP(r *http.Request) string {
 	if r == nil {
 		return ""
-	}
-	// Prefer real-client IP headers set by trusted proxies (Cloudflare, nginx).
-	// CF-Connecting-IP is the most reliable when behind Cloudflare.
-	for _, hdr := range []string{"CF-Connecting-IP", "X-Real-IP"} {
-		if v := strings.TrimSpace(r.Header.Get(hdr)); v != "" {
-			return v
-		}
-	}
-	// X-Forwarded-For may be a comma-separated list; take the first entry.
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		if idx := strings.Index(xff, ","); idx > 0 {
-			return strings.TrimSpace(xff[:idx])
-		}
-		return xff
 	}
 	host := r.RemoteAddr
 	if strings.Contains(host, ":") {
@@ -503,14 +507,17 @@ func requestSourceIP(r *http.Request) string {
 	return host
 }
 
-func tokenClientSecret(r *http.Request) string {
+// tokenClientCredentials extracts client_id and client_secret per RFC 6749 §2.3.1.
+// HTTP Basic Auth takes precedence: username = client_id, password = client_secret.
+// Falls back to form parameters when Basic Auth is absent.
+func tokenClientCredentials(r *http.Request) (clientID, clientSecret string) {
 	if r == nil {
-		return ""
+		return "", ""
 	}
-	if user, pass, ok := r.BasicAuth(); ok && user != "" && pass != "" {
-		return pass
+	if user, pass, ok := r.BasicAuth(); ok && user != "" {
+		return user, pass
 	}
-	return r.FormValue("client_secret")
+	return r.FormValue("client_id"), r.FormValue("client_secret")
 }
 
 func writeOAuthError(w http.ResponseWriter, code string, status int) {
@@ -528,6 +535,8 @@ func oauthAuthorizeErrorCode(err error) string {
 		return "access_denied"
 	case strings.HasPrefix(msg, "unauthorized_client"):
 		return "unauthorized_client"
+	case strings.HasPrefix(msg, "invalid_scope"):
+		return "invalid_scope"
 	default:
 		return "invalid_request"
 	}
@@ -552,12 +561,19 @@ func oauthTokenErrorCode(err error) string {
 		return "invalid_client"
 	case strings.HasPrefix(msg, "invalid_grant"):
 		return "invalid_grant"
+	case strings.HasPrefix(msg, "invalid_scope"):
+		return "invalid_scope"
+	case strings.HasPrefix(msg, "server_error"):
+		return "server_error"
 	default:
 		return "invalid_request"
 	}
 }
 
 func oauthTokenErrorStatus(err error) int {
+	if strings.HasPrefix(err.Error(), "server_error") {
+		return http.StatusInternalServerError
+	}
 	if strings.HasPrefix(err.Error(), "invalid_client") {
 		return http.StatusUnauthorized
 	}

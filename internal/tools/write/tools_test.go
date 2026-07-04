@@ -165,3 +165,114 @@ func TestUpdatePageNotFound(t *testing.T) {
 		t.Errorf("expected not_found error, got: %s", raw)
 	}
 }
+
+func TestCreatePageEmptySlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{"slug": "", "title": "T"})
+	if !res.IsError {
+		t.Fatal("expected error for empty slug")
+	}
+}
+
+func TestCreatePageEmptyTitle(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{"slug": "valid-slug", "title": ""})
+	if !res.IsError {
+		t.Fatal("expected error for empty title")
+	}
+}
+
+func TestUpdatePageEmptySlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{"slug": "", "title": "T"})
+	if !res.IsError {
+		t.Fatal("expected error for empty slug")
+	}
+}
+
+func TestDeletePageEmptySlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{"slug": ""})
+	if !res.IsError {
+		t.Fatal("expected error for empty slug")
+	}
+}
+
+func TestUpdatePageSuccess(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// create first
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "update-me",
+		"title":      "Original Title",
+		"body":       "Original body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	// update title only
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":  "update-me",
+		"title": "New Title",
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page failed: %s", raw)
+	}
+
+	data, err := os.ReadFile(filepath.Join(contentRoot, "update-me", "index.md"))
+	if err != nil {
+		t.Fatalf("file not found: %v", err)
+	}
+	if !strings.Contains(string(data), "New Title") {
+		t.Errorf("updated file missing new title: %s", data)
+	}
+}
+
+func TestDeletePageSuccess(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// create page first
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "to-delete",
+		"title":      "Delete Me",
+		"body":       "body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	// delete it
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "to-delete"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page failed: %s", raw)
+	}
+
+	if _, err := os.Stat(filepath.Join(contentRoot, "to-delete", "index.md")); !os.IsNotExist(err) {
+		t.Error("expected index.md to be deleted")
+	}
+}

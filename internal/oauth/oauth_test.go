@@ -429,24 +429,6 @@ func TestBearerValidationViaTokenEndpoint(t *testing.T) {
 	}
 }
 
-func TestAuthorizationServerMetadata(t *testing.T) {
-	svc, _ := newTestService(t)
-	meta := svc.AuthorizationServerMetadata()
-	if meta["issuer"] != "https://mcp.test" {
-		t.Fatalf("issuer = %v", meta["issuer"])
-	}
-	if meta["token_endpoint"] != "https://mcp.test/token" {
-		t.Fatalf("token_endpoint = %v", meta["token_endpoint"])
-	}
-	agentAuth, ok := meta["agent_auth"].(map[string]any)
-	if !ok {
-		t.Fatalf("agent_auth not a map: %T", meta["agent_auth"])
-	}
-	if agentAuth["identity_endpoint"] != "https://mcp.test/agent/identity" {
-		t.Fatalf("identity_endpoint = %v", agentAuth["identity_endpoint"])
-	}
-}
-
 func TestAuthorizeUntrustedSource(t *testing.T) {
 	svc, _ := newTestService(t, "10.0.0.1/32")
 	clientID := registerClient(t, svc, []string{"https://client.test/callback"})

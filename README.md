@@ -89,6 +89,44 @@ mcp.arleo.eu
 
 The MCP transport is streamable HTTP at `/mcp`.
 
+## Security contact
+
+To report a vulnerability, set `security_contact` in your server config (e.g., `security_contact: "mailto:security@example.com"`). This populates `/.well-known/security.txt` per RFC 9116. The server requires `Contact` and `Expires` — Canonical is set automatically from `site_url` (or `oauth.issuer` if `site_url` is blank).
+
+## Agent identity flow
+
+Agents authenticate via the device-flow-like endpoint at `/agent/identity/verify`:
+
+1. Agent POSTs to `/agent/identity` with `{"type":"anonymous"}` → receives `claim_token` + `verification_uri`.
+2. Agent POSTs to `/agent/identity/claim` with the `claim_token` → initiates claim.
+3. Operator visits the `verification_uri` (or POSTs to `/agent/identity/verify`) with a `site.admin`/`system.admin` Bearer token and the `claim_token` to approve.
+4. Agent exchanges its `identity_assertion` at `/token` (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) → receives a `content.read` Bearer token.
+
+The POST to `/agent/identity/verify` requires operator authentication via the `Authorization: Bearer <admin-token>` header (or `admin_token` form field for browser submissions).
+
+## API reference
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/mcp` | GET/POST/DELETE | MCP Streamable HTTP transport |
+| `/.well-known/oauth-authorization-server` | GET | OAuth 2.0 authorization server metadata (RFC 8414) |
+| `/.well-known/oauth-protected-resource` | GET | Protected resource metadata (RFC 9728) |
+| `/.well-known/mcp/server-card.json` | GET | MCP server card |
+| `/.well-known/mcp.json` | GET | MCP server card (alias) |
+| `/.well-known/agent.json` | GET | Agent card (Google A2A schema) |
+| `/.well-known/security.txt` | GET | Security contact (RFC 9116) |
+| `/robots.txt` | GET | Robots exclusion |
+| `/llms.txt` | GET | LLM discovery |
+| `/auth.md` | GET | Authentication guide |
+| `/metrics` | GET | Prometheus metrics |
+| `/register` | POST | OAuth dynamic client registration |
+| `/authorize` | GET/POST | OAuth authorization endpoint |
+| `/token` | POST | OAuth token endpoint |
+| `/agent/identity` | POST | Register agent identity |
+| `/agent/identity/claim` | POST | Initiate agent claim |
+| `/agent/identity/verify` | GET/POST | Operator agent approval page |
+| `/agent/event/notify` | POST | Agent event notifications |
+
 ## Documentation
 
 - [Operator guide](docs/operator-guide.md)

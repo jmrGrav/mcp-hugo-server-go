@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -30,9 +31,9 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		Description: "[RequiredScope: site.admin] Run a non-destructive Hugo preview build with render-to-memory semantics. Use this to validate the site without writing build artifacts.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: boolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   boolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ previewBuildInput) (*mcp.CallToolResult, previewBuildOutput, error) {
 		if cfg.SiteRoot == "" {
@@ -59,4 +60,3 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		return nil, previewBuildOutput{Status: "ok", DurationMs: durationMs}, nil
 	})
 }
-

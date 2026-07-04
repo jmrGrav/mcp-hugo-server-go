@@ -24,11 +24,11 @@ func TestCollectBrokenLinks(t *testing.T) {
 	write("posts/hello/index.html", `<html><body>hello</body></html>`)
 
 	idx, err := site.NewIndex(config.Config{
-		SiteRoot:        root,
-		SiteURL:         "https://example.test",
-		SiteName:        "example",
-		DefaultLanguage: "en",
-		RejectSymlinks:  true,
+		SiteRoot:         root,
+		SiteURL:          "https://example.test",
+		SiteName:         "example",
+		DefaultLanguage:  "en",
+		RejectSymlinks:   true,
 		RejectHiddenPath: true,
 	})
 	if err != nil {

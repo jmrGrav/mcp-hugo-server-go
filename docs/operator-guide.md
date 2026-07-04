@@ -101,7 +101,7 @@ The server exposes tools across five access tiers. Each tier is a superset of lo
 
 Legacy clients may still send `mcp` as a scope. It is accepted as a deprecated alias for `content.read` for backward compatibility, but it is not advertised as a canonical scope and should not be used by new clients.
 
-To enable confidential OAuth clients for `content.write`, `site.admin`, or `system.admin`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry must include a `client_id`, a `client_secret` or `client_secret_hash`, redirect URIs, and a canonical scope.
+To enable confidential OAuth clients for `content.write`, `site.admin`, or `system.admin`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
 
 The server exposes a migration metric at `/metrics`:
 

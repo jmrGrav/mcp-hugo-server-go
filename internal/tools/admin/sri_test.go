@@ -27,7 +27,6 @@ type sriResult struct {
 	Error        string `json:"error"`
 }
 
-
 func setupSRILayout(t *testing.T, url, hash string) string {
 	t.Helper()
 	hugoRoot := t.TempDir()

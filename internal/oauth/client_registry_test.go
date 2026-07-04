@@ -1,6 +1,7 @@
 package oauth_test
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -42,20 +43,10 @@ clients:
 		t.Fatalf("LoadClientRegistry() error = %v", err)
 	}
 
-	meta := svc.AuthorizationServerMetadata()
-	methods, _ := meta["token_endpoint_auth_methods_supported"].([]string)
-	if len(methods) == 0 {
-		t.Fatal("metadata missing token auth methods")
-	}
-	foundSecretMethod := false
-	for _, m := range methods {
-		if m == "client_secret_basic" || m == "client_secret_post" {
-			foundSecretMethod = true
-		}
-	}
-	if !foundSecretMethod {
-		t.Fatalf("metadata methods = %v, want client_secret_* support", methods)
-	}
+	// The live HTTP handler for /.well-known/oauth-authorization-server is in the
+	// server package and uses buildAuthServerMeta(cfg). Here we verify that after
+	// loading a static client registry the service accepts client_secret_basic
+	// credentials via a token request — the concrete proof that secret auth works.
 
 	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
 		"response_type":         {"code"},
@@ -104,4 +95,65 @@ clients:
 	if resp.Scope != "site.admin" {
 		t.Fatalf("scope = %q want site.admin", resp.Scope)
 	}
+}
+
+func TestLoadClientRegistryUpsertsSQLiteClients(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "tokens.sqlite")
+	registryPath := filepath.Join(dir, "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - id: chatgpt-admin
+    secret: super-secret-value
+    scopes: ["read", "write", "admin"]
+    redirect_uris:
+      - https://chatgpt.com/connector/oauth/*
+    enabled: true
+`), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	svc := oauth.NewService(config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		Resource:              "https://mcp.test/mcp",
+		DynamicClientEnabled:  true,
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
+		AuthCodeTTLSeconds:    300,
+		AccessTokenTTLSeconds: 3600,
+	}, mustSQLiteStore(t, storePath))
+	if err := svc.LoadClientRegistry(registryPath); err != nil {
+		t.Fatalf("LoadClientRegistry() error = %v", err)
+	}
+
+	db, err := sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+
+	var clientID string
+	var effectiveScope string
+	var enabled int
+	if err := db.QueryRow(`SELECT client_id, effective_scope, enabled FROM oauth_clients WHERE client_id = ?`, "chatgpt-admin").Scan(&clientID, &effectiveScope, &enabled); err != nil {
+		t.Fatalf("query oauth_clients: %v", err)
+	}
+	if clientID != "chatgpt-admin" {
+		t.Fatalf("client_id = %q want chatgpt-admin", clientID)
+	}
+	if effectiveScope != "system.admin" {
+		t.Fatalf("effective_scope = %q want system.admin", effectiveScope)
+	}
+	if enabled != 1 {
+		t.Fatalf("enabled = %d want 1", enabled)
+	}
+}
+
+func mustSQLiteStore(t *testing.T, path string) storage.Store {
+	t.Helper()
+	store, err := storage.NewSQLite(path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	return store
 }

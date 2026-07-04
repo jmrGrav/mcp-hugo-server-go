@@ -32,7 +32,7 @@ type SourcePage struct {
 }
 
 type SourceIndex struct {
-	pages []SourcePage
+	pages  []SourcePage
 	bySlug map[string]int
 }
 

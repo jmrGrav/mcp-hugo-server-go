@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,12 +18,8 @@ type agentRegistration struct {
 	AssertionExpires time.Time
 	ClaimExpires     time.Time
 	// Claimed is set to true only when the operator has verified the claim via
-	// an out-of-band verification step. Until then the assertion cannot be
-	// exchanged for a privileged token.
-	// NOTE: no verification endpoint exists yet — this gate always blocks token
-	// issuance, which is the secure-by-default posture. A future PR must add a
-	// verification endpoint (e.g. /agent/identity/verify) that sets Claimed=true
-	// after human or automated validation. See issue #27.
+	// /agent/identity/verify. Until then the assertion cannot be exchanged for
+	// a privileged token.
 	Claimed bool
 }
 
@@ -110,17 +107,14 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 		return nil, fmt.Errorf("invalid_grant")
 	}
 	if !reg.Claimed {
-		// The assertion has not been verified by a human or automated claim
-		// verification step. Issuing a privileged token without claim verification
-		// would allow any anonymous caller to escalate scope.
-		// TODO(#27): Add a /agent/identity/verify endpoint that sets Claimed=true
-		// after operator validation, then remove this guard.
 		return nil, fmt.Errorf("invalid_grant: claim_required")
 	}
 
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	_ = s.store.AddAccessToken(HashToken(token), "content.read", time.Now().Add(ttl))
+	if err := s.store.AddAccessToken(HashToken(token), "content.read", time.Now().Add(ttl)); err != nil {
+		return nil, fmt.Errorf("server_error: store token: %w", err)
+	}
 
 	return &TokenResponse{
 		AccessToken: token,
@@ -217,6 +211,96 @@ func (s *Service) HandleAgentClaim(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (s *Service) verifyAgentClaim(claimToken string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	assertionKey, ok := s.agentClaimTokens[claimToken]
+	if !ok {
+		return fmt.Errorf("invalid_claim_token")
+	}
+	reg, ok := s.agentRegs[assertionKey]
+	if !ok {
+		return fmt.Errorf("invalid_claim_token")
+	}
+	if time.Now().After(reg.ClaimExpires) {
+		return fmt.Errorf("claim_expired")
+	}
+	reg.Claimed = true
+	s.agentRegs[assertionKey] = reg
+	delete(s.agentClaimTokens, claimToken)
+	return nil
+}
+
+// isAdminScope returns true when scope carries site.admin or system.admin
+// privileges — rank 3 or 4 in the 5-tier hierarchy.
+func isAdminScope(scope string) bool {
+	return scope == "site.admin" || scope == "system.admin"
+}
+
+func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		claimToken := r.URL.Query().Get("claim_token")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Agent Identity Verification</title></head>
+<body>
+<h1>Agent Identity Verification</h1>
+<p>An agent is requesting access. Operator approval is required (site.admin or system.admin token).</p>
+<form method="POST" action="/agent/identity/verify">
+  <label>Admin token: <input type="password" name="admin_token" size="40" required></label><br>
+  <label>Claim token: <input type="text" name="claim_token" value="%s" size="40" required></label><br>
+  <button type="submit">Approve</button>
+</form>
+</body></html>`, claimToken)
+	case http.MethodPost:
+		// Operator must authenticate with a site.admin or system.admin Bearer token.
+		// Accept it via Authorization header (API callers) or admin_token form field
+		// (browser form submissions, which cannot set custom headers).
+		adminToken := strings.TrimSpace(strings.TrimPrefix(
+			strings.TrimSpace(r.Header.Get("Authorization")), "Bearer "))
+		if adminToken == "" {
+			if err := r.ParseForm(); err != nil {
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			adminToken = r.FormValue("admin_token")
+		}
+		if adminToken == "" {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-verify"`)
+			http.Error(w, "operator authentication required", http.StatusUnauthorized)
+			return
+		}
+		scope, _, ok := s.ValidateBearerDetails(adminToken)
+		if !ok || !isAdminScope(scope) {
+			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-verify", error="insufficient_scope"`)
+			http.Error(w, "forbidden: site.admin or system.admin scope required", http.StatusForbidden)
+			return
+		}
+
+		claimToken := r.FormValue("claim_token")
+		if claimToken == "" {
+			http.Error(w, "missing claim_token", http.StatusBadRequest)
+			return
+		}
+		if err := s.verifyAgentClaim(claimToken); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Verified</title></head>
+<body><h1>Agent claim verified</h1><p>The agent can now exchange its assertion for an access token.</p></body></html>`)
+	default:
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *Service) HandleAgentEvent(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+      - name: gofmt check
+        run: |
+          FILES=$(gofmt -l ./internal/ ./cmd/)
+          if [ -n "$FILES" ]; then
+            echo "gofmt violations:"
+            echo "$FILES"
+            exit 1
+          fi
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2025.1.1
+          staticcheck ./...
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+      - name: build
+        run: go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=${GITHUB_REF_NAME:-dev}" ./...
       - run: go test -cover -coverprofile=coverage.out ./internal/...
       - run: go test -race ./...
       - run: go vet ./...
@@ -19,7 +37,4 @@ jobs:
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
           echo "Coverage: ${COVERAGE}%"
-          # Keep the gate aligned with the measured internal package coverage.
-          # The repository deliberately excludes non-core packages from the gate to avoid
-          # a permanent red badge while the public MCP surface keeps expanding.
-          python3 -c "import sys; val=float('${COVERAGE}'); sys.exit(0 if val >= 79 else 1)" || (echo "Coverage ${COVERAGE}% is below 79%"; exit 1)
+          awk -v cov="$COVERAGE" 'BEGIN { if (cov + 0 < 79) { print "Coverage " cov "% is below 79%"; exit 1 } }'

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 )
 
 func TestWriteHelpers(t *testing.T) {
@@ -17,14 +19,14 @@ func TestWriteHelpers(t *testing.T) {
 	if !strings.Contains(fm2, "Title") || !strings.Contains(fm2, "Body") {
 		t.Fatalf("buildFrontmatterFromMap() = %q", fm2)
 	}
-	if !*boolPtr(true) {
-		t.Fatal("boolPtr() returned false")
+	if !*fileutil.BoolPtr(true) {
+		t.Fatal("fileutil.BoolPtr() returned false")
 	}
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", "page.md")
-	if err := atomicWrite(path, "content"); err != nil {
-		t.Fatalf("atomicWrite() error = %v", err)
+	if err := fileutil.AtomicWrite(path, "content"); err != nil {
+		t.Fatalf("fileutil.AtomicWrite() error = %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -51,4 +53,3 @@ func TestWriteHelpers(t *testing.T) {
 		t.Fatalf("Defs() = %#v", defs)
 	}
 }
-

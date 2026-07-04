@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	toolsanon "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	toolsread "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 )
 
 func TestOpenStoreBranches(t *testing.T) {

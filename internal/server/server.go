@@ -26,14 +26,17 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const (
-	Name    = "mcp-hugo-server-go"
-	Version = "v1.0.0"
-)
+const Name = "mcp-hugo-server-go"
+
+// Version is set at build time via -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=..."
+var Version = "dev"
 
 type Server struct {
-	cfg     config.Config
-	handler http.Handler
+	cfg          config.Config
+	handler      http.Handler
+	store        storage.Store
+	oauthSvc     *oauth.Service
+	resetIPCounts func()
 }
 
 // buildRegistry returns a registry populated from every known tool package.
@@ -162,12 +165,14 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	}, opts)
 
 	var oauthSvc *oauth.Service
+	var tokenStore storage.Store
 	if cfg.OAuth.Enabled {
-		store, err := openStore(cfg.OAuth)
+		var err error
+		tokenStore, err = openStore(cfg.OAuth)
 		if err != nil {
 			return nil, err
 		}
-		oauthSvc = oauth.NewService(cfg.OAuth, store)
+		oauthSvc = oauth.NewService(cfg.OAuth, tokenStore)
 		if err := oauthSvc.LoadClientRegistry(cfg.OAuth.ClientRegistryPath); err != nil {
 			return nil, fmt.Errorf("server: oauth client registry: %w", err)
 		}
@@ -227,6 +232,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				return
 			}
 			_, _ = io.WriteString(w, metrics.RenderPrometheus())
+		case "/.well-known/security.txt":
+			handleSecurityTxt(w, r, cfg)
 		case "/robots.txt":
 			handleRobotsTxt(w, r, cfg)
 		case "/llms.txt":
@@ -257,6 +264,12 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				return
 			}
 			rateLimitOAuth(oauthSvc.HandleAgentIdentity)(w, r)
+		case "/agent/identity/verify":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAgentVerify(w, r)
 		case "/agent/identity/claim":
 			if oauthSvc == nil {
 				http.NotFound(w, r)
@@ -333,7 +346,18 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			http.NotFound(w, r)
 		}
 	})
-	return &Server{cfg: cfg, handler: observability.RequestMiddleware(handler, logger)}, nil
+	resetIP := func() {
+		oauthIPMu.Lock()
+		oauthIPCounts = make(map[string]int)
+		oauthIPMu.Unlock()
+	}
+	return &Server{
+		cfg:           cfg,
+		handler:       observability.RequestMiddleware(handler, logger),
+		store:         tokenStore,
+		oauthSvc:      oauthSvc,
+		resetIPCounts: resetIP,
+	}, nil
 }
 
 func (s *Server) Handler() http.Handler {
@@ -342,6 +366,49 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) Run(ctx context.Context) error {
 	shutdownTimeout := 15 * time.Second
+
+	if s.store != nil {
+		go func() {
+			t := time.NewTicker(15 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					_ = s.store.PurgeExpiredTokens()
+				}
+			}
+		}()
+	}
+
+	if s.oauthSvc != nil {
+		go func() {
+			t := time.NewTicker(5 * time.Minute)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					s.oauthSvc.PurgeExpired()
+				}
+			}
+		}()
+	}
+
+	go func() {
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.resetIPCounts()
+			}
+		}
+	}()
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%d", s.cfg.HTTPBindAddr, s.cfg.HTTPBindPort),
@@ -360,6 +427,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}()
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
+	}
+	if s.store != nil {
+		_ = s.store.Close()
 	}
 	return nil
 }

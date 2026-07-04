@@ -16,44 +16,64 @@ func TestRedirectURIValidationHelpers(t *testing.T) {
 		ok  bool
 	}{
 		{"https://client.test/callback", true},
+		{"https://chatgpt.com/connector/oauth/*", true},
+		{"https://claude.ai/*", true},
 		{"http://localhost/callback", true},
 		{"http://127.0.0.1/callback", true},
 		{"ftp://client.test/callback", false},
+		{"https://chatgpt.com/connector/*/callback", false},
+		{"http://example.com/callback", false},
 		{"", false},
 	}
 	for _, tc := range cases {
-		if got := isAllowedRedirectURI(tc.uri); got != tc.ok {
-			t.Fatalf("isAllowedRedirectURI(%q) = %v, want %v", tc.uri, got, tc.ok)
+		if got := validateRegisteredRedirectURI(tc.uri); (got == nil) != tc.ok {
+			t.Fatalf("validateRegisteredRedirectURI(%q) = %v, want ok=%v", tc.uri, got, tc.ok)
+		}
+	}
+}
+
+func TestRedirectURIMatching(t *testing.T) {
+	cases := []struct {
+		registered string
+		actual     string
+		ok         bool
+	}{
+		{"https://chatgpt.com/connector/oauth/*", "https://chatgpt.com/connector/oauth/callback", true},
+		{"https://chatgpt.com/connector/oauth/*", "https://evil.chatgpt.com/connector/oauth/callback", false},
+		{"https://chatgpt.com/connector/oauth/*", "http://chatgpt.com/connector/oauth/callback", false},
+		{"https://chatgpt.com/connector/oauth/*", "https://chatgpt.com/connector/other/callback", false},
+		{"https://claude.ai/*", "https://claude.ai/oauth/callback", true},
+		{"https://client.test/callback", "https://client.test/callback", true},
+		{"https://client.test/callback", "https://client.test/other", false},
+	}
+	for _, tc := range cases {
+		if got := matchRedirectURI(tc.registered, tc.actual); got != tc.ok {
+			t.Fatalf("matchRedirectURI(%q, %q) = %v, want %v", tc.registered, tc.actual, got, tc.ok)
 		}
 	}
 }
 
 func TestRequestSourceIP(t *testing.T) {
+	// requestSourceIP uses RemoteAddr only (not proxy headers) so that
+	// CF-Connecting-IP/X-Forwarded-For injection cannot bypass CIDR checks (#54).
 	req := httptest.NewRequest(http.MethodPost, "/", nil)
 	req.RemoteAddr = "203.0.113.9:1234"
 	if got := requestSourceIP(req); got != "203.0.113.9" {
-		t.Fatalf("requestSourceIP(remote) = %q", got)
+		t.Fatalf("requestSourceIP(remote) = %q, want 203.0.113.9", got)
 	}
+	// Proxy headers must NOT change the result.
 	req.Header.Set("CF-Connecting-IP", "198.51.100.1")
-	if got := requestSourceIP(req); got != "198.51.100.1" {
-		t.Fatalf("requestSourceIP(CF) = %q", got)
-	}
-	req.Header.Del("CF-Connecting-IP")
 	req.Header.Set("X-Real-IP", "198.51.100.2")
-	if got := requestSourceIP(req); got != "198.51.100.2" {
-		t.Fatalf("requestSourceIP(real) = %q", got)
-	}
-	req.Header.Del("X-Real-IP")
 	req.Header.Set("X-Forwarded-For", "198.51.100.3, 10.0.0.1")
-	if got := requestSourceIP(req); got != "198.51.100.3" {
-		t.Fatalf("requestSourceIP(xff) = %q", got)
+	if got := requestSourceIP(req); got != "203.0.113.9" {
+		t.Fatalf("requestSourceIP with proxy headers = %q, want 203.0.113.9 (headers must not override)", got)
 	}
 }
 
 func TestOAuthErrorMapping(t *testing.T) {
 	cases := []struct {
-		err   error
-		code  string
+		err    error
+		code   string
 		status int
 	}{
 		{errors.New("unsupported_response_type"), "unsupported_response_type", http.StatusBadRequest},
@@ -110,7 +130,7 @@ func TestPKCEAndHashHelpers(t *testing.T) {
 	}
 }
 
-func TestSourceAllowedAndMetadata(t *testing.T) {
+func TestSourceAllowed(t *testing.T) {
 	svc := NewService(config.OAuthConfig{
 		Enabled:               true,
 		Issuer:                "https://mcp.test",
@@ -122,12 +142,5 @@ func TestSourceAllowedAndMetadata(t *testing.T) {
 	}
 	if svc.sourceAllowed("203.0.113.10") {
 		t.Fatal("sourceAllowed should reject untrusted IP")
-	}
-	meta := svc.AuthorizationServerMetadata()
-	if meta["issuer"] != "https://mcp.test" {
-		t.Fatalf("AuthorizationServerMetadata issuer = %#v", meta["issuer"])
-	}
-	if _, ok := meta["agent_auth"].(map[string]any); !ok {
-		t.Fatalf("AuthorizationServerMetadata missing agent_auth: %#v", meta)
 	}
 }

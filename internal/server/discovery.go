@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
@@ -30,7 +31,7 @@ type authServerMeta struct {
 	Issuer                            string             `json:"issuer"`
 	AuthorizationEndpoint             string             `json:"authorization_endpoint"`
 	TokenEndpoint                     string             `json:"token_endpoint"`
-	RegistrationEndpoint              string             `json:"registration_endpoint"`
+	RegistrationEndpoint              string             `json:"registration_endpoint,omitempty"`
 	ResponseTypesSupported            []string           `json:"response_types_supported"`
 	GrantTypesSupported               []string           `json:"grant_types_supported"`
 	CodeChallengeMethodsSupported     []string           `json:"code_challenge_methods_supported"`
@@ -54,11 +55,15 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 	if resource == "" {
 		resource = issuer + "/mcp"
 	}
+	registrationEndpoint := ""
+	if cfg.OAuth.DynamicClientEnabled {
+		registrationEndpoint = issuer + "/register"
+	}
 	return authServerMeta{
 		Issuer:                            issuer,
 		AuthorizationEndpoint:             issuer + "/authorize",
 		TokenEndpoint:                     issuer + "/token",
-		RegistrationEndpoint:              issuer + "/register",
+		RegistrationEndpoint:              registrationEndpoint,
 		ResponseTypesSupported:            []string{"code"},
 		GrantTypesSupported:               []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
@@ -80,10 +85,17 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 }
 
 func tokenEndpointAuthMethods(cfg config.Config) []string {
-	if strings.TrimSpace(cfg.OAuth.ClientRegistryPath) != "" {
-		return []string{"none", "client_secret_basic", "client_secret_post"}
+	methods := make([]string, 0, 3)
+	if cfg.OAuth.DynamicClientEnabled {
+		methods = append(methods, "none")
 	}
-	return []string{"none"}
+	if strings.TrimSpace(cfg.OAuth.ClientRegistryPath) != "" {
+		methods = append(methods, "client_secret_basic", "client_secret_post")
+	}
+	if len(methods) == 0 {
+		methods = append(methods, "none")
+	}
+	return methods
 }
 
 func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
@@ -191,7 +203,7 @@ func buildMCPServerCard(cfg config.Config) mcpServerCard {
 			},
 		},
 		Authentication: mcpAuthentication{
-			Required: true,
+			Required: cfg.OAuth.Enabled,
 			Schemes:  []string{"bearer", "oauth2"},
 		},
 		DocumentationURL: base + "/auth.md",
@@ -250,6 +262,27 @@ func handleOAuthAuthServer(w http.ResponseWriter, r *http.Request, cfg config.Co
 
 func handleOAuthProtectedResource(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 	serveDiscoveryJSON(w, r, buildProtectedResourceMeta(cfg))
+}
+
+func handleSecurityTxt(w http.ResponseWriter, r *http.Request, cfg config.Config) {
+	if cfg.SecurityContact == "" {
+		http.NotFound(w, r)
+		return
+	}
+	canonical := strings.TrimRight(cfg.SiteURL, "/")
+	if canonical == "" {
+		canonical = strings.TrimRight(cfg.OAuth.Issuer, "/")
+	}
+	expires := time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339)
+	var body string
+	if canonical != "" {
+		body = fmt.Sprintf("Contact: %s\nExpires: %s\nCanonical: %s/.well-known/security.txt\n",
+			cfg.SecurityContact, expires, canonical)
+	} else {
+		body = fmt.Sprintf("Contact: %s\nExpires: %s\n",
+			cfg.SecurityContact, expires)
+	}
+	serveDiscoveryText(w, r, "text/plain; charset=utf-8", body)
 }
 
 func handleRobotsTxt(w http.ResponseWriter, r *http.Request, cfg config.Config) {
