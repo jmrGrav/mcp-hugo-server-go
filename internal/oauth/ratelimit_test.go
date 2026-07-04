@@ -62,8 +62,8 @@ func TestRateLimiter429Response(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d", rec.Code)
 	}
-	if rec.Header().Get("Retry-After") == "" {
-		t.Fatal("expected Retry-After header")
+	if got := rec.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("expected Retry-After: 1, got %q", got)
 	}
 	var body map[string]string
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {

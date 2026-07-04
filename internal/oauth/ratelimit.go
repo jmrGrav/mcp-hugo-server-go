@@ -31,6 +31,9 @@ func (rl *RateLimiter) limiterFor(scope string) *rate.Limiter {
 		return l
 	}
 	perMin := rl.perMinFor(scope)
+	if perMin < 1 {
+		perMin = 1
+	}
 	l := rate.NewLimiter(rate.Every(time.Minute/time.Duration(perMin)), perMin)
 	rl.limiters[scope] = l
 	return l
