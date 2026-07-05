@@ -16,7 +16,7 @@ Public endpoint: `https://mcp.arleo.eu/mcp`
 
 ## What it does
 
-`mcp-hugo-server-go` exposes a Hugo site through the Model Context Protocol with public discovery, OAuth-backed scopes, and strict separation between read, write, admin, and system operations.
+`mcp-hugo-server-go` exposes a Hugo site through the Model Context Protocol with public discovery, OAuth-backed scopes, and strict separation between read, write, and admin operations.
 
 It is the unified successor of:
 
@@ -29,10 +29,10 @@ It is the unified successor of:
 - `anonymous`: public, safe, read-only discovery
 - `content.read`: richer read-only access
 - `content.write`: create, update, and delete operations
-- `site.admin`: build and site-management operations
-- `system.admin`: integrity and diagnostic operations
+- `site.admin`: build, site-management, integrity, and diagnostic operations
 
 Legacy clients may still send `mcp` as a scope. The server accepts it as a deprecated compatibility alias for `content.read` only.
+Legacy clients may still send `system.admin`; the server accepts it as a compatibility alias for `site.admin`, but it is not advertised as a canonical scope.
 
 ## Tool inventory
 
@@ -42,7 +42,7 @@ The current tool inventory is documented in [docs/tools.md](docs/tools.md) and s
 
 - Anonymous callers only see public read-only tools.
 - OAuth bearer tokens are required for non-public tiers.
-- `content.write`, `site.admin`, and `system.admin` are never exposed to anonymous callers.
+- `content.write` and `site.admin` are never exposed to anonymous callers.
 - The legacy `mcp` alias is accepted for compatibility, but it is not advertised as canonical.
 
 ## Claude and MCP
@@ -54,7 +54,6 @@ The server card and OAuth discovery advertise canonical scopes only:
 - `content.read`
 - `content.write`
 - `site.admin`
-- `system.admin`
 
 ## Validation
 
@@ -83,8 +82,7 @@ mcp.arleo.eu
 ├── anonymous       public discovery and safe read-only tools
 ├── content.read    richer read-only content access
 ├── content.write   content creation and editing
-├── site.admin      build and site operations
-└── system.admin    diagnostic and integrity checks
+└── site.admin      build, site, integrity, and diagnostic operations
 ```
 
 The MCP transport is streamable HTTP at `/mcp`.
@@ -99,7 +97,7 @@ Agents authenticate via the device-flow-like endpoint at `/agent/identity/verify
 
 1. Agent POSTs to `/agent/identity` with `{"type":"anonymous"}` → receives `claim_token` + `verification_uri`.
 2. Agent POSTs to `/agent/identity/claim` with the `claim_token` → initiates claim.
-3. Operator visits the `verification_uri` (or POSTs to `/agent/identity/verify`) with a `site.admin`/`system.admin` Bearer token and the `claim_token` to approve.
+3. Operator visits the `verification_uri` (or POSTs to `/agent/identity/verify`) with a `site.admin` Bearer token and the `claim_token` to approve.
 4. Agent exchanges its `identity_assertion` at `/token` (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) → receives a `content.read` Bearer token.
 
 The POST to `/agent/identity/verify` requires operator authentication via the `Authorization: Bearer <admin-token>` header (or `admin_token` form field for browser submissions).
@@ -134,3 +132,4 @@ The POST to `/agent/identity/verify` requires operator authentication via the `A
 - [Release checklist](docs/release-checklist.md)
 - [Tool inventory](docs/tools.md)
 - [Security policy](SECURITY.md)
+- [Operations wiki](https://github.com/jmrGrav/mcp-hugo-server-go/wiki)

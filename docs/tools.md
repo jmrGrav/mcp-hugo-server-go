@@ -41,10 +41,9 @@ This document reflects the current MCP registry. Tool IDs are stable; titles and
 - `preview_build` - Preview build
 - `run_post_build_hooks` - Run post-build hooks
 - `generate_featured_image` - Generate featured image
-
-## `system.admin`
-
 - `check_sri_versions` - Verify SRI integrity
+
+`system.admin` is accepted as a legacy compatibility alias for `site.admin`, but it is not advertised as a canonical tool tier.
 
 ## Discovery
 

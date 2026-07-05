@@ -43,7 +43,7 @@ Items marked **(live)** were verified against the production server with `script
 | `authorization_endpoint` | ✅ **(live)** | |
 | `token_endpoint` | ✅ **(live)** | |
 | `registration_endpoint` | ✅ **(live)** | Always present when OAuth is enabled (v1.2.0 fix, issue #117) |
-| `scopes_supported` | ✅ **(live)** | `["content.read","content.write","site.admin","system.admin"]` |
+| `scopes_supported` | ✅ **(live)** | `["content.read","content.write","site.admin"]`; legacy `system.admin` normalizes to `site.admin` |
 | `response_types_supported` | ✅ **(live)** | `["code"]` |
 | `grant_types_supported` | ✅ **(live)** | Includes `authorization_code` and agent assertion grants |
 | `code_challenge_methods_supported` | ✅ **(live)** | `["S256"]` |
@@ -67,7 +67,7 @@ Items marked **(live)** were verified against the production server with `script
 | `resource` field | ✅ **(live)** | `{issuer}/mcp` |
 | `authorization_servers` field | ✅ **(live)** | Points to issuer |
 | `bearer_methods_supported` | ✅ **(live)** | `["header"]` |
-| `scopes_supported` | ✅ **(live)** | All 4 scopes listed |
+| `scopes_supported` | ✅ **(live)** | Canonical scopes listed: `content.read`, `content.write`, `site.admin` |
 
 ## MCP Streamable HTTP Transport
 

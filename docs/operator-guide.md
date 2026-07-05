@@ -97,11 +97,13 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 
 ## Tool Access Scopes
 
-The server exposes tools across five access tiers. Each tier is a superset of lower tiers: agents with `content.write` access can call all `content.read` tools, and so on.
+The server exposes tools across anonymous, read, write, and admin tiers. Each tier is a superset of lower tiers: agents with `content.write` access can call all `content.read` tools, and so on.
 
 Legacy clients may still send `mcp` as a scope. It is accepted as a deprecated alias for `content.read` for backward compatibility, but it is not advertised as a canonical scope and should not be used by new clients.
 
-To enable confidential OAuth clients for `content.write`, `site.admin`, or `system.admin`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
+Legacy clients may still send `system.admin`; it is accepted as a compatibility alias for `site.admin`, but it is not advertised as canonical.
+
+To enable confidential OAuth clients for `content.write` or `site.admin`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
 
 The server exposes a migration metric at `/metrics`:
 
@@ -294,7 +296,7 @@ oauth:
 sudo systemctl reload mcp-hugo-server-go
 ```
 
-When OAuth is disabled, all authenticated tools (`content.read`, `content.write`, `site.admin`, `system.admin`) are rejected with a `not_authorized` error. Only anonymous tools remain available.
+When OAuth is disabled, all authenticated tools (`content.read`, `content.write`, `site.admin`) are rejected with a `not_authorized` error. Only anonymous tools remain available.
 
 ## Monitoring and Debugging
 

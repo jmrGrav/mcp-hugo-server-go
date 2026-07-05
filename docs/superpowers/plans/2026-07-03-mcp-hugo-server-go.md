@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> Historical note: this plan predates the v1.2.10 scope simplification. Current canonical scopes are `content.read`, `content.write`, and `site.admin`; legacy `system.admin` normalizes to `site.admin`.
+
 **Goal:** Build the canonical unified MCP server for the arleo.eu Hugo site, merging the public read-only surface (`hugo-public-mcp`) with the write/admin tools (`hugo-mcp-go`), using `mcp-runtime-go` for the storage layer.
 
 **Architecture:** Dual-server HTTP: public path (anonymous, no token) serves the 9 read-only tools; full server (same binary, different middleware chain) guards content.read/write and site.admin tools behind OAuth scope checks. A single binary replaces both `hugo-public-mcp` and `hugo-mcp-go` on `mcp.arleo.eu`.
@@ -1038,7 +1040,7 @@ git commit -m "feat: implement 5 content.read tools with RequiredScope annotatio
 
 Scope hierarchy (higher includes lower):
 ```
-anonymous ("") < content.read < content.write < site.admin < system.admin
+anonymous ("") < content.read < content.write < site.admin
 ```
 
 `ForScope("content.read")` returns anonymous + content.read tools.
@@ -1343,14 +1345,14 @@ git commit -m "feat: run_post_build_hooks tool with URL allowlist SSRF protectio
 
 ---
 
-### Task 17: check_sri_versions tool (system.admin)
+### Task 17: check_sri_versions tool (site.admin)
 
 **Files:**
 - Create: `internal/tools/admin/sri.go`
 - Create: `internal/tools/admin/sri_test.go`
 - Source reference: `/home/jm/Documents/hugo-mcp-go/internal/sri/`
 
-**Tool:** `check_sri_versions` — scope `system.admin`
+**Tool:** `check_sri_versions` — scope `site.admin`
 - Scans Hugo templates in `{HugoRoot}/layouts/` for `integrity="sha384-..."` attributes
 - For each CDN URL found: fetches current version, computes SHA-384, compares to template
 - Returns list: `[{"url":"...", "template_hash":"...","current_hash":"...","match":true/false}]`

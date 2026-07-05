@@ -79,7 +79,7 @@ Anonymous read-only access is available without registration. OAuth 2.0 unlocks 
     "token_endpoint": "https://mcp.arleo.eu/token",
     "mcp_endpoint": "https://mcp.arleo.eu/mcp"
   },
-  "scopes": ["content.read", "content.write", "site.admin", "system.admin"]
+  "scopes": ["content.read", "content.write", "site.admin"]
 }
 ```
 
