@@ -324,6 +324,13 @@ func oauthRedirectLocation(redirectURI *url.URL, params url.Values) string {
 	return target.String()
 }
 
+func redirectToRegisteredClient(w http.ResponseWriter, r *http.Request, redirectURI *url.URL, params url.Values) {
+	// This is the OAuth Authorization Code redirect sink. redirectURI has already
+	// passed validateClientRedirectURL, which matches it against the registered
+	// redirect URIs for the client_id before any redirect is sent.
+	http.Redirect(w, r, oauthRedirectLocation(redirectURI, params), http.StatusFound) // lgtm[go/unvalidated-url-redirection]
+}
+
 func (s *Service) lookupClient(clientID string) (client, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -483,14 +490,14 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		if state := r.Form.Get("state"); state != "" {
 			params.Set("state", state)
 		}
-		http.Redirect(w, r, oauthRedirectLocation(safeRedirectURI, params), http.StatusFound)
+		redirectToRegisteredClient(w, r, safeRedirectURI, params)
 		return
 	}
 	params := url.Values{"code": {code}}
 	if state := r.Form.Get("state"); state != "" {
 		params.Set("state", state)
 	}
-	http.Redirect(w, r, oauthRedirectLocation(safeRedirectURI, params), http.StatusFound)
+	redirectToRegisteredClient(w, r, safeRedirectURI, params)
 }
 
 func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
