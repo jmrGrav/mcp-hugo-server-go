@@ -11,6 +11,8 @@ govulncheck ./...
 gitleaks detect --no-banner --redact --source .
 go test ./... -coverprofile=coverage.out
 go tool cover -func=coverage.out | tail -n 1
+go run ./cmd/check-changelog -version <tag>
+make check-changelog RELEASE_VERSION=<tag>
 scripts/check-agent-ready.sh
 SMOKE_LIVE=1 scripts/smoke-agent-interop.sh
 ```
@@ -18,6 +20,7 @@ SMOKE_LIVE=1 scripts/smoke-agent-interop.sh
 Required gates:
 
 - coverage stays at or above the CI threshold
+- `CHANGELOG.md` contains an entry for the release tag
 - `scripts/check-agent-ready.sh` passes
 - `scripts/smoke-agent-interop.sh` passes in live mode
 - the live MCP/Auth/Skill Discovery scan is at 7/7, or the blocker is documented explicitly before release

@@ -2,6 +2,91 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+- Regression tests for Claude.ai scope clamping, ChatGPT write-scope boundaries, and IsItAgentReady auth metadata.
+- Release checklist guard to verify that the release tag points at the same commit that passed CI and was deployed.
+- `check-changelog` release helper to fail releases when `CHANGELOG.md` is missing the target version.
+
+### Changed
+- Documentation now describes the current canonical scope model: `content.read`, `content.write`, and `site.admin`; legacy `system.admin` normalizes to `site.admin`.
+
+### Fixed
+- OAuth scope clamping now logs the requested and granted scopes without exposing secrets.
+- Anonymous/read tool-boundary smoke checks were tightened so public access cannot silently gain authenticated tools.
+
+## [v1.2.10] - 2026-07-05
+
+### Changed
+- Collapsed the former standalone `system.admin` tier into `site.admin`; `system.admin` remains accepted as a legacy alias.
+- Simplified the active scope hierarchy to anonymous, `content.read`, `content.write`, and `site.admin`.
+
+### Fixed
+- Claude.ai authorization no longer fails with `invalid_scope` when it requests a wider historical scope list than the registered client ceiling.
+- Admin and integrity tools, including `check_sri_versions`, are now served under `site.admin`.
+
+## [v1.2.9] - 2026-07-05
+
+### Fixed
+- Added Claude.ai's observed `https://claude.ai/api/mcp/auth_callback` redirect URI to the admin client configuration path.
+
+## [v1.2.8] - 2026-07-05
+
+### Fixed
+- Return a proper OAuth challenge for unauthenticated `/mcp` requests when OAuth is enabled, preventing authenticated clients from caching anonymous tool lists.
+
+## [v1.2.7] - 2026-07-05
+
+### Added
+- Dynamic Client Registration scope inheritance from pre-registered clients when redirect URI policy matches.
+
+### Fixed
+- Hardened OAuth redirect handling and agent discovery metadata.
+- Resolved CodeQL redirect findings with validated redirect sinks and documentation.
+
+## [v1.2.6] - 2026-07-05
+
+### Fixed
+- Corrected `resource_documentation` metadata and added regression tests for the AgentReady scanner path.
+- Added a regression test for the Auth.md backtick URL extraction issue.
+
+## [v1.2.5] - 2026-07-05
+
+### Fixed
+- Resolved remaining AgentReady blockers for API/Auth/MCP/Skill Discovery 7/7.
+
+## [v1.2.4] - 2026-07-05
+
+### Fixed
+- Added `register_uri` to agent auth discovery metadata.
+
+## [v1.2.3] - 2026-07-05
+
+### Added
+- `scripts/verify-agent-ready.sh` for post-deploy discovery validation.
+- RFC compliance documentation with live-tested discovery endpoint annotations.
+
+## [v1.2.2] - 2026-07-05
+
+### Fixed
+- Applied `gofmt` to resolve CI formatting violations.
+
+## [v1.2.1] - 2026-07-05
+
+### Fixed
+- Resolved remaining v1.2.0 follow-up issues around OAuth, client compatibility, and AgentReady discovery.
+
+## [v1.2.0] - 2026-07-05
+
+### Added
+- Agent interop and AgentReady validation scripts.
+- Secret scanning jobs for gitleaks and trufflehog in CI.
+
+### Fixed
+- Interop, security, and correctness issues found during the v1.2.0 hardening milestone.
+- Deploy script now injects version ldflags so live binaries can report build version.
+
 ## [v1.1.0] - 2026-07-04
 
 ### Security
@@ -34,7 +119,7 @@ Initial public release.
 
 - Streamable HTTP MCP transport at `/mcp`
 - OAuth 2.0 / PKCE authorization code flow
-- 5-tier scope hierarchy: anonymous → content.read → content.write → site.admin → system.admin
+- Initial 5-tier scope hierarchy: anonymous → content.read → content.write → site.admin → system.admin
 - Agent identity registration and claim flow
 - SQLite and JSON token persistence backends
 - Hugo content tools: `create_page`, `update_page`, `delete_page`
