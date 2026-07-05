@@ -36,8 +36,8 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ previewBuildInput) (*mcp.CallToolResult, previewBuildOutput, error) {
-		if cfg.SiteRoot == "" {
-			return nil, previewBuildOutput{}, fmt.Errorf("config_error: site_root is not configured")
+		if cfg.HugoRoot == "" {
+			return nil, previewBuildOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 		}
 		hugosite.ContentMu.RLock()
 		defer hugosite.ContentMu.RUnlock()
@@ -47,7 +47,7 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 
 		start := time.Now()
 		cmd := exec.CommandContext(tctx, "hugo", "--renderToMemory")
-		cmd.Dir = cfg.SiteRoot
+		cmd.Dir = cfg.HugoRoot
 		err := cmd.Run()
 		durationMs := time.Since(start).Milliseconds()
 		if err != nil {

@@ -36,6 +36,9 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
+		if cfg.HugoRoot == "" {
+			return nil, buildSiteOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
+		}
 		if !hugosite.ContentMu.TryLock() {
 			return nil, buildSiteOutput{}, fmt.Errorf("build_in_progress: a content mutation or build is already running")
 		}
@@ -50,7 +53,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 
 		start := time.Now()
 		cmd := exec.CommandContext(tctx, "hugo")
-		cmd.Dir = cfg.SiteRoot
+		cmd.Dir = cfg.HugoRoot
 		err := cmd.Run()
 		durationMs := time.Since(start).Milliseconds()
 

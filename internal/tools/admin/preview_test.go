@@ -10,12 +10,13 @@ import (
 )
 
 func TestPreviewBuildSucceeds(t *testing.T) {
-	dir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
+	wantRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\n[ \"$(pwd)\" = \""+wantRoot+"\" ] || exit 42\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 
-	siteRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = siteRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = wantRoot
 
 	session, done := newTestServer(t, cfg)
 	defer done()

@@ -26,12 +26,14 @@ func writeMockHugo(t *testing.T, script string) string {
 }
 
 func TestBuildSiteSucceeds(t *testing.T) {
-	dir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
+	wantRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\n[ \"$(pwd)\" = \""+wantRoot+"\" ] || exit 42\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 
 	siteRoot := t.TempDir()
 	cfg := config.Default()
 	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = wantRoot
 
 	session, done := newTestServer(t, cfg)
 	defer done()
@@ -61,9 +63,9 @@ func TestBuildSiteConcurrentReject(t *testing.T) {
 	dir := writeMockHugo(t, "#!/bin/sh\nsleep 5\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 
-	siteRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = siteRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	admin.RegisterBuild(s, cfg)
@@ -120,9 +122,9 @@ func TestBuildSiteTimeout(t *testing.T) {
 	dir := writeMockHugo(t, "#!/bin/sh\nsleep 10\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 
-	siteRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = siteRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
 	cfg.BuildTimeoutSeconds = 1
 
 	session, done := newTestServer(t, cfg)
