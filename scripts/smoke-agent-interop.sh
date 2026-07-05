@@ -213,15 +213,28 @@ probe_authorize() {
   local label="$1"
   local client_id="$2"
   local redirect_uri="$3"
-  local status loc
+  local status loc err_param
+  # Capture both status code and Location header in one request
+  loc="$(
+    curl -sk -o /dev/null -w '%{redirect_url}' \
+      "$BASE_URL/authorize?response_type=code&client_id=$(jq -rn --arg v "$client_id" '$v|@uri')&redirect_uri=$(jq -rn --arg v "$redirect_uri" '$v|@uri')&state=smoke&code_challenge=n4sk8wlI_n8S-GaUfbNTr6dL7X5enlRgJe27i8U6Bhg&code_challenge_method=S256"
+  )"
   status="$(
     curl -sk -o /dev/null -w '%{http_code}' \
       "$BASE_URL/authorize?response_type=code&client_id=$(jq -rn --arg v "$client_id" '$v|@uri')&redirect_uri=$(jq -rn --arg v "$redirect_uri" '$v|@uri')&state=smoke&code_challenge=n4sk8wlI_n8S-GaUfbNTr6dL7X5enlRgJe27i8U6Bhg&code_challenge_method=S256"
   )"
-  if [[ "$status" == "302" ]]; then
-    pass "$label authorize redirect (HTTP 302)"
-  else
+  if [[ "$status" != "302" ]]; then
     fail "$label authorize redirect: got HTTP $status, want 302"
+    return
+  fi
+  pass "$label authorize redirect (HTTP 302)"
+  # Check Location header has no error= — a 302 with ?error=invalid_scope looks
+  # identical in nginx logs but the client never calls /token (issue #121).
+  err_param="$(python3 -c "import sys,urllib.parse as p; u=p.urlparse('$loc'); print(p.parse_qs(u.query).get('error',[''])[0])" 2>/dev/null || true)"
+  if [[ -n "$err_param" ]]; then
+    fail "$label authorize Location contains error=$err_param (silent OAuth failure — see pitfall wiki)"
+  else
+    pass "$label authorize Location has code, no error"
   fi
 }
 

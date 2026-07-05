@@ -728,3 +728,47 @@ clients:
 		t.Fatalf("site.admin token missing create_page; got %v", names)
 	}
 }
+
+// TestAnonymousServerDoesNotExposeAuthenticatedTools guards the scope boundary
+// between the anonymous server (no OAuth) and the content.read tier.
+// Tools like validate_site and validate_front_matter require content.read and
+// must NEVER appear when the server runs without OAuth (anonymous mode).
+// If they appear here it means they were accidentally registered on anonServer.
+func TestAnonymousServerDoesNotExposeAuthenticatedTools(t *testing.T) {
+	srv := mustTestServer(t) // no OAuth — anonymous server
+	names := doMCPToolsList(t, srv, "")
+
+	// These tools require content.read and must not be on the anonymous server.
+	authOnlyTools := []string{
+		"validate_site",
+		"validate_front_matter",
+		"build_agent_context",
+		"export_agent_context",
+		"get_broken_links",
+		"get_site_health",
+		"diff_page",
+		"search_content",
+	}
+	for _, bad := range authOnlyTools {
+		for _, got := range names {
+			if got == bad {
+				t.Errorf("anonymous server must not expose content.read tool %q", bad)
+			}
+		}
+	}
+
+	// Public tools must still be present.
+	publicTools := []string{"list_pages", "get_page", "list_tags"}
+	for _, want := range publicTools {
+		found := false
+		for _, got := range names {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("anonymous server missing expected public tool %q; got %v", want, names)
+		}
+	}
+}

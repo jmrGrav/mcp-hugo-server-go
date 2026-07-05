@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -227,6 +228,12 @@ func (s *Service) resolveClientScope(clientID, requested string) (string, error)
 	// permitted). Returning invalid_scope would break clients like Claude.ai
 	// that always request all scopes and rely on the server to downscope.
 	if !allowedScope(scope, c.Scope) {
+		slog.Info("OAuth scope clamped",
+			"client", clientID,
+			"requested", scope,
+			"granted", c.Scope,
+			"reason", "client_max_scope",
+		)
 		scope = c.Scope
 	}
 	return scope, nil
