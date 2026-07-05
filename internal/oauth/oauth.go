@@ -325,10 +325,16 @@ func oauthRedirectLocation(redirectURI *url.URL, params url.Values) string {
 }
 
 func redirectToRegisteredClient(w http.ResponseWriter, r *http.Request, redirectURI *url.URL, params url.Values) {
-	// This is the OAuth Authorization Code redirect sink. redirectURI has already
-	// passed validateClientRedirectURL, which matches it against the registered
-	// redirect URIs for the client_id before any redirect is sent.
-	http.Redirect(w, r, oauthRedirectLocation(redirectURI, params), http.StatusFound) // lgtm[go/unvalidated-url-redirection]
+	if redirectURI == nil || redirectURI.Scheme == "" || redirectURI.Host == "" {
+		http.Error(w, "invalid_redirect_uri", http.StatusBadRequest)
+		return
+	}
+	if redirectURI.Scheme != "https" && !(redirectURI.Scheme == "http" && isLoopbackHost(redirectURI.Hostname())) {
+		http.Error(w, "invalid_redirect_uri", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Location", oauthRedirectLocation(redirectURI, params))
+	w.WriteHeader(http.StatusFound)
 }
 
 func (s *Service) lookupClient(clientID string) (client, bool) {
