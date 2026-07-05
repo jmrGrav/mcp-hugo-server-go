@@ -4,17 +4,10 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-### Added
-- Regression tests for Claude.ai scope clamping, ChatGPT write-scope boundaries, and IsItAgentReady auth metadata.
-- Release checklist guard to verify that the release tag points at the same commit that passed CI and was deployed.
-- `check-changelog` release helper to fail releases when `CHANGELOG.md` is missing the target version.
-
-### Changed
-- Documentation now describes the current canonical scope model: `content.read`, `content.write`, and `site.admin`; legacy `system.admin` normalizes to `site.admin`.
+## [v1.3.0] - 2026-07-05
 
 ### Fixed
-- OAuth scope clamping now logs the requested and granted scopes without exposing secrets.
-- Anonymous/read tool-boundary smoke checks were tightened so public access cannot silently gain authenticated tools.
+- Switch MCP transport from stateless to stateful mode. In stateless mode the server returned HTTP 405 for `GET /mcp`, causing Claude.ai and ChatGPT to immediately disconnect after tools discovery (tools briefly visible, then "not connected"). Stateful mode keeps the SSE session open so tool calls succeed. Sessions have a one-hour idle timeout for cleanup.
 
 ## [v1.2.10] - 2026-07-05
 

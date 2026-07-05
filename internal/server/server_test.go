@@ -222,12 +222,38 @@ func toolsListNames(t *testing.T, body string) []string {
 	return nil
 }
 
+// initMCPSession sends an initialize request and returns the session ID.
+// Required in stateful mode: without initialize, the session is uninitialized
+// and tools/list returns an empty list.
+func initMCPSession(t *testing.T, srv *server.Server, bearer string) string {
+	t.Helper()
+	body := []byte(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.0.1"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if bearer != "" {
+		req.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initialize status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	sessionID := rec.Header().Get("Mcp-Session-Id")
+	if sessionID == "" {
+		t.Fatal("initialize response missing Mcp-Session-Id header")
+	}
+	return sessionID
+}
+
 func doMCPToolsList(t *testing.T, srv *server.Server, bearer string) []string {
 	t.Helper()
+	sessionID := initMCPSession(t, srv, bearer)
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", sessionID)
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -241,9 +267,13 @@ func doMCPToolsList(t *testing.T, srv *server.Server, bearer string) []string {
 
 func doMCPCall(t *testing.T, srv *server.Server, bearer string, payload []byte) *httptest.ResponseRecorder {
 	t.Helper()
+	// ACL-blocked calls (403) never reach go-sdk, so they don't need a session.
+	// We still initialize to be correct for calls that succeed.
+	sessionID := initMCPSession(t, srv, bearer)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", sessionID)
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -438,7 +468,7 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	if metricsRec.Code != http.StatusOK {
 		t.Fatalf("/metrics status = %d body = %q", metricsRec.Code, metricsRec.Body.String())
 	}
-	if !strings.Contains(metricsRec.Body.String(), `mcp_legacy_scope_requests_total{scope="mcp"} 3`) {
+	if !strings.Contains(metricsRec.Body.String(), `mcp_legacy_scope_requests_total{scope="mcp"} 6`) {
 		t.Fatalf("metrics missing legacy scope counter: %q", metricsRec.Body.String())
 	}
 }

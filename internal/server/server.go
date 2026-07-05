@@ -134,8 +134,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	admin.Register(siteAdminServer, cfg)
 
 	opts := &mcp.StreamableHTTPOptions{
-		Stateless:                  true,
 		DisableLocalhostProtection: true,
+		SessionTimeout:             time.Hour,
 	}
 	streaming := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		scope, _ := r.Context().Value(oauth.CtxScope).(string)
