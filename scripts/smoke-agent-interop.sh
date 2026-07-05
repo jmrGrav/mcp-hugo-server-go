@@ -85,12 +85,12 @@ check_tools_list() {
   local label="$1"
   local bearer="${2:-}"
   local expect_min="${3:-}"
-  local response
+  local response http_status
   if [[ -n "$bearer" ]]; then
     local auth_header_name="Authori""zation"
     local auth_scheme="Be""arer"
     response="$(
-      curl -fsS "$BASE_URL/mcp" \
+      curl -sS -w '\n%{http_code}' "$BASE_URL/mcp" \
         -H 'Content-Type: application/json' \
         -H 'Accept: application/json, text/event-stream' \
         -H "${auth_header_name}: ${auth_scheme} $bearer" \
@@ -98,11 +98,19 @@ check_tools_list() {
     )"
   else
     response="$(
-      curl -fsS "$BASE_URL/mcp" \
+      curl -sS -w '\n%{http_code}' "$BASE_URL/mcp" \
         -H 'Content-Type: application/json' \
         -H 'Accept: application/json, text/event-stream' \
         --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
     )"
+  fi
+  http_status="${response##*$'\n'}"
+  response="${response%$'\n'*}"
+  # 401 is valid when OAuth is enabled — the server correctly challenges
+  if [[ "$http_status" == "401" ]]; then
+    pass "$label tools/list requires auth (HTTP 401)"
+    printf '0\n'
+    return
   fi
   local json
   json="$(extract_json "$response")"

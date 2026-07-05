@@ -302,29 +302,36 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				wwwAuth := fmt.Sprintf(`Bearer realm=%q, resource_metadata=%q`,
 					issuer, issuer+"/.well-known/oauth-protected-resource")
 				auth := strings.TrimSpace(r.Header.Get("Authorization"))
-				if auth != "" {
-					if !strings.HasPrefix(auth, "Bearer ") {
-						w.Header().Set("WWW-Authenticate", wwwAuth)
-						http.Error(w, "unauthorized", http.StatusUnauthorized)
-						return
-					}
-					token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-					scope, legacy, ok := oauthSvc.ValidateBearerDetails(token)
-					if !ok {
-						w.Header().Set("WWW-Authenticate", wwwAuth+`, error="invalid_token"`)
-						http.Error(w, "unauthorized", http.StatusUnauthorized)
-						return
-					}
-					callerScope = scope
-					if legacy {
-						metrics.RecordLegacyScope(scope)
-						logger.Warn("accepted deprecated legacy scope alias", "scope", oauth.LegacyScopeAlias, "canonical_scope", callerScope, "issuer", strings.TrimRight(cfg.OAuth.Issuer, "/"), "path", r.URL.Path)
-					}
-					callerIP, _, _ := strings.Cut(r.RemoteAddr, ":")
-					ctx := context.WithValue(r.Context(), oauth.CtxScope, callerScope)
-					ctx = context.WithValue(ctx, oauth.CtxCallerIP, callerIP)
-					r = r.WithContext(ctx)
+				if auth == "" {
+					// No token: challenge so OAuth clients (Claude.ai, ChatGPT) discover
+					// the auth server and start the PKCE flow. Without this 401 they see
+					// 200 + anonymous tools and never learn auth is available (RFC 6750 §3.1).
+					w.Header().Set("WWW-Authenticate", wwwAuth)
+					w.Header().Set("Cache-Control", "no-store")
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
 				}
+				if !strings.HasPrefix(auth, "Bearer ") {
+					w.Header().Set("WWW-Authenticate", wwwAuth)
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
+				token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+				scope, legacy, ok := oauthSvc.ValidateBearerDetails(token)
+				if !ok {
+					w.Header().Set("WWW-Authenticate", wwwAuth+`, error="invalid_token"`)
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
+				callerScope = scope
+				if legacy {
+					metrics.RecordLegacyScope(scope)
+					logger.Warn("accepted deprecated legacy scope alias", "scope", oauth.LegacyScopeAlias, "canonical_scope", callerScope, "issuer", strings.TrimRight(cfg.OAuth.Issuer, "/"), "path", r.URL.Path)
+				}
+				callerIP, _, _ := strings.Cut(r.RemoteAddr, ":")
+				ctx := context.WithValue(r.Context(), oauth.CtxScope, callerScope)
+				ctx = context.WithValue(ctx, oauth.CtxCallerIP, callerIP)
+				r = r.WithContext(ctx)
 
 				// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
 				if r.Method == http.MethodPost {

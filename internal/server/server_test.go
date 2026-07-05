@@ -143,6 +143,8 @@ func TestUnknownPathReturns404(t *testing.T) {
 }
 
 func TestACLBlocksProtectedToolAnonymous(t *testing.T) {
+	// With OAuth enabled, unauthenticated requests get 401 before reaching
+	// the ACL layer — the challenge is the guard, not a 403.
 	srv := mustOAuthServer(t)
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_full_page_markdown"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
@@ -151,15 +153,18 @@ func TestACLBlocksProtectedToolAnonymous(t *testing.T) {
 
 	srv.Handler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("status = %d want 403 body = %q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d want 401 body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "forbidden_tool") {
-		t.Fatalf("expected forbidden_tool in response body, got: %q", rec.Body.String())
+	if rec.Header().Get("WWW-Authenticate") == "" {
+		t.Fatal("unauthenticated /mcp must include WWW-Authenticate header")
 	}
 }
 
 func TestACLAllowsPublicToolAnonymous(t *testing.T) {
+	// With OAuth enabled every /mcp request without a token gets 401 so that
+	// OAuth clients discover the authorization server. Public tools are still
+	// accessible once a token is acquired (any scope level).
 	srv := mustOAuthServer(t)
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_pages"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
@@ -169,8 +174,8 @@ func TestACLAllowsPublicToolAnonymous(t *testing.T) {
 
 	srv.Handler().ServeHTTP(rec, req)
 
-	if rec.Code == http.StatusForbidden {
-		t.Fatalf("expected list_pages to pass ACL, got 403: %q", rec.Body.String())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for unauthenticated request, got %d: %q", rec.Code, rec.Body.String())
 	}
 }
 
@@ -345,18 +350,28 @@ func oauthHashForTest(token string) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
-func TestToolsListAnonymousReturnsNineTools(t *testing.T) {
+func TestUnauthenticatedMCPReturns401WithWWWAuthenticate(t *testing.T) {
+	// When OAuth is enabled every unauthenticated /mcp request must return 401
+	// so that OAuth clients (Claude.ai, ChatGPT) discover the authorization
+	// server and start the PKCE flow (RFC 6750 §3.1).
 	srv := mustOAuthServer(t)
-	names := doMCPToolsList(t, srv, "")
-	if len(names) != 9 {
-		t.Fatalf("anonymous tools/list = %d tools, want 9; got %v", len(names), names)
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d want 401", rec.Code)
 	}
-	for _, name := range []string{"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context"} {
-		for _, n := range names {
-			if n == name {
-				t.Fatalf("anonymous tools/list must not include %q", name)
-			}
-		}
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if wwwAuth == "" {
+		t.Fatal("missing WWW-Authenticate header on unauthenticated /mcp")
+	}
+	if !strings.Contains(wwwAuth, "resource_metadata=") {
+		t.Fatalf("WWW-Authenticate missing resource_metadata: %q", wwwAuth)
 	}
 }
 
@@ -462,9 +477,9 @@ func TestContentReadCannotCallSiteAdminTool(t *testing.T) {
 	}
 }
 
-// TestAnonymousCannotCallSystemAdminTool verifies the unknown unknown_tool response
-// for anonymous callers trying to invoke system.admin tools.
-func TestAnonymousCannotCallSystemAdminTool(t *testing.T) {
+// TestUnauthenticatedCannotCallSystemAdminTool verifies unauthenticated callers
+// are rejected before reaching the tool layer (RFC 6750: 401, not 403).
+func TestUnauthenticatedCannotCallSystemAdminTool(t *testing.T) {
 	srv := mustOAuthServer(t)
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"check_sri_versions"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
@@ -473,8 +488,8 @@ func TestAnonymousCannotCallSystemAdminTool(t *testing.T) {
 
 	srv.Handler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("anonymous must not call check_sri_versions: status = %d body = %q", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated must get 401 before tool layer: status = %d body = %q", rec.Code, rec.Body.String())
 	}
 }
 
