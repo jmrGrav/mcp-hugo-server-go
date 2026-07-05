@@ -341,6 +341,11 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				}
 			}
 
+			// Prevent clients from caching scoped tool lists. Without these headers,
+			// a client that calls tools/list before OAuth (receiving the anonymous
+			// set) may cache and reuse that response after acquiring a token.
+			w.Header().Set("Cache-Control", "no-store")
+			w.Header().Set("Vary", "Authorization")
 			rateLimitedStreaming.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
