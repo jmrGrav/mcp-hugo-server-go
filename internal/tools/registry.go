@@ -26,6 +26,11 @@ func (r *Registry) Register(def ToolDef) {
 	r.byName[def.Name] = def
 }
 
+// All returns every registered ToolDef in registration order.
+func (r *Registry) All() []ToolDef {
+	return r.defs
+}
+
 // RequiredScopeFor returns the scope required to call name, and whether name is known.
 func (r *Registry) RequiredScopeFor(name string) (string, bool) {
 	d, ok := r.byName[name]
