@@ -14,17 +14,27 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 )
 
+const (
+	maxBuckets = 10_000
+	idleTTL    = 15 * time.Minute
+	gcInterval = 5 * time.Minute
+)
+
 type RateLimiter struct {
 	mu       sync.Mutex
 	limiters map[string]*rate.Limiter
+	lastSeen map[string]time.Time
 	cfg      config.RateLimitConfig
 }
 
 func NewRateLimiter(cfg config.RateLimitConfig) *RateLimiter {
-	return &RateLimiter{
+	rl := &RateLimiter{
 		limiters: make(map[string]*rate.Limiter),
+		lastSeen: make(map[string]time.Time),
 		cfg:      cfg,
 	}
+	go rl.gcLoop()
+	return rl
 }
 
 // callerKey returns a rate-limit bucket key combining the caller's IP and scope
@@ -40,8 +50,12 @@ func callerKey(remoteAddr, scope string) string {
 func (rl *RateLimiter) limiterFor(key, scope string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+	rl.lastSeen[key] = time.Now()
 	if l, ok := rl.limiters[key]; ok {
 		return l
+	}
+	if len(rl.limiters) >= maxBuckets {
+		rl.evictOldest()
 	}
 	perMin := rl.perMinFor(scope)
 	if perMin < 1 {
@@ -50,6 +64,42 @@ func (rl *RateLimiter) limiterFor(key, scope string) *rate.Limiter {
 	l := rate.NewLimiter(rate.Every(time.Minute/time.Duration(perMin)), perMin)
 	rl.limiters[key] = l
 	return l
+}
+
+func (rl *RateLimiter) gcLoop() {
+	ticker := time.NewTicker(gcInterval)
+	defer ticker.Stop()
+	for range ticker.C {
+		rl.gc()
+	}
+}
+
+func (rl *RateLimiter) gc() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	cutoff := time.Now().Add(-idleTTL)
+	for key, last := range rl.lastSeen {
+		if last.Before(cutoff) {
+			delete(rl.limiters, key)
+			delete(rl.lastSeen, key)
+		}
+	}
+}
+
+func (rl *RateLimiter) evictOldest() {
+	// Called with rl.mu held. Removes the entry with the oldest lastSeen time.
+	var oldest string
+	var oldestAt time.Time
+	for k, t := range rl.lastSeen {
+		if oldest == "" || t.Before(oldestAt) {
+			oldest = k
+			oldestAt = t
+		}
+	}
+	if oldest != "" {
+		delete(rl.limiters, oldest)
+		delete(rl.lastSeen, oldest)
+	}
 }
 
 func (rl *RateLimiter) perMinFor(scope string) int {

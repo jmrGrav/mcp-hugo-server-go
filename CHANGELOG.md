@@ -4,6 +4,52 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [v1.3.1] - 2026-07-06
+
+### Fixed
+- Rate-limit 429 response body is now a valid JSON-RPC 2.0 error object
+  (`code: -32029`, `message`, `data.retry_after_seconds`) so MCP clients can
+  parse the structured error instead of seeing a generic "Error occurred during
+  tool execution" (#153).
+- Default rate limits raised to account for stateful Streamable HTTP transport
+  consuming 2 HTTP requests per tool call: `site_admin_per_min` 10 → 60,
+  `content_write_per_min` 30 → 60, `anonymous_per_min` 60 → 120,
+  `content_read_per_min` 120 → 240 (#152, #140).
+- `preview_build`, `create_page`, `update_page`, `delete_page` now use
+  `TryLock`/`TryRLock` with a 10-second deadline instead of blocking
+  indefinitely on `ContentMu`; lock events are logged via `slog` (#145).
+- `get_related_content` resolves slugs through `PageResolver` instead of
+  direct `idx.GetBySlug`, enabling correct multilingual branch-bundle lookup
+  (#146).
+- `matchContentFilters` in `search_content` no longer rebuilds
+  `ContentClassifier` per page (O(n²) → O(n)) (#141).
+- `isGitPathMissing` in `diff_page` now checks `exec.ExitError.ExitCode()==128`
+  instead of locale-dependent English substring matching (#142).
+- `get_sitemap` accepts `limit` (default/cap 200) and `offset`; returns an
+  empty list when offset ≥ total instead of panicking (#147).
+- Rate limiter bucket map now evicts idle entries (TTL 15 minutes, GC every
+  5 minutes) and caps at 10,000 entries to prevent unbounded memory growth
+  under sustained load from many distinct IPs (#150).
+- `deploy.sh` no longer overwrites an existing `mcp-hugo-server-go.service`
+  on upgrades — the distribution template carries no site-specific paths;
+  a `service.d/override.conf` example is installed on first deploy and
+  preserved on upgrades (#143).
+- `--version` / `-version` / `version` flag prints the build version and
+  exits without requiring the config file to be loaded (#148).
+- Operator guide documents `ProtectSystem=strict`, the `ReadWritePaths`
+  requirement, and the systemd drop-in override pattern (#149).
+- `docs/client-compatibility.md` and `auth.md` document that
+  `oauth.enabled: true` requires a Bearer token on all `/mcp` requests,
+  including anonymous-scope tools (#154).
+- `docs/client-compatibility.md` updated to v1.3.0 test results: Claude.ai
+  admin token and stateful HTTP transport confirmed functional (#151).
+
+### Added
+- `smoke-agent-interop.sh` extended with `mcp_tool_call` helper (handles
+  202+session-id two-phase flow) and live assertions for
+  `get_site_information`, `get_recent_posts`, and optionally `get_site_health`
+  (#144).
+
 ## [v1.3.0] - 2026-07-05
 
 ### Added

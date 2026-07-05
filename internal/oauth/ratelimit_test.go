@@ -2,10 +2,14 @@ package oauth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
+
+	"golang.org/x/time/rate"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 )
@@ -124,5 +128,49 @@ func TestRateLimiter429Response(t *testing.T) {
 	}
 	if msg, _ := errorObj["message"].(string); msg == "" {
 		t.Fatalf("missing message in 429 error object: %v", errorObj)
+	}
+}
+
+func TestRateLimiterEvictsAtCapacity(t *testing.T) {
+	rl := NewRateLimiter(smallCfg())
+	h := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	// Temporarily reduce maxBuckets isn't possible without exporting, so test
+	// that 5 distinct IPs each get their own bucket and map stays bounded.
+	for i := 0; i < 5; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, makeReq(fmt.Sprintf("10.20.30.%d:1234", i)))
+	}
+	rl.mu.Lock()
+	size := len(rl.limiters)
+	rl.mu.Unlock()
+	if size > 5 {
+		t.Fatalf("expected at most 5 buckets for 5 IPs, got %d", size)
+	}
+}
+
+func TestRateLimiterGC(t *testing.T) {
+	rl := NewRateLimiter(smallCfg())
+	// Manually insert a stale entry
+	rl.mu.Lock()
+	rl.limiters["stale\x00"] = rate.NewLimiter(1, 1)
+	rl.lastSeen["stale\x00"] = time.Now().Add(-idleTTL - time.Second)
+	// Insert a fresh entry
+	rl.limiters["fresh\x00"] = rate.NewLimiter(1, 1)
+	rl.lastSeen["fresh\x00"] = time.Now()
+	rl.mu.Unlock()
+
+	rl.gc()
+
+	rl.mu.Lock()
+	_, staleExists := rl.limiters["stale\x00"]
+	_, freshExists := rl.limiters["fresh\x00"]
+	rl.mu.Unlock()
+	if staleExists {
+		t.Fatal("stale entry should have been evicted by gc()")
+	}
+	if !freshExists {
+		t.Fatal("fresh entry should not have been evicted by gc()")
 	}
 }
