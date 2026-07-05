@@ -67,6 +67,69 @@ func TestDynamicClientRegistration(t *testing.T) {
 	}
 }
 
+func TestDynamicClientRegistrationScopeInheritance(t *testing.T) {
+	// When DCR request uses a redirect URI that matches a pre-registered client,
+	// the new public client should inherit that client's scope instead of defaulting
+	// to content.read. This enables Claude.ai/ChatGPT to get their configured scopes
+	// automatically through DCR without requiring manual credential entry.
+	svc, _ := newTestService(t)
+
+	registryYAML := `clients:
+- client_id: claude-admin
+  client_secret: test-secret-abc
+  redirect_uris:
+    - https://claude.ai/api/oauth/callback
+    - https://claude.ai/oauth/callback
+  scope: site.admin
+- client_id: chatgpt-write
+  client_secret: test-secret-xyz
+  redirect_uris:
+    - https://chatgpt.com/aip/oauth/callback
+  scope: content.write
+`
+	registryPath := filepath.Join(t.TempDir(), "clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(registryYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.LoadClientRegistry(registryPath); err != nil {
+		t.Fatalf("LoadClientRegistry: %v", err)
+	}
+
+	tests := []struct {
+		name          string
+		redirectURIs  []string
+		expectedScope string
+	}{
+		{"claude.ai primary callback → site.admin", []string{"https://claude.ai/api/oauth/callback"}, "site.admin"},
+		{"claude.ai alternate callback → site.admin", []string{"https://claude.ai/oauth/callback"}, "site.admin"},
+		{"chatgpt callback → content.write", []string{"https://chatgpt.com/aip/oauth/callback"}, "content.write"},
+		{"unknown client → content.read", []string{"https://unknown.example.com/callback"}, "content.read"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"redirect_uris": tc.redirectURIs})
+			req := httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			svc.HandleRegister(rec, req)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status = %d body = %q", rec.Code, rec.Body.String())
+			}
+			var resp struct {
+				ClientID string `json:"client_id"`
+				Scope    string `json:"scope"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Scope != tc.expectedScope {
+				t.Errorf("scope = %q want %q", resp.Scope, tc.expectedScope)
+			}
+		})
+	}
+}
+
 func TestDynamicClientRegistrationDisabled(t *testing.T) {
 	cfg := config.OAuthConfig{
 		Enabled:               true,

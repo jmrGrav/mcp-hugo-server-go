@@ -241,8 +241,9 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		}
 	}
 	id := randomString(24)
+	scope := s.resolveRegistrationScope(req.RedirectURIs)
 	s.mu.Lock()
-	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...), Scope: "content.read", Enabled: true}
+	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...), Scope: scope, Enabled: true}
 	s.mu.Unlock()
 	return &RegistrationResponse{
 		ClientID:                      id,
@@ -252,8 +253,34 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		ResponseTypes:                 []string{"code"},
 		TokenEndpointAuthMethod:       "none",
 		CodeChallengeMethodsSupported: []string{"S256"},
-		Scope:                         "content.read",
+		Scope:                         scope,
 	}, nil
+}
+
+// resolveRegistrationScope returns the highest scope among all pre-registered
+// (secret-bearing) clients whose redirect URIs overlap with the DCR request.
+// This lets Claude.ai and ChatGPT inherit the scope of their pre-registered
+// counterparts when they do Dynamic Client Registration. Falls back to
+// "content.read" when no pre-registered client matches.
+func (s *Service) resolveRegistrationScope(redirectURIs []string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	scopes := []string{"content.read"}
+clientLoop:
+	for _, c := range s.clients {
+		if c.SecretHash == "" {
+			continue // public DCR client — skip, only match pre-registered clients
+		}
+		for _, reqURI := range redirectURIs {
+			for _, regURI := range c.RedirectURIs {
+				if matchRedirectURI(regURI, reqURI) {
+					scopes = append(scopes, c.Scope)
+					continue clientLoop
+				}
+			}
+		}
+	}
+	return highestConfiguredScope(scopes)
 }
 
 func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {
