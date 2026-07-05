@@ -7,11 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -55,12 +57,35 @@ var reservedSlugs = map[string]bool{
 	"index":  true,
 }
 
+// deleteCallerKey builds a rate-limit key that isolates delete budgets by caller IP.
+// Falls back to "unknown" when context carries no IP (e.g. in tests).
+func deleteCallerKey(ctx context.Context) string {
+	ip, _ := ctx.Value(oauth.CtxCallerIP).(string)
+	if ip == "" {
+		ip = "unknown"
+	}
+	return ip
+}
+
+// deleteCallerLimiter returns (or creates) a per-caller rate.Limiter for deletions.
+func deleteCallerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string) *rate.Limiter {
+	mu.Lock()
+	defer mu.Unlock()
+	if l, ok := m[key]; ok {
+		return l
+	}
+	l := rate.NewLimiter(rate.Every(time.Minute/5), 5)
+	m[key] = l
+	return l
+}
+
 func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config) {
 	if s == nil {
 		return
 	}
 
-	deleteLimiter := rate.NewLimiter(rate.Every(time.Minute/5), 5)
+	var deleteMu sync.Mutex
+	deleteLimiters := make(map[string]*rate.Limiter)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create_page",
@@ -141,20 +166,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		filePath := filepath.Join(dir, "index.md")
 
-		fm := make(map[string]any, len(existing.FrontmatterRaw))
-		for k, v := range existing.FrontmatterRaw {
-			fm[k] = v
+		raw, err := os.ReadFile(filePath)
+		if err != nil {
+			slog.Error("update_page: read failed", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, fmt.Errorf("read_error: failed to read page")
 		}
-		if in.Title != "" {
-			fm["title"] = in.Title
+		content, err := applyPageUpdates(string(raw), in.Title, in.Body)
+		if err != nil {
+			slog.Error("update_page: frontmatter update failed", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, fmt.Errorf("parse_error: failed to update frontmatter")
 		}
-
-		body := existing.Body
-		if in.Body != "" {
-			body = in.Body
-		}
-
-		content := buildFrontmatterFromMap(fm, body)
 		if err := fileutil.AtomicWrite(filePath, content); err != nil {
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("write_error: failed to write page")
@@ -162,7 +183,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		updated := *existing
 		if in.Title != "" {
 			updated.Title = in.Title
-			updated.FrontmatterRaw = fm
+			if updated.FrontmatterRaw == nil {
+				updated.FrontmatterRaw = make(map[string]any)
+			}
+			updated.FrontmatterRaw["title"] = in.Title
 		}
 		if in.Body != "" {
 			updated.Body = in.Body
@@ -182,7 +206,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
 		if in.Slug == "" {
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -192,16 +216,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
-		filePath := filepath.Join(dir, "index.md")
 
-		if !deleteLimiter.Allow() {
+		callerKey := deleteCallerKey(ctx)
+		if !deleteCallerLimiter(&deleteMu, deleteLimiters, callerKey).Allow() {
 			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute")
 		}
 
 		hugosite.ContentMu.Lock()
 		defer hugosite.ContentMu.Unlock()
 
-		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		if err := os.RemoveAll(dir); err != nil {
 			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
 			return nil, deletePageOutput{}, fmt.Errorf("delete_error: failed to delete page")
 		}
@@ -263,6 +287,58 @@ func buildFrontmatterFromMap(fm map[string]any, body string) string {
 		sb.WriteString(body)
 	}
 	return sb.String()
+}
+
+// applyPageUpdates applies title and/or body changes to an existing page file
+// using the yaml.v3 Node API to preserve field ordering, comments, and YAML
+// style in the frontmatter (issue #111).
+func applyPageUpdates(fileContent, newTitle, newBody string) (string, error) {
+	if !strings.HasPrefix(fileContent, "---\n") {
+		return "", fmt.Errorf("no YAML frontmatter delimiter")
+	}
+	rest := fileContent[4:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return "", fmt.Errorf("unterminated YAML frontmatter")
+	}
+	yamlPart := rest[:end]
+	bodyPart := rest[end+4:] // everything after the closing ---
+
+	if newTitle != "" {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(yamlPart), &doc); err != nil {
+			return "", fmt.Errorf("YAML parse: %w", err)
+		}
+		if len(doc.Content) > 0 {
+			setYAMLKey(doc.Content[0], "title", newTitle)
+		}
+		out, err := yaml.Marshal(doc.Content[0])
+		if err != nil {
+			return "", fmt.Errorf("YAML marshal: %w", err)
+		}
+		yamlPart = strings.TrimRight(string(out), "\n")
+	}
+
+	if newBody != "" {
+		bodyPart = "\n\n" + newBody
+	}
+
+	return "---\n" + yamlPart + "\n---" + bodyPart, nil
+}
+
+// setYAMLKey updates the value of key in a YAML mapping node in-place,
+// appending a new key-value pair when key is absent.
+func setYAMLKey(mapping *yaml.Node, key, value string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1].SetString(value)
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).

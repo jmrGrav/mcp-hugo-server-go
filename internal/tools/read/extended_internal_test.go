@@ -1,8 +1,11 @@
 package read
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -113,5 +116,90 @@ func TestValidationHelpers(t *testing.T) {
 	health := buildSiteHealth(&site.Index{}, src)
 	if health.SourcePages != 2 || health.DraftPages != 1 {
 		t.Fatalf("buildSiteHealth() = %#v", health)
+	}
+}
+
+func TestReadHelperBranches(t *testing.T) {
+	if got := clampLimit(0, 10, 50); got != 10 {
+		t.Fatalf("clampLimit(0) = %d", got)
+	}
+	if got := clampLimit(100, 10, 50); got != 50 {
+		t.Fatalf("clampLimit(100) = %d", got)
+	}
+	if got := clampLimit(25, 10, 50); got != 25 {
+		t.Fatalf("clampLimit(25) = %d", got)
+	}
+	if got := nullsafeStrings(nil); len(got) != 0 {
+		t.Fatalf("nullsafeStrings(nil) = %#v", got)
+	}
+	if !sliceContains([]string{"go", "mcp"}, "go") || sliceContains([]string{"go"}, "rust") {
+		t.Fatal("sliceContains() failed expected cases")
+	}
+	if got := readingTimeMinutes(""); got != 1 {
+		t.Fatalf("readingTimeMinutes(empty) = %d", got)
+	}
+	if got := readingTimeMinutes(strings.Repeat("word ", 201)); got != 2 {
+		t.Fatalf("readingTimeMinutes(201 words) = %d", got)
+	}
+
+	idx := &site.Index{}
+	related := computeRelated(idx, site.Page{Slug: "/posts/a/", Tags: []string{"go"}, Categories: []string{"docs"}}, 5)
+	if len(related) != 0 {
+		t.Fatalf("computeRelated() = %#v", related)
+	}
+}
+
+func TestDiffHelperBranches(t *testing.T) {
+	if got := normalizeSourceSlug("/posts/hello/"); got != "posts/hello" {
+		t.Fatalf("normalizeSourceSlug() = %q", got)
+	}
+	if got := sourceSlugFromRel("posts/hello/index.md"); got != "posts/hello" {
+		t.Fatalf("sourceSlugFromRel(index.md) = %q", got)
+	}
+	if got := sourceSlugFromRel("posts/about.md"); got != "posts/about" {
+		t.Fatalf("sourceSlugFromRel(.md) = %q", got)
+	}
+	if got := diffStatus(true, []byte("same"), []byte("same")); got != "unchanged" {
+		t.Fatalf("diffStatus(unchanged) = %q", got)
+	}
+	if got := diffStatus(true, []byte("new"), []byte("old")); got != "modified" {
+		t.Fatalf("diffStatus(modified) = %q", got)
+	}
+	if got := diffStatus(false, []byte{}, nil); got != "deleted" {
+		t.Fatalf("diffStatus(deleted) = %q", got)
+	}
+	if got := diffStatus(false, []byte("new"), nil); got != "added" {
+		t.Fatalf("diffStatus(added) = %q", got)
+	}
+	if !isGitPathMissing(errors.New("fatal: path 'content/posts/hello/index.md' exists on disk, but not in 'HEAD'")) {
+		t.Fatal("isGitPathMissing() should detect git missing-path error text")
+	}
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "hello"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	pagePath := filepath.Join(contentRoot, "posts", "hello", "index.md")
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Hello\n---\nbody\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	abs, rel, err := findSourceFile(contentRoot, "posts/hello")
+	if err != nil {
+		t.Fatalf("findSourceFile() error = %v", err)
+	}
+	if abs != pagePath || rel != filepath.Join("posts", "hello", "index.md") {
+		t.Fatalf("findSourceFile() = %q %q", abs, rel)
+	}
+	if _, _, err := findSourceFile(contentRoot, "missing"); err == nil {
+		t.Fatal("findSourceFile() should fail for missing page")
+	}
+
+	if diff, err := unifiedDiff("posts/hello/index.md", []byte("one\n"), []byte("two\n")); err != nil || !strings.Contains(diff, "two") {
+		t.Fatalf("unifiedDiff() = %q, %v", diff, err)
+	}
+
+	if out, err := gitBytes(context.Background(), root, "--version"); err != nil || !strings.Contains(string(out), "git version") {
+		t.Fatalf("gitBytes() = %q, %v", out, err)
 	}
 }

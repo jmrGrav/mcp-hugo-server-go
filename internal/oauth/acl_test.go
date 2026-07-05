@@ -156,6 +156,36 @@ func TestACLNotification(t *testing.T) {
 	}
 }
 
+func TestACLBatchSizeCapRejected(t *testing.T) {
+	p := buildTestPolicy()
+	batch := make([]any, 51)
+	for i := range batch {
+		batch[i] = map[string]any{
+			"jsonrpc": "2.0", "id": i + 1,
+			"method": "tools/list",
+		}
+	}
+	body := mustMarshal(batch)
+	if p.AllowRequest(body, "") {
+		t.Fatal("expected batch of 51 to be rejected")
+	}
+}
+
+func TestACLBatchSizeCapAllowed(t *testing.T) {
+	p := buildTestPolicy()
+	batch := make([]any, 50)
+	for i := range batch {
+		batch[i] = map[string]any{
+			"jsonrpc": "2.0", "id": i + 1,
+			"method": "tools/list",
+		}
+	}
+	body := mustMarshal(batch)
+	if !p.AllowRequest(body, "") {
+		t.Fatal("expected batch of 50 to be allowed")
+	}
+}
+
 func TestACLMalformedBodyDenied(t *testing.T) {
 	p := buildTestPolicy()
 	if p.AllowRequest([]byte("not-json"), "") {

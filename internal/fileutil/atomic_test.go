@@ -39,6 +39,28 @@ func TestAtomicWriteBytes(t *testing.T) {
 	}
 }
 
+func TestAtomicWriteMkdirFailure(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "nested")
+	if err := os.WriteFile(blocker, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := fileutil.AtomicWrite(filepath.Join(blocker, "file.txt"), "hello"); err == nil {
+		t.Fatal("expected AtomicWrite() to fail when parent path is a file")
+	}
+}
+
+func TestAtomicWriteBytesTempCreateFailure(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "readonly")
+	if err := os.MkdirAll(dir, 0o555); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+	if err := fileutil.AtomicWriteBytes(filepath.Join(dir, "file.bin"), []byte("x")); err == nil {
+		t.Fatal("expected AtomicWriteBytes() to fail in read-only directory")
+	}
+}
+
 func TestBoolPtr(t *testing.T) {
 	if !*fileutil.BoolPtr(true) {
 		t.Fatal("BoolPtr(true) returned false")

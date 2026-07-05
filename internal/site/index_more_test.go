@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"golang.org/x/net/html"
 )
 
@@ -179,6 +180,68 @@ func TestCanonicalDirAndHiddenPath(t *testing.T) {
 		if _, err := canonicalDir(symlink); err == nil {
 			t.Fatal("canonicalDir() should reject symlinks")
 		}
+	}
+}
+
+func TestNilIndexMethods(t *testing.T) {
+	var idx *Index
+	if got := idx.AllTags(); got != nil {
+		t.Fatalf("AllTags(nil) = %#v", got)
+	}
+	if got := idx.AllCategories(); got != nil {
+		t.Fatalf("AllCategories(nil) = %#v", got)
+	}
+	if got := idx.Sitemap(); got != nil {
+		t.Fatalf("Sitemap(nil) = %#v", got)
+	}
+	if got := idx.GetFeed(5); got != nil {
+		t.Fatalf("GetFeed(nil) = %#v", got)
+	}
+	if got := idx.RecentPosts(5); got != nil {
+		t.Fatalf("RecentPosts(nil) = %#v", got)
+	}
+	if got := idx.Search("query", 5); got != nil {
+		t.Fatalf("Search(nil) = %#v", got)
+	}
+	if got := idx.SiteInfo(); len(got) != 0 {
+		t.Fatalf("SiteInfo(nil) = %#v", got)
+	}
+}
+
+func TestIndexBoundariesAndDefaults(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example"
+	cfg.DefaultLanguage = ""
+	cfg.MaxIndexEntries = 0
+	idx, err := NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	if got := idx.SiteInfo(); got["lang"] != "en" {
+		t.Fatalf("SiteInfo().lang = %q want en", got["lang"])
+	}
+
+	custom := &Index{
+		entries: []entry{
+			{page: Page{Slug: "/posts/a/", Date: "2026-07-03"}},
+			{page: Page{Slug: "/posts/b/", Date: "2026-07-04"}},
+		},
+		bySlug: map[string]int{"/posts/a/": 0, "/posts/b/": 1},
+		info:   map[string]string{"name": "example", "url": "https://example.test", "lang": "en"},
+	}
+	if got := custom.GetFeed(-1); len(got) != 2 {
+		t.Fatalf("GetFeed(-1) = %#v", got)
+	}
+	if got := custom.RecentPosts(0); len(got) != 2 {
+		t.Fatalf("RecentPosts(0) = %#v", got)
+	}
+	if got := custom.Search("missing", 3); len(got) != 0 {
+		t.Fatalf("Search(missing) = %#v", got)
+	}
+	if got := custom.Search("", 1); len(got) != 1 {
+		t.Fatalf("Search(empty) = %#v", got)
 	}
 }
 

@@ -71,3 +71,8 @@ func ScopeRank(scope string) int {
 	}
 	return r
 }
+
+// IsAdminScope reports whether scope carries site.admin or system.admin privileges.
+func IsAdminScope(scope string) bool {
+	return ScopeRank(scope) >= 3
+}

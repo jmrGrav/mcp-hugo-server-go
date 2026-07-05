@@ -1,7 +1,6 @@
 package oauth
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
 type agentRegistration struct {
@@ -30,7 +31,6 @@ type agentClaim struct {
 }
 
 type AgentClaimInfo struct {
-	UserCode        string `json:"user_code"`
 	ExpiresIn       int    `json:"expires_in"`
 	VerificationURI string `json:"verification_uri"`
 	Interval        int    `json:"interval"`
@@ -88,7 +88,6 @@ func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 		ClaimTokenExpires: claimExpires.UTC().Format(time.RFC3339Nano),
 		PostClaimScopes:   []string{"content.read"},
 		Claim: &AgentClaimInfo{
-			UserCode:        randomDigits(6),
 			ExpiresIn:       600,
 			VerificationURI: issuer + "/agent/identity/verify",
 			Interval:        5,
@@ -101,7 +100,9 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 	reg, ok := s.agentRegs[assertion]
 	s.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("invalid_grant")
+		// Assertion not found — most likely lost on server restart (in-memory state).
+		// Use a distinct sentinel so the HTTP handler can add Retry-After: 0.
+		return nil, fmt.Errorf("invalid_grant: assertion_not_found")
 	}
 	if time.Now().After(reg.AssertionExpires) {
 		return nil, fmt.Errorf("invalid_grant")
@@ -154,7 +155,6 @@ func (s *Service) initiateClaim(claimToken string) (*AgentClaimResponse, error) 
 		Status:         "initiated",
 		ExpiresAt:      expiresAt.UTC().Format(time.RFC3339Nano),
 		ClaimAttempt: &AgentClaimInfo{
-			UserCode:        randomDigits(6),
 			ExpiresIn:       600,
 			VerificationURI: issuer + "/agent/identity/verify",
 			Interval:        5,
@@ -233,12 +233,6 @@ func (s *Service) verifyAgentClaim(claimToken string) error {
 	return nil
 }
 
-// isAdminScope returns true when scope carries site.admin or system.admin
-// privileges — rank 3 or 4 in the 5-tier hierarchy.
-func isAdminScope(scope string) bool {
-	return scope == "site.admin" || scope == "system.admin"
-}
-
 func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -276,7 +270,7 @@ func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		scope, _, ok := s.ValidateBearerDetails(adminToken)
-		if !ok || !isAdminScope(scope) {
+		if !ok || !tools.IsAdminScope(scope) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-verify", error="insufficient_scope"`)
 			http.Error(w, "forbidden: site.admin or system.admin scope required", http.StatusForbidden)
 			return
@@ -322,12 +316,3 @@ func writeAgentAuthError(w http.ResponseWriter, code string, httpStatus int) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
 }
 
-func randomDigits(n int) string {
-	const digits = "0123456789"
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	for i := range b {
-		b[i] = digits[b[i]%10]
-	}
-	return string(b)
-}

@@ -24,6 +24,11 @@ type ctxKey string
 
 const CtxScope ctxKey = "oauth_scope"
 
+// CtxCallerIP carries the caller's remote IP so tool handlers can maintain
+// per-caller state (e.g. per-caller rate limiters) without access to the
+// underlying http.Request.
+const CtxCallerIP ctxKey = "caller_ip"
+
 type Service struct {
 	cfg              config.OAuthConfig
 	store            storage.Store
@@ -448,6 +453,11 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		resp, err := s.exchangeAgentAssertion(r.FormValue("assertion"))
 		if err != nil {
 			errCode := oauthTokenErrorCode(err)
+			if strings.Contains(err.Error(), "assertion_not_found") {
+				// In-memory assertion state was lost (server restart). Signal
+				// that the client should re-register immediately.
+				w.Header().Set("Retry-After", "0")
+			}
 			writeOAuthError(w, errCode, http.StatusBadRequest)
 			return
 		}

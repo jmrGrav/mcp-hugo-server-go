@@ -149,6 +149,48 @@ clients:
 	}
 }
 
+func TestLoadClientRegistryErrors(t *testing.T) {
+	svc := oauth.NewService(config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		Resource:              "https://mcp.test/mcp",
+		DynamicClientEnabled:  true,
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
+		AuthCodeTTLSeconds:    300,
+		AccessTokenTTLSeconds: 3600,
+	}, storage.NewMemory())
+
+	if err := svc.LoadClientRegistry(filepath.Join(t.TempDir(), "missing.yaml")); err == nil {
+		t.Fatal("expected missing registry file to fail")
+	}
+
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte("clients: ["), 0o600); err != nil {
+		t.Fatalf("write malformed registry: %v", err)
+	}
+	if err := svc.LoadClientRegistry(registryPath); err == nil {
+		t.Fatal("expected malformed registry to fail")
+	}
+
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - id: duplicate
+    secret: one
+    redirect_uris:
+      - https://client.test/callback
+  - client_id: duplicate
+    secret: two
+    redirect_uris:
+      - https://client.test/callback
+`), 0o600); err != nil {
+		t.Fatalf("write duplicate registry: %v", err)
+	}
+	if err := svc.LoadClientRegistry(registryPath); err == nil {
+		t.Fatal("expected duplicate client_id to fail")
+	}
+}
+
 func mustSQLiteStore(t *testing.T, path string) storage.Store {
 	t.Helper()
 	store, err := storage.NewSQLite(path)

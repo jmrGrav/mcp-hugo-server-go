@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,6 +65,83 @@ func TestServerRunShutsDown(t *testing.T) {
 	cfg.SiteRoot = t.TempDir()
 	cfg.HTTPBindAddr = "127.0.0.1"
 	cfg.HTTPBindPort = 0
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		done <- srv.Run(ctx)
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after context cancellation")
+	}
+}
+
+func TestDiscoveryBuildersFallbacks(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteURL = ""
+	cfg.SiteName = ""
+	cfg.OAuth.Issuer = "https://mcp.test"
+	cfg.OAuth.Resource = ""
+	cfg.OAuth.DynamicClientEnabled = true
+
+	authMeta := buildAuthServerMeta(cfg)
+	if authMeta.Issuer != "https://mcp.test" {
+		t.Fatalf("buildAuthServerMeta issuer = %q", authMeta.Issuer)
+	}
+	if authMeta.RegistrationEndpoint != "https://mcp.test/register" {
+		t.Fatalf("buildAuthServerMeta registration endpoint = %q", authMeta.RegistrationEndpoint)
+	}
+	if authMeta.ServiceDocumentation != "https://mcp.test/mcp" {
+		t.Fatalf("buildAuthServerMeta service documentation = %q", authMeta.ServiceDocumentation)
+	}
+
+	resourceMeta := buildProtectedResourceMeta(cfg)
+	if resourceMeta.Resource != "https://mcp.test/mcp" {
+		t.Fatalf("buildProtectedResourceMeta resource = %q", resourceMeta.Resource)
+	}
+
+	card := buildMCPServerCard(cfg)
+	if card.ServerInfo.Title != "MCP Server" {
+		t.Fatalf("buildMCPServerCard title = %q", card.ServerInfo.Title)
+	}
+	if card.DocumentationURL != "https://mcp.test/auth.md" {
+		t.Fatalf("buildMCPServerCard documentation = %q", card.DocumentationURL)
+	}
+
+	llms := buildLLMsTxt(cfg)
+	if !strings.Contains(llms, "MCP endpoint: https://mcp.test/mcp") {
+		t.Fatalf("buildLLMsTxt() = %q", llms)
+	}
+	if got := buildAgentCard(cfg); got.Name != "MCP Hugo Server" || got.URL != "https://mcp.test" {
+		t.Fatalf("buildAgentCard() = %#v", got)
+	}
+}
+
+func TestServerRunWithOAuthEnabled(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HTTPBindAddr = "127.0.0.1"
+	cfg.HTTPBindPort = 0
+	cfg.OAuth.Enabled = true
+	cfg.OAuth.Issuer = "https://mcp.test"
+	cfg.OAuth.Resource = "https://mcp.test/mcp"
+	cfg.OAuth.DynamicClientEnabled = true
 	idx, err := site.NewIndex(cfg)
 	if err != nil {
 		t.Fatalf("NewIndex() error = %v", err)
