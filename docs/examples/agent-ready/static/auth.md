@@ -3,7 +3,10 @@
 ## Agent authentication policy
 
 `arleo.eu` exposes Hugo-published content through an MCP endpoint at https://mcp.arleo.eu/mcp.
-Anonymous read-only access is available without registration. OAuth 2.0 unlocks richer tools.
+Anonymous read-only access is available without registration when `oauth.enabled`
+is `false`. When OAuth is enabled, all `/mcp` requests require a Bearer token
+(the server returns `401` otherwise). Complete the PKCE flow once to obtain a
+token with `content.read` scope for read-only access. OAuth 2.0 unlocks richer tools.
 
 ## Agent registration
 

@@ -18,8 +18,30 @@ ssh "$REMOTE" "sudo mv /tmp/$BINARY /usr/local/bin/$BINARY && sudo chmod 755 /us
 ssh "$REMOTE" "sudo systemctl stop hugo-public-mcp 2>/dev/null || true"
 ssh "$REMOTE" "sudo systemctl disable hugo-public-mcp 2>/dev/null || true"
 
+# Install service file and override example only on first deploy.
+# On upgrades only the binary is updated; existing .service customizations
+# (ReadWritePaths, Environment, etc.) are preserved via the drop-in override.
 scp deploy/systemd/mcp-hugo-server-go.service "$REMOTE:/tmp/mcp-hugo-server-go.service"
-ssh "$REMOTE" "sudo mv /tmp/mcp-hugo-server-go.service /etc/systemd/system/mcp-hugo-server-go.service"
+scp deploy/systemd/override.conf.example "$REMOTE:/tmp/mcp-hugo-server-go-override.conf.example"
+ssh "$REMOTE" bash -s <<'ENDSSH'
+if [ ! -f /etc/systemd/system/mcp-hugo-server-go.service ]; then
+  sudo mv /tmp/mcp-hugo-server-go.service /etc/systemd/system/mcp-hugo-server-go.service
+  sudo chmod 644 /etc/systemd/system/mcp-hugo-server-go.service
+  echo "Installed service file (first deploy)."
+else
+  rm -f /tmp/mcp-hugo-server-go.service
+  echo "Preserving existing service file."
+fi
+sudo mkdir -p /etc/systemd/system/mcp-hugo-server-go.service.d
+if [ ! -f /etc/systemd/system/mcp-hugo-server-go.service.d/override.conf ]; then
+  sudo cp /tmp/mcp-hugo-server-go-override.conf.example \
+    /etc/systemd/system/mcp-hugo-server-go.service.d/override.conf
+  echo "Installed override.conf example — edit it to match your site paths."
+else
+  echo "Preserving existing override.conf."
+fi
+rm -f /tmp/mcp-hugo-server-go-override.conf.example
+ENDSSH
 
 ssh "$REMOTE" "sudo systemctl daemon-reload && sudo systemctl enable mcp-hugo-server-go && sudo systemctl restart mcp-hugo-server-go"
 

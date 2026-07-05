@@ -21,6 +21,14 @@ func main() {
 }
 
 func run() error {
+	args := os.Args[1:]
+	for _, a := range args {
+		if a == "--version" || a == "-version" || a == "version" {
+			fmt.Printf("mcp-hugo-server-go %s\n", server.Version)
+			return nil
+		}
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 

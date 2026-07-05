@@ -28,7 +28,14 @@ RestrictNamespaces=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-ReadOnlyPaths=/home/jm/hugo-site/public /etc/mcp-hugo-server-go
+# ReadOnlyPaths and ReadWritePaths are site-specific and must NOT be set here.
+# Create /etc/systemd/system/mcp-hugo-server-go.service.d/override.conf
+# with the paths that apply to your installation. Example:
+#
+#   [Service]
+#   ReadOnlyPaths=/srv/hugo-site/public /etc/mcp-hugo-server-go
+#   ReadWritePaths=/var/lib/mcp-hugo-server-go /srv/hugo-site/content
+#   Environment=PATH=/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=multi-user.target

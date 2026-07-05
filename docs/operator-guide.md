@@ -134,6 +134,35 @@ This script:
 4. Uploads and installs the systemd service file to `/etc/systemd/system/mcp-hugo-server-go.service`.
 5. Reloads systemd and enables the service with `systemctl enable --now`.
 
+### Systemd Hardening and Override
+
+The service runs under `ProtectSystem=strict`, which makes the entire filesystem
+read-only for the process. You must declare any directory the server needs to
+write to (SQLite token store, Hugo content directory) via `ReadWritePaths` in
+the systemd drop-in override.
+
+The deploy script installs a template at:
+
+    /etc/systemd/system/mcp-hugo-server-go.service.d/override.conf
+
+Edit it after the first deploy to match your installation. At minimum you need:
+
+```ini
+[Service]
+ReadWritePaths=/var/lib/mcp-hugo-server-go /path/to/hugo-site/content
+ReadOnlyPaths=/path/to/hugo-site/public /etc/mcp-hugo-server-go
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+```
+
+After editing, reload systemd:
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
+```
+
+The drop-in override survives subsequent `deploy.sh` runs (the script never
+overwrites an existing override.conf).
+
 Edit the `REMOTE` variable in `deploy/deploy.sh` to target a different host.
 
 ### Configuration File

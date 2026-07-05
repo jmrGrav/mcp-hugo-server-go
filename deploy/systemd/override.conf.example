@@ -1,0 +1,5 @@
+[Service]
+# Site-specific paths — adjust to match your installation.
+ReadOnlyPaths=/srv/hugo-site/public /etc/mcp-hugo-server-go
+ReadWritePaths=/var/lib/mcp-hugo-server-go /srv/hugo-site/content
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
