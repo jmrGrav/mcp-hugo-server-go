@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
 func newAgentTestService() (*Service, storage.Store) {
@@ -27,8 +28,8 @@ func newAgentTestService() (*Service, storage.Store) {
 
 func TestAgentAuthHelperBranches(t *testing.T) {
 	svc, store := newAgentTestService()
-	if !isAdminScope("site.admin") || !isAdminScope("system.admin") || isAdminScope("content.read") {
-		t.Fatal("isAdminScope() returned unexpected result")
+	if !tools.IsAdminScope("site.admin") || !tools.IsAdminScope("system.admin") || tools.IsAdminScope("content.read") {
+		t.Fatal("tools.IsAdminScope() returned unexpected result")
 	}
 
 	resp, err := svc.registerAgentAnonymous()
