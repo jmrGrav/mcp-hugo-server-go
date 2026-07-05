@@ -333,6 +333,10 @@ func redirectToRegisteredClient(w http.ResponseWriter, r *http.Request, redirect
 		http.Error(w, "invalid_redirect_uri", http.StatusBadRequest)
 		return
 	}
+	// redirectURI is allowlist-validated by validateClientRedirectURL before
+	// this helper is called, and this final guard rejects non-HTTPS targets
+	// except loopback HTTP used for local OAuth clients.
+	// codeql[go/unvalidated-url-redirection]
 	w.Header().Set("Location", oauthRedirectLocation(redirectURI, params))
 	w.WriteHeader(http.StatusFound)
 }
