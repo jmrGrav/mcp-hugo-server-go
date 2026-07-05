@@ -38,6 +38,8 @@ jobs:
       - name: changelog release gate
         if: startsWith(github.ref, 'refs/tags/')
         run: go run ./cmd/check-changelog -version "${GITHUB_REF_NAME}"
+      - name: oauth-clients registry lint
+        run: bash scripts/lint-registry.sh docs/oauth-clients.example.yaml
       - run: go test -cover -coverprofile=coverage.out ./internal/...
       - run: go test -race ./...
       - run: go vet ./...
@@ -47,6 +49,130 @@ jobs:
           echo "Coverage: ${COVERAGE}%"
           awk -v cov="$COVERAGE" 'BEGIN { if (cov + 0 < 79) { print "Coverage " cov "% is below 79%"; exit 1 } }'
 
+  # Boot the real binary with a synthetic config and assert all 7 IsItAgentReady
+  # discovery endpoints respond correctly, and that scopes_supported contains
+  # site.admin but NOT system.admin. This catches "compiles but panics on start"
+  # regressions and scope collapse regressions before any code reaches production.
+  boot-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Build binary
+        run: go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=${GITHUB_REF_NAME:-dev}" -o /tmp/mcp-server ./cmd/mcp-hugo-server-go/
+      - name: Create test config and registry
+        run: |
+          mkdir -p /tmp/boot-check/site
+          echo '# auth' > /tmp/boot-check/site/auth.md
+
+          cat > /tmp/boot-check/registry.yaml <<'YAML'
+          clients:
+            - client_id: claude-admin
+              client_secret: boot-check-secret-long-enough-value
+              redirect_uris:
+                - https://claude.ai/api/mcp/auth_callback
+              scope: site.admin
+            - client_id: chatgpt-write
+              client_secret: boot-check-secret-long-enough-value
+              redirect_uris:
+                - https://chatgpt.com/connector/oauth/*
+              scope: content.write
+          YAML
+
+          cat > /tmp/boot-check/config.yaml <<'YAML'
+          site_root: /tmp/boot-check/site
+          site_url: https://www.example.com
+          site_name: boot-check
+          http_bind_addr: 127.0.0.1
+          http_bind_port: 8765
+          streaming_enabled: true
+          transport: http
+          oauth:
+            enabled: true
+            issuer: http://127.0.0.1:8765
+            resource: http://127.0.0.1:8765/mcp
+            dynamic_client_enabled: true
+            auth_code_ttl_seconds: 300
+            access_token_ttl_seconds: 3600
+            trusted_authorize_cidrs:
+              - 127.0.0.1/32
+            client_registry_path: /tmp/boot-check/registry.yaml
+          YAML
+      - name: Start server and wait for ready
+        run: |
+          MCP_HUGO_SERVER_CONFIG=/tmp/boot-check/config.yaml /tmp/mcp-server &
+          SERVER_PID=$!
+          echo "SERVER_PID=$SERVER_PID" >> "$GITHUB_ENV"
+          for i in $(seq 1 20); do
+            if curl -sf http://127.0.0.1:8765/.well-known/oauth-authorization-server > /dev/null 2>&1; then
+              echo "Server ready after ${i} attempts"
+              break
+            fi
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:8765/.well-known/oauth-authorization-server > /dev/null || \
+            { echo "Server failed to start"; kill $SERVER_PID 2>/dev/null; exit 1; }
+      - name: IsItAgentReady — 7 discovery endpoints
+        run: |
+          BASE=http://127.0.0.1:8765
+          fail=0
+          check() {
+            local desc="$1" url="$2" want="$3"
+            local got
+            got=$(curl -so /dev/null -w '%{http_code}' "$url")
+            if [[ "$got" == "$want" ]]; then
+              echo "OK   $desc ($got)"
+            else
+              echo "FAIL $desc: got $got want $want" >&2
+              fail=1
+            fi
+          }
+          check "OAuth authorization server" "$BASE/.well-known/oauth-authorization-server" "200"
+          check "OAuth protected resource"   "$BASE/.well-known/oauth-protected-resource"   "200"
+          check "MCP server card"            "$BASE/.well-known/mcp/server-card.json"        "200"
+          check "API catalog (mcp.json)"     "$BASE/.well-known/mcp.json"                    "200"
+          check "Agent skills index"         "$BASE/.well-known/agent.json"                  "200"
+          check "auth.md"                    "$BASE/auth.md"                                 "200"
+          # /mcp with OAuth enabled → 401 challenge (correct behaviour)
+          check "MCP endpoint (401=correct)" "$BASE/mcp"                                     "401"
+          [[ $fail -eq 0 ]] || exit 1
+      - name: scopes_supported — site.admin present, system.admin absent
+        run: |
+          SCOPES=$(curl -sf http://127.0.0.1:8765/.well-known/oauth-authorization-server | \
+            python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(d.get('scopes_supported',[])))")
+          echo "scopes_supported: $SCOPES"
+          if echo "$SCOPES" | grep -qw "system.admin"; then
+            echo "FAIL scopes_supported must not contain system.admin (scope collapse regression)" >&2
+            exit 1
+          fi
+          echo "OK   system.admin absent from scopes_supported"
+          if ! echo "$SCOPES" | grep -qw "site.admin"; then
+            echo "FAIL scopes_supported must contain site.admin" >&2
+            exit 1
+          fi
+          echo "OK   site.admin present in scopes_supported"
+      - name: Scope clamping — claude-admin requesting system.admin gets code not error
+        run: |
+          VERIFIER="boot-check-verifier-long-enough-value"
+          CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 | tr '+/' '-_' | tr -d '=')
+          PARAMS="response_type=code&client_id=claude-admin&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback&state=boot&scope=content.read+content.write+site.admin+system.admin&code_challenge=${CHALLENGE}&code_challenge_method=S256"
+          LOC=$(curl -sk -o /dev/null -w '%{redirect_url}' "http://127.0.0.1:8765/authorize?${PARAMS}")
+          echo "Location: $LOC"
+          if echo "$LOC" | grep -q "error="; then
+            echo "FAIL authorize returned error in Location (scope clamping broken)" >&2
+            exit 1
+          fi
+          if ! echo "$LOC" | grep -q "code="; then
+            echo "FAIL authorize Location missing code" >&2
+            exit 1
+          fi
+          echo "OK   scope clamping works — code issued, no error"
+      - name: Stop server
+        if: always()
+        run: kill "$SERVER_PID" 2>/dev/null || true
+
   secret-scan:
     name: Secret Scan (gitleaks)
     runs-on: ubuntu-latest
@@ -54,7 +180,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: gitleaks scan
         uses: gitleaks/gitleaks-action@v3
         env:
@@ -67,9 +192,37 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: trufflehog scan
         uses: trufflesecurity/trufflehog@main
         with:
           path: ./
           extra_args: --only-verified
+
+  # Optional: run the full smoke test against the live staging/production server.
+  # Only runs on tag pushes and only when the STAGING_URL secret is configured.
+  # Set STAGING_URL to the base URL (e.g. https://mcp.arleo.eu) in repo secrets.
+  staging-smoke:
+    name: Staging smoke test
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check STAGING_URL secret available
+        id: check-secret
+        run: |
+          if [[ -z "${{ secrets.STAGING_URL }}" ]]; then
+            echo "STAGING_URL not configured — skipping smoke test"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Run smoke test against staging
+        if: steps.check-secret.outputs.skip == 'false'
+        env:
+          BASE_URL: ${{ secrets.STAGING_URL }}
+          SMOKE_DCR_PROBE: "1"
+          CLAUDE_REDIRECT_URI: https://claude.ai/api/mcp/auth_callback
+          CHATGPT_REDIRECT_URI: https://chatgpt.com/connector/oauth/boot-check
+        run: |
+          bash scripts/smoke-agent-interop.sh
