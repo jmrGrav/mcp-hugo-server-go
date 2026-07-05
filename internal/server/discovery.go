@@ -19,6 +19,7 @@ type discoveryIdentityAssertion struct {
 
 type discoveryAgentAuth struct {
 	Skill                  string                     `json:"skill"`
+	RegisterURI            string                     `json:"register_uri"`
 	IdentityEndpoint       string                     `json:"identity_endpoint"`
 	ClaimEndpoint          string                     `json:"claim_endpoint"`
 	EventsEndpoint         string                     `json:"events_endpoint"`
@@ -73,6 +74,7 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 		ServiceDocumentation:              resource,
 		AgentAuth: discoveryAgentAuth{
 			Skill:                  issuer + "/auth.md",
+			RegisterURI:            issuer + "/register",
 			IdentityEndpoint:       issuer + "/agent/identity",
 			ClaimEndpoint:          issuer + "/agent/identity/claim",
 			EventsEndpoint:         issuer + "/agent/event/notify",
