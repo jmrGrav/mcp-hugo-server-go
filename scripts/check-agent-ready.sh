@@ -83,6 +83,7 @@ for needle in \
   "$BASE_URL/mcp" \
   "agent_auth_metadata" \
   "credential_types_supported" \
+  "urn:ietf:params:oauth:token-type:id-jag" \
   "claim_uri" \
   "identity_assertion"; do
   if ! grep -q "$needle" <<<"$auth_md"; then

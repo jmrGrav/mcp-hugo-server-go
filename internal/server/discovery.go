@@ -15,7 +15,8 @@ import (
 )
 
 type discoveryIdentityAssertion struct {
-	AssertionTypesSupported []string `json:"assertion_types_supported"`
+	AssertionTypesSupported  []string `json:"assertion_types_supported"`
+	CredentialTypesSupported []string `json:"credential_types_supported"`
 }
 
 type discoveryAnonymousAuth struct {
@@ -93,7 +94,8 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 				ClaimURI:                 issuer + "/agent/identity/claim",
 			},
 			IdentityAssertion: discoveryIdentityAssertion{
-				AssertionTypesSupported: []string{"urn:ietf:params:oauth:token-type:id-jag"},
+				AssertionTypesSupported:  []string{"urn:ietf:params:oauth:token-type:id-jag"},
+				CredentialTypesSupported: []string{"urn:ietf:params:oauth:token-type:id-jag"},
 			},
 			EventsSupported: []string{"https://schemas.workos.com/events/agent/auth/identity/assertion/revoked"},
 		},
@@ -404,7 +406,8 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"      \"claim_uri\": \"%s/agent/identity/claim\"\n"+
 				"    },\n"+
 				"    \"identity_assertion\": {\n"+
-				"      \"assertion_types_supported\": [\"urn:ietf:params:oauth:token-type:id-jag\"]\n"+
+				"      \"assertion_types_supported\": [\"urn:ietf:params:oauth:token-type:id-jag\"],\n"+
+				"      \"credential_types_supported\": [\"urn:ietf:params:oauth:token-type:id-jag\"]\n"+
 				"    },\n"+
 				"    \"events_supported\": [\"https://schemas.workos.com/events/agent/auth/identity/assertion/revoked\"]\n"+
 				"  }\n"+

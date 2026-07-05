@@ -117,6 +117,19 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	if len(anonymous.CredentialTypesSupported) == 0 {
 		t.Fatal("anonymous.credential_types_supported is empty")
 	}
+	var identityAssertion struct {
+		AssertionTypesSupported  []string `json:"assertion_types_supported"`
+		CredentialTypesSupported []string `json:"credential_types_supported"`
+	}
+	if err := json.Unmarshal(agentAuth["identity_assertion"], &identityAssertion); err != nil {
+		t.Fatalf("identity_assertion: %v", err)
+	}
+	if len(identityAssertion.AssertionTypesSupported) == 0 {
+		t.Fatal("identity_assertion.assertion_types_supported is empty")
+	}
+	if len(identityAssertion.CredentialTypesSupported) == 0 {
+		t.Fatal("identity_assertion.credential_types_supported is empty")
+	}
 
 	var grantTypes []string
 	if err := json.Unmarshal(got["grant_types_supported"], &grantTypes); err != nil {
