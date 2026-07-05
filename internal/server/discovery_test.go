@@ -407,6 +407,15 @@ func TestAuthMdContainsRegistrationFlow(t *testing.T) {
 	if !strings.Contains(body, "/register") {
 		t.Error("auth.md must reference the /register endpoint")
 	}
+	// Scanners extract URLs from auth.md by scanning for https:// prefixes.
+	// A URL followed immediately by a markdown backtick (end-of-line) causes the
+	// scanner to include the backtick in the URL, turning a valid path into a
+	// 404. Ensure no well-known URLs are backtick-wrapped at end-of-line.
+	for _, line := range strings.Split(body, "\n") {
+		if strings.Contains(line, ".well-known/") && strings.HasSuffix(strings.TrimRight(line, "\r"), "`") {
+			t.Errorf("auth.md line ends with backtick after a .well-known/ URL — scanner will include the backtick in the URL: %q", line)
+		}
+	}
 }
 
 func TestRobotsTxt(t *testing.T) {
