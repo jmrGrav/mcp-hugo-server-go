@@ -316,7 +316,10 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 						metrics.RecordLegacyScope(scope)
 						logger.Warn("accepted deprecated legacy scope alias", "scope", oauth.LegacyScopeAlias, "canonical_scope", callerScope, "issuer", strings.TrimRight(cfg.OAuth.Issuer, "/"), "path", r.URL.Path)
 					}
-					r = r.WithContext(context.WithValue(r.Context(), oauth.CtxScope, callerScope))
+					callerIP, _, _ := strings.Cut(r.RemoteAddr, ":")
+					ctx := context.WithValue(r.Context(), oauth.CtxScope, callerScope)
+					ctx = context.WithValue(ctx, oauth.CtxCallerIP, callerIP)
+					r = r.WithContext(ctx)
 				}
 
 				// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)

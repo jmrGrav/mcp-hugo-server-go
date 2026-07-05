@@ -7,11 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -55,12 +57,35 @@ var reservedSlugs = map[string]bool{
 	"index":  true,
 }
 
+// deleteCallerKey builds a rate-limit key that isolates delete budgets by caller IP.
+// Falls back to "unknown" when context carries no IP (e.g. in tests).
+func deleteCallerKey(ctx context.Context) string {
+	ip, _ := ctx.Value(oauth.CtxCallerIP).(string)
+	if ip == "" {
+		ip = "unknown"
+	}
+	return ip
+}
+
+// deleteCallerLimiter returns (or creates) a per-caller rate.Limiter for deletions.
+func deleteCallerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string) *rate.Limiter {
+	mu.Lock()
+	defer mu.Unlock()
+	if l, ok := m[key]; ok {
+		return l
+	}
+	l := rate.NewLimiter(rate.Every(time.Minute/5), 5)
+	m[key] = l
+	return l
+}
+
 func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config) {
 	if s == nil {
 		return
 	}
 
-	deleteLimiter := rate.NewLimiter(rate.Every(time.Minute/5), 5)
+	var deleteMu sync.Mutex
+	deleteLimiters := make(map[string]*rate.Limiter)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create_page",
@@ -182,7 +207,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
 		if in.Slug == "" {
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -193,7 +218,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
 
-		if !deleteLimiter.Allow() {
+		callerKey := deleteCallerKey(ctx)
+		if !deleteCallerLimiter(&deleteMu, deleteLimiters, callerKey).Allow() {
 			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute")
 		}
 

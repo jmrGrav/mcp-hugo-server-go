@@ -24,6 +24,11 @@ type ctxKey string
 
 const CtxScope ctxKey = "oauth_scope"
 
+// CtxCallerIP carries the caller's remote IP so tool handlers can maintain
+// per-caller state (e.g. per-caller rate limiters) without access to the
+// underlying http.Request.
+const CtxCallerIP ctxKey = "caller_ip"
+
 type Service struct {
 	cfg              config.OAuthConfig
 	store            storage.Store
