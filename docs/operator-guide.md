@@ -340,6 +340,86 @@ Then send MCP JSON-RPC requests over stdin.
 | `build_site` timeout | Hugo build takes longer than `build_timeout_seconds`. | Increase the timeout value in config. |
 | Permission denied when writing pages | Systemd service lacks write permissions. | Update `ReadWritePaths` in the service file and reload. |
 
+## Known Deployment Pitfalls
+
+### Pitfall 1 — SQLite storage fails with "unable to open database file"
+
+**Symptom:** Service crashes at startup with:
+```
+mcp-hugo-server-go: pragma journal_mode: unable to open database file (14)
+```
+
+**Cause:** `ProtectSystem=strict` in the service unit makes the entire filesystem read-only except paths listed in `ReadWritePaths`. Creating the directory with the right owner is not enough — the service unit must explicitly whitelist the path.
+
+**Fix:** Two steps are both required:
+
+```bash
+# 1. Create the directory and set ownership
+sudo mkdir -p /var/lib/mcp-hugo-server-go
+sudo chown mcp-hugo-server-go:mcp-hugo-server-go /var/lib/mcp-hugo-server-go
+
+# 2. Add it to ReadWritePaths in the service unit
+sudo sed -i 's|ReadWritePaths=|ReadWritePaths=/var/lib/mcp-hugo-server-go |' \
+    /etc/systemd/system/mcp-hugo-server-go.service
+sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
+```
+
+Or edit `/etc/systemd/system/mcp-hugo-server-go.service` manually:
+```ini
+ReadWritePaths=/var/lib/mcp-hugo-server-go /home/user/hugo-site/content
+```
+
+---
+
+### Pitfall 2 — Write tools fail with "read-only file system"
+
+**Symptom:** `create_page`, `update_page`, `delete_page` return a write error even though the service user has group access to the content directory.
+
+**Cause:** `ProtectHome=read-only` blocks all writes under `/home/`, including directories the service user owns or belongs to via group membership. Group membership is not sufficient — systemd's namespace isolation applies before Unix permissions.
+
+**Fix:**
+
+```bash
+# Add content_root to ReadWritePaths
+sudo sed -i 's|ReadWritePaths=|ReadWritePaths=/home/user/hugo-site/content |' \
+    /etc/systemd/system/mcp-hugo-server-go.service
+sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
+```
+
+Also ensure the service user has group write access to the content directory:
+```bash
+sudo usermod -aG <site-owner-group> mcp-hugo-server-go
+```
+
+---
+
+### Pitfall 3 — `validate_site` / `build_site` fail with "hugo: not found" or "Connection failed"
+
+**Symptom:** `validate_site` returns `"Connection failed"` or `"hugo: command not found"`. The `hugo` binary is installed and works fine when run as a normal user.
+
+**Cause:** Systemd services run with a minimal `PATH` that typically excludes `/usr/local/bin`. If Hugo was installed via the official installer (e.g., `snap`, direct download, or `go install`), it lands in `/usr/local/bin` which is absent from the service environment.
+
+**Fix:** Add an explicit `PATH` in the service unit:
+
+```bash
+sudo systemctl edit mcp-hugo-server-go
+```
+
+Add under `[Service]`:
+```ini
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+```
+
+Or edit `/etc/systemd/system/mcp-hugo-server-go.service` directly, then:
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
+```
+
+Verify:
+```bash
+sudo -u mcp-hugo-server-go env PATH=/usr/local/bin:/usr/bin:/bin which hugo
+```
+
 ## References
 
 - [mcp-hugo-server-go GitHub](https://github.com/jmrGrav/mcp-hugo-server-go)
