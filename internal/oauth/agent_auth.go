@@ -315,4 +315,3 @@ func writeAgentAuthError(w http.ResponseWriter, code string, httpStatus int) {
 	w.WriteHeader(httpStatus)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
 }
-

@@ -359,4 +359,3 @@ func appendAuditLog(path, entry string) error {
 	_, err = f.WriteString(entry)
 	return err
 }
-

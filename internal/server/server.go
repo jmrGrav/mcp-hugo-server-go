@@ -32,10 +32,10 @@ const Name = "mcp-hugo-server-go"
 var Version = "dev"
 
 type Server struct {
-	cfg          config.Config
-	handler      http.Handler
-	store        storage.Store
-	oauthSvc     *oauth.Service
+	cfg           config.Config
+	handler       http.Handler
+	store         storage.Store
+	oauthSvc      *oauth.Service
 	resetIPCounts func()
 }
 

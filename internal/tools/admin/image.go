@@ -153,4 +153,3 @@ func fetchImage(ctx context.Context, url, key, prompt string) ([]byte, error) {
 	}
 	return data, nil
 }
-
