@@ -166,20 +166,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		filePath := filepath.Join(dir, "index.md")
 
-		fm := make(map[string]any, len(existing.FrontmatterRaw))
-		for k, v := range existing.FrontmatterRaw {
-			fm[k] = v
+		raw, err := os.ReadFile(filePath)
+		if err != nil {
+			slog.Error("update_page: read failed", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, fmt.Errorf("read_error: failed to read page")
 		}
-		if in.Title != "" {
-			fm["title"] = in.Title
+		content, err := applyPageUpdates(string(raw), in.Title, in.Body)
+		if err != nil {
+			slog.Error("update_page: frontmatter update failed", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, fmt.Errorf("parse_error: failed to update frontmatter")
 		}
-
-		body := existing.Body
-		if in.Body != "" {
-			body = in.Body
-		}
-
-		content := buildFrontmatterFromMap(fm, body)
 		if err := fileutil.AtomicWrite(filePath, content); err != nil {
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("write_error: failed to write page")
@@ -187,7 +183,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		updated := *existing
 		if in.Title != "" {
 			updated.Title = in.Title
-			updated.FrontmatterRaw = fm
+			if updated.FrontmatterRaw == nil {
+				updated.FrontmatterRaw = make(map[string]any)
+			}
+			updated.FrontmatterRaw["title"] = in.Title
 		}
 		if in.Body != "" {
 			updated.Body = in.Body
@@ -288,6 +287,58 @@ func buildFrontmatterFromMap(fm map[string]any, body string) string {
 		sb.WriteString(body)
 	}
 	return sb.String()
+}
+
+// applyPageUpdates applies title and/or body changes to an existing page file
+// using the yaml.v3 Node API to preserve field ordering, comments, and YAML
+// style in the frontmatter (issue #111).
+func applyPageUpdates(fileContent, newTitle, newBody string) (string, error) {
+	if !strings.HasPrefix(fileContent, "---\n") {
+		return "", fmt.Errorf("no YAML frontmatter delimiter")
+	}
+	rest := fileContent[4:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return "", fmt.Errorf("unterminated YAML frontmatter")
+	}
+	yamlPart := rest[:end]
+	bodyPart := rest[end+4:] // everything after the closing ---
+
+	if newTitle != "" {
+		var doc yaml.Node
+		if err := yaml.Unmarshal([]byte(yamlPart), &doc); err != nil {
+			return "", fmt.Errorf("YAML parse: %w", err)
+		}
+		if len(doc.Content) > 0 {
+			setYAMLKey(doc.Content[0], "title", newTitle)
+		}
+		out, err := yaml.Marshal(doc.Content[0])
+		if err != nil {
+			return "", fmt.Errorf("YAML marshal: %w", err)
+		}
+		yamlPart = strings.TrimRight(string(out), "\n")
+	}
+
+	if newBody != "" {
+		bodyPart = "\n\n" + newBody
+	}
+
+	return "---\n" + yamlPart + "\n---" + bodyPart, nil
+}
+
+// setYAMLKey updates the value of key in a YAML mapping node in-place,
+// appending a new key-value pair when key is absent.
+func setYAMLKey(mapping *yaml.Node, key, value string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1].SetString(value)
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
+	)
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).

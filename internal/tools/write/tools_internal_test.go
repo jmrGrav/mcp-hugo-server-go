@@ -79,3 +79,37 @@ func TestWriteHelperBranches(t *testing.T) {
 func TestRegisterNilServer(t *testing.T) {
 	Register(nil, nil, nil, config.Default())
 }
+
+func TestApplyPageUpdatesPreservesOrder(t *testing.T) {
+	input := "---\ntitle: Old Title\ndate: 2026-01-01T00:00:00Z\ntags:\n  - go\n---\n\nOriginal body."
+
+	got, err := applyPageUpdates(input, "New Title", "")
+	if err != nil {
+		t.Fatalf("applyPageUpdates error: %v", err)
+	}
+	if !strings.Contains(got, "New Title") {
+		t.Errorf("title not updated: %s", got)
+	}
+	titleIdx := strings.Index(got, "title:")
+	dateIdx := strings.Index(got, "date:")
+	if dateIdx < titleIdx {
+		t.Errorf("field order not preserved: date appears before title in:\n%s", got)
+	}
+	if !strings.Contains(got, "Original body.") {
+		t.Errorf("body changed unexpectedly: %s", got)
+	}
+}
+
+func TestApplyPageUpdatesBody(t *testing.T) {
+	input := "---\ntitle: Page\n---\n\nOld body."
+	got, err := applyPageUpdates(input, "", "New body.")
+	if err != nil {
+		t.Fatalf("applyPageUpdates error: %v", err)
+	}
+	if !strings.Contains(got, "New body.") {
+		t.Errorf("body not updated: %s", got)
+	}
+	if strings.Contains(got, "Old body.") {
+		t.Errorf("old body still present: %s", got)
+	}
+}
