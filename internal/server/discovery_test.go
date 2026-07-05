@@ -274,32 +274,138 @@ func TestWellKnownProtectedResource(t *testing.T) {
 		t.Fatalf("Content-Type = %q want application/json", ct)
 	}
 
-	var got struct {
-		Resource             string   `json:"resource"`
-		AuthorizationServers []string `json:"authorization_servers"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if got.Resource != "https://mcp.arleo.eu/mcp" {
-		t.Errorf("resource = %q want https://mcp.arleo.eu/mcp", got.Resource)
-	}
-	if len(got.AuthorizationServers) != 1 || got.AuthorizationServers[0] != "https://mcp.arleo.eu" {
-		t.Errorf("authorization_servers = %v want [https://mcp.arleo.eu]", got.AuthorizationServers)
-	}
-
 	var meta struct {
-		ScopesSupported []string `json:"scopes_supported"`
+		Resource              string   `json:"resource"`
+		AuthorizationServers  []string `json:"authorization_servers"`
+		ScopesSupported       []string `json:"scopes_supported"`
+		ResourceDocumentation string   `json:"resource_documentation"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
-		t.Fatalf("invalid JSON for scopes_supported: %v", err)
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if meta.Resource != "https://mcp.arleo.eu/mcp" {
+		t.Errorf("resource = %q want https://mcp.arleo.eu/mcp", meta.Resource)
+	}
+	if len(meta.AuthorizationServers) != 1 || meta.AuthorizationServers[0] != "https://mcp.arleo.eu" {
+		t.Errorf("authorization_servers = %v want [https://mcp.arleo.eu]", meta.AuthorizationServers)
+	}
+	// resource_documentation must point to auth.md, NOT the MCP endpoint.
+	// Scanners follow this URL to find the registration flow; the /mcp endpoint
+	// requires auth and returns 401, breaking agent-readiness checks.
+	if meta.ResourceDocumentation != "https://mcp.arleo.eu/auth.md" {
+		t.Errorf("resource_documentation = %q want https://mcp.arleo.eu/auth.md (must not be the /mcp endpoint)", meta.ResourceDocumentation)
 	}
 	for _, bad := range []string{"mcp"} {
 		for _, scope := range meta.ScopesSupported {
 			if scope == bad {
-				t.Fatalf("oauth-protected-resource scopes_supported should not contain legacy scope %q", bad)
+				t.Fatalf("scopes_supported must not contain legacy scope %q", bad)
 			}
 		}
+	}
+	wantScopes := []string{"content.read", "content.write", "site.admin", "system.admin"}
+	for _, want := range wantScopes {
+		found := false
+		for _, s := range meta.ScopesSupported {
+			if s == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("scopes_supported missing %q, got %v", want, meta.ScopesSupported)
+		}
+	}
+}
+
+func TestAuthServerMetaRegistrationEndpoint(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	var meta struct {
+		RegistrationEndpoint string `json:"registration_endpoint"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// registration_endpoint must always be present and point to /register (#117).
+	// Removing or omitting it breaks agent-readiness scanners.
+	if meta.RegistrationEndpoint == "" {
+		t.Fatal("registration_endpoint must be present in OAuth authorization server metadata (#117)")
+	}
+	if !strings.HasSuffix(meta.RegistrationEndpoint, "/register") {
+		t.Errorf("registration_endpoint = %q, must end with /register", meta.RegistrationEndpoint)
+	}
+}
+
+func TestAuthServerMetaRegisterURI(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	var meta struct {
+		AgentAuth struct {
+			RegisterURI string `json:"register_uri"`
+			Skill       string `json:"skill"`
+		} `json:"agent_auth"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	// agent_auth.register_uri must be present so agent-readiness scanners can
+	// find the registration endpoint via the auth server discovery metadata.
+	if meta.AgentAuth.RegisterURI == "" {
+		t.Fatal("agent_auth.register_uri must be present in OAuth auth server metadata")
+	}
+	// agent_auth.skill must point to auth.md, not to any endpoint requiring auth.
+	if !strings.HasSuffix(meta.AgentAuth.Skill, "/auth.md") {
+		t.Errorf("agent_auth.skill = %q, must end with /auth.md", meta.AgentAuth.Skill)
+	}
+}
+
+func TestAuthMdContainsRegistrationFlow(t *testing.T) {
+	dir := t.TempDir()
+	// auth.md must contain a machine-readable registration_flow block so
+	// agent-readiness scanners can autonomously complete registration.
+	// This test prevents future code-cleanup from stripping required content.
+	const authMd = `# Auth.md
+
+## Agent registration
+
+### Standalone registration flow
+
+` + "```json\n" + `{
+  "registration_flow": {
+    "step_1_register": {
+      "method": "POST",
+      "url": "https://mcp.arleo.eu/register"
+    }
+  },
+  "endpoints": {
+    "registration_endpoint": "https://mcp.arleo.eu/register"
+  }
+}
+` + "```\n"
+	if err := os.WriteFile(filepath.Join(dir, "auth.md"), []byte(authMd), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	srv := mustDiscoveryServer(t, dir)
+	req := httptest.NewRequest(http.MethodGet, "/auth.md", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "registration_flow") {
+		t.Error("auth.md must contain 'registration_flow' for agent-readiness scanners")
+	}
+	if !strings.Contains(body, "/register") {
+		t.Error("auth.md must reference the /register endpoint")
 	}
 }
 

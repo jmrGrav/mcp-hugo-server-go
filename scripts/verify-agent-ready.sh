@@ -62,8 +62,9 @@ echo "$AUTH_BODY" | grep -q "registration_flow"; ok $? "auth.md: machine-readabl
 
 # ── www.arleo.eu: protected resource (OpenResty inline JSON) ─────────────────
 WWW_PR=$(curl -sf "https://www.arleo.eu/.well-known/oauth-protected-resource") || { fail "www: oauth-protected-resource unreachable"; WWW_PR="{}"; }
-python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d.get('resource')=='https://mcp.arleo.eu/mcp'" "$WWW_PR" 2>/dev/null; ok $? "www: resource points to mcp.arleo.eu/mcp"
+python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d.get('resource')=='https://www.arleo.eu'" "$WWW_PR" 2>/dev/null; ok $? "www: resource matches origin (https://www.arleo.eu)"
 python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert 'content.read' in d.get('scopes_supported',[])" "$WWW_PR" 2>/dev/null; ok $? "www: scopes_supported has content.read (not stale mcp)"
+python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d.get('resource_documentation','').endswith('/auth.md')" "$WWW_PR" 2>/dev/null; ok $? "www: resource_documentation points to auth.md"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

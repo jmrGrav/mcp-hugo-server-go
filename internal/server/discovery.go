@@ -112,7 +112,7 @@ func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
 		AuthorizationServers:   []string{issuer},
 		BearerMethodsSupported: []string{"header"},
 		ScopesSupported:        tools.KnownScopes,
-		ResourceDocumentation:  resource,
+		ResourceDocumentation:  issuer + "/auth.md",
 	}
 }
 
