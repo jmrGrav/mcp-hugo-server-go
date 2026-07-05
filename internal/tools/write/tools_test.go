@@ -252,7 +252,6 @@ func TestDeletePageSuccess(t *testing.T) {
 	session, done := newTestServer(t, contentRoot)
 	defer done()
 
-	// create page first
 	res := callTool(t, session, "create_page", map[string]any{
 		"slug":       "to-delete",
 		"title":      "Delete Me",
@@ -265,14 +264,48 @@ func TestDeletePageSuccess(t *testing.T) {
 		t.Fatalf("create_page failed: %s", raw)
 	}
 
-	// delete it
 	res = callTool(t, session, "delete_page", map[string]any{"slug": "to-delete"})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page failed: %s", raw)
 	}
 
-	if _, err := os.Stat(filepath.Join(contentRoot, "to-delete", "index.md")); !os.IsNotExist(err) {
-		t.Error("expected index.md to be deleted")
+	// The entire directory must be removed, not just index.md.
+	if _, err := os.Stat(filepath.Join(contentRoot, "to-delete")); !os.IsNotExist(err) {
+		t.Error("expected page directory to be fully removed")
+	}
+}
+
+func TestDeletePageRemovesWholeDirectory(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "extra-files",
+		"title":      "Extra Files",
+		"body":       "body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	// Add an extra file inside the page directory (e.g. an uploaded asset).
+	extra := filepath.Join(contentRoot, "extra-files", "image.png")
+	if err := os.WriteFile(extra, []byte("fake png"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "extra-files"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page failed: %s", raw)
+	}
+
+	if _, err := os.Stat(filepath.Join(contentRoot, "extra-files")); !os.IsNotExist(err) {
+		t.Error("expected directory with extra files to be fully removed")
 	}
 }

@@ -192,7 +192,6 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
-		filePath := filepath.Join(dir, "index.md")
 
 		if !deleteLimiter.Allow() {
 			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute")
@@ -201,7 +200,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		hugosite.ContentMu.Lock()
 		defer hugosite.ContentMu.Unlock()
 
-		if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+		if err := os.RemoveAll(dir); err != nil {
 			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
 			return nil, deletePageOutput{}, fmt.Errorf("delete_error: failed to delete page")
 		}
