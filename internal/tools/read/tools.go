@@ -108,7 +108,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 	}
 
 	addReadOnlyTool(s, "get_full_page_markdown", "Read page Markdown",
-		"[RequiredScope: content.read] Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. Input: indexed slug only.",
+		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. Input: indexed slug only.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getFullPageMarkdownInput) (*mcp.CallToolResult, getFullPageMarkdownOutput, error) {
 			if idx == nil {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("index not initialized")
@@ -122,7 +122,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 		})
 
 	addReadOnlyTool(s, "get_page_frontmatter", "Read page metadata",
-		"[RequiredScope: content.read] Read structured metadata for a published page, including title, tags, categories, date, URL, and estimated reading time. Input: indexed slug only.",
+		"Read structured metadata for a published page, including title, tags, categories, date, URL, and estimated reading time. Input: indexed slug only.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getPageFrontmatterInput) (*mcp.CallToolResult, getPageFrontmatterOutput, error) {
 			if idx == nil {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("index not initialized")
@@ -137,7 +137,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
-		"[RequiredScope: content.read] Return pages related to a given slug by shared tags or categories. Use this for content recommendations and editorial linking. Input: indexed slug only.",
+		"Return pages related to a given slug by shared tags or categories. Use this for content recommendations and editorial linking. Input: indexed slug only.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getRelatedContentInput) (*mcp.CallToolResult, getRelatedContentOutput, error) {
 			if idx == nil {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("index not initialized")
@@ -152,7 +152,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 		})
 
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
-		"[RequiredScope: content.read] Build a complete context bundle for a published page: metadata, reading time, full Markdown content, and related pages. Use this before summarizing or editing a page. Input: indexed slug only.",
+		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, and related pages. Use this before summarizing or editing a page. Input: indexed slug only.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in buildAgentContextInput) (*mcp.CallToolResult, buildAgentContextOutput, error) {
 			if idx == nil {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("index not initialized")
@@ -174,7 +174,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 		})
 
 	addReadOnlyTool(s, "export_agent_context", "Export agent context",
-		"[RequiredScope: content.read] Paginated export of page context bundles filtered by tag or category. Each page includes front matter, reading time, and full Markdown content. Use this for bulk analysis or migration work.",
+		"Paginated export of page context bundles filtered by tag or category. Each page includes front matter, reading time, and full Markdown content. Use this for bulk analysis or migration work.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in exportAgentContextInput) (*mcp.CallToolResult, exportAgentContextOutput, error) {
 			if idx == nil {
 				return nil, exportAgentContextOutput{}, fmt.Errorf("index not initialized")

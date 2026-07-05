@@ -55,10 +55,11 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 	if resource == "" {
 		resource = issuer + "/mcp"
 	}
-	registrationEndpoint := ""
-	if cfg.OAuth.DynamicClientEnabled {
-		registrationEndpoint = issuer + "/register"
-	}
+	// /register is always live when OAuth is enabled (RFC 7591 DCR endpoint).
+	// DynamicClientEnabled controls whether unauthenticated public registration
+	// is accepted; the endpoint itself is always advertised so agent discovery
+	// stays coherent with auth.md and the live /register surface (#117).
+	registrationEndpoint := issuer + "/register"
 	return authServerMeta{
 		Issuer:                            issuer,
 		AuthorizationEndpoint:             issuer + "/authorize",
@@ -335,6 +336,42 @@ func serveDiscoveryJSON(w http.ResponseWriter, r *http.Request, v interface{}) {
 		return
 	}
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func handleLandingPage(w http.ResponseWriter, r *http.Request, cfg config.Config) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	if issuer == "" {
+		issuer = "https://localhost"
+	}
+	body := fmt.Sprintf(`<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>MCP Server</title>
+<style>body{font-family:monospace;max-width:600px;margin:3em auto;line-height:1.6}a{color:#0066cc}</style>
+</head>
+<body>
+<h1>MCP Hugo Server</h1>
+<p>This is an MCP (Model Context Protocol) server for Hugo sites.</p>
+<table>
+<tr><td><strong>MCP endpoint</strong></td><td><a href="%s/mcp">%s/mcp</a></td></tr>
+<tr><td><strong>OAuth issuer</strong></td><td>%s</td></tr>
+<tr><td><strong>Authorization metadata</strong></td><td><a href="%s/.well-known/oauth-authorization-server">/.well-known/oauth-authorization-server</a></td></tr>
+<tr><td><strong>Protected resource</strong></td><td><a href="%s/.well-known/oauth-protected-resource">/.well-known/oauth-protected-resource</a></td></tr>
+<tr><td><strong>Server card</strong></td><td><a href="%s/.well-known/mcp/server-card.json">/.well-known/mcp/server-card.json</a></td></tr>
+</table>
+</body>
+</html>`, issuer, issuer, issuer, issuer, issuer, issuer)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = fmt.Fprint(w, body)
 }
 
 func serveDiscoveryText(w http.ResponseWriter, r *http.Request, contentType, body string) {

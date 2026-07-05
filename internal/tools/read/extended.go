@@ -154,6 +154,9 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
+			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
+				return nil, contentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
+			}
 			filtered := filterContentPages(idx.Sitemap(), in)
 			total := len(filtered)
 			limit := clampLimit(in.Limit, 20, 100)
@@ -328,7 +331,7 @@ func matchContentFilters(p site.Page, in searchContentInput) bool {
 	case "page", "pages":
 		return !strings.HasPrefix(strings.ToLower(p.Slug), "/posts/")
 	default:
-		return true
+		return false
 	}
 }
 

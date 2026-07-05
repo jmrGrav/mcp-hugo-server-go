@@ -209,6 +209,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/":
+			handleLandingPage(w, r, cfg)
 		case "/.well-known/oauth-authorization-server":
 			handleOAuthAuthServer(w, r, cfg)
 		case "/.well-known/oauth-protected-resource":
