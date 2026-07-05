@@ -83,6 +83,9 @@ func Default() Config {
 			SiteAdminPerMin:    10,
 			DestructivePerMin:  5,
 		},
+		OAuth: OAuthConfig{
+			RequirePKCE: true,
+		},
 	}
 }
 
