@@ -67,7 +67,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "generate_featured_image",
 		Title:       "Generate featured image",
-		Description: "[RequiredScope: site.admin] Generate a featured image for a page using the configured image generation API and save it to {SiteRoot}/images/featured/{slug}.jpg.",
+		Description: "Generate a featured image for a page using the configured image generation API and save it to {SiteRoot}/images/featured/{slug}.jpg.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
