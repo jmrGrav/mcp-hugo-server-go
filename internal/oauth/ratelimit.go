@@ -2,7 +2,9 @@ package oauth
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -67,14 +69,20 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scope, _ := r.Context().Value(CtxScope).(string)
 		key := callerKey(r.RemoteAddr, scope)
-		if !rl.limiterFor(key, scope).Allow() {
+		res := rl.limiterFor(key, scope).Reserve()
+		if delay := res.Delay(); delay > 0 {
+			res.Cancel()
+			retryAfter := int(math.Ceil(delay.Seconds()))
+			if retryAfter < 1 {
+				retryAfter = 1
+			}
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
-			w.Header().Set("Retry-After", "1")
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			w.WriteHeader(http.StatusTooManyRequests)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"error":               "rate_limit_exceeded",
-				"message":             "rate limit exceeded; retry after 1 second",
-				"retry_after_seconds": 1,
+				"message":             "rate limit exceeded; retry after " + strconv.Itoa(retryAfter) + " second(s)",
+				"retry_after_seconds": retryAfter,
 			})
 			return
 		}

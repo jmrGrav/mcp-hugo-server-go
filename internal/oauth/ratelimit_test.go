@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -92,8 +93,10 @@ func TestRateLimiter429Response(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d", rec.Code)
 	}
-	if got := rec.Header().Get("Retry-After"); got != "1" {
-		t.Fatalf("expected Retry-After: 1, got %q", got)
+	retryAfterHeader := rec.Header().Get("Retry-After")
+	retryAfterVal, err := strconv.Atoi(retryAfterHeader)
+	if err != nil || retryAfterVal < 1 {
+		t.Fatalf("expected Retry-After >= 1, got %q", retryAfterHeader)
 	}
 	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
@@ -102,7 +105,10 @@ func TestRateLimiter429Response(t *testing.T) {
 	if body["error"] != "rate_limit_exceeded" {
 		t.Fatalf("unexpected error body: %v", body)
 	}
-	if body["retry_after_seconds"] != float64(1) {
-		t.Fatalf("unexpected retry_after_seconds body: %v", body)
+	if got := body["retry_after_seconds"]; got != float64(retryAfterVal) {
+		t.Fatalf("retry_after_seconds %v does not match Retry-After header %s", got, retryAfterHeader)
+	}
+	if msg, _ := body["message"].(string); msg == "" {
+		t.Fatalf("missing message in 429 body: %v", body)
 	}
 }

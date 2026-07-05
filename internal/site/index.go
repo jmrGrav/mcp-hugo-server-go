@@ -161,6 +161,8 @@ func NewIndex(cfg config.Config) (*Index, error) {
 	}
 	sort.Strings(idx.categories)
 
+	idx.contentClassifier = NewClassifier(idx)
+
 	return idx, nil
 }
 

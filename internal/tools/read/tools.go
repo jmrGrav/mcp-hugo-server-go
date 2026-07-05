@@ -187,7 +187,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, exportAgentContextOutput{}, fmt.Errorf("index not initialized")
 			}
 			limit := clampLimit(in.Limit, 10, 50)
-			all := idx.Sitemap()
+			all := idx.ContentPages()
 			var filtered []site.Page
 			for _, pg := range all {
 				if in.Tag != "" && !sliceContains(pg.Tags, in.Tag) {
@@ -212,10 +212,12 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			pages := make([]pageExportDTO, 0, len(slice))
 			for _, pg := range slice {
-				md := site.ExtractMarkdown(pg.RawHTML)
+				resolved, _ := resolver.Resolve(pg.Slug)
+				p := resolvedPublicPage(resolved)
+				md := resolvedMarkdown(resolved)
 				rt := readingTimeMinutes(md)
 				pages = append(pages, pageExportDTO{
-					Frontmatter: toFrontmatterDTO(pg, rt),
+					Frontmatter: toFrontmatterDTO(p, rt),
 					Markdown:    md,
 				})
 			}

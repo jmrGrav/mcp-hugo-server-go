@@ -117,10 +117,11 @@ func (idx *Index) classifier() *ContentClassifier {
 	if idx == nil {
 		return NewClassifier(nil)
 	}
-	if idx.contentClassifier == nil {
-		idx.contentClassifier = NewClassifier(idx)
+	if idx.contentClassifier != nil {
+		return idx.contentClassifier
 	}
-	return idx.contentClassifier
+	// Fallback for zero-value Index (tests that construct Index{} directly).
+	return NewClassifier(idx)
 }
 
 func (idx *Index) ContentPages() []Page {
