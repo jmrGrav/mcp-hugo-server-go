@@ -305,7 +305,7 @@ func filterContentPages(pages []site.Page, in searchContentInput) []site.Page {
 		if !classifier.IsContent(p) {
 			continue
 		}
-		if !matchContentFilters(p, in) {
+		if !matchContentFilters(p, in, classifier) {
 			continue
 		}
 		out = append(out, p)
@@ -314,8 +314,7 @@ func filterContentPages(pages []site.Page, in searchContentInput) []site.Page {
 	return out
 }
 
-func matchContentFilters(p site.Page, in searchContentInput) bool {
-	classifier := site.NewClassifierFromPages([]site.Page{p})
+func matchContentFilters(p site.Page, in searchContentInput, classifier *site.ContentClassifier) bool {
 	query := strings.TrimSpace(in.Query)
 	if query != "" && scoreContentPage(p, query) == 0 {
 		return false

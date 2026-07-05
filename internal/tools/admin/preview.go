@@ -39,8 +39,23 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		if cfg.HugoRoot == "" {
 			return nil, previewBuildOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 		}
-		hugosite.ContentMu.RLock()
-		defer hugosite.ContentMu.RUnlock()
+		const lockWait = 10 * time.Second
+		deadline := time.Now().Add(lockWait)
+		for {
+			if hugosite.ContentMu.TryRLock() {
+				slog.Debug("preview_build: lock_acquired")
+				break
+			}
+			if time.Now().After(deadline) {
+				slog.Error("preview_build: lock_timeout", "timeout_s", lockWait.Seconds())
+				return nil, previewBuildOutput{}, fmt.Errorf("build_in_progress: content mutation in progress, retry in a moment")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		defer func() {
+			hugosite.ContentMu.RUnlock()
+			slog.Debug("preview_build: lock_released")
+		}()
 
 		tctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 		defer cancel()

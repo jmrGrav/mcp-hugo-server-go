@@ -117,8 +117,23 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		filePath := filepath.Join(dir, "index.md")
 		content := buildFrontmatter(in.Title, in.Tags, in.Categories, in.Body)
 
-		hugosite.ContentMu.Lock()
-		defer hugosite.ContentMu.Unlock()
+		const lockWait = 10 * time.Second
+		deadline := time.Now().Add(lockWait)
+		for {
+			if hugosite.ContentMu.TryLock() {
+				slog.Debug("create_page: lock_acquired")
+				break
+			}
+			if time.Now().After(deadline) {
+				slog.Error("create_page: lock_timeout", "timeout_s", lockWait.Seconds())
+				return nil, createPageOutput{}, fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		defer func() {
+			hugosite.ContentMu.Unlock()
+			slog.Debug("create_page: lock_released")
+		}()
 
 		if err := fileutil.AtomicWrite(filePath, content); err != nil {
 			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
@@ -152,8 +167,23 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
 
-		hugosite.ContentMu.Lock()
-		defer hugosite.ContentMu.Unlock()
+		const lockWait = 10 * time.Second
+		deadline := time.Now().Add(lockWait)
+		for {
+			if hugosite.ContentMu.TryLock() {
+				slog.Debug("update_page: lock_acquired")
+				break
+			}
+			if time.Now().After(deadline) {
+				slog.Error("update_page: lock_timeout", "timeout_s", lockWait.Seconds())
+				return nil, updatePageOutput{}, fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		defer func() {
+			hugosite.ContentMu.Unlock()
+			slog.Debug("update_page: lock_released")
+		}()
 
 		existing, ok := idx.GetBySlug(in.Slug)
 		if !ok {
@@ -223,8 +253,23 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute")
 		}
 
-		hugosite.ContentMu.Lock()
-		defer hugosite.ContentMu.Unlock()
+		const lockWait = 10 * time.Second
+		deadline := time.Now().Add(lockWait)
+		for {
+			if hugosite.ContentMu.TryLock() {
+				slog.Debug("delete_page: lock_acquired")
+				break
+			}
+			if time.Now().After(deadline) {
+				slog.Error("delete_page: lock_timeout", "timeout_s", lockWait.Seconds())
+				return nil, deletePageOutput{}, fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		defer func() {
+			hugosite.ContentMu.Unlock()
+			slog.Debug("delete_page: lock_released")
+		}()
 
 		if err := os.RemoveAll(dir); err != nil {
 			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)

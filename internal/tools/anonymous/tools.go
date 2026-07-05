@@ -56,6 +56,11 @@ type pageDetailDTO struct {
 	HTML       string   `json:"html"`
 }
 
+type getSitemapInput struct {
+	Limit  int `json:"limit,omitempty"`
+	Offset int `json:"offset,omitempty"`
+}
+
 type sitemapEntryDTO struct {
 	Slug string `json:"slug"`
 	URL  string `json:"url"`
@@ -211,13 +216,25 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_sitemap", "Read sitemap", "Return the published sitemap with URL and publication date. Useful for site-wide discovery without authentication.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, getSitemapOutput, error) {
+		func(_ context.Context, _ *mcp.CallToolRequest, in getSitemapInput) (*mcp.CallToolResult, getSitemapOutput, error) {
 			if idx == nil {
 				return nil, getSitemapOutput{}, fmt.Errorf("index not initialized")
 			}
 			all := idx.Sitemap()
-			entries := make([]sitemapEntryDTO, len(all))
-			for i, p := range all {
+			limit := clampLimit(in.Limit, 200, 200)
+			offset := in.Offset
+			if offset < 0 {
+				offset = 0
+			}
+			if offset >= len(all) {
+				return nil, getSitemapOutput{Entries: []sitemapEntryDTO{}}, nil
+			}
+			slice := all[offset:]
+			if len(slice) > limit {
+				slice = slice[:limit]
+			}
+			entries := make([]sitemapEntryDTO, len(slice))
+			for i, p := range slice {
 				entries[i] = sitemapEntryDTO{Slug: p.Slug, URL: p.URL, Date: p.Date}
 			}
 			return nil, getSitemapOutput{Entries: entries}, nil

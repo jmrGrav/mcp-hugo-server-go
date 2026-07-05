@@ -123,6 +123,59 @@ check_tools_list() {
   printf '%s\n' "$count"
 }
 
+# Calls a tool via MCP JSON-RPC and returns the parsed result JSON.
+# Usage: mcp_tool_call LABEL TOOL_NAME ARGS_JSON [BEARER]
+mcp_tool_call() {
+  local label="$1"
+  local tool_name="$2"
+  local args_json="${3:-{\}}"
+  local bearer="${4:-}"
+  local req
+  req="$(jq -nc --arg t "$tool_name" --argjson a "$args_json" \
+    '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":$t,"arguments":$a}}')"
+  local hdr_file
+  hdr_file="$(mktemp)"
+  local body_file
+  body_file="$(mktemp)"
+  trap 'rm -f "$hdr_file" "$body_file"' RETURN
+  local curl_base=(-sS -D "$hdr_file" -o "$body_file"
+    -X POST "$BASE_URL/mcp"
+    -H 'Content-Type: application/json'
+    -H 'Accept: application/json, text/event-stream')
+  [[ -n "$bearer" ]] && curl_base+=(-H "Authorization: Bearer $bearer")
+  local status
+  status="$(curl "${curl_base[@]}" -w '%{http_code}' --data "$req")"
+  local body session_id
+  body="$(cat "$body_file")"
+  session_id="$(grep -i '^mcp-session-id:' "$hdr_file" | tr -d '\r' | awk '{print $2}')"
+  if [[ "$status" == "202" && -n "$session_id" ]]; then
+    local curl_phase2=(-sS
+      -X POST "$BASE_URL/mcp"
+      -H 'Content-Type: application/json'
+      -H 'Accept: application/json, text/event-stream'
+      -H "Mcp-Session-Id: $session_id")
+    [[ -n "$bearer" ]] && curl_phase2+=(-H "Authorization: Bearer $bearer")
+    body="$(curl "${curl_phase2[@]}" --data "$req")"
+    status="200"
+  fi
+  if [[ "$status" != "200" ]]; then
+    fail "$label tools/call $tool_name: HTTP $status"
+    return 1
+  fi
+  local json
+  json="$(extract_json "$body")"
+  if jq -e '.error' <<<"$json" >/dev/null 2>&1; then
+    fail "$label tools/call $tool_name error: $(jq -r '.error.message // .error' <<<"$json")"
+    return 1
+  fi
+  if ! jq -e '.result' <<<"$json" >/dev/null 2>&1; then
+    fail "$label tools/call $tool_name: missing result field"
+    return 1
+  fi
+  pass "$label tools/call $tool_name"
+  jq '.result' <<<"$json"
+}
+
 probe_dcr() {
   local label="$1"
   local redirect_uri="$2"
@@ -274,6 +327,32 @@ if [[ -n "$read_count" && -n "$admin_count" ]]; then
     fail "admin tools/list count ($admin_count) must be greater than read count ($read_count)"
   fi
   pass "admin tools/list exposes more tools than read"
+fi
+
+# tools/call smoke — anonymous tools (no auth needed)
+site_info="$(mcp_tool_call "anon" "get_site_information" "{}")"
+if [[ -z "$(jq -r '.content[0].text // empty' <<<"$site_info" 2>/dev/null)" ]]; then
+  fail "get_site_information: empty or missing content"
+else
+  pass "get_site_information: content present"
+fi
+
+recent="$(mcp_tool_call "anon" "get_recent_posts" '{"limit":3}')"
+if ! jq -e '.content[0].text' <<<"$recent" >/dev/null 2>&1; then
+  fail "get_recent_posts: empty or missing content"
+else
+  pass "get_recent_posts: content present"
+fi
+
+if [[ -n "${READ_BEARER:-}" ]]; then
+  health="$(mcp_tool_call "read" "get_site_health" "{}" "$READ_BEARER")"
+  if ! jq -e '.content[0].text' <<<"$health" >/dev/null 2>&1; then
+    fail "get_site_health: empty or missing content"
+  else
+    pass "get_site_health: content present"
+  fi
+else
+  echo "SKIP read tools/call smoke (READ_BEARER not provided)"
 fi
 
 register_status="$(

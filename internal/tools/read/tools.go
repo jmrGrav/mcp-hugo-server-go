@@ -148,12 +148,16 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if idx == nil {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("index not initialized")
 			}
-			p, ok := idx.GetBySlug(in.Slug)
+			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
 			limit := clampLimit(in.Limit, 5, 20)
-			related := computeRelated(idx, *p, limit)
+			ref := resolvedPublicPage(resolved)
+			if resolved.Public != nil {
+				ref = *resolved.Public
+			}
+			related := computeRelated(idx, ref, limit)
 			return nil, getRelatedContentOutput{Related: related}, nil
 		})
 

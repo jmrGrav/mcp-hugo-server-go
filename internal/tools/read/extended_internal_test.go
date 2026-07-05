@@ -2,8 +2,8 @@ package read
 
 import (
 	"context"
-	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,10 +36,11 @@ func TestContentHelperFunctions(t *testing.T) {
 	if len(filtered) != 1 || filtered[0].Slug != "/posts/a/" {
 		t.Fatalf("filterContentPages() = %#v", filtered)
 	}
-	if !matchContentFilters(pages[0], searchContentInput{Tag: "go", Category: "docs", Language: "en", Type: "posts"}) {
+	classifier := site.NewClassifierFromPages(pages)
+	if !matchContentFilters(pages[0], searchContentInput{Tag: "go", Category: "docs", Language: "en", Type: "posts"}, classifier) {
 		t.Fatal("matchContentFilters() should match expected page")
 	}
-	if matchContentFilters(pages[2], searchContentInput{Type: "posts"}) {
+	if matchContentFilters(pages[2], searchContentInput{Type: "posts"}, classifier) {
 		t.Fatal("matchContentFilters() should reject non-post for posts filter")
 	}
 
@@ -162,8 +163,19 @@ func TestDiffHelperBranches(t *testing.T) {
 	if got := diffStatus(false, []byte("new"), nil); got != "added" {
 		t.Fatalf("diffStatus(added) = %q", got)
 	}
-	if !isGitPathMissing(errors.New("fatal: path 'content/posts/hello/index.md' exists on disk, but not in 'HEAD'")) {
-		t.Fatal("isGitPathMissing() should detect git missing-path error text")
+	cmd128 := exec.Command("bash", "-c", "exit 128")
+	err128 := cmd128.Run()
+	if !isGitPathMissing(err128) {
+		t.Fatal("isGitPathMissing() should detect exit code 128")
+	}
+	cmd0 := exec.Command("bash", "-c", "exit 0")
+	if err0 := cmd0.Run(); isGitPathMissing(err0) {
+		t.Fatal("isGitPathMissing() should not match exit code 0")
+	}
+	cmd1 := exec.Command("bash", "-c", "exit 1")
+	err1 := cmd1.Run()
+	if isGitPathMissing(err1) {
+		t.Fatal("isGitPathMissing() should not match exit code 1")
 	}
 
 	root := t.TempDir()

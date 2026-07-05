@@ -3,6 +3,7 @@ package read
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -169,8 +170,8 @@ func isGitPathMissing(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "path") && strings.Contains(msg, "exists on disk, but not in")
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) && exitErr.ExitCode() == 128
 }
 
 func diffStatus(baseExists bool, current, base []byte) string {
