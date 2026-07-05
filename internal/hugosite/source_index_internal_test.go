@@ -54,6 +54,25 @@ func TestNewSourceIndexFrontmatterVariants(t *testing.T) {
 	}
 }
 
+func TestSlugFromRelMultilingual(t *testing.T) {
+	cases := []struct{ rel, want string }{
+		{"posts/hello/index.md", "posts/hello"},
+		{"posts/hello/index.en.md", "posts/hello"},
+		{"posts/hello/index.fr.md", "posts/hello"},
+		{"posts/hello/index.en-US.md", "posts/hello"},
+		{"about/index.md", "about"},
+		{"about/index.fr.md", "about"},
+		{"posts/flat.md", "posts/flat"},
+		{"posts/flat.en.md", "posts/flat.en"}, // flat files keep lang suffix
+	}
+	for _, c := range cases {
+		got := slugFromRel(c.rel)
+		if got != c.want {
+			t.Errorf("slugFromRel(%q) = %q, want %q", c.rel, got, c.want)
+		}
+	}
+}
+
 func TestSplitFrontmatterFallbacks(t *testing.T) {
 	fm, body := splitFrontmatter([]byte("plain body only"))
 	if len(fm) != 0 || body != "plain body only" {

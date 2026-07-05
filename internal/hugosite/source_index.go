@@ -163,8 +163,20 @@ func (idx *SourceIndex) Delete(slug string) {
 
 func slugFromRel(rel string) string {
 	rel = filepath.ToSlash(rel)
+	// Standard branch bundle: posts/slug/index.md → posts/slug
 	if strings.HasSuffix(rel, "/index.md") {
 		return strings.TrimSuffix(rel, "/index.md")
+	}
+	// Multilingual branch bundle: posts/slug/index.en.md → posts/slug
+	if i := strings.LastIndex(rel, "/index."); i >= 0 {
+		after := rel[i+len("/index."):]
+		// after is e.g. "en.md", "fr.md", "en-US.md"
+		if strings.HasSuffix(after, ".md") {
+			lang := strings.TrimSuffix(after, ".md")
+			if len(lang) >= 2 && len(lang) <= 5 {
+				return rel[:i]
+			}
+		}
 	}
 	return strings.TrimSuffix(rel, ".md")
 }
