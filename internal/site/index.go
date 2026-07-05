@@ -22,11 +22,12 @@ type entry struct {
 }
 
 type Index struct {
-	entries    []entry
-	bySlug     map[string]int
-	tags       []string
-	categories []string
-	info       map[string]string
+	entries           []entry
+	bySlug            map[string]int
+	tags              []string
+	categories        []string
+	info              map[string]string
+	contentClassifier *ContentClassifier
 }
 
 func NewIndex(cfg config.Config) (*Index, error) {
@@ -180,8 +181,9 @@ func (idx *Index) Search(query string, limit int) []Page {
 	if idx == nil {
 		return nil
 	}
-	if limit <= 0 || limit > len(idx.entries) {
-		limit = len(idx.entries)
+	pages := idx.ContentPages()
+	if limit <= 0 || limit > len(pages) {
+		limit = len(pages)
 	}
 	terms := strings.Fields(strings.ToLower(query))
 	type scored struct {
@@ -189,13 +191,13 @@ func (idx *Index) Search(query string, limit int) []Page {
 		score int
 	}
 	var results []scored
-	for _, e := range idx.entries {
-		s := scoreEntry(e.page, terms)
+	for _, page := range pages {
+		s := scoreEntry(page, terms)
 		if len(terms) == 0 {
 			s = 1
 		}
 		if s > 0 {
-			results = append(results, scored{page: e.page, score: s})
+			results = append(results, scored{page: page, score: s})
 		}
 	}
 	sort.SliceStable(results, func(i, j int) bool {
@@ -218,9 +220,10 @@ func (idx *Index) RecentPosts(n int) []Page {
 	if idx == nil {
 		return nil
 	}
+	classifier := idx.classifier()
 	var posts []Page
 	for _, e := range idx.entries {
-		if isPost(e.page) {
+		if classifier.IsArticle(e.page) {
 			posts = append(posts, e.page)
 		}
 	}
@@ -259,10 +262,7 @@ func (idx *Index) GetFeed(limit int) []Page {
 	if idx == nil {
 		return nil
 	}
-	out := make([]Page, 0, len(idx.entries))
-	for _, e := range idx.entries {
-		out = append(out, e.page)
-	}
+	out := idx.ContentPages()
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
@@ -553,10 +553,6 @@ func isHTMLFile(name string) bool {
 		return true
 	}
 	return false
-}
-
-func isPost(p Page) bool {
-	return strings.HasPrefix(strings.ToLower(p.Slug), "/posts/")
 }
 
 func scoreEntry(p Page, terms []string) int {

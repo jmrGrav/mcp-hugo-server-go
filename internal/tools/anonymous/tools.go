@@ -121,7 +121,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 				return nil, listPagesOutput{}, fmt.Errorf("index not initialized")
 			}
 			limit := clampLimit(in.Limit, 50, 50)
-			all := idx.Sitemap()
+			all := idx.ContentPages()
 			offset := in.Offset
 			if offset < 0 {
 				offset = 0

@@ -193,14 +193,15 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
-			sections := countSections(idx.Sitemap())
-			languages := uniqueLanguages(idx.Sitemap())
-			recent := idx.Sitemap()
+			contentPages := idx.ContentPages()
+			sections := countSections(contentPages)
+			languages := uniqueLanguages(contentPages)
+			recent := contentPages
 			if len(recent) > 5 {
 				recent = recent[:5]
 			}
 			summary := fmt.Sprintf("%d published pages across %d sections, %d tags, and %d categories.",
-				len(idx.Sitemap()), len(sections), len(idx.AllTags()), len(idx.AllCategories()))
+				len(contentPages), len(sections), len(idx.AllTags()), len(idx.AllCategories()))
 			now := time.Now().UTC().Format(time.RFC3339)
 			return nil, contentEnvelope{
 				Success:     true,
@@ -299,7 +300,11 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 
 func filterContentPages(pages []site.Page, in searchContentInput) []site.Page {
 	out := make([]site.Page, 0, len(pages))
+	classifier := site.NewClassifierFromPages(pages)
 	for _, p := range pages {
+		if !classifier.IsContent(p) {
+			continue
+		}
 		if !matchContentFilters(p, in) {
 			continue
 		}
@@ -310,6 +315,7 @@ func filterContentPages(pages []site.Page, in searchContentInput) []site.Page {
 }
 
 func matchContentFilters(p site.Page, in searchContentInput) bool {
+	classifier := site.NewClassifierFromPages([]site.Page{p})
 	query := strings.TrimSpace(in.Query)
 	if query != "" && scoreContentPage(p, query) == 0 {
 		return false
@@ -327,9 +333,9 @@ func matchContentFilters(p site.Page, in searchContentInput) bool {
 	case "", "all":
 		return true
 	case "post", "posts":
-		return strings.HasPrefix(strings.ToLower(p.Slug), "/posts/")
+		return classifier.IsArticle(p)
 	case "page", "pages":
-		return !strings.HasPrefix(strings.ToLower(p.Slug), "/posts/")
+		return classifier.IsContent(p) && !classifier.IsArticle(p)
 	default:
 		return false
 	}
@@ -447,7 +453,8 @@ func collectBrokenLinks(idx *site.Index) []brokenLinkDTO {
 		return nil
 	}
 	var issues []brokenLinkDTO
-	for _, page := range idx.Sitemap() {
+	classifier := site.NewClassifier(idx)
+	for _, page := range idx.ContentPages() {
 		base, err := url.Parse(page.URL)
 		if err != nil {
 			continue
@@ -457,7 +464,7 @@ func collectBrokenLinks(idx *site.Index) []brokenLinkDTO {
 			if !ok {
 				continue
 			}
-			if _, found := idx.GetBySlug(target.Path); found {
+			if targetPage, found := idx.GetBySlug(target.Path); found && classifier.IsContent(*targetPage) {
 				continue
 			}
 			issues = append(issues, brokenLinkDTO{
@@ -624,7 +631,7 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex) contentEnvel
 		Status: "healthy",
 	}
 	if idx != nil {
-		health.PublishedPages = len(idx.Sitemap())
+		health.PublishedPages = len(idx.ContentPages())
 		health.Tags = len(idx.AllTags())
 		health.Categories = len(idx.AllCategories())
 	}
@@ -668,7 +675,11 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex) contentEnvel
 
 func countSections(pages []site.Page) []sectionDTO {
 	counts := map[string]int{}
+	classifier := site.NewClassifierFromPages(pages)
 	for _, p := range pages {
+		if !classifier.IsContent(p) {
+			continue
+		}
 		seg := topSection(p.Slug)
 		counts[seg]++
 	}

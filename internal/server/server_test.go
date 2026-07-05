@@ -41,6 +41,7 @@ func mustOAuthServer(t *testing.T) *server.Server {
 	t.Helper()
 	cfg := config.Default()
 	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth = config.OAuthConfig{
 		Enabled:               true,
@@ -65,6 +66,7 @@ func mustOAuthServerWithRegistry(t *testing.T, registryPath string) *server.Serv
 	t.Helper()
 	cfg := config.Default()
 	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth = config.OAuthConfig{
 		Enabled:               true,
@@ -90,6 +92,7 @@ func mustOAuthSQLiteServer(t *testing.T, storePath string) *server.Server {
 	t.Helper()
 	cfg := config.Default()
 	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth = config.OAuthConfig{
 		Enabled:               true,

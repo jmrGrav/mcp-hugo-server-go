@@ -20,8 +20,8 @@ func TestCollectBrokenLinks(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	write("index.html", `<html><body><a href="/posts/hello/">ok</a><a href="/missing/">bad</a></body></html>`)
-	write("posts/hello/index.html", `<html><body>hello</body></html>`)
+	write("index.html", `<html><body><a href="/posts/hello/">ok</a><a href="/missing-home/">ignored home link</a></body></html>`)
+	write("posts/hello/index.html", `<html><body><a href="/missing/">bad</a></body></html>`)
 
 	idx, err := site.NewIndex(config.Config{
 		SiteRoot:         root,
@@ -39,7 +39,7 @@ func TestCollectBrokenLinks(t *testing.T) {
 	if len(issues) != 1 {
 		t.Fatalf("collectBrokenLinks() = %#v", issues)
 	}
-	if issues[0].PageSlug != "/" || issues[0].Link != "/missing/" {
+	if issues[0].PageSlug != "/posts/hello/" || issues[0].Link != "/missing/" {
 		t.Fatalf("collectBrokenLinks() issue = %#v", issues[0])
 	}
 

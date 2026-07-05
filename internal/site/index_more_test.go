@@ -40,8 +40,9 @@ func TestSiteIndexHelpers(t *testing.T) {
 		if !isHTMLFile("index.HTM") || isHTMLFile("index.md") {
 			t.Fatal("isHTMLFile() failed expected cases")
 		}
-		if !isPost(Page{Slug: "/posts/hello/"}) || isPost(Page{Slug: "/about/"}) {
-			t.Fatal("isPost() failed expected cases")
+		classifier := NewClassifier(nil)
+		if !classifier.IsArticle(Page{Slug: "/posts/hello/"}) || classifier.IsArticle(Page{Slug: "/about/"}) {
+			t.Fatal("ContentClassifier.IsArticle() failed expected cases")
 		}
 	})
 
@@ -129,6 +130,8 @@ func TestSiteIndexCollectionsAndBoundaries(t *testing.T) {
 			{page: Page{Slug: "/posts/b/", Date: "2026-07-02", Tags: []string{"go"}, Categories: []string{"docs"}}},
 			{page: Page{Slug: "/posts/a/", Date: "2026-07-03", Tags: []string{"mcp"}, Categories: []string{"docs"}}},
 			{page: Page{Slug: "/about/", Date: "2026-07-01", Tags: []string{"about"}, Categories: []string{"pages"}}},
+			{page: Page{Slug: "/posts/", Date: "2026-07-04"}},
+			{page: Page{Slug: "/tags/go/", Date: "2026-07-05"}},
 		},
 		bySlug: map[string]int{
 			"/posts/b/": 0,
@@ -158,7 +161,7 @@ func TestSiteIndexCollectionsAndBoundaries(t *testing.T) {
 	if got := idx.Search("", 1); len(got) != 1 {
 		t.Fatalf("Search() with empty query should still return ranked results, got %#v", got)
 	}
-	if got := idx.Sitemap(); len(got) != 3 {
+	if got := idx.Sitemap(); len(got) != 5 {
 		t.Fatalf("Sitemap() = %#v", got)
 	}
 }
