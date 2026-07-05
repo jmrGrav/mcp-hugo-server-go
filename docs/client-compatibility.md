@@ -50,6 +50,12 @@ Run `scripts/check-agent-ready.sh` before each release to catch discovery regres
 
 The agent-readiness scan at `isitagentready.com` targets `https://www.arleo.eu/` and should score ≥95/100 overall and 7/7 on `API/Auth/MCP/Skill Discovery`.
 
+Run `scripts/smoke-mcp-live.sh` after deploys to catch interop regressions that
+discovery-only checks cannot see. It verifies `tools/list`, representative
+`tools/call` responses, JSON-RPC errors, `result.isError`, rate-limit behavior,
+and reverse-proxy HTML failures. The script is safe by default and skips write
+tools unless `MCP_SMOKE_ENABLE_WRITES=1` is explicitly set.
+
 ## Known Behavior: OAuth Enabled Requires Bearer for All Requests
 
 When `oauth.enabled: true`, **every** `/mcp` request must carry a valid Bearer

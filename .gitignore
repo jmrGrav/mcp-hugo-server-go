@@ -4,6 +4,10 @@
 
 # test cache
 /tmp/
+codex-mcp-live-audit*
+*.mcp-smoke.log
+scripts/.env.local
+scripts/.env.mcp-smoke.local
 
 # secrets
 *.env

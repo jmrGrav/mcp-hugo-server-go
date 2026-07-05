@@ -359,6 +359,71 @@ MCP_HUGO_SERVER_CONFIG=/etc/mcp-hugo-server-go/config.yaml /usr/local/bin/mcp-hu
 
 Then send MCP JSON-RPC requests over stdin.
 
+### Live MCP Smoke Test
+
+Use `scripts/smoke-mcp-live.sh` after staging or production deploys to verify
+that MCP discovery, `tools/list`, and representative `tools/call` requests still
+work through the real HTTP transport and reverse proxy.
+
+The script is secret-safe:
+
+- it contains no OAuth client secret and no Bearer token;
+- it reads the Bearer token only from `MCP_ACCESS_TOKEN`;
+- it prints tokens as `<redacted>`;
+- it stores request state in a temporary directory that is deleted on exit.
+
+Safe read-only run:
+
+```bash
+MCP_SMOKE_LIVE=1 \
+MCP_BASE_URL=https://mcp.arleo.eu \
+MCP_ACCESS_TOKEN="$MCP_ACCESS_TOKEN" \
+scripts/smoke-mcp-live.sh
+```
+
+The default mode skips live mutations. To explicitly test create/update/delete
+and build behavior, set `MCP_SMOKE_ENABLE_WRITES=1` and use a dedicated test
+slug:
+
+```bash
+MCP_SMOKE_LIVE=1 \
+MCP_BASE_URL=https://mcp.arleo.eu \
+MCP_ACCESS_TOKEN="$MCP_ACCESS_TOKEN" \
+MCP_SMOKE_ENABLE_WRITES=1 \
+MCP_SMOKE_WRITE_SLUG=codex-mcp-live-audit-$(date -u +%Y%m%d-%H%M%S) \
+scripts/smoke-mcp-live.sh
+```
+
+Before and after write-enabled runs, check for leftovers:
+
+```bash
+find /path/to/hugo-site -iname '*codex-mcp-live-audit*' -print
+```
+
+Optional burst probe:
+
+```bash
+MCP_SMOKE_LIVE=1 \
+MCP_ACCESS_TOKEN="$MCP_ACCESS_TOKEN" \
+MCP_SMOKE_BURST=1 \
+MCP_SMOKE_BURST_COUNT=10 \
+scripts/smoke-mcp-live.sh
+```
+
+The smoke classifies failures separately:
+
+- HTTP 401/403 authentication failures;
+- HTTP 429 rate-limit responses and `Retry-After`;
+- JSON-RPC errors;
+- `result.isError=true` tool failures;
+- `unknown_tool` handling;
+- OpenResty or reverse-proxy HTML 503 responses;
+- transport success with malformed or missing MCP result payloads.
+
+Do not run write-enabled smoke against production unless you have confirmed the
+test slug does not already exist and you are ready to clean it manually if a
+client disconnects mid-run.
+
 ## Troubleshooting
 
 | Issue | Cause | Solution |
