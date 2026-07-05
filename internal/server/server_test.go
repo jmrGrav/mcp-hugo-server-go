@@ -772,3 +772,255 @@ func TestAnonymousServerDoesNotExposeAuthenticatedTools(t *testing.T) {
 		}
 	}
 }
+
+// --- Regression: Claude.ai OAuth flow ---
+//
+// Claude.ai always sends scope=content.read+content.write+site.admin+system.admin
+// regardless of what the server advertises. Before v1.2.10 this caused an
+// invalid_scope redirect (disguised as HTTP 302) and the token endpoint was
+// never called. This test locks in the correct behaviour: scope is clamped to
+// the client ceiling (site.admin), a code is issued, and the token exchange
+// returns site.admin with admin tools visible.
+func TestRegressionClaudeAiScopeClamping(t *testing.T) {
+	mockDir := t.TempDir()
+	mockHugo := filepath.Join(mockDir, "hugo")
+	if err := os.WriteFile(mockHugo, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write mock hugo: %v", err)
+	}
+	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
+
+	registryPath := filepath.Join(t.TempDir(), "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - client_id: claude-admin
+    client_secret: admin-secret
+    redirect_uris:
+      - https://claude.ai/api/mcp/auth_callback
+    scope: site.admin
+`), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	srv := mustOAuthServerWithRegistry(t, registryPath)
+
+	verifier := "verifier-regression-claude-ai-00000000000"
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+
+	// Simulate the exact scope string Claude.ai sends (includes system.admin).
+	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
+		"response_type":         {"code"},
+		"client_id":             {"claude-admin"},
+		"redirect_uri":          {"https://claude.ai/api/mcp/auth_callback"},
+		"state":                 {"regression"},
+		"scope":                 {"content.read content.write site.admin system.admin"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode(), nil)
+	authReq.RemoteAddr = "127.0.0.1:1234"
+	authRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d (want 302); body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse Location: %v", err)
+	}
+	// Must have a code, not an error — a 302 with ?error=invalid_scope looks
+	// identical in nginx logs but breaks the token exchange silently (issue #121).
+	if errParam := loc.Query().Get("error"); errParam != "" {
+		t.Fatalf("authorize returned error=%q in Location; scope clamping must prevent this", errParam)
+	}
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatalf("authorize Location missing code: %s", loc)
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {"claude-admin"},
+		"client_secret": {"admin-secret"},
+		"redirect_uri":  {"https://claude.ai/api/mcp/auth_callback"},
+		"code":          {code},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		Scope string `json:"scope"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	if tokenResp.Scope != "site.admin" {
+		t.Fatalf("token scope = %q want site.admin (should be clamped from system.admin)", tokenResp.Scope)
+	}
+}
+
+// --- Regression: ChatGPT OAuth flow ---
+//
+// ChatGPT uses a wildcard redirect URI and requests scope=content.read+content.write.
+// It must receive a content.write token that exposes write tools (create_page)
+// but NOT admin tools (build_site, check_sri_versions).
+func TestRegressionChatGPTWriteScopeToolBoundary(t *testing.T) {
+	registryPath := filepath.Join(t.TempDir(), "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - client_id: chatgpt-write
+    client_secret: chatgpt-secret
+    redirect_uris:
+      - https://chatgpt.com/connector/oauth/*
+    scope: content.write
+`), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	srv := mustOAuthServerWithRegistry(t, registryPath)
+
+	verifier := "verifier-regression-chatgpt-00000000000"
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+
+	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
+		"response_type":         {"code"},
+		"client_id":             {"chatgpt-write"},
+		"redirect_uri":          {"https://chatgpt.com/connector/oauth/callback"},
+		"state":                 {"regression"},
+		"scope":                 {"content.read content.write"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode(), nil)
+	authReq.RemoteAddr = "127.0.0.1:1234"
+	authRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, _ := url.Parse(authRec.Header().Get("Location"))
+	if errParam := loc.Query().Get("error"); errParam != "" {
+		t.Fatalf("authorize returned error=%q", errParam)
+	}
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatalf("authorize missing code")
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {"chatgpt-write"},
+		"client_secret": {"chatgpt-secret"},
+		"redirect_uri":  {"https://chatgpt.com/connector/oauth/callback"},
+		"code":          {code},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	if tokenResp.Scope != "content.write" {
+		t.Fatalf("token scope = %q want content.write", tokenResp.Scope)
+	}
+
+	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
+	// Must see write tools.
+	if !containsToolName(names, "create_page") {
+		t.Errorf("chatgpt content.write token missing create_page; got %v", names)
+	}
+	// Must NOT see admin tools — this would mean the scope boundary is broken.
+	for _, adminTool := range []string{"build_site", "check_sri_versions", "preview_build"} {
+		if containsToolName(names, adminTool) {
+			t.Errorf("chatgpt content.write token must not expose admin tool %q", adminTool)
+		}
+	}
+}
+
+// --- Regression: IsItAgentReady 7/7 discovery endpoints ---
+//
+// These seven endpoints make up the API, Auth, MCP & Skill Discovery score.
+// A score drop from 7/7 breaks AgentReady certification.
+func TestRegressionIsItAgentReadyDiscoveryEndpoints(t *testing.T) {
+	// auth.md must exist in SiteRoot for the /auth.md endpoint to return 200.
+	siteRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(siteRoot, "auth.md"), []byte("# auth\n"), 0o644); err != nil {
+		t.Fatalf("write auth.md: %v", err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://www.arleo.eu"
+	cfg.SiteName = "arleo.eu"
+	cfg.OAuth = config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.arleo.eu",
+		Resource:              "https://mcp.arleo.eu/mcp",
+		DynamicClientEnabled:  true,
+		AuthCodeTTLSeconds:    300,
+		AccessTokenTTLSeconds: 3600,
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+
+	endpoints := []struct {
+		path        string
+		description string
+	}{
+		{"/.well-known/oauth-authorization-server", "OAuth/OIDC discovery"},
+		{"/.well-known/oauth-protected-resource", "OAuth protected resource"},
+		{"/.well-known/mcp/server-card.json", "MCP server card"},
+		{"/.well-known/mcp.json", "API catalog (mcp.json alias)"},
+		{"/.well-known/agent.json", "Agent skills index"},
+		{"/auth.md", "Auth.md agent integration"},
+		{"/mcp", "MCP endpoint reachable (401 = auth challenge, not a failure)"},
+	}
+
+	for _, ep := range endpoints {
+		req := httptest.NewRequest(http.MethodGet, ep.path, nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		// /mcp returns 401 when OAuth is enabled — that IS the correct response
+		// (it tells the client to authenticate). Any other endpoint must be 200.
+		if ep.path == "/mcp" {
+			if rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s (%s): got %d want 401", ep.path, ep.description, rec.Code)
+			}
+			if rec.Header().Get("WWW-Authenticate") == "" {
+				t.Errorf("%s: missing WWW-Authenticate header", ep.path)
+			}
+		} else {
+			if rec.Code != http.StatusOK {
+				t.Errorf("%s (%s): got %d want 200", ep.path, ep.description, rec.Code)
+			}
+		}
+	}
+}
+
+func containsToolName(names []string, want string) bool {
+	for _, n := range names {
+		if n == want {
+			return true
+		}
+	}
+	return false
+}
