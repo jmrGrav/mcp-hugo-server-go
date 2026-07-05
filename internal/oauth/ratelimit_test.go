@@ -102,13 +102,27 @@ func TestRateLimiter429Response(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	if body["error"] != "rate_limit_exceeded" {
-		t.Fatalf("unexpected error body: %v", body)
+	if body["jsonrpc"] != "2.0" {
+		t.Fatalf("expected jsonrpc 2.0, got %v", body["jsonrpc"])
 	}
-	if got := body["retry_after_seconds"]; got != float64(retryAfterVal) {
+	errorObj, _ := body["error"].(map[string]any)
+	if errorObj == nil {
+		t.Fatalf("missing error object in 429 body: %v", body)
+	}
+	if got := errorObj["code"]; got != float64(-32029) {
+		t.Fatalf("expected error.code == -32029, got %v", got)
+	}
+	data, _ := errorObj["data"].(map[string]any)
+	if data == nil {
+		t.Fatalf("missing error.data in 429 body: %v", body)
+	}
+	if data["error"] != "rate_limit_exceeded" {
+		t.Fatalf("unexpected error.data.error: %v", data)
+	}
+	if got := data["retry_after_seconds"]; got != float64(retryAfterVal) {
 		t.Fatalf("retry_after_seconds %v does not match Retry-After header %s", got, retryAfterHeader)
 	}
-	if msg, _ := body["message"].(string); msg == "" {
-		t.Fatalf("missing message in 429 body: %v", body)
+	if msg, _ := errorObj["message"].(string); msg == "" {
+		t.Fatalf("missing message in 429 error object: %v", errorObj)
 	}
 }

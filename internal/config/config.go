@@ -39,7 +39,7 @@ type RateLimitConfig struct {
 	AnonymousPerMin    int `yaml:"anonymous_per_min"`
 	ContentReadPerMin  int `yaml:"content_read_per_min"`
 	ContentWritePerMin int `yaml:"content_write_per_min"`
-	SiteAdminPerMin    int `yaml:"site_admin_per_min"`
+	SiteAdminPerMin    int `yaml:"site_admin_per_min"` // HTTP requests/min; effective tool calls ≈ N/2 in stateful mode
 	DestructivePerMin  int `yaml:"destructive_per_min"`
 }
 
@@ -76,11 +76,14 @@ func Default() Config {
 		RejectSymlinks:      true,
 		RejectHiddenPath:    true,
 		BuildTimeoutSeconds: 120,
+		// Note: in stateful Streamable HTTP mode the MCP transport uses two HTTP
+		// requests per tool call (202 session-init + 200 response). Effective
+		// tool-call budget = configured value / 2.
 		RateLimit: RateLimitConfig{
-			AnonymousPerMin:    60,
-			ContentReadPerMin:  120,
-			ContentWritePerMin: 30,
-			SiteAdminPerMin:    10,
+			AnonymousPerMin:    120,
+			ContentReadPerMin:  240,
+			ContentWritePerMin: 60,
+			SiteAdminPerMin:    60,
 			DestructivePerMin:  5,
 		},
 		OAuth: OAuthConfig{

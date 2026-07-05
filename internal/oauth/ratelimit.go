@@ -80,9 +80,16 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			w.WriteHeader(http.StatusTooManyRequests)
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error":               "rate_limit_exceeded",
-				"message":             "rate limit exceeded; retry after " + strconv.Itoa(retryAfter) + " second(s)",
-				"retry_after_seconds": retryAfter,
+				"jsonrpc": "2.0",
+				"id":      nil,
+				"error": map[string]any{
+					"code":    -32029,
+					"message": "rate limit exceeded; retry after " + strconv.Itoa(retryAfter) + " second(s)",
+					"data": map[string]any{
+						"error":               "rate_limit_exceeded",
+						"retry_after_seconds": retryAfter,
+					},
+				},
 			})
 			return
 		}
