@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -111,10 +112,15 @@ type getSiteInformationOutput struct {
 	Site siteInfoDTO `json:"site"`
 }
 
-func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
+func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
 	if s == nil {
 		return
 	}
+	var srcIdx *hugosite.SourceIndex
+	if len(sources) > 0 {
+		srcIdx = sources[0]
+	}
+	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published Hugo pages with pagination. Returns page metadata only and does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
@@ -138,17 +144,17 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 
 	addReadOnlyTool(s, "get_page", "Read page", "Read a published Hugo page by slug. Returns metadata, rendered HTML, and a short summary. Does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
-			if idx == nil {
+			if idx == nil && srcIdx == nil {
 				return nil, getPageOutput{}, fmt.Errorf("index not initialized")
 			}
 			if in.Slug == "" {
 				return nil, getPageOutput{}, fmt.Errorf("content_not_found: slug must not be empty")
 			}
-			p, ok := idx.GetBySlug(in.Slug)
+			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			return nil, getPageOutput{Page: toPageDetailDTO(*p)}, nil
+			return nil, getPageOutput{Page: toResolvedPageDetailDTO(resolved)}, nil
 		})
 
 	addReadOnlyTool(s, "search_pages", "Search content", "Search the published index by title, summary, tags, categories, and URL. Use this for simple keyword lookup without authentication.",
@@ -313,6 +319,32 @@ func toPageDetailDTO(p site.Page) pageDetailDTO {
 		URL:        p.URL,
 		Lang:       p.Lang,
 		HTML:       p.RawHTML,
+	}
+}
+
+func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
+	if resolved.Public != nil {
+		return toPageDetailDTO(*resolved.Public)
+	}
+	src := resolved.Source
+	if src == nil {
+		return pageDetailDTO{}
+	}
+	tags := src.Tags
+	if tags == nil {
+		tags = []string{}
+	}
+	cats := src.Categories
+	if cats == nil {
+		cats = []string{}
+	}
+	return pageDetailDTO{
+		Slug:       "/" + src.Slug + "/",
+		Title:      src.Title,
+		Tags:       tags,
+		Categories: cats,
+		Date:       src.Date,
+		HTML:       src.Body,
 	}
 }
 

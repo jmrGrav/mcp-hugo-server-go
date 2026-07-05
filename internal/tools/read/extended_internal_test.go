@@ -150,15 +150,6 @@ func TestReadHelperBranches(t *testing.T) {
 }
 
 func TestDiffHelperBranches(t *testing.T) {
-	if got := normalizeSourceSlug("/posts/hello/"); got != "posts/hello" {
-		t.Fatalf("normalizeSourceSlug() = %q", got)
-	}
-	if got := sourceSlugFromRel("posts/hello/index.md"); got != "posts/hello" {
-		t.Fatalf("sourceSlugFromRel(index.md) = %q", got)
-	}
-	if got := sourceSlugFromRel("posts/about.md"); got != "posts/about" {
-		t.Fatalf("sourceSlugFromRel(.md) = %q", got)
-	}
 	if got := diffStatus(true, []byte("same"), []byte("same")); got != "unchanged" {
 		t.Fatalf("diffStatus(unchanged) = %q", got)
 	}
@@ -176,24 +167,6 @@ func TestDiffHelperBranches(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	contentRoot := filepath.Join(root, "content")
-	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "hello"), 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	pagePath := filepath.Join(contentRoot, "posts", "hello", "index.md")
-	if err := os.WriteFile(pagePath, []byte("---\ntitle: Hello\n---\nbody\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	abs, rel, err := findSourceFile(contentRoot, "posts/hello")
-	if err != nil {
-		t.Fatalf("findSourceFile() error = %v", err)
-	}
-	if abs != pagePath || rel != filepath.Join("posts", "hello", "index.md") {
-		t.Fatalf("findSourceFile() = %q %q", abs, rel)
-	}
-	if _, _, err := findSourceFile(contentRoot, "missing"); err == nil {
-		t.Fatal("findSourceFile() should fail for missing page")
-	}
 
 	if diff, err := unifiedDiff("posts/hello/index.md", []byte("one\n"), []byte("two\n")); err != nil || !strings.Contains(diff, "two") {
 		t.Fatalf("unifiedDiff() = %q, %v", diff, err)

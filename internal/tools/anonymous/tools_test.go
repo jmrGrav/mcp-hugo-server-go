@@ -3,11 +3,13 @@ package anonymous_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -35,6 +37,24 @@ func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	anonymous.Register(s, idx, config.Default())
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, func() { _ = session.Close() }
+}
+
+func newTestClientWithSourceIndex(t *testing.T, idx *site.Index, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
+	t.Helper()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	anonymous.Register(s, idx, config.Default(), srcIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -149,6 +169,34 @@ func TestGetPageBySlug(t *testing.T) {
 	}
 	if page["lang"] != "en" {
 		t.Fatalf("get_page: lang = %v, want en", page["lang"])
+	}
+}
+
+func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
+	contentRoot := t.TempDir()
+	full := filepath.Join(contentRoot, "drafts", "fresh", "index.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(full, []byte("---\ntitle: Fresh\ntags: [draft]\ncategories: [notes]\n---\nFresh body\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &site.Index{}
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/drafts/fresh/"})
+	if res.IsError {
+		t.Fatalf("get_page source-only returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page := m["page"].(map[string]any)
+	if page["title"] != "Fresh" || page["html"] != "Fresh body" {
+		t.Fatalf("get_page source-only page = %#v", page)
 	}
 }
 

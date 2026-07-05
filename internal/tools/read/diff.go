@@ -3,7 +3,6 @@ package read
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,8 +15,6 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
-
-var errFoundSourceFile = errors.New("found")
 
 type diffPageInput struct {
 	Slug string `json:"slug"`
@@ -50,11 +47,12 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			if srcIdx == nil {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: source index not initialized")
 			}
-			slug := normalizeSourceSlug(in.Slug)
-			if slug == "" {
+			if strings.TrimSpace(in.Slug) == "" {
 				return nil, diffPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 			}
-			if _, ok := srcIdx.GetBySlug(slug); !ok {
+			resolver := site.NewPageResolver(idx, srcIdx, cfg)
+			resolved, ok := resolver.Resolve(in.Slug)
+			if !ok || resolved.Source == nil {
 				return nil, diffPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
 			contentRoot := strings.TrimSpace(cfg.ContentRoot)
@@ -65,7 +63,11 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			if err != nil {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: repository root not found")
 			}
-			absPath, relPath, err := findSourceFile(contentRoot, slug)
+			absPath := resolved.SourcePath
+			if absPath == "" {
+				return nil, diffPageOutput{}, fmt.Errorf("content_not_found: page not readable for slug %q", in.Slug)
+			}
+			relPath, err := filepath.Rel(contentRoot, absPath)
 			if err != nil {
 				return nil, diffPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
@@ -98,7 +100,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				Version:     toolResultVersion,
 				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 				Data: diffPageData{
-					Slug:       slug,
+					Slug:       resolved.Source.Slug,
 					Path:       relPath,
 					Status:     status,
 					BaseCommit: strings.TrimSpace(headCommit),
@@ -109,13 +111,6 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				Errors:   []string{},
 			}, nil
 		})
-}
-
-func normalizeSourceSlug(slug string) string {
-	slug = strings.TrimSpace(slug)
-	slug = strings.TrimPrefix(slug, "/")
-	slug = strings.TrimSuffix(slug, "/")
-	return slug
 }
 
 func findGitRoot(ctx context.Context, start string) (string, error) {
@@ -214,46 +209,4 @@ func unifiedDiff(relPath string, base, current []byte) (string, error) {
 	diff = strings.ReplaceAll(diff, baseFile.Name(), "a/"+filepath.ToSlash(relPath))
 	diff = strings.ReplaceAll(diff, currentFile.Name(), "b/"+filepath.ToSlash(relPath))
 	return diff, nil
-}
-
-func findSourceFile(contentRoot, slug string) (string, string, error) {
-	var absPath string
-	var relPath string
-	target := normalizeSourceSlug(slug)
-	err := filepath.WalkDir(contentRoot, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(strings.ToLower(d.Name()), ".md") {
-			return nil
-		}
-		rel, err := filepath.Rel(contentRoot, path)
-		if err != nil {
-			return nil
-		}
-		if normalizeSourceSlug(sourceSlugFromRel(rel)) != target {
-			return nil
-		}
-		absPath = path
-		relPath = rel
-		return errFoundSourceFile
-	})
-	if err != nil && !errors.Is(err, errFoundSourceFile) {
-		return "", "", err
-	}
-	if absPath == "" {
-		return "", "", fmt.Errorf("not found")
-	}
-	return absPath, relPath, nil
-}
-
-func sourceSlugFromRel(rel string) string {
-	rel = filepath.ToSlash(rel)
-	if strings.HasSuffix(rel, "/index.md") {
-		return strings.TrimSuffix(rel, "/index.md")
-	}
-	return strings.TrimSuffix(rel, ".md")
 }

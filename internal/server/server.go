@@ -103,18 +103,18 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	}
 
 	anonServer := mcp.NewServer(impl, nil)
-	anonymous.Register(anonServer, idx, cfg)
+	anonymous.Register(anonServer, idx, cfg, srcIdx)
 
 	readServer := mcp.NewServer(impl, nil)
-	anonymous.Register(readServer, idx, cfg)
-	read.Register(readServer, idx, cfg)
+	anonymous.Register(readServer, idx, cfg, srcIdx)
+	read.Register(readServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
 		read.RegisterWithSourceIndex(readServer, idx, srcIdx, cfg)
 	}
 
 	writeServer := mcp.NewServer(impl, nil)
-	anonymous.Register(writeServer, idx, cfg)
-	read.Register(writeServer, idx, cfg)
+	anonymous.Register(writeServer, idx, cfg, srcIdx)
+	read.Register(writeServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
 		read.RegisterWithSourceIndex(writeServer, idx, srcIdx, cfg)
 	}
@@ -123,8 +123,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	}
 
 	siteAdminServer := mcp.NewServer(impl, nil)
-	anonymous.Register(siteAdminServer, idx, cfg)
-	read.Register(siteAdminServer, idx, cfg)
+	anonymous.Register(siteAdminServer, idx, cfg, srcIdx)
+	read.Register(siteAdminServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
 		read.RegisterWithSourceIndex(siteAdminServer, idx, srcIdx, cfg)
 	}

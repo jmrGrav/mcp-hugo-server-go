@@ -64,8 +64,31 @@ func TestGetBySlug(t *testing.T) {
 	if page.Body == "" {
 		t.Fatal("want non-empty body")
 	}
+	wantPath := filepath.Join(root, "posts", "hello.md")
+	if page.FilePath != wantPath {
+		t.Fatalf("FilePath = %q want %q", page.FilePath, wantPath)
+	}
 	if page.FrontmatterRaw == nil {
 		t.Fatal("want non-nil FrontmatterRaw")
+	}
+}
+
+func TestSlugFromRelHandlesBundlesAndMultilingualBundles(t *testing.T) {
+	tests := []struct {
+		rel  string
+		want string
+	}{
+		{rel: "posts/hello/index.md", want: "posts/hello"},
+		{rel: "posts/hello/index.fr.md", want: "posts/hello"},
+		{rel: "posts/hello/index.en-US.md", want: "posts/hello"},
+		{rel: "about.md", want: "about"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.rel, func(t *testing.T) {
+			if got := hugosite.SlugFromRel(tt.rel); got != tt.want {
+				t.Fatalf("SlugFromRel(%q) = %q want %q", tt.rel, got, tt.want)
+			}
+		})
 	}
 }
 

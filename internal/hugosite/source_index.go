@@ -22,6 +22,7 @@ var ContentMu sync.RWMutex
 
 type SourcePage struct {
 	Slug           string
+	FilePath       string
 	Title          string
 	Date           string
 	Draft          bool
@@ -61,7 +62,7 @@ func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
 		if err != nil {
 			return nil
 		}
-		slug := slugFromRel(rel)
+		slug := SlugFromRel(rel)
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return nil
@@ -69,6 +70,7 @@ func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
 		fm, body := splitFrontmatter(raw)
 		page := SourcePage{
 			Slug:           slug,
+			FilePath:       path,
 			Title:          stringVal(fm["title"]),
 			Date:           stringVal(fm["date"]),
 			Draft:          boolVal(fm["draft"]),
@@ -161,7 +163,7 @@ func (idx *SourceIndex) Delete(slug string) {
 	delete(idx.bySlug, slug)
 }
 
-func slugFromRel(rel string) string {
+func SlugFromRel(rel string) string {
 	rel = filepath.ToSlash(rel)
 	// Standard branch bundle: posts/slug/index.md → posts/slug
 	if strings.HasSuffix(rel, "/index.md") {

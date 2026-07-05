@@ -66,9 +66,9 @@ func TestSlugFromRelMultilingual(t *testing.T) {
 		{"posts/flat.en.md", "posts/flat.en"}, // flat files keep lang suffix
 	}
 	for _, c := range cases {
-		got := slugFromRel(c.rel)
+		got := SlugFromRel(c.rel)
 		if got != c.want {
-			t.Errorf("slugFromRel(%q) = %q, want %q", c.rel, got, c.want)
+			t.Errorf("SlugFromRel(%q) = %q, want %q", c.rel, got, c.want)
 		}
 	}
 }

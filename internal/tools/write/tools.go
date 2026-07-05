@@ -126,6 +126,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		idx.Upsert(hugosite.SourcePage{
 			Slug:           in.Slug,
+			FilePath:       filePath,
 			Title:          in.Title,
 			Tags:           in.Tags,
 			Categories:     in.Categories,

@@ -33,7 +33,7 @@ func mustTestIndex(t *testing.T) *site.Index {
 
 func mustTestSourceIndex(t *testing.T) *hugosite.SourceIndex {
 	t.Helper()
-	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
 	idx, err := hugosite.NewSourceIndex(root)
 	if err != nil {
 		t.Fatalf("NewSourceIndex() error = %v", err)
@@ -44,8 +44,9 @@ func mustTestSourceIndex(t *testing.T) *hugosite.SourceIndex {
 func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	read.Register(s, idx, config.Default())
-	read.RegisterWithSourceIndex(s, idx, mustTestSourceIndex(t), config.Default())
+	srcIdx := mustTestSourceIndex(t)
+	read.Register(s, idx, config.Default(), srcIdx)
+	read.RegisterWithSourceIndex(s, idx, srcIdx, config.Default())
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -107,6 +108,9 @@ func TestGetFullPageMarkdown(t *testing.T) {
 	markdown, ok := markdownVal.(string)
 	if !ok || markdown == "" {
 		t.Fatalf("get_full_page_markdown: markdown is empty or not a string: %v", markdownVal)
+	}
+	if markdown != "This is the hello world post body." {
+		t.Fatalf("get_full_page_markdown markdown = %q, want source body", markdown)
 	}
 }
 
@@ -197,8 +201,12 @@ func TestBuildAgentContext(t *testing.T) {
 	if _, ok := ctx["frontmatter"]; !ok {
 		t.Fatal("build_agent_context: missing 'frontmatter' in context")
 	}
-	if _, ok := ctx["markdown"]; !ok {
+	markdown, ok := ctx["markdown"].(string)
+	if !ok {
 		t.Fatal("build_agent_context: missing 'markdown' in context")
+	}
+	if markdown != "This is the hello world post body." {
+		t.Fatalf("build_agent_context markdown = %q, want source body", markdown)
 	}
 	if _, ok := ctx["related_pages"]; !ok {
 		t.Fatal("build_agent_context: missing 'related_pages' in context")

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -102,23 +103,27 @@ type exportResultDTO struct {
 	Total int             `json:"total"`
 }
 
-func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
+func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
 	if s == nil {
 		return
 	}
+	var srcIdx *hugosite.SourceIndex
+	if len(sources) > 0 {
+		srcIdx = sources[0]
+	}
+	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 
 	addReadOnlyTool(s, "get_full_page_markdown", "Read page Markdown",
 		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. Input: indexed slug only.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getFullPageMarkdownInput) (*mcp.CallToolResult, getFullPageMarkdownOutput, error) {
-			if idx == nil {
+			if idx == nil && srcIdx == nil {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("index not initialized")
 			}
-			p, ok := idx.GetBySlug(in.Slug)
+			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			md := site.ExtractMarkdown(p.RawHTML)
-			return nil, getFullPageMarkdownOutput{Page: toPageMarkdownDTO(*p, md)}, nil
+			return nil, getFullPageMarkdownOutput{Page: toResolvedPageMarkdownDTO(resolved)}, nil
 		})
 
 	addReadOnlyTool(s, "get_page_frontmatter", "Read page metadata",
@@ -157,11 +162,15 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config) {
 			if idx == nil {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("index not initialized")
 			}
-			p, ok := idx.GetBySlug(in.Slug)
+			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			md := site.ExtractMarkdown(p.RawHTML)
+			p := resolved.Public
+			if p == nil {
+				p = sourcePageAsPublic(resolved.Source)
+			}
+			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
 			fm := toFrontmatterDTO(*p, rt)
 			related := computeRelated(idx, *p, 5)
@@ -226,6 +235,37 @@ func toPageMarkdownDTO(p site.Page, md string) pageMarkdownDTO {
 		URL:        p.URL,
 		Lang:       p.Lang,
 		Markdown:   md,
+	}
+}
+
+func toResolvedPageMarkdownDTO(resolved site.ResolvedPage) pageMarkdownDTO {
+	p := resolved.Public
+	if p == nil {
+		p = sourcePageAsPublic(resolved.Source)
+	}
+	return toPageMarkdownDTO(*p, resolvedMarkdown(resolved))
+}
+
+func resolvedMarkdown(resolved site.ResolvedPage) string {
+	if resolved.Source != nil {
+		return resolved.Source.Body
+	}
+	if resolved.Public != nil {
+		return site.ExtractMarkdown(resolved.Public.RawHTML)
+	}
+	return ""
+}
+
+func sourcePageAsPublic(src *hugosite.SourcePage) *site.Page {
+	if src == nil {
+		return &site.Page{}
+	}
+	return &site.Page{
+		Slug:       "/" + strings.Trim(src.Slug, "/") + "/",
+		Title:      src.Title,
+		Date:       src.Date,
+		Tags:       src.Tags,
+		Categories: src.Categories,
 	}
 }
 

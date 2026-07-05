@@ -22,9 +22,9 @@ func newDiffPageClient(t *testing.T, contentRoot string) (*mcp.ClientSession, fu
 		t.Fatalf("NewSourceIndex() error = %v", err)
 	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	read.Register(s, idx, config.Default())
 	cfg := config.Default()
 	cfg.ContentRoot = contentRoot
+	read.Register(s, idx, cfg, srcIdx)
 	read.RegisterWithSourceIndex(s, idx, srcIdx, cfg)
 
 	ctx := context.Background()
@@ -62,7 +62,7 @@ func TestDiffPage(t *testing.T) {
 	session, done := newDiffPageClient(t, contentRoot)
 	defer done()
 
-	res := callTool(t, session, "diff_page", map[string]any{"slug": "posts/hello"})
+	res := callTool(t, session, "diff_page", map[string]any{"slug": "/posts/hello/"})
 	if res.IsError {
 		t.Fatalf("diff_page returned error: %v", res.Content)
 	}
@@ -86,6 +86,39 @@ func TestDiffPage(t *testing.T) {
 	}
 	if strings.TrimSpace(asString(t, data["head_commit"])) == "" {
 		t.Fatal("diff_page missing head_commit")
+	}
+}
+
+func TestDiffPageResolvesMultilingualBundleFromSourceIndex(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	pagePath := filepath.Join(contentRoot, "posts", "bonjour", "index.fr.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Bonjour\ndate: 2026-07-03\n---\nBonjour monde.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.email", "test@example.test")
+	runGit(t, root, "config", "user.name", "Test User")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Bonjour\ndate: 2026-07-03\n---\nBonjour tout le monde.\n"), 0o644); err != nil {
+		t.Fatalf("rewrite page: %v", err)
+	}
+
+	session, done := newDiffPageClient(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "diff_page", map[string]any{"slug": "/posts/bonjour/"})
+	if res.IsError {
+		t.Fatalf("diff_page multilingual returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data := m["data"].(map[string]any)
+	if got := data["path"]; got != "posts/bonjour/index.fr.md" {
+		t.Fatalf("diff_page multilingual path = %v, want posts/bonjour/index.fr.md", got)
 	}
 }
 
