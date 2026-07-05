@@ -122,6 +122,26 @@ func TestSiteIndexHelpers(t *testing.T) {
 			t.Fatalf("textContent() = %q", txt)
 		}
 	})
+
+	t.Run("article section is not category fallback", func(t *testing.T) {
+		raw := []byte(`
+<!doctype html>
+<html>
+  <head>
+    <title>Post section only</title>
+    <meta property="article:section" content="posts">
+    <link rel="canonical" href="https://example.test/posts/section-only/">
+  </head>
+  <body><article><p>Body</p></article></body>
+</html>`)
+		pg, _, err := parseHTMLPage(raw, "posts/section-only/index.html", time.Unix(0, 0), "https://example.test", "en")
+		if err != nil {
+			t.Fatalf("parseHTMLPage() error = %v", err)
+		}
+		if len(pg.Categories) != 0 {
+			t.Fatalf("parseHTMLPage() categories = %#v, want none", pg.Categories)
+		}
+	})
 }
 
 func TestSiteIndexCollectionsAndBoundaries(t *testing.T) {

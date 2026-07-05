@@ -132,13 +132,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if idx == nil {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("index not initialized")
 			}
-			p, ok := idx.GetBySlug(in.Slug)
+			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			md := site.ExtractMarkdown(p.RawHTML)
+			p := resolvedPublicPage(resolved)
+			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			return nil, getPageFrontmatterOutput{Frontmatter: toFrontmatterDTO(*p, rt)}, nil
+			return nil, getPageFrontmatterOutput{Frontmatter: toFrontmatterDTO(p, rt)}, nil
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
@@ -166,14 +167,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if !ok {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			p := resolved.Public
-			if p == nil {
-				p = sourcePageAsPublic(resolved.Source)
-			}
+			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			fm := toFrontmatterDTO(*p, rt)
-			related := computeRelated(idx, *p, 5)
+			fm := toFrontmatterDTO(p, rt)
+			related := computeRelated(idx, p, 5)
 			ac := agentContextDTO{
 				Frontmatter:  fm,
 				Markdown:     md,
@@ -239,11 +237,8 @@ func toPageMarkdownDTO(p site.Page, md string) pageMarkdownDTO {
 }
 
 func toResolvedPageMarkdownDTO(resolved site.ResolvedPage) pageMarkdownDTO {
-	p := resolved.Public
-	if p == nil {
-		p = sourcePageAsPublic(resolved.Source)
-	}
-	return toPageMarkdownDTO(*p, resolvedMarkdown(resolved))
+	p := resolvedPublicPage(resolved)
+	return toPageMarkdownDTO(p, resolvedMarkdown(resolved))
 }
 
 func resolvedMarkdown(resolved site.ResolvedPage) string {
@@ -256,11 +251,23 @@ func resolvedMarkdown(resolved site.ResolvedPage) string {
 	return ""
 }
 
-func sourcePageAsPublic(src *hugosite.SourcePage) *site.Page {
-	if src == nil {
-		return &site.Page{}
+func resolvedPublicPage(resolved site.ResolvedPage) site.Page {
+	if resolved.Public != nil {
+		p := *resolved.Public
+		if resolved.Source != nil {
+			p.Tags = nullsafeStrings(resolved.Source.Tags)
+			p.Categories = nullsafeStrings(resolved.Source.Categories)
+		}
+		return p
 	}
-	return &site.Page{
+	return sourcePageAsPublic(resolved.Source)
+}
+
+func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
+	if src == nil {
+		return site.Page{}
+	}
+	return site.Page{
 		Slug:       "/" + strings.Trim(src.Slug, "/") + "/",
 		Title:      src.Title,
 		Date:       src.Date,

@@ -304,9 +304,6 @@ func parseHTMLPage(raw []byte, rel string, modTime time.Time, siteURL, defaultLa
 
 	tags := uniqueStrs(meta.tags)
 	cats := uniqueStrs(meta.categories)
-	if len(cats) == 0 && meta.section != "" {
-		cats = []string{meta.section}
-	}
 
 	pg := Page{
 		Slug:       slug,

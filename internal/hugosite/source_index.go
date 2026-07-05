@@ -135,6 +135,42 @@ func (idx *SourceIndex) ListPages(limit, offset int) []SourcePage {
 	return result
 }
 
+func (idx *SourceIndex) AllTags() []string {
+	if idx == nil {
+		return nil
+	}
+	return uniqueSortedSourceStrings(func(p SourcePage) []string { return p.Tags }, idx.pages)
+}
+
+func (idx *SourceIndex) AllCategories() []string {
+	if idx == nil {
+		return nil
+	}
+	return uniqueSortedSourceStrings(func(p SourcePage) []string { return p.Categories }, idx.pages)
+}
+
+func uniqueSortedSourceStrings(values func(SourcePage) []string, pages []SourcePage) []string {
+	seen := map[string]string{}
+	for _, page := range pages {
+		for _, raw := range values(page) {
+			v := strings.TrimSpace(raw)
+			if v == "" {
+				continue
+			}
+			key := strings.ToLower(v)
+			if _, ok := seen[key]; !ok {
+				seen[key] = v
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for _, v := range seen {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Upsert adds or replaces the index entry for page. It must be called while
 // ContentMu is held for writing, so callers (create_page, update_page) must
 // acquire the write lock before the filesystem write and index update.

@@ -186,6 +186,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, listTagsOutput{}, fmt.Errorf("index not initialized")
 			}
 			tags := idx.AllTags()
+			if srcIdx != nil {
+				tags = srcIdx.AllTags()
+			}
 			if tags == nil {
 				tags = []string{}
 			}
@@ -198,6 +201,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, listCategoriesOutput{}, fmt.Errorf("index not initialized")
 			}
 			cats := idx.AllCategories()
+			if srcIdx != nil {
+				cats = srcIdx.AllCategories()
+			}
 			if cats == nil {
 				cats = []string{}
 			}
@@ -324,7 +330,12 @@ func toPageDetailDTO(p site.Page) pageDetailDTO {
 
 func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 	if resolved.Public != nil {
-		return toPageDetailDTO(*resolved.Public)
+		page := *resolved.Public
+		if resolved.Source != nil {
+			page.Tags = resolved.Source.Tags
+			page.Categories = resolved.Source.Categories
+		}
+		return toPageDetailDTO(page)
 	}
 	src := resolved.Source
 	if src == nil {

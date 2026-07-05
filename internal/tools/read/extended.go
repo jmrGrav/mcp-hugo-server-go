@@ -637,6 +637,8 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex) contentEnvel
 	}
 	if srcIdx != nil {
 		pages := srcIdx.ListPages(0, 0)
+		health.Tags = len(srcIdx.AllTags())
+		health.Categories = len(srcIdx.AllCategories())
 		health.SourcePages = len(pages)
 		for _, p := range pages {
 			if p.Draft {

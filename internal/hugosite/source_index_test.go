@@ -1,6 +1,7 @@
 package hugosite_test
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -180,6 +181,31 @@ func TestListPagesLimitOffset(t *testing.T) {
 	pages3 := idx.ListPages(10, 10)
 	if len(pages3) != 0 {
 		t.Fatalf("want 0 pages at offset 10, got %d", len(pages3))
+	}
+}
+
+func TestSourceIndexTaxonomiesComeFromFrontmatter(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/a/index.md", "---\ntitle: A\ntags: [go]\ncategories: [dev, security]\n---\nA\n")
+	write("posts/b/index.md", "---\ntitle: B\ntags: [hugo, go]\ncategories: [security]\n---\nB\n")
+	idx, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := idx.AllTags(); len(got) != 2 || got[0] != "go" || got[1] != "hugo" {
+		t.Fatalf("AllTags() = %#v", got)
+	}
+	if got := idx.AllCategories(); len(got) != 2 || got[0] != "dev" || got[1] != "security" {
+		t.Fatalf("AllCategories() = %#v", got)
 	}
 }
 

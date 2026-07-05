@@ -374,6 +374,34 @@ func TestListCategories(t *testing.T) {
 	}
 }
 
+func TestListCategoriesPrefersSourceFrontmatter(t *testing.T) {
+	contentRoot := t.TempDir()
+	full := filepath.Join(contentRoot, "posts", "hello", "index.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(full, []byte("---\ntitle: Hello\ncategories: [dev, security]\n---\nBody\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &site.Index{}
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "list_categories", map[string]any{})
+	if res.IsError {
+		t.Fatalf("list_categories returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	categories := m["categories"].([]any)
+	if len(categories) != 2 || categories[0] != "dev" || categories[1] != "security" {
+		t.Fatalf("categories = %#v, want dev/security", categories)
+	}
+}
+
 func TestGetSitemap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

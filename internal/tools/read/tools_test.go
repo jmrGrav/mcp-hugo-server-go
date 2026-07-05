@@ -155,6 +155,10 @@ func TestGetPageFrontmatter(t *testing.T) {
 	if !ok || rt < 1 {
 		t.Fatalf("get_page_frontmatter: reading_time_minutes = %v, want >= 1", rtVal)
 	}
+	cats, ok := fm["categories"].([]any)
+	if !ok || len(cats) != 1 || cats[0] != "tutorials" {
+		t.Fatalf("get_page_frontmatter categories = %#v, want source frontmatter category", fm["categories"])
+	}
 }
 
 func TestGetRelatedContent(t *testing.T) {
