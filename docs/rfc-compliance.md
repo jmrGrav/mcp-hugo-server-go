@@ -2,6 +2,8 @@
 
 This document tracks the server's conformance with the relevant specifications. Each item is marked **✅ compliant**, **⚠️ partial**, or **❌ not implemented**.
 
+Items marked **(live)** were verified against the production server with `scripts/verify-agent-ready.sh` or direct curl checks. Others were verified by code review only.
+
 ## RFC 6749 — OAuth 2.0 Authorization Framework
 
 | Requirement | Status | Notes |
@@ -19,7 +21,7 @@ This document tracks the server's conformance with the relevant specifications. 
 | Requirement | Status | Notes |
 |---|---|---|
 | `Authorization: Bearer <token>` header | ✅ | Required on `/mcp` for scoped tools |
-| `WWW-Authenticate` on 401 | ✅ | Includes `realm`, `resource_metadata`, `error` |
+| `WWW-Authenticate` on 401 | ✅ **(live)** | `Bearer realm=…, resource_metadata=…, error=invalid_token` |
 | `Bearer` scheme only | ✅ | Other schemes rejected with 401 |
 | Token must not appear in URL | ✅ | Only header accepted |
 
@@ -27,24 +29,24 @@ This document tracks the server's conformance with the relevant specifications. 
 
 | Requirement | Status | Notes |
 |---|---|---|
-| `code_challenge` + `code_challenge_method=S256` | ✅ | Required when `RequirePKCE=true` |
-| `code_verifier` validated at token exchange | ✅ | SHA-256 match enforced |
-| `code_challenge_methods_supported` in metadata | ✅ | `["S256"]` |
+| `code_challenge` + `code_challenge_method=S256` | ✅ **(live)** | `/authorize` returns 400 when challenge absent |
+| `code_verifier` validated at token exchange | ✅ | SHA-256 match enforced; unit-tested |
+| `code_challenge_methods_supported` in metadata | ✅ **(live)** | `["S256"]` |
 | `RequirePKCE` default | ✅ | `true` since v1.2.0 |
 
 ## RFC 8414 — OAuth Authorization Server Metadata
 
 | Requirement | Status | Notes |
 |---|---|---|
-| `/.well-known/oauth-authorization-server` | ✅ | Served at correct path |
-| `issuer` matches request origin | ✅ | Configurable via `oauth.issuer` |
-| `authorization_endpoint` | ✅ | |
-| `token_endpoint` | ✅ | |
-| `registration_endpoint` | ✅ | Always present when OAuth is enabled (v1.2.0 fix) |
-| `scopes_supported` | ✅ | All 4 scopes listed |
-| `response_types_supported` | ✅ | `["code"]` |
-| `grant_types_supported` | ✅ | Includes `authorization_code` and agent assertion grants |
-| `code_challenge_methods_supported` | ✅ | `["S256"]` |
+| `/.well-known/oauth-authorization-server` | ✅ **(live)** | Served at correct path |
+| `issuer` matches request origin | ✅ **(live)** | Configurable via `oauth.issuer` |
+| `authorization_endpoint` | ✅ **(live)** | |
+| `token_endpoint` | ✅ **(live)** | |
+| `registration_endpoint` | ✅ **(live)** | Always present when OAuth is enabled (v1.2.0 fix, issue #117) |
+| `scopes_supported` | ✅ **(live)** | `["content.read","content.write","site.admin","system.admin"]` |
+| `response_types_supported` | ✅ **(live)** | `["code"]` |
+| `grant_types_supported` | ✅ **(live)** | Includes `authorization_code` and agent assertion grants |
+| `code_challenge_methods_supported` | ✅ **(live)** | `["S256"]` |
 
 ## RFC 7591 — Dynamic Client Registration
 
@@ -61,11 +63,11 @@ This document tracks the server's conformance with the relevant specifications. 
 
 | Requirement | Status | Notes |
 |---|---|---|
-| `/.well-known/oauth-protected-resource` | ✅ | |
-| `resource` field | ✅ | Defaults to `{issuer}/mcp` |
-| `authorization_servers` field | ✅ | Points to issuer |
-| `bearer_methods_supported` | ✅ | `["header"]` |
-| `scopes_supported` | ✅ | |
+| `/.well-known/oauth-protected-resource` | ✅ **(live)** | |
+| `resource` field | ✅ **(live)** | `{issuer}/mcp` |
+| `authorization_servers` field | ✅ **(live)** | Points to issuer |
+| `bearer_methods_supported` | ✅ **(live)** | `["header"]` |
+| `scopes_supported` | ✅ **(live)** | All 4 scopes listed |
 
 ## MCP Streamable HTTP Transport
 
@@ -78,6 +80,15 @@ This document tracks the server's conformance with the relevant specifications. 
 | `Cache-Control: no-store` on `/mcp` | ✅ | Added v1.2.0 — prevents tool list caching |
 | `Vary: Authorization` on `/mcp` | ✅ | Added v1.2.0 |
 | Stateless mode | ✅ | No server-side session state |
+
+## Discovery Endpoints (agent-readiness)
+
+| Endpoint | Status | Notes |
+|---|---|---|
+| `/.well-known/mcp/server-card.json` | ✅ **(live)** | `protocolVersion: 2025-06-18`, `transport.type: streamable-http` |
+| `/.well-known/agent.json` (A2A) | ✅ **(live)** | `$schema: a2a.google.com/…`, `name`, `url`, `capabilities` |
+| `/auth.md` | ✅ **(live)** | Correct scopes, `/register` URL, no stale `mcp` scope |
+| `llms.txt` | ✅ | MCP endpoint and description |
 
 ## Agent-to-Agent (A2A / WorkOS agent identity)
 
