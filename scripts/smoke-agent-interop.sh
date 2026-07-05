@@ -8,7 +8,7 @@ fi
 
 BASE_URL="${BASE_URL:-https://mcp.arleo.eu}"
 SITE_URL="${SITE_URL:-https://www.arleo.eu}"
-CLAUDE_REDIRECT_URI="${CLAUDE_REDIRECT_URI:-https://claude.ai/api/oauth/callback}"
+CLAUDE_REDIRECT_URI="${CLAUDE_REDIRECT_URI:-https://claude.ai/api/mcp/auth_callback}"
 CHATGPT_REDIRECT_URI="${CHATGPT_REDIRECT_URI:-https://chatgpt.com/aip/oauth/callback}"
 EXPECT_READ_TOOLS_MIN="${EXPECT_READ_TOOLS_MIN:-}"
 EXPECT_ADMIN_TOOLS_MIN="${EXPECT_ADMIN_TOOLS_MIN:-}"
@@ -209,9 +209,27 @@ for needle in \
 done
 pass "auth.md machine-readable registration block"
 
+probe_authorize() {
+  local label="$1"
+  local client_id="$2"
+  local redirect_uri="$3"
+  local status loc
+  status="$(
+    curl -sk -o /dev/null -w '%{http_code}' \
+      "$BASE_URL/authorize?response_type=code&client_id=$(jq -rn --arg v "$client_id" '$v|@uri')&redirect_uri=$(jq -rn --arg v "$redirect_uri" '$v|@uri')&state=smoke&code_challenge=n4sk8wlI_n8S-GaUfbNTr6dL7X5enlRgJe27i8U6Bhg&code_challenge_method=S256"
+  )"
+  if [[ "$status" == "302" ]]; then
+    pass "$label authorize redirect (HTTP 302)"
+  else
+    fail "$label authorize redirect: got HTTP $status, want 302"
+  fi
+}
+
 if [[ "${SMOKE_DCR_PROBE:-0}" == "1" ]]; then
   probe_dcr "Claude" "$CLAUDE_REDIRECT_URI" "claude-interop-smoke"
   probe_dcr "ChatGPT" "$CHATGPT_REDIRECT_URI" "chatgpt-interop-smoke"
+  probe_authorize "Claude" "claude-admin" "$CLAUDE_REDIRECT_URI"
+  probe_authorize "ChatGPT" "chatgpt-write" "$CHATGPT_REDIRECT_URI"
 else
   echo "SKIP DCR probe (SMOKE_DCR_PROBE not set)"
 fi
