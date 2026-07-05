@@ -1,0 +1,19 @@
+Arleo.eu
+
+Public technical blog and homelab notes about infrastructure, security, reverse
+proxying, Cloudflare, Hugo, OpenResty, and automation.
+
+Useful entry points:
+- https://www.arleo.eu/
+- https://www.arleo.eu/posts/
+- https://www.arleo.eu/tags/
+- https://www.arleo.eu/categories/
+- https://www.arleo.eu/sitemap.xml
+- https://www.arleo.eu/index.xml
+- https://www.arleo.eu/feed.json
+- https://www.arleo.eu/auth.md
+
+Policy:
+- Public content may be read and cited by search and answer agents.
+- Automated training and abusive scraping are not authorized.
+- Training or fine-tuning AI models on this content is not authorized.
