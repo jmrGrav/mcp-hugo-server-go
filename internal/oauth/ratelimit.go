@@ -3,6 +3,7 @@ package oauth
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,10 +25,20 @@ func NewRateLimiter(cfg config.RateLimitConfig) *RateLimiter {
 	}
 }
 
-func (rl *RateLimiter) limiterFor(scope string) *rate.Limiter {
+// callerKey returns a rate-limit bucket key combining the caller's IP and scope
+// so that two different IPs with the same scope get independent limits.
+func callerKey(remoteAddr, scope string) string {
+	ip, _, _ := strings.Cut(remoteAddr, ":")
+	if ip == "" {
+		ip = remoteAddr
+	}
+	return ip + "\x00" + scope
+}
+
+func (rl *RateLimiter) limiterFor(key, scope string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
-	if l, ok := rl.limiters[scope]; ok {
+	if l, ok := rl.limiters[key]; ok {
 		return l
 	}
 	perMin := rl.perMinFor(scope)
@@ -35,7 +46,7 @@ func (rl *RateLimiter) limiterFor(scope string) *rate.Limiter {
 		perMin = 1
 	}
 	l := rate.NewLimiter(rate.Every(time.Minute/time.Duration(perMin)), perMin)
-	rl.limiters[scope] = l
+	rl.limiters[key] = l
 	return l
 }
 
@@ -54,14 +65,11 @@ func (rl *RateLimiter) perMinFor(scope string) int {
 	}
 }
 
-func (rl *RateLimiter) Allow(scope string) bool {
-	return rl.limiterFor(scope).Allow()
-}
-
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		scope, _ := r.Context().Value(CtxScope).(string)
-		if !rl.Allow(scope) {
+		key := callerKey(r.RemoteAddr, scope)
+		if !rl.limiterFor(key, scope).Allow() {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
