@@ -58,6 +58,12 @@ AUTH_BODY=$(curl -sf "$BASE/auth.md" 2>/dev/null) || AUTH_BODY=""
 echo "$AUTH_BODY" | grep -qi "registration.endpoint\|/register"; ok $? "auth.md: /register endpoint mentioned"
 echo "$AUTH_BODY" | grep -q "content.read"; ok $? "auth.md: correct scopes (content.read)"
 ! echo "$AUTH_BODY" | grep -q "Scope: \`mcp\`"; ok $? "auth.md: no stale 'Scope: mcp' line"
+echo "$AUTH_BODY" | grep -q "registration_flow"; ok $? "auth.md: machine-readable registration_flow present"
+
+# ── www.arleo.eu: protected resource (OpenResty inline JSON) ─────────────────
+WWW_PR=$(curl -sf "https://www.arleo.eu/.well-known/oauth-protected-resource") || { fail "www: oauth-protected-resource unreachable"; WWW_PR="{}"; }
+python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert d.get('resource')=='https://mcp.arleo.eu/mcp'" "$WWW_PR" 2>/dev/null; ok $? "www: resource points to mcp.arleo.eu/mcp"
+python3 -c "import json,sys; d=json.loads(sys.argv[1]); assert 'content.read' in d.get('scopes_supported',[])" "$WWW_PR" 2>/dev/null; ok $? "www: scopes_supported has content.read (not stale mcp)"
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
