@@ -18,13 +18,20 @@ type discoveryIdentityAssertion struct {
 	AssertionTypesSupported []string `json:"assertion_types_supported"`
 }
 
+type discoveryAnonymousAuth struct {
+	CredentialTypesSupported []string `json:"credential_types_supported"`
+	ClaimURI                 string   `json:"claim_uri"`
+}
+
 type discoveryAgentAuth struct {
 	Skill                  string                     `json:"skill"`
 	RegisterURI            string                     `json:"register_uri"`
 	IdentityEndpoint       string                     `json:"identity_endpoint"`
 	ClaimEndpoint          string                     `json:"claim_endpoint"`
+	ClaimURI               string                     `json:"claim_uri"`
 	EventsEndpoint         string                     `json:"events_endpoint"`
 	IdentityTypesSupported []string                   `json:"identity_types_supported"`
+	Anonymous              discoveryAnonymousAuth     `json:"anonymous"`
 	IdentityAssertion      discoveryIdentityAssertion `json:"identity_assertion"`
 	EventsSupported        []string                   `json:"events_supported"`
 }
@@ -78,8 +85,13 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 			RegisterURI:            issuer + "/register",
 			IdentityEndpoint:       issuer + "/agent/identity",
 			ClaimEndpoint:          issuer + "/agent/identity/claim",
+			ClaimURI:               issuer + "/agent/identity/claim",
 			EventsEndpoint:         issuer + "/agent/event/notify",
-			IdentityTypesSupported: []string{"anonymous"},
+			IdentityTypesSupported: []string{"anonymous", "identity_assertion"},
+			Anonymous: discoveryAnonymousAuth{
+				CredentialTypesSupported: []string{"none"},
+				ClaimURI:                 issuer + "/agent/identity/claim",
+			},
 			IdentityAssertion: discoveryIdentityAssertion{
 				AssertionTypesSupported: []string{"urn:ietf:params:oauth:token-type:id-jag"},
 			},
@@ -325,7 +337,10 @@ func handleAuthMd(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 }
 
 func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []byte {
-	if bytes.Contains(bytes.ToLower(data), []byte("registration_flow")) {
+	lower := bytes.ToLower(data)
+	hasRegistrationFlow := bytes.Contains(lower, []byte("registration_flow"))
+	hasAgentAuthMetadata := bytes.Contains(lower, []byte("agent_auth_metadata"))
+	if hasRegistrationFlow && hasAgentAuthMetadata {
 		return data
 	}
 
@@ -337,39 +352,73 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 		return data
 	}
 
-	block := fmt.Sprintf(
-		"## Agent registration\n\n"+
-			"Registration endpoint: `%s/register`\n"+
-			"Authorization endpoint: `%s/authorize`\n"+
-			"Token endpoint: `%s/token`\n"+
-			"Protected resource metadata: `%s/.well-known/oauth-protected-resource`\n"+
-			"MCP endpoint: `%s/mcp`\n"+
-			"Scopes: `content.read`, `content.write`, `site.admin`, `system.admin`\n\n"+
-			"```json\n"+
-			"{\n"+
-			"  \"registration_flow\": {\n"+
-			"    \"registration_endpoint\": \"%s/register\",\n"+
-			"    \"authorization_endpoint\": \"%s/authorize\",\n"+
-			"    \"token_endpoint\": \"%s/token\",\n"+
-			"    \"protected_resource_metadata\": \"%s/.well-known/oauth-protected-resource\",\n"+
-			"    \"mcp_endpoint\": \"%s/mcp\",\n"+
-			"    \"scopes\": [\n"+
-			"      \"content.read\",\n"+
-			"      \"content.write\",\n"+
-			"      \"site.admin\",\n"+
-			"      \"system.admin\"\n"+
-			"    ]\n"+
-			"  }\n"+
-			"}\n"+
-			"```\n",
-		issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer,
-	)
+	var block strings.Builder
+	if !hasRegistrationFlow {
+		block.WriteString(fmt.Sprintf(
+			"## Agent registration\n\n"+
+				"Registration endpoint: `%s/register`\n"+
+				"Authorization endpoint: `%s/authorize`\n"+
+				"Token endpoint: `%s/token`\n"+
+				"Protected resource metadata: %s/.well-known/oauth-protected-resource\n"+
+				"MCP endpoint: `%s/mcp`\n"+
+				"Scopes: `content.read`, `content.write`, `site.admin`, `system.admin`\n\n"+
+				"```json\n"+
+				"{\n"+
+				"  \"registration_flow\": {\n"+
+				"    \"registration_endpoint\": \"%s/register\",\n"+
+				"    \"authorization_endpoint\": \"%s/authorize\",\n"+
+				"    \"token_endpoint\": \"%s/token\",\n"+
+				"    \"protected_resource_metadata\": \"%s/.well-known/oauth-protected-resource\",\n"+
+				"    \"mcp_endpoint\": \"%s/mcp\",\n"+
+				"    \"scopes\": [\n"+
+				"      \"content.read\",\n"+
+				"      \"content.write\",\n"+
+				"      \"site.admin\",\n"+
+				"      \"system.admin\"\n"+
+				"    ]\n"+
+				"  }\n"+
+				"}\n"+
+				"```\n",
+			issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer,
+		))
+	}
+	if !hasAgentAuthMetadata {
+		if block.Len() > 0 {
+			block.WriteByte('\n')
+		}
+		block.WriteString(fmt.Sprintf(
+			"### Agent auth metadata\n\n"+
+				"Machine-readable metadata for agent registration checks:\n\n"+
+				"```json\n"+
+				"{\n"+
+				"  \"agent_auth_metadata\": {\n"+
+				"    \"skill\": \"%s/auth.md\",\n"+
+				"    \"register_uri\": \"%s/register\",\n"+
+				"    \"identity_endpoint\": \"%s/agent/identity\",\n"+
+				"    \"claim_endpoint\": \"%s/agent/identity/claim\",\n"+
+				"    \"claim_uri\": \"%s/agent/identity/claim\",\n"+
+				"    \"events_endpoint\": \"%s/agent/event/notify\",\n"+
+				"    \"identity_types_supported\": [\"anonymous\", \"identity_assertion\"],\n"+
+				"    \"anonymous\": {\n"+
+				"      \"credential_types_supported\": [\"none\"],\n"+
+				"      \"claim_uri\": \"%s/agent/identity/claim\"\n"+
+				"    },\n"+
+				"    \"identity_assertion\": {\n"+
+				"      \"assertion_types_supported\": [\"urn:ietf:params:oauth:token-type:id-jag\"]\n"+
+				"    },\n"+
+				"    \"events_supported\": [\"https://schemas.workos.com/events/agent/auth/identity/assertion/revoked\"]\n"+
+				"  }\n"+
+				"}\n"+
+				"```\n",
+			issuer, issuer, issuer, issuer, issuer, issuer, issuer,
+		))
+	}
 
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		data = append(data, '\n')
 	}
 	data = append(data, '\n')
-	data = append(data, []byte(block)...)
+	data = append(data, []byte(block.String())...)
 	return data
 }
 

@@ -189,7 +189,11 @@ for needle in \
   "token_endpoint" \
   "$BASE_URL/token" \
   "mcp_endpoint" \
-  "$BASE_URL/mcp"; do
+  "$BASE_URL/mcp" \
+  "agent_auth_metadata" \
+  "credential_types_supported" \
+  "claim_uri" \
+  "identity_assertion"; do
   if ! grep -q "$needle" <<<"$auth_md"; then
     fail "auth.md missing $needle"
   fi

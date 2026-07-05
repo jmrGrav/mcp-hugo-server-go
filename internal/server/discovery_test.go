@@ -83,8 +83,40 @@ func TestWellKnownOAuthServer(t *testing.T) {
 
 	checkStringField(agentAuth, "identity_endpoint", "https://mcp.arleo.eu/agent/identity")
 	checkStringField(agentAuth, "claim_endpoint", "https://mcp.arleo.eu/agent/identity/claim")
+	checkStringField(agentAuth, "claim_uri", "https://mcp.arleo.eu/agent/identity/claim")
 	checkStringField(agentAuth, "events_endpoint", "https://mcp.arleo.eu/agent/event/notify")
 	checkStringField(agentAuth, "skill", "https://mcp.arleo.eu/auth.md")
+
+	var identityTypes []string
+	if err := json.Unmarshal(agentAuth["identity_types_supported"], &identityTypes); err != nil {
+		t.Fatalf("identity_types_supported: %v", err)
+	}
+	for _, want := range []string{"anonymous", "identity_assertion"} {
+		found := false
+		for _, got := range identityTypes {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("identity_types_supported missing %q", want)
+		}
+	}
+
+	var anonymous struct {
+		CredentialTypesSupported []string `json:"credential_types_supported"`
+		ClaimURI                 string   `json:"claim_uri"`
+	}
+	if err := json.Unmarshal(agentAuth["anonymous"], &anonymous); err != nil {
+		t.Fatalf("anonymous: %v", err)
+	}
+	if anonymous.ClaimURI != "https://mcp.arleo.eu/agent/identity/claim" {
+		t.Errorf("anonymous.claim_uri = %q", anonymous.ClaimURI)
+	}
+	if len(anonymous.CredentialTypesSupported) == 0 {
+		t.Fatal("anonymous.credential_types_supported is empty")
+	}
 
 	var grantTypes []string
 	if err := json.Unmarshal(got["grant_types_supported"], &grantTypes); err != nil {
@@ -432,6 +464,18 @@ func TestAuthMdContainsRegistrationFlow(t *testing.T) {
 	if !strings.Contains(body, "registration_flow") {
 		t.Error("auth.md must contain 'registration_flow' for agent-readiness scanners")
 	}
+	if !strings.Contains(body, "agent_auth_metadata") {
+		t.Error("auth.md must contain 'agent_auth_metadata' for agent-readiness scanners")
+	}
+	if !strings.Contains(body, "credential_types_supported") {
+		t.Error("auth.md must document anonymous.credential_types_supported")
+	}
+	if !strings.Contains(body, "claim_uri") {
+		t.Error("auth.md must document claim_uri")
+	}
+	if !strings.Contains(body, `"identity_types_supported": ["anonymous", "identity_assertion"]`) {
+		t.Error("auth.md must document ID-JAG identity_assertion support")
+	}
 	if !strings.Contains(body, "/register") {
 		t.Error("auth.md must reference the /register endpoint")
 	}
@@ -465,11 +509,54 @@ func TestAuthMdAppendsCanonicalRegistrationBlockWhenMissing(t *testing.T) {
 	if !strings.Contains(body, "registration_flow") {
 		t.Fatal("auth.md response must append a machine-readable registration_flow block")
 	}
+	if !strings.Contains(body, "agent_auth_metadata") {
+		t.Fatal("auth.md response must append agent_auth_metadata")
+	}
 	if !strings.Contains(body, "registration_endpoint") {
 		t.Fatal("auth.md response must mention registration_endpoint")
 	}
 	if !strings.Contains(body, "https://mcp.arleo.eu/register") {
 		t.Fatal("auth.md response must reference the canonical /register endpoint")
+	}
+}
+
+func TestAuthMdAppendsAgentAuthMetadataWhenRegistrationFlowAlreadyExists(t *testing.T) {
+	dir := t.TempDir()
+	const content = `# Auth.md
+
+` + "```json\n" + `{
+  "registration_flow": {
+    "registration_endpoint": "https://mcp.arleo.eu/register"
+  }
+}
+` + "```\n"
+	if err := os.WriteFile(filepath.Join(dir, "auth.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	srv := mustDiscoveryServer(t, dir)
+	req := httptest.NewRequest(http.MethodGet, "/auth.md", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"registration_flow",
+		"agent_auth_metadata",
+		"credential_types_supported",
+		"claim_uri",
+		`"identity_types_supported": ["anonymous", "identity_assertion"]`,
+		"urn:ietf:params:oauth:token-type:id-jag",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("auth.md missing %q", want)
+		}
+	}
+	if strings.Count(body, "registration_flow") != 1 {
+		t.Fatalf("registration_flow should not be duplicated, body:\n%s", body)
 	}
 }
 
