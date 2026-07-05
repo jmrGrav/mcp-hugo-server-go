@@ -464,6 +464,9 @@ func collectBrokenLinks(idx *site.Index) []brokenLinkDTO {
 			if !ok {
 				continue
 			}
+			if shouldIgnoreBrokenLinkTarget(classifier, target.Path) {
+				continue
+			}
 			if targetPage, found := idx.GetBySlug(target.Path); found && classifier.IsContent(*targetPage) {
 				continue
 			}
@@ -517,11 +520,21 @@ func resolveInternalLink(base *url.URL, raw string) (*url.URL, bool) {
 	if err != nil {
 		return nil, false
 	}
+	if ref.Scheme != "" && ref.Scheme != "http" && ref.Scheme != "https" {
+		return nil, false
+	}
 	target := base.ResolveReference(ref)
 	if target.Host != "" && target.Host != base.Host {
 		return nil, false
 	}
 	return target, true
+}
+
+func shouldIgnoreBrokenLinkTarget(classifier *site.ContentClassifier, rawPath string) bool {
+	if classifier == nil {
+		classifier = site.NewClassifier(nil)
+	}
+	return !classifier.IsContent(site.Page{Slug: rawPath})
 }
 
 func htmlAttr(n *html.Node, key string) string {

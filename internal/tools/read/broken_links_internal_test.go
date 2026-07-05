@@ -50,3 +50,49 @@ func TestCollectBrokenLinks(t *testing.T) {
 		t.Fatalf("sliceBrokenLinks(offset overflow) = %#v", got)
 	}
 }
+
+func TestCollectBrokenLinksIgnoresGeneratedAndNonHTTPLinks(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/hello/index.html", `<html><head>
+<link rel="canonical" href="https://example.test/posts/hello/">
+</head><body>
+<a href="#local">fragment</a>
+<a href="javascript:void(0)">javascript</a>
+<a href="/page/2/">pagination</a>
+<a href="/posts/page/2/">section pagination</a>
+<a href="/robots.txt">robots</a>
+<a href="/security.txt">security</a>
+<a href="/llms.txt">llms</a>
+<a href="/.well-known/security.txt">well-known</a>
+<a href="/missing/">real missing page</a>
+</body></html>`)
+
+	idx, err := site.NewIndex(config.Config{
+		SiteRoot:         root,
+		SiteURL:          "https://example.test",
+		SiteName:         "example",
+		DefaultLanguage:  "en",
+		RejectSymlinks:   true,
+		RejectHiddenPath: false,
+	})
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+
+	issues := collectBrokenLinks(idx)
+	if len(issues) != 1 {
+		t.Fatalf("collectBrokenLinks() = %#v, want only /missing/", issues)
+	}
+	if issues[0].Link != "/missing/" {
+		t.Fatalf("collectBrokenLinks() issue = %#v, want /missing/", issues[0])
+	}
+}
