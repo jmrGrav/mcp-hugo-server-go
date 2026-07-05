@@ -57,6 +57,29 @@ func TestHandleAgentVerifyGET(t *testing.T) {
 	}
 }
 
+func TestHandleAgentVerifyGETEscapesClaimToken(t *testing.T) {
+	svc, _ := newTestService(t)
+	rawClaimToken := `"><script>alert(1)</script>`
+
+	req := httptest.NewRequest(http.MethodGet, "/agent/identity/verify?claim_token="+rawClaimToken, nil)
+	rec := httptest.NewRecorder()
+	svc.HandleAgentVerify(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET verify: status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, rawClaimToken) {
+		t.Fatalf("verify page rendered raw claim_token, body = %q", body)
+	}
+	if strings.Contains(body, "<script>") {
+		t.Fatalf("verify page contains executable script markup, body = %q", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Fatalf("verify page missing escaped claim_token, body = %q", body)
+	}
+}
+
 func TestHandleAgentVerifyPOST(t *testing.T) {
 	svc, store := newTestService(t)
 	resp := registerAgentAnonymous(t, svc)

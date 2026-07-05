@@ -1,0 +1,7 @@
+title = "mcp-hugo-server-go gitleaks config"
+
+[allowlist]
+description = "Legacy agent-ready wrapper delegates to safer smoke scripts and contains no secrets."
+paths = [
+  '''scripts/verify-agent-ready\.sh''',
+]

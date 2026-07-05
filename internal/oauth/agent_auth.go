@@ -3,6 +3,7 @@ package oauth
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
@@ -250,7 +251,7 @@ func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
   <label>Claim token: <input type="text" name="claim_token" value="%s" size="40" required></label><br>
   <button type="submit">Approve</button>
 </form>
-</body></html>`, claimToken)
+</body></html>`, html.EscapeString(claimToken))
 	case http.MethodPost:
 		// Operator must authenticate with a site.admin or system.admin Bearer token.
 		// Accept it via Authorization header (API callers) or admin_token form field

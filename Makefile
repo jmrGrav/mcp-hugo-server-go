@@ -1,4 +1,4 @@
-.PHONY: build test lint vet fmt check clean check-agent-ready
+.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=$(VERSION)
@@ -33,6 +33,9 @@ check: fmt vet lint test
 
 check-agent-ready:
 	./scripts/check-agent-ready.sh
+
+smoke-agent-interop:
+	./scripts/smoke-agent-interop.sh
 
 clean:
 	rm -f $(BIN) coverage.out

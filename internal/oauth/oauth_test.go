@@ -657,3 +657,38 @@ func TestAuthorizeUntrustedSource(t *testing.T) {
 		t.Fatalf("status = %d want 302 with error=access_denied or 403", authRec.Code)
 	}
 }
+
+func TestAuthorizeRedirectPreservesExistingQuery(t *testing.T) {
+	svc, _ := newTestService(t)
+	redirectURI := "https://client.test/callback?existing=1"
+	clientID := registerClient(t, svc, []string{redirectURI})
+
+	authURL := "/authorize?" + url.Values{
+		"response_type": {"code"},
+		"client_id":     {clientID},
+		"redirect_uri":  {redirectURI},
+		"state":         {"state-query"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	location, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	query := location.Query()
+	if got := query.Get("existing"); got != "1" {
+		t.Fatalf("existing query = %q want 1; location = %s", got, authRec.Header().Get("Location"))
+	}
+	if query.Get("code") == "" {
+		t.Fatalf("redirect missing code; location = %s", authRec.Header().Get("Location"))
+	}
+	if got := query.Get("state"); got != "state-query" {
+		t.Fatalf("state = %q want state-query", got)
+	}
+}

@@ -317,6 +317,34 @@ func TestWellKnownProtectedResource(t *testing.T) {
 	}
 }
 
+func TestWellKnownProtectedResourceAliasMCP(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource/mcp", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q want application/json", ct)
+	}
+
+	var meta struct {
+		Resource             string   `json:"resource"`
+		AuthorizationServers []string `json:"authorization_servers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if meta.Resource != "https://mcp.arleo.eu/mcp" {
+		t.Fatalf("resource = %q want https://mcp.arleo.eu/mcp", meta.Resource)
+	}
+	if len(meta.AuthorizationServers) != 1 || meta.AuthorizationServers[0] != "https://mcp.arleo.eu" {
+		t.Fatalf("authorization_servers = %v want [https://mcp.arleo.eu]", meta.AuthorizationServers)
+	}
+}
+
 func TestAuthServerMetaRegistrationEndpoint(t *testing.T) {
 	srv := mustDiscoveryServer(t, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
@@ -415,6 +443,33 @@ func TestAuthMdContainsRegistrationFlow(t *testing.T) {
 		if strings.Contains(line, ".well-known/") && strings.HasSuffix(strings.TrimRight(line, "\r"), "`") {
 			t.Errorf("auth.md line ends with backtick after a .well-known/ URL — scanner will include the backtick in the URL: %q", line)
 		}
+	}
+}
+
+func TestAuthMdAppendsCanonicalRegistrationBlockWhenMissing(t *testing.T) {
+	dir := t.TempDir()
+	const content = "# auth.md\n\nAgent authentication instructions.\n"
+	if err := os.WriteFile(filepath.Join(dir, "auth.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	srv := mustDiscoveryServer(t, dir)
+	req := httptest.NewRequest(http.MethodGet, "/auth.md", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "registration_flow") {
+		t.Fatal("auth.md response must append a machine-readable registration_flow block")
+	}
+	if !strings.Contains(body, "registration_endpoint") {
+		t.Fatal("auth.md response must mention registration_endpoint")
+	}
+	if !strings.Contains(body, "https://mcp.arleo.eu/register") {
+		t.Fatal("auth.md response must reference the canonical /register endpoint")
 	}
 }
 
@@ -589,6 +644,7 @@ func TestDiscoveryHeadRequests(t *testing.T) {
 	for _, path := range []string{
 		"/.well-known/oauth-authorization-server",
 		"/.well-known/oauth-protected-resource",
+		"/.well-known/oauth-protected-resource/mcp",
 		"/.well-known/mcp/server-card.json",
 		"/robots.txt",
 		"/llms.txt",

@@ -247,6 +247,7 @@ Discovery surfaces:
 
 - `/.well-known/mcp/server-card.json` is the canonical MCP Server Card endpoint.
 - `/.well-known/mcp.json` is retained as a compatibility alias.
+- `/.well-known/oauth-protected-resource/mcp` is retained as a compatibility alias for resource-specific discovery.
 - Both return the same public discovery document.
 
 3. **Choose a storage backend** for access tokens:

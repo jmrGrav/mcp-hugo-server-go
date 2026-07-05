@@ -284,16 +284,44 @@ clientLoop:
 }
 
 func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {
+	u, err := s.validateClientRedirectURL(clientID, uri)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
+}
+
+func (s *Service) validateClientRedirectURL(clientID, uri string) (*url.URL, error) {
 	c, ok := s.lookupClient(clientID)
 	if !ok {
-		return "", fmt.Errorf("unauthorized_client")
+		return nil, fmt.Errorf("unauthorized_client")
+	}
+	parsed, err := url.Parse(strings.TrimSpace(uri))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return nil, fmt.Errorf("invalid_redirect_uri")
 	}
 	for _, r := range c.RedirectURIs {
-		if matchRedirectURI(r, uri) {
-			return uri, nil
+		if matchRedirectURI(r, parsed.String()) {
+			return parsed, nil
 		}
 	}
-	return "", fmt.Errorf("invalid_redirect_uri")
+	return nil, fmt.Errorf("invalid_redirect_uri")
+}
+
+func oauthRedirectLocation(redirectURI *url.URL, params url.Values) string {
+	if redirectURI == nil {
+		return ""
+	}
+	target := *redirectURI
+	query := target.Query()
+	for key, values := range params {
+		query.Del(key)
+		for _, value := range values {
+			query.Add(key, value)
+		}
+	}
+	target.RawQuery = query.Encode()
+	return target.String()
 }
 
 func (s *Service) lookupClient(clientID string) (client, bool) {
@@ -429,7 +457,7 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	clientID := r.Form.Get("client_id")
 	rawRedirectURI := r.Form.Get("redirect_uri")
-	safeRedirectURI, err := s.validateClientRedirect(clientID, rawRedirectURI)
+	safeRedirectURI, err := s.validateClientRedirectURL(clientID, rawRedirectURI)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -438,7 +466,7 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		requestSourceIP(r),
 		r.Form.Get("response_type"),
 		clientID,
-		safeRedirectURI,
+		safeRedirectURI.String(),
 		r.Form.Get("state"),
 		r.Form.Get("scope"),
 		r.Form.Get("code_challenge"),
@@ -455,14 +483,14 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		if state := r.Form.Get("state"); state != "" {
 			params.Set("state", state)
 		}
-		http.Redirect(w, r, safeRedirectURI+"?"+params.Encode(), http.StatusFound)
+		http.Redirect(w, r, oauthRedirectLocation(safeRedirectURI, params), http.StatusFound)
 		return
 	}
 	params := url.Values{"code": {code}}
 	if state := r.Form.Get("state"); state != "" {
 		params.Set("state", state)
 	}
-	http.Redirect(w, r, safeRedirectURI+"?"+params.Encode(), http.StatusFound)
+	http.Redirect(w, r, oauthRedirectLocation(safeRedirectURI, params), http.StatusFound)
 }
 
 func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {

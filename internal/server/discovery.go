@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -313,6 +314,7 @@ func handleAuthMd(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 		http.NotFound(w, r)
 		return
 	}
+	data = appendCanonicalAuthMdRegistrationBlock(data, cfg)
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	w.WriteHeader(http.StatusOK)
@@ -320,6 +322,55 @@ func handleAuthMd(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 		return
 	}
 	_, _ = w.Write(data)
+}
+
+func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []byte {
+	if bytes.Contains(bytes.ToLower(data), []byte("registration_flow")) {
+		return data
+	}
+
+	issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	if issuer == "" {
+		issuer = strings.TrimRight(cfg.SiteURL, "/")
+	}
+	if issuer == "" {
+		return data
+	}
+
+	block := fmt.Sprintf(
+		"## Agent registration\n\n"+
+			"Registration endpoint: `%s/register`\n"+
+			"Authorization endpoint: `%s/authorize`\n"+
+			"Token endpoint: `%s/token`\n"+
+			"Protected resource metadata: `%s/.well-known/oauth-protected-resource`\n"+
+			"MCP endpoint: `%s/mcp`\n"+
+			"Scopes: `content.read`, `content.write`, `site.admin`, `system.admin`\n\n"+
+			"```json\n"+
+			"{\n"+
+			"  \"registration_flow\": {\n"+
+			"    \"registration_endpoint\": \"%s/register\",\n"+
+			"    \"authorization_endpoint\": \"%s/authorize\",\n"+
+			"    \"token_endpoint\": \"%s/token\",\n"+
+			"    \"protected_resource_metadata\": \"%s/.well-known/oauth-protected-resource\",\n"+
+			"    \"mcp_endpoint\": \"%s/mcp\",\n"+
+			"    \"scopes\": [\n"+
+			"      \"content.read\",\n"+
+			"      \"content.write\",\n"+
+			"      \"site.admin\",\n"+
+			"      \"system.admin\"\n"+
+			"    ]\n"+
+			"  }\n"+
+			"}\n"+
+			"```\n",
+		issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer,
+	)
+
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		data = append(data, '\n')
+	}
+	data = append(data, '\n')
+	data = append(data, []byte(block)...)
+	return data
 }
 
 func serveDiscoveryJSON(w http.ResponseWriter, r *http.Request, v interface{}) {

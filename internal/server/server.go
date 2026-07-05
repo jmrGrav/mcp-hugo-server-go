@@ -215,6 +215,8 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			handleOAuthAuthServer(w, r, cfg)
 		case "/.well-known/oauth-protected-resource":
 			handleOAuthProtectedResource(w, r, cfg)
+		case "/.well-known/oauth-protected-resource/mcp":
+			handleOAuthProtectedResource(w, r, cfg)
 		case "/.well-known/mcp/server-card.json":
 			handleMCPServerCard(w, r, cfg)
 		case "/.well-known/mcp.json":

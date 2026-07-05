@@ -41,6 +41,7 @@ expect_contains() {
 
 auth_meta="$(json_get "$BASE_URL/.well-known/oauth-authorization-server")"
 resource_meta="$(json_get "$BASE_URL/.well-known/oauth-protected-resource")"
+resource_meta_alias="$(json_get "$BASE_URL/.well-known/oauth-protected-resource/mcp")"
 server_card="$(json_get "$BASE_URL/.well-known/mcp/server-card.json")"
 mcp_alias="$(json_get "$BASE_URL/.well-known/mcp.json")"
 auth_md="$(curl -fsS "$WWW_URL/auth.md")"
@@ -50,6 +51,7 @@ auth_endpoint="$(jq -r '.authorization_endpoint // empty' <<<"$auth_meta")"
 token_endpoint="$(jq -r '.token_endpoint // empty' <<<"$auth_meta")"
 registration_endpoint="$(jq -r '.registration_endpoint // empty' <<<"$auth_meta")"
 resource="$(jq -r '.resource // empty' <<<"$resource_meta")"
+resource_alias="$(jq -r '.resource // empty' <<<"$resource_meta_alias")"
 authorization_servers="$(jq -c '.authorization_servers // []' <<<"$resource_meta")"
 transport_endpoint="$(jq -r '.transport.endpoint // empty' <<<"$server_card")"
 alias_transport_endpoint="$(jq -r '.transport.endpoint // empty' <<<"$mcp_alias")"
@@ -59,6 +61,7 @@ expect_eq "$auth_endpoint" "$BASE_URL/authorize" "authorization_endpoint"
 expect_eq "$token_endpoint" "$BASE_URL/token" "token_endpoint"
 expect_eq "$registration_endpoint" "$BASE_URL/register" "registration_endpoint"
 expect_eq "$resource" "$BASE_URL/mcp" "resource"
+expect_eq "$resource_alias" "$BASE_URL/mcp" "resource alias"
 expect_contains "$authorization_servers" "$BASE_URL" "authorization_servers"
 expect_eq "$transport_endpoint" "/mcp" "server_card transport.endpoint"
 expect_eq "$alias_transport_endpoint" "/mcp" "mcp alias transport.endpoint"
@@ -68,14 +71,21 @@ expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "content.wr
 expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "site.admin" "auth scopes"
 expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "system.admin" "auth scopes"
 
-if ! grep -q "Registration endpoint: \`$BASE_URL/register\`" <<<"$auth_md"; then
-  echo "auth.md: missing canonical registration endpoint" >&2
-  exit 1
-fi
-if ! grep -q "Canonical MCP endpoint: \`$BASE_URL/mcp\`" <<<"$auth_md"; then
-  echo "auth.md: missing canonical MCP endpoint" >&2
-  exit 1
-fi
+for needle in \
+  "registration_flow" \
+  "registration_endpoint" \
+  "$BASE_URL/register" \
+  "authorization_endpoint" \
+  "$BASE_URL/authorize" \
+  "token_endpoint" \
+  "$BASE_URL/token" \
+  "mcp_endpoint" \
+  "$BASE_URL/mcp"; do
+  if ! grep -q "$needle" <<<"$auth_md"; then
+    echo "auth.md: missing $needle" >&2
+    exit 1
+  fi
+done
 
 register_status="$(
   curl -sk -o /dev/null -w '%{http_code}' \
