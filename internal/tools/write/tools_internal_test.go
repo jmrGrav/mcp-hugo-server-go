@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 )
 
@@ -52,4 +53,29 @@ func TestWriteHelpers(t *testing.T) {
 	if len(defs) != 3 || defs[0].RequiredScope != "content.write" {
 		t.Fatalf("Defs() = %#v", defs)
 	}
+}
+
+func TestWriteHelperBranches(t *testing.T) {
+	fm := buildFrontmatter("Title", nil, nil, "")
+	if !strings.Contains(fm, "tags: []") || !strings.Contains(fm, "categories: []") {
+		t.Fatalf("buildFrontmatter(nil slices) = %q", fm)
+	}
+	m := map[string]any{"title": "Title"}
+	fm2 := buildFrontmatterFromMap(m, "")
+	if !strings.Contains(fm2, "title: Title") {
+		t.Fatalf("buildFrontmatterFromMap() = %q", fm2)
+	}
+
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "audit.log")
+	if err := os.MkdirAll(blocker, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := appendAuditLog(blocker, "entry\n"); err == nil {
+		t.Fatal("appendAuditLog() should fail when target path is a directory")
+	}
+}
+
+func TestRegisterNilServer(t *testing.T) {
+	Register(nil, nil, nil, config.Default())
 }

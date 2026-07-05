@@ -116,3 +116,44 @@ func TestNonHTTPHookRejected(t *testing.T) {
 		t.Fatal("expected error: file:// scheme should be rejected")
 	}
 }
+
+func TestLoadInvalidTransport(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("transport: websocket\n")
+	f.Close()
+	_, err := config.Load(f.Name())
+	if err == nil {
+		t.Fatal("expected error for invalid transport")
+	}
+}
+
+func TestExternalURLValidationEdgeCases(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "missing host",
+			yaml: "image_gen_url: https:///no-host\n",
+		},
+		{
+			name: "private ip literal",
+			yaml: "image_gen_url: http://127.0.0.1/image\n",
+		},
+		{
+			name: "invalid scheme",
+			yaml: "image_gen_url: ftp://example.com/image\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+			f.WriteString(tc.yaml)
+			f.Close()
+			_, err := config.Load(f.Name())
+			if err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+		})
+	}
+}

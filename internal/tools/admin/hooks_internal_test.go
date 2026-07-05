@@ -34,3 +34,7 @@ func TestFireHookError(t *testing.T) {
 		t.Fatal("fireHook() should surface connection error")
 	}
 }
+
+func TestRegisterHooksNilServer(t *testing.T) {
+	RegisterHooks(nil, config.Config{})
+}

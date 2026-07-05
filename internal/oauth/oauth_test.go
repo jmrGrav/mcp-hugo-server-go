@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -194,6 +196,146 @@ func TestPKCEFlowWrongVerifier(t *testing.T) {
 	svc.HandleToken(tokenRec, tokenReq)
 	if tokenRec.Code != http.StatusBadRequest {
 		t.Fatalf("token: status = %d want 400", tokenRec.Code)
+	}
+}
+
+func TestTokenEndpointSupportsBasicAuth(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - id: basic-client
+    secret: super-secret
+    scopes: ["read"]
+    redirect_uris:
+      - https://client.test/callback
+    enabled: true
+`), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+	svc := oauth.NewService(config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		Resource:              "https://mcp.test/mcp",
+		DynamicClientEnabled:  true,
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
+		AuthCodeTTLSeconds:    300,
+		AccessTokenTTLSeconds: 3600,
+	}, storage.NewMemory())
+	if err := svc.LoadClientRegistry(registryPath); err != nil {
+		t.Fatalf("LoadClientRegistry() error = %v", err)
+	}
+	clientID := "basic-client"
+	verifier := "verifier-verifier-verifier-verifier"
+
+	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://client.test/callback"},
+		"state":                 {"state-basic"},
+		"code_challenge":        {oauth.CodeChallengeS256(verifier)},
+		"code_challenge_method": {"S256"},
+	}.Encode(), nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	location, _ := url.Parse(authRec.Header().Get("Location"))
+	code := location.Query().Get("code")
+
+	form := url.Values{
+		"grant_type":    {"authorization_code"},
+		"redirect_uri":  {"https://client.test/callback"},
+		"code":          {code},
+		"code_verifier": {verifier},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(clientID, "super-secret")
+	rec := httptest.NewRecorder()
+	svc.HandleToken(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("token basic auth: status = %d body = %q", rec.Code, rec.Body.String())
+	}
+}
+
+func TestAuthorizeMissingStateReturnsError(t *testing.T) {
+	svc, _ := newTestService(t)
+	clientID := registerClient(t, svc, []string{"https://client.test/callback"})
+
+	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://client.test/callback"},
+		"code_challenge":        {oauth.CodeChallengeS256("verifier-verifier-verifier-verifier")},
+		"code_challenge_method": {"S256"},
+	}.Encode(), nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize missing state: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	location, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	if got := location.Query().Get("error"); got != "invalid_request" {
+		t.Fatalf("authorize missing state error = %q", got)
+	}
+}
+
+func TestAuthorizeRequiresPKCE(t *testing.T) {
+	svc, _ := newTestService(t)
+	svc2 := oauth.NewService(config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		Resource:              "https://mcp.test/mcp",
+		DynamicClientEnabled:  true,
+		RequirePKCE:           true,
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
+		AuthCodeTTLSeconds:    300,
+		AccessTokenTTLSeconds: 3600,
+	}, storage.NewMemory())
+	clientID := registerClient(t, svc2, []string{"https://client.test/callback"})
+	_ = svc
+
+	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
+		"response_type": {"code"},
+		"client_id":     {clientID},
+		"redirect_uri":  {"https://client.test/callback"},
+		"state":         {"state-pkce"},
+	}.Encode(), nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc2.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize require pkce: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	location, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	if got := location.Query().Get("error"); got != "invalid_request" {
+		t.Fatalf("authorize require pkce error = %q", got)
+	}
+}
+
+func TestTokenEndpointRejectsUnsupportedGrantType(t *testing.T) {
+	svc, _ := newTestService(t)
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(url.Values{
+		"grant_type": {"client_credentials"},
+	}.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	svc.HandleToken(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("token unsupported grant: status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unsupported_grant_type") {
+		t.Fatalf("token unsupported grant body = %q", rec.Body.String())
 	}
 }
 

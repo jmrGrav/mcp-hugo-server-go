@@ -464,3 +464,29 @@ func TestOAuthServerServedWithOAuthDisabled(t *testing.T) {
 		t.Fatalf("discovery must be served even when OAuth is disabled: status = %d", rec.Code)
 	}
 }
+
+func TestDiscoveryHeadRequests(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "auth.md"), []byte("# auth\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srv := mustDiscoveryServer(t, dir)
+	for _, path := range []string{
+		"/.well-known/oauth-authorization-server",
+		"/.well-known/oauth-protected-resource",
+		"/.well-known/mcp/server-card.json",
+		"/robots.txt",
+		"/llms.txt",
+		"/auth.md",
+	} {
+		req := httptest.NewRequest(http.MethodHead, path, nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("HEAD %s status = %d want 200", path, rec.Code)
+		}
+		if rec.Body.Len() != 0 {
+			t.Fatalf("HEAD %s should not include a body, got %q", path, rec.Body.String())
+		}
+	}
+}

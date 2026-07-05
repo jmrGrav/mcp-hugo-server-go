@@ -104,3 +104,29 @@ func TestSafeJoinSymlinkParentAllowed(t *testing.T) {
 		t.Fatalf("unexpected error with rejectSymlinks=false: %v", err)
 	}
 }
+
+func TestNewFallsBackToAbsWhenRootMissing(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-root")
+	pg, err := security.New(root, true)
+	if err != nil {
+		t.Fatalf("security.New() error = %v", err)
+	}
+	got, err := pg.SafeJoin("page.md")
+	if err != nil {
+		t.Fatalf("SafeJoin() error = %v", err)
+	}
+	if !pg.WithinRoot(got) {
+		t.Fatalf("expected %q to remain within root", got)
+	}
+}
+
+func TestWithinRootRejectsOutsidePath(t *testing.T) {
+	root := t.TempDir()
+	pg, err := security.New(root, true)
+	if err != nil {
+		t.Fatalf("security.New() error = %v", err)
+	}
+	if pg.WithinRoot(filepath.Join(filepath.Dir(root), "other", "file.md")) {
+		t.Fatal("WithinRoot() should reject path outside root")
+	}
+}

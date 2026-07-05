@@ -4,7 +4,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
@@ -142,5 +145,69 @@ func TestSourceAllowed(t *testing.T) {
 	}
 	if svc.sourceAllowed("203.0.113.10") {
 		t.Fatal("sourceAllowed should reject untrusted IP")
+	}
+}
+
+func TestTokenClientCredentials(t *testing.T) {
+	form := url.Values{
+		"client_id":     {"form-client"},
+		"client_secret": {"form-secret"},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if gotID, gotSecret := tokenClientCredentials(req); gotID != "form-client" || gotSecret != "form-secret" {
+		t.Fatalf("tokenClientCredentials(form) = %q/%q", gotID, gotSecret)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/token", nil)
+	req.SetBasicAuth("basic-client", "basic-secret")
+	if gotID, gotSecret := tokenClientCredentials(req); gotID != "basic-client" || gotSecret != "basic-secret" {
+		t.Fatalf("tokenClientCredentials(basic) = %q/%q", gotID, gotSecret)
+	}
+}
+
+func TestPurgeExpired(t *testing.T) {
+	store := storage.NewMemory()
+	svc := NewService(config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		Resource:              "https://mcp.test/mcp",
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
+	}, store)
+	token := HashToken("token")
+	if err := store.AddAccessToken(token, "content.read", time.Now().Add(-time.Hour)); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
+	}
+	svc.PurgeExpired()
+	if _, ok := store.ValidateAccessToken(token); ok {
+		t.Fatal("expired token should have been purged")
+	}
+}
+
+func TestScopeConfigurationHelpers(t *testing.T) {
+	scopes, err := normalizeConfiguredScopes([]string{"system.admin", "content.write", "read"}, "site.admin")
+	if err != nil {
+		t.Fatalf("normalizeConfiguredScopes() error = %v", err)
+	}
+	if len(scopes) != 4 || scopes[0] != "content.read" || scopes[1] != "content.write" || scopes[3] != "system.admin" {
+		t.Fatalf("normalizeConfiguredScopes() = %#v", scopes)
+	}
+	if got := highestConfiguredScope(scopes); got != "system.admin" {
+		t.Fatalf("highestConfiguredScope() = %q", got)
+	}
+	if got, err := requestedScope("content.read content.write"); err != nil || got != "content.write" {
+		t.Fatalf("requestedScope() = %q, %v", got, err)
+	}
+	if got, err := requestedScope("unknown"); err == nil || got != "" {
+		t.Fatalf("requestedScope(unknown) = %q, %v", got, err)
+	}
+	if !allowedScope("content.read", "site.admin") {
+		t.Fatal("allowedScope() should allow lower rank")
+	}
+	if allowedScope("system.admin", "content.write") {
+		t.Fatal("allowedScope() should reject higher rank")
+	}
+	if CanonicalScope("mcp") != "content.read" || !IsLegacyScope("mcp") {
+		t.Fatal("legacy scope alias not normalized correctly")
 	}
 }
