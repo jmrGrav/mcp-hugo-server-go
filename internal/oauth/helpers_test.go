@@ -185,14 +185,15 @@ func TestPurgeExpired(t *testing.T) {
 }
 
 func TestScopeConfigurationHelpers(t *testing.T) {
+	// system.admin is an alias for site.admin; dedup produces 3 unique scopes
 	scopes, err := normalizeConfiguredScopes([]string{"system.admin", "content.write", "read"}, "site.admin")
 	if err != nil {
 		t.Fatalf("normalizeConfiguredScopes() error = %v", err)
 	}
-	if len(scopes) != 4 || scopes[0] != "content.read" || scopes[1] != "content.write" || scopes[3] != "system.admin" {
+	if len(scopes) != 3 || scopes[0] != "content.read" || scopes[1] != "content.write" || scopes[2] != "site.admin" {
 		t.Fatalf("normalizeConfiguredScopes() = %#v", scopes)
 	}
-	if got := highestConfiguredScope(scopes); got != "system.admin" {
+	if got := highestConfiguredScope(scopes); got != "site.admin" {
 		t.Fatalf("highestConfiguredScope() = %q", got)
 	}
 	if got, err := requestedScope("content.read content.write"); err != nil || got != "content.write" {
@@ -204,7 +205,7 @@ func TestScopeConfigurationHelpers(t *testing.T) {
 	if !allowedScope("content.read", "site.admin") {
 		t.Fatal("allowedScope() should allow lower rank")
 	}
-	if allowedScope("system.admin", "content.write") {
+	if allowedScope("site.admin", "content.write") {
 		t.Fatal("allowedScope() should reject higher rank")
 	}
 	if CanonicalScope("mcp") != "content.read" || !IsLegacyScope("mcp") {

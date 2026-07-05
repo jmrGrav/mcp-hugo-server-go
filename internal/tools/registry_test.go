@@ -113,7 +113,7 @@ func TestScopeRank(t *testing.T) {
 		{"content.read", 1},
 		{"content.write", 2},
 		{"site.admin", 3},
-		{"system.admin", 4},
+		{"system.admin", 0},
 		{"mcp", 0},
 		{"unknown", 0},
 	}

@@ -28,7 +28,7 @@ func newAgentTestService() (*Service, storage.Store) {
 
 func TestAgentAuthHelperBranches(t *testing.T) {
 	svc, store := newAgentTestService()
-	if !tools.IsAdminScope("site.admin") || !tools.IsAdminScope("system.admin") || tools.IsAdminScope("content.read") {
+	if !tools.IsAdminScope("site.admin") || tools.IsAdminScope("content.read") {
 		t.Fatal("tools.IsAdminScope() returned unexpected result")
 	}
 

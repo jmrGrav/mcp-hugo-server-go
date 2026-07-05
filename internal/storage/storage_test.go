@@ -100,10 +100,10 @@ func TestSQLiteStoreLifecycle(t *testing.T) {
 	}
 	defer s.Close()
 	future := time.Now().Add(time.Hour)
-	if err := s.AddAccessToken("tok1", "system.admin", future); err != nil {
+	if err := s.AddAccessToken("tok1", "site.admin", future); err != nil {
 		t.Fatalf("AddAccessToken() error = %v", err)
 	}
-	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "system.admin" {
+	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "site.admin" {
 		t.Fatalf("ValidateAccessToken() = %q, %v", scope, ok)
 	}
 	if err := s.PurgeExpiredTokens(); err != nil {
@@ -120,7 +120,7 @@ func TestSQLiteStoreUpsertOAuthClient(t *testing.T) {
 	store := storeAny.(*sqliteStore)
 	defer store.db.Close()
 
-	if err := store.UpsertOAuthClient("chatgpt-admin", "hash", true, []string{"https://chatgpt.com/connector/oauth/*"}, []string{"content.read", "content.write", "system.admin"}); err != nil {
+	if err := store.UpsertOAuthClient("chatgpt-admin", "hash", true, []string{"https://chatgpt.com/connector/oauth/*"}, []string{"content.read", "content.write", "site.admin"}); err != nil {
 		t.Fatalf("UpsertOAuthClient() error = %v", err)
 	}
 	if err := store.UpsertOAuthClient("chatgpt-read", "hash2", false, nil, nil); err != nil {
@@ -136,8 +136,8 @@ func TestSQLiteStoreUpsertOAuthClient(t *testing.T) {
 	if secretHash != "hash" {
 		t.Fatalf("secret_hash = %q want hash", secretHash)
 	}
-	if effectiveScope != "system.admin" {
-		t.Fatalf("effective_scope = %q want system.admin", effectiveScope)
+	if effectiveScope != "site.admin" {
+		t.Fatalf("effective_scope = %q want site.admin", effectiveScope)
 	}
 	if enabled != 1 {
 		t.Fatalf("enabled = %d want 1", enabled)
@@ -153,7 +153,7 @@ func TestSQLiteStoreUpsertOAuthClient(t *testing.T) {
 	if err := json.Unmarshal([]byte(scopesJSON), &scopes); err != nil {
 		t.Fatalf("scopes JSON invalid: %v", err)
 	}
-	if len(scopes) != 3 || scopes[0] != "content.read" || scopes[2] != "system.admin" {
+	if len(scopes) != 3 || scopes[0] != "content.read" || scopes[2] != "site.admin" {
 		t.Fatalf("scopes = %#v", scopes)
 	}
 

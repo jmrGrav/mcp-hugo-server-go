@@ -510,7 +510,7 @@ func TestScopesSupported(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	wantScopes := []string{"content.read", "content.write", "site.admin", "system.admin"}
+	wantScopes := []string{"content.read", "content.write", "site.admin"}
 	for _, want := range wantScopes {
 		found := false
 		for _, got := range meta.ScopesSupported {
@@ -523,7 +523,7 @@ func TestScopesSupported(t *testing.T) {
 			t.Errorf("scopes_supported missing %q; got %v", want, meta.ScopesSupported)
 		}
 	}
-	for _, bad := range []string{"mcp"} {
+	for _, bad := range []string{"mcp", "system.admin"} {
 		for _, got := range meta.ScopesSupported {
 			if got == bad {
 				t.Errorf("scopes_supported should not contain legacy scope %q", bad)
@@ -706,8 +706,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "system.admin" {
-		t.Fatalf("token scope = %q want system.admin", tokenResp.Scope)
+	if tokenResp.Scope != "site.admin" {
+		t.Fatalf("token scope = %q want site.admin", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
@@ -722,9 +722,9 @@ clients:
 		}
 	}
 	if !found {
-		t.Fatalf("system.admin token missing build_site; got %v", names)
+		t.Fatalf("site.admin token missing build_site; got %v", names)
 	}
 	if !writeFound {
-		t.Fatalf("system.admin token missing create_page; got %v", names)
+		t.Fatalf("site.admin token missing create_page; got %v", names)
 	}
 }

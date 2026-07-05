@@ -222,8 +222,12 @@ func (s *Service) resolveClientScope(clientID, requested string) (string, error)
 	if scope == "" {
 		scope = c.Scope
 	}
+	// Clamp to the client's maximum allowed scope (RFC 6749 §3.3: server MAY
+	// grant a subset when the requested scope exceeds what the client is
+	// permitted). Returning invalid_scope would break clients like Claude.ai
+	// that always request all scopes and rely on the server to downscope.
 	if !allowedScope(scope, c.Scope) {
-		return "", fmt.Errorf("invalid_scope")
+		scope = c.Scope
 	}
 	return scope, nil
 }

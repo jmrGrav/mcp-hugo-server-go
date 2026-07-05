@@ -347,7 +347,7 @@ func TestWellKnownProtectedResource(t *testing.T) {
 			}
 		}
 	}
-	wantScopes := []string{"content.read", "content.write", "site.admin", "system.admin"}
+	wantScopes := []string{"content.read", "content.write", "site.admin"}
 	for _, want := range wantScopes {
 		found := false
 		for _, s := range meta.ScopesSupported {
@@ -358,6 +358,13 @@ func TestWellKnownProtectedResource(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("scopes_supported missing %q, got %v", want, meta.ScopesSupported)
+		}
+	}
+	for _, bad := range []string{"system.admin"} {
+		for _, s := range meta.ScopesSupported {
+			if s == bad {
+				t.Errorf("scopes_supported must not contain removed scope %q", bad)
+			}
 		}
 	}
 }

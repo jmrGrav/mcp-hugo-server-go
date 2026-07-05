@@ -94,8 +94,8 @@ clients:
 		if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 			t.Fatalf("token(%s) decode: %v", redirectURI, err)
 		}
-		if tokenResp.Scope != "system.admin" {
-			t.Fatalf("token(%s) scope = %q want system.admin", redirectURI, tokenResp.Scope)
+		if tokenResp.Scope != "site.admin" {
+			t.Fatalf("token(%s) scope = %q want site.admin", redirectURI, tokenResp.Scope)
 		}
 	}
 }
@@ -154,7 +154,7 @@ clients:
 	}
 }
 
-func TestClientRegistryRejectsUnauthorizedRequestedScope(t *testing.T) {
+func TestClientRegistryClampsRequestedScopeToClientMax(t *testing.T) {
 	dir := t.TempDir()
 	registryPath := filepath.Join(dir, "oauth-clients.yaml")
 	if err := os.WriteFile(registryPath, []byte(`
@@ -182,12 +182,14 @@ clients:
 		t.Fatalf("LoadClientRegistry() error = %v", err)
 	}
 
+	// Request a wider scope (site.admin) than the client is allowed (content.read).
+	// Server must clamp to content.read and issue a code, not reject with invalid_scope.
 	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
 		"response_type":         {"code"},
 		"client_id":             {"chatgpt-read"},
 		"redirect_uri":          {"https://chatgpt.com/connector/oauth/callback"},
 		"state":                 {"state-xyz"},
-		"scope":                 {"system.admin"},
+		"scope":                 {"content.read content.write site.admin"},
 		"code_challenge":        {oauth.CodeChallengeS256("verifier-verifier-verifier-verifier")},
 		"code_challenge_method": {"S256"},
 	}.Encode(), nil)
@@ -201,7 +203,10 @@ clients:
 	if err != nil {
 		t.Fatalf("parse redirect: %v", err)
 	}
-	if got := loc.Query().Get("error"); got != "invalid_scope" {
-		t.Fatalf("redirect error = %q want invalid_scope", got)
+	if errParam := loc.Query().Get("error"); errParam != "" {
+		t.Fatalf("authorize returned error=%q, want code (scope should be clamped)", errParam)
+	}
+	if loc.Query().Get("code") == "" {
+		t.Fatalf("authorize redirect missing code param: %s", loc)
 	}
 }

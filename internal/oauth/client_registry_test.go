@@ -141,8 +141,8 @@ clients:
 	if clientID != "chatgpt-admin" {
 		t.Fatalf("client_id = %q want chatgpt-admin", clientID)
 	}
-	if effectiveScope != "system.admin" {
-		t.Fatalf("effective_scope = %q want system.admin", effectiveScope)
+	if effectiveScope != "site.admin" {
+		t.Fatalf("effective_scope = %q want site.admin", effectiveScope)
 	}
 	if enabled != 1 {
 		t.Fatalf("enabled = %d want 1", enabled)

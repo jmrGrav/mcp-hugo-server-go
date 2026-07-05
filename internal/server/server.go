@@ -131,18 +131,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	if writeEnabled {
 		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg)
 	}
-	admin.RegisterSiteAdmin(siteAdminServer, cfg)
-
-	sysAdminServer := mcp.NewServer(impl, nil)
-	anonymous.Register(sysAdminServer, idx, cfg)
-	read.Register(sysAdminServer, idx, cfg)
-	if srcIdx != nil {
-		read.RegisterWithSourceIndex(sysAdminServer, idx, srcIdx, cfg)
-	}
-	if writeEnabled {
-		toolswrite.Register(sysAdminServer, pg, srcIdx, cfg)
-	}
-	admin.Register(sysAdminServer, cfg)
+	admin.Register(siteAdminServer, cfg)
 
 	opts := &mcp.StreamableHTTPOptions{
 		Stateless:                  true,
@@ -151,8 +140,6 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	streaming := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		scope, _ := r.Context().Value(oauth.CtxScope).(string)
 		switch tools.ScopeRank(scope) {
-		case 4:
-			return sysAdminServer
 		case 3:
 			return siteAdminServer
 		case 2:

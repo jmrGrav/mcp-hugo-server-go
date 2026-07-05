@@ -17,7 +17,7 @@ func normalizeConfiguredScope(raw string) (string, error) {
 	case "site.admin", "site_admin", "siteadmin":
 		return "site.admin", nil
 	case "system.admin", "admin", "system_admin", "systemadmin":
-		return "system.admin", nil
+		return "site.admin", nil
 	default:
 		return "", fmt.Errorf("invalid scope %q", raw)
 	}

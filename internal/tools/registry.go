@@ -1,9 +1,9 @@
 package tools
 
-var scopeOrder = []string{"", "content.read", "content.write", "site.admin", "system.admin"}
+var scopeOrder = []string{"", "content.read", "content.write", "site.admin"}
 
 // KnownScopes lists every scope this server may issue or enforce.
-var KnownScopes = []string{"content.read", "content.write", "site.admin", "system.admin"}
+var KnownScopes = []string{"content.read", "content.write", "site.admin"}
 
 type ToolDef struct {
 	Name          string
@@ -66,8 +66,7 @@ func scopeRank(scope string) int {
 //	0  anonymous / ""
 //	1  content.read
 //	2  content.write
-//	3  site.admin
-//	4  system.admin
+//	3  site.admin (highest; system.admin is an alias)
 //	0  unknown scope (treated as anonymous)
 func ScopeRank(scope string) int {
 	r := scopeRank(scope)

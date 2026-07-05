@@ -32,17 +32,8 @@ type generateFeaturedImageOutput struct {
 	Path string `json:"path"`
 }
 
-// Register wires all admin tools (site.admin + system.admin scopes).
+// Register wires all admin tools (site.admin scope).
 func Register(s *mcp.Server, cfg config.Config) {
-	if s == nil {
-		return
-	}
-	RegisterSiteAdmin(s, cfg)
-	RegisterSRI(s, cfg)
-}
-
-// RegisterSiteAdmin wires the site.admin-scoped tools only.
-func RegisterSiteAdmin(s *mcp.Server, cfg config.Config) {
 	if s == nil {
 		return
 	}
@@ -50,6 +41,12 @@ func RegisterSiteAdmin(s *mcp.Server, cfg config.Config) {
 	RegisterPreviewBuild(s, cfg)
 	RegisterHooks(s, cfg)
 	registerGenerateFeaturedImage(s, cfg)
+	RegisterSRI(s, cfg)
+}
+
+// RegisterSiteAdmin is an alias for Register kept for compatibility.
+func RegisterSiteAdmin(s *mcp.Server, cfg config.Config) {
+	Register(s, cfg)
 }
 
 // Defs returns tool definitions for all admin tools (used to build the global registry).
@@ -59,7 +56,7 @@ func Defs() []tools.ToolDef {
 		{Name: "preview_build", RequiredScope: "site.admin"},
 		{Name: "run_post_build_hooks", RequiredScope: "site.admin"},
 		{Name: "generate_featured_image", RequiredScope: "site.admin"},
-		{Name: "check_sri_versions", RequiredScope: "system.admin"},
+		{Name: "check_sri_versions", RequiredScope: "site.admin"},
 	}
 }
 
