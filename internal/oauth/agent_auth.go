@@ -100,7 +100,9 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 	reg, ok := s.agentRegs[assertion]
 	s.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("invalid_grant")
+		// Assertion not found — most likely lost on server restart (in-memory state).
+		// Use a distinct sentinel so the HTTP handler can add Retry-After: 0.
+		return nil, fmt.Errorf("invalid_grant: assertion_not_found")
 	}
 	if time.Now().After(reg.AssertionExpires) {
 		return nil, fmt.Errorf("invalid_grant")
