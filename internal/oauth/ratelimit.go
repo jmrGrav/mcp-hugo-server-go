@@ -71,7 +71,11 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "rate_limit_exceeded"})
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"error":               "rate_limit_exceeded",
+				"message":             "rate limit exceeded; retry after 1 second",
+				"retry_after_seconds": 1,
+			})
 			return
 		}
 		next.ServeHTTP(w, r)

@@ -95,11 +95,14 @@ func TestRateLimiter429Response(t *testing.T) {
 	if got := rec.Header().Get("Retry-After"); got != "1" {
 		t.Fatalf("expected Retry-After: 1, got %q", got)
 	}
-	var body map[string]string
+	var body map[string]any
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
 	if body["error"] != "rate_limit_exceeded" {
 		t.Fatalf("unexpected error body: %v", body)
+	}
+	if body["retry_after_seconds"] != float64(1) {
+		t.Fatalf("unexpected retry_after_seconds body: %v", body)
 	}
 }

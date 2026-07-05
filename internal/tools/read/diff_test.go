@@ -122,6 +122,38 @@ func TestDiffPageResolvesMultilingualBundleFromSourceIndex(t *testing.T) {
 	}
 }
 
+func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	pagePath := filepath.Join(contentRoot, "posts", "nogit", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: No Git\ndate: 2026-07-03\n---\nNo git source body.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+
+	session, done := newDiffPageClient(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "diff_page", map[string]any{"slug": "/posts/nogit/"})
+	if res.IsError {
+		t.Fatalf("diff_page without git returned MCP error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data := m["data"].(map[string]any)
+	if got := data["status"]; got != "git_not_available" {
+		t.Fatalf("diff_page status = %v, want git_not_available", got)
+	}
+	if got := data["source_content"]; got != "No git source body." {
+		t.Fatalf("source_content = %q, want source body", got)
+	}
+	warnings := m["warnings"].([]any)
+	if len(warnings) == 0 {
+		t.Fatal("expected warning explaining git is unavailable")
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
