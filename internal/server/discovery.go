@@ -55,10 +55,11 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 	if resource == "" {
 		resource = issuer + "/mcp"
 	}
-	registrationEndpoint := ""
-	if cfg.OAuth.DynamicClientEnabled {
-		registrationEndpoint = issuer + "/register"
-	}
+	// /register is always live when OAuth is enabled (RFC 7591 DCR endpoint).
+	// DynamicClientEnabled controls whether unauthenticated public registration
+	// is accepted; the endpoint itself is always advertised so agent discovery
+	// stays coherent with auth.md and the live /register surface (#117).
+	registrationEndpoint := issuer + "/register"
 	return authServerMeta{
 		Issuer:                            issuer,
 		AuthorizationEndpoint:             issuer + "/authorize",
