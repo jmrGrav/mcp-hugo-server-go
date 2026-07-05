@@ -46,6 +46,8 @@ func (p *ScopePolicy) checkOne(env rpcEnvelope, callerScope string) (allow bool,
 	return true, ""
 }
 
+const maxBatchSize = 50
+
 func (p *ScopePolicy) parse(body []byte) ([]rpcEnvelope, bool) {
 	body = []byte(strings.TrimSpace(string(body)))
 	if len(body) == 0 {
@@ -54,6 +56,9 @@ func (p *ScopePolicy) parse(body []byte) ([]rpcEnvelope, bool) {
 	if body[0] == '[' {
 		var batch []rpcEnvelope
 		if err := json.Unmarshal(body, &batch); err != nil {
+			return nil, false
+		}
+		if len(batch) > maxBatchSize {
 			return nil, false
 		}
 		return batch, true
