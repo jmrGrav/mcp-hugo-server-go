@@ -132,7 +132,9 @@ func validateHookURL(raw string) error {
 	return validateExternalURL(raw)
 }
 
-// validateExternalURL rejects non-HTTP(S) schemes and private/link-local addresses.
+// validateExternalURL rejects non-HTTP(S) schemes and literal private/link-local
+// IP addresses. Hostname-based URLs are accepted without DNS resolution to avoid
+// side effects at config load time (issue #112).
 func validateExternalURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -145,21 +147,8 @@ func validateExternalURL(raw string) error {
 	if host == "" {
 		return fmt.Errorf("URL %q: missing host", raw)
 	}
-	ips, err := net.LookupHost(host)
-	if err != nil {
-		// Accept hostnames that cannot be resolved at load time (e.g. DNS may not
-		// be ready), but reject literal private IPs.
-		ip := net.ParseIP(host)
-		if ip != nil && isPrivateOrLinkLocal(ip) {
-			return fmt.Errorf("URL %q: private/link-local IP addresses are not allowed", raw)
-		}
-		return nil
-	}
-	for _, ipStr := range ips {
-		ip := net.ParseIP(ipStr)
-		if ip != nil && isPrivateOrLinkLocal(ip) {
-			return fmt.Errorf("URL %q resolves to private/link-local address %s", raw, ipStr)
-		}
+	if ip := net.ParseIP(host); ip != nil && isPrivateOrLinkLocal(ip) {
+		return fmt.Errorf("URL %q: private/link-local IP addresses are not allowed", raw)
 	}
 	return nil
 }
