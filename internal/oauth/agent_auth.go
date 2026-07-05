@@ -1,7 +1,6 @@
 package oauth
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,7 +29,6 @@ type agentClaim struct {
 }
 
 type AgentClaimInfo struct {
-	UserCode        string `json:"user_code"`
 	ExpiresIn       int    `json:"expires_in"`
 	VerificationURI string `json:"verification_uri"`
 	Interval        int    `json:"interval"`
@@ -88,7 +86,6 @@ func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 		ClaimTokenExpires: claimExpires.UTC().Format(time.RFC3339Nano),
 		PostClaimScopes:   []string{"content.read"},
 		Claim: &AgentClaimInfo{
-			UserCode:        randomDigits(6),
 			ExpiresIn:       600,
 			VerificationURI: issuer + "/agent/identity/verify",
 			Interval:        5,
@@ -154,7 +151,6 @@ func (s *Service) initiateClaim(claimToken string) (*AgentClaimResponse, error) 
 		Status:         "initiated",
 		ExpiresAt:      expiresAt.UTC().Format(time.RFC3339Nano),
 		ClaimAttempt: &AgentClaimInfo{
-			UserCode:        randomDigits(6),
 			ExpiresIn:       600,
 			VerificationURI: issuer + "/agent/identity/verify",
 			Interval:        5,
@@ -322,12 +318,3 @@ func writeAgentAuthError(w http.ResponseWriter, code string, httpStatus int) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": code})
 }
 
-func randomDigits(n int) string {
-	const digits = "0123456789"
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	for i := range b {
-		b[i] = digits[b[i]%10]
-	}
-	return string(b)
-}
