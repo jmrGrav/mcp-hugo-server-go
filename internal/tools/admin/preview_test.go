@@ -3,6 +3,7 @@ package admin_test
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -35,6 +36,60 @@ func TestPreviewBuildSucceeds(t *testing.T) {
 	}
 	if out["status"] != "ok" {
 		t.Fatalf("expected status ok, got %v", out["status"])
+	}
+}
+
+func TestPreviewBuildFailureStructuredError(t *testing.T) {
+	dir := writeMockHugo(t, "#!/bin/sh\necho 'Error: TOML parse error' >&2\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "preview_build", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result, got success")
+	}
+
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON object in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v — got %q", err, text)
+	}
+
+	if out["error"] != "build_error" {
+		t.Errorf("error field: want %q, got %v", "build_error", out["error"])
+	}
+	if out["exit_code"] != float64(1) {
+		t.Errorf("exit_code: want 1, got %v", out["exit_code"])
+	}
+	summary, _ := out["stderr_summary"].(string)
+	if !strings.Contains(summary, "TOML parse error") {
+		t.Errorf("stderr_summary %q does not contain 'TOML parse error'", summary)
+	}
+	buildID, _ := out["build_id"].(string)
+	if !matchesBuildIDPattern(buildID) {
+		t.Errorf("build_id %q does not match pattern YYYYMMDD-HHMMSS-xxxx", buildID)
+	}
+	if _, ok := out["duration_ms"].(float64); !ok {
+		t.Errorf("duration_ms missing or not a number: %v", out["duration_ms"])
+	}
+	if out["command"] != "hugo --renderToMemory" {
+		t.Errorf("command: want %q, got %v", "hugo --renderToMemory", out["command"])
+	}
+	if wd, _ := out["working_directory"].(string); wd == "" {
+		t.Error("working_directory is empty")
 	}
 }
 

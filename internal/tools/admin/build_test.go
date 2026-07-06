@@ -143,3 +143,157 @@ func TestBuildSiteTimeout(t *testing.T) {
 		t.Fatalf("error %q does not indicate timeout", text)
 	}
 }
+
+func TestBuildSiteFailureStructuredError(t *testing.T) {
+	dir := writeMockHugo(t, "#!/bin/sh\necho 'Error: TOML parse error' >&2\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result, got success")
+	}
+
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON object in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v — got %q", err, text)
+	}
+
+	if out["error"] != "build_error" {
+		t.Errorf("error field: want %q, got %v", "build_error", out["error"])
+	}
+	if out["exit_code"] != float64(1) {
+		t.Errorf("exit_code: want 1, got %v", out["exit_code"])
+	}
+	summary, _ := out["stderr_summary"].(string)
+	if !strings.Contains(summary, "TOML parse error") {
+		t.Errorf("stderr_summary %q does not contain 'TOML parse error'", summary)
+	}
+	buildID, _ := out["build_id"].(string)
+	if !matchesBuildIDPattern(buildID) {
+		t.Errorf("build_id %q does not match pattern YYYYMMDD-HHMMSS-xxxx", buildID)
+	}
+	if _, ok := out["duration_ms"].(float64); !ok {
+		t.Errorf("duration_ms missing or not a number: %v", out["duration_ms"])
+	}
+	if out["command"] != "hugo" {
+		t.Errorf("command: want %q, got %v", "hugo", out["command"])
+	}
+	if wd, _ := out["working_directory"].(string); wd == "" {
+		t.Error("working_directory is empty")
+	}
+}
+
+func TestBuildSiteStderrSanitised(t *testing.T) {
+	secretRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\necho '"+secretRoot+": Error occurred' >&2\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = secretRoot
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result, got success")
+	}
+
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON object in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v", err)
+	}
+
+	summary, _ := out["stderr_summary"].(string)
+	if strings.Contains(summary, secretRoot) {
+		t.Errorf("stderr_summary leaks secretRoot %q: %q", secretRoot, summary)
+	}
+	if !strings.Contains(summary, "<site_root>") {
+		t.Errorf("stderr_summary %q does not contain '<site_root>'", summary)
+	}
+}
+
+func TestBuildSiteStderrTruncated(t *testing.T) {
+	// Write 600 'x' bytes to stderr.
+	dir := writeMockHugo(t, "#!/bin/sh\nprintf '%0.sx' $(seq 1 600) >&2\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result, got success")
+	}
+
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON object in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v", err)
+	}
+
+	summary, _ := out["stderr_summary"].(string)
+	if len(summary) > 500 {
+		t.Errorf("stderr_summary length %d exceeds 500", len(summary))
+	}
+}
+
+// matchesBuildIDPattern returns true if s matches YYYYMMDD-HHMMSS-xxxx.
+func matchesBuildIDPattern(s string) bool {
+	if len(s) != 20 {
+		return false
+	}
+	// YYYYMMDD-HHMMSS-xxxx
+	for i, ch := range s {
+		switch i {
+		case 8, 15:
+			if ch != '-' {
+				return false
+			}
+		case 16, 17, 18, 19:
+			if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
+				return false
+			}
+		default:
+			if ch < '0' || ch > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}

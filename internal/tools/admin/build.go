@@ -1,10 +1,14 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -18,6 +22,51 @@ type buildSiteInput struct{}
 type buildSiteOutput struct {
 	Status     string `json:"status"`
 	DurationMs int64  `json:"duration_ms"`
+}
+
+// buildErrorPayload is the structured JSON returned on Hugo failure.
+type buildErrorPayload struct {
+	Error            string `json:"error"`
+	ExitCode         int    `json:"exit_code"`
+	Command          string `json:"command"`
+	WorkingDirectory string `json:"working_directory"`
+	DurationMs       int64  `json:"duration_ms"`
+	StderrSummary    string `json:"stderr_summary"`
+	BuildID          string `json:"build_id"`
+	LogHint          string `json:"log_hint"`
+}
+
+// newBuildID generates a build identifier of the form YYYYMMDD-HHMMSS-<4 random lowercase hex chars>.
+func newBuildID(t time.Time) string {
+	b := make([]byte, 2)
+	_, _ = rand.Read(b)
+	return t.UTC().Format("20060102-150405") + "-" + fmt.Sprintf("%04x", b)
+}
+
+// truncateUTF8 returns a string from b that is at most maxBytes bytes and ends
+// on a valid UTF-8 boundary.
+func truncateUTF8(b []byte, maxBytes int) string {
+	if len(b) <= maxBytes {
+		return string(b)
+	}
+	b = b[:maxBytes]
+	// Walk back to a valid UTF-8 boundary.
+	for len(b) > 0 && b[len(b)-1]&0xC0 == 0x80 {
+		b = b[:len(b)-1]
+	}
+	return string(b)
+}
+
+// sanitiseStderr truncates raw stderr to 500 bytes and redacts absolute paths.
+func sanitiseStderr(raw []byte, hugoRoot, siteRoot string) string {
+	s := truncateUTF8(raw, 500)
+	if hugoRoot != "" {
+		s = strings.ReplaceAll(s, hugoRoot, "<site_root>")
+	}
+	if siteRoot != "" && siteRoot != hugoRoot {
+		s = strings.ReplaceAll(s, siteRoot, "<site_root>")
+	}
+	return strings.TrimSpace(s)
 }
 
 func RegisterBuild(s *mcp.Server, cfg config.Config) {
@@ -54,6 +103,8 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 		start := time.Now()
 		cmd := exec.CommandContext(tctx, "hugo")
 		cmd.Dir = cfg.HugoRoot
+		var stderrBuf bytes.Buffer
+		cmd.Stderr = &stderrBuf
 		err := cmd.Run()
 		durationMs := time.Since(start).Milliseconds()
 
@@ -63,11 +114,32 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 		}
 
 		if err != nil {
-			slog.Error("build_site failed", "duration_ms", durationMs, "exit_code", exitCode, "error", err)
+			buildID := newBuildID(start)
+			slog.Error("build_site failed",
+				"build_id", buildID,
+				"duration_ms", durationMs,
+				"exit_code", exitCode,
+				"stderr", stderrBuf.String(),
+				"error", err,
+			)
+
+			errKind := "build_error"
 			if tctx.Err() != nil {
-				return nil, buildSiteOutput{}, fmt.Errorf("build_error: build timeout exceeded")
+				errKind = "build_timeout"
 			}
-			return nil, buildSiteOutput{}, fmt.Errorf("build_error: hugo exited with error")
+
+			payload := buildErrorPayload{
+				Error:            errKind,
+				ExitCode:         exitCode,
+				Command:          "hugo",
+				WorkingDirectory: cfg.HugoRoot,
+				DurationMs:       durationMs,
+				StderrSummary:    sanitiseStderr(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				BuildID:          buildID,
+				LogHint:          "Search server logs for build_id=" + buildID,
+			}
+			jsonPayload, _ := json.Marshal(payload)
+			return nil, buildSiteOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
 		}
 
 		slog.Info("build_site completed", "duration_ms", durationMs, "exit_code", exitCode)

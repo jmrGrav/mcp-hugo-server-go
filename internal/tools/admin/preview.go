@@ -1,7 +1,9 @@
 package admin
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os/exec"
@@ -63,15 +65,45 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		start := time.Now()
 		cmd := exec.CommandContext(tctx, "hugo", "--renderToMemory")
 		cmd.Dir = cfg.HugoRoot
+		var stderrBuf bytes.Buffer
+		cmd.Stderr = &stderrBuf
 		err := cmd.Run()
 		durationMs := time.Since(start).Milliseconds()
+
 		if err != nil {
-			if tctx.Err() != nil {
-				return nil, previewBuildOutput{}, fmt.Errorf("build_error: preview build timeout exceeded")
+			buildID := newBuildID(start)
+			exitCode := 0
+			if cmd.ProcessState != nil {
+				exitCode = cmd.ProcessState.ExitCode()
 			}
-			slog.Error("preview_build failed", "duration_ms", durationMs, "error", err)
-			return nil, previewBuildOutput{}, fmt.Errorf("build_error: hugo exited with error")
+
+			slog.Error("preview_build failed",
+				"build_id", buildID,
+				"duration_ms", durationMs,
+				"exit_code", exitCode,
+				"stderr", stderrBuf.String(),
+				"error", err,
+			)
+
+			errKind := "build_error"
+			if tctx.Err() != nil {
+				errKind = "build_timeout"
+			}
+
+			payload := buildErrorPayload{
+				Error:            errKind,
+				ExitCode:         exitCode,
+				Command:          "hugo --renderToMemory",
+				WorkingDirectory: cfg.HugoRoot,
+				DurationMs:       durationMs,
+				StderrSummary:    sanitiseStderr(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				BuildID:          buildID,
+				LogHint:          "Search server logs for build_id=" + buildID,
+			}
+			jsonPayload, _ := json.Marshal(payload)
+			return nil, previewBuildOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
 		}
+
 		return nil, previewBuildOutput{Status: "ok", DurationMs: durationMs}, nil
 	})
 }
