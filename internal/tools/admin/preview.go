@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"time"
 
@@ -62,8 +63,14 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		tctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 		defer cancel()
 
+		cacheDir := hugoCacheDir(cfg)
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			return nil, previewBuildOutput{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
+		}
 		start := time.Now()
-		cmd := exec.CommandContext(tctx, "hugo", "--renderToMemory")
+		runID := newBuildID(start)
+		args := buildCommandArgs(cacheDir, true)
+		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
 		var stderrBuf bytes.Buffer
 		var stdoutBuf bytes.Buffer
@@ -73,17 +80,26 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		durationMs := time.Since(start).Milliseconds()
 
 		if err != nil {
-			buildID := newBuildID(start)
 			exitCode := 0
 			if cmd.ProcessState != nil {
 				exitCode = cmd.ProcessState.ExitCode()
 			}
+			summary := buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot)
+			errClass := classifyBuildFailure(tctx, summary)
 
 			slog.Error("preview_build failed",
-				"build_id", buildID,
+				"build_id", runID,
+				"tool", "preview_build",
+				"user", currentUserForLog(),
+				"command", commandString("hugo", args),
+				"cwd", cfg.HugoRoot,
+				"cache_dir", cacheDir,
 				"duration_ms", durationMs,
 				"exit_code", exitCode,
-				"output_summary", buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				"error_class", errClass,
+				"stdout_tail", outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				"stderr_tail", outputTail(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				"output_summary", summary,
 				"error", err,
 			)
 
@@ -94,18 +110,31 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 
 			payload := buildErrorPayload{
 				Error:            errKind,
+				ErrorClass:       errClass,
 				ExitCode:         exitCode,
-				Command:          "hugo --renderToMemory",
+				Command:          commandString("hugo", args),
 				WorkingDirectory: cfg.HugoRoot,
+				CacheDirectory:   cacheDir,
 				DurationMs:       durationMs,
-				StderrSummary:    buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
-				BuildID:          buildID,
-				LogHint:          "Search server logs for build_id=" + buildID,
+				StderrSummary:    summary,
+				StdoutSummary:    outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				BuildID:          runID,
+				LogHint:          "Search server logs for build_id=" + runID,
 			}
 			jsonPayload, _ := json.Marshal(payload)
 			return nil, previewBuildOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
 		}
 
+		slog.Info("preview_build completed",
+			"build_id", runID,
+			"tool", "preview_build",
+			"user", currentUserForLog(),
+			"command", commandString("hugo", args),
+			"cwd", cfg.HugoRoot,
+			"cache_dir", cacheDir,
+			"duration_ms", durationMs,
+			"exit_code", 0,
+		)
 		return nil, previewBuildOutput{Status: "ok", DurationMs: durationMs}, nil
 	})
 }

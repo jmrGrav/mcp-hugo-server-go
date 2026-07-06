@@ -90,7 +90,11 @@ image_gen_key: sk-...  # optional
 ```
 
 The generated image is saved to `{site_root}/images/featured/{slug}.jpg` and must be
-committed/deployed separately.
+committed/deployed separately. If the tool returns `write_error`, verify both:
+
+- Unix ownership/mode on `{site_root}/images` or its parent directories.
+- systemd `ReadWritePaths` includes `{site_root}` (or at minimum the relevant
+  `public/` subtree) for the MCP service.
 
 ### Build Configuration
 
@@ -175,8 +179,9 @@ This script:
 
 The service runs under `ProtectSystem=strict`, which makes the entire filesystem
 read-only for the process. You must declare any directory the server needs to
-write to (SQLite token store, Hugo content directory) via `ReadWritePaths` in
-the systemd drop-in override.
+write to via `ReadWritePaths` in the systemd drop-in override. For Hugo admin
+tools, that means more than `content/`: builds and generated images also need
+`resources/` and `public/`.
 
 The deploy script installs a template at:
 
@@ -186,8 +191,8 @@ Edit it after the first deploy to match your installation. At minimum you need:
 
 ```ini
 [Service]
-ReadWritePaths=/var/lib/mcp-hugo-server-go /path/to/hugo-site/content
-ReadOnlyPaths=/path/to/hugo-site/public /etc/mcp-hugo-server-go
+ReadOnlyPaths=/etc/mcp-hugo-server-go
+ReadWritePaths=/var/lib/mcp-hugo-server-go /path/to/hugo-site/content /path/to/hugo-site/resources /path/to/hugo-site/public
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ```
 
@@ -252,8 +257,8 @@ The systemd service is installed to `/etc/systemd/system/mcp-hugo-server-go.serv
 
 - **User/Group**: `mcp-hugo-server-go` (create this user before running).
 - **Environment**: `MCP_HUGO_SERVER_CONFIG=/etc/mcp-hugo-server-go/config.yaml`.
-- **Security**: `ProtectSystem=full`, `ProtectHome=true`, `CapabilityBoundingSet=` (no capabilities).
-- **Write Paths**: `ReadWritePaths=/var/lib/mcp-hugo-server-go /srv/hugo-site` (adjust to match `site_root` and OAuth storage path).
+- **Security**: `ProtectSystem=strict`, `ProtectHome=read-only`, `CapabilityBoundingSet=` (no capabilities).
+- **Write Paths**: `ReadWritePaths=/var/lib/mcp-hugo-server-go /srv/hugo-site/content /srv/hugo-site/resources /srv/hugo-site/public` (adjust to match your Hugo tree and OAuth storage path).
 
 To run in read-only mode (anonymous and `content.read` only):
 1. Remove the `ReadWritePaths` lines.
@@ -553,7 +558,7 @@ the deploy SSH block before the new binary is moved into place.
 | OAuth token endpoint returns error | `oauth.enabled: true` but `oauth.issuer` is not set or empty. | Set `oauth.issuer` to a valid URL. |
 | Post-build hooks not firing | Hook URL is invalid or uses a private IP. | Validate the URL format and DNS resolution. |
 | `build_site` timeout | Hugo build takes longer than `build_timeout_seconds`. | Increase the timeout value in config. |
-| Permission denied when writing pages | Systemd service lacks write permissions. | Update `ReadWritePaths` in the service file and reload. |
+| Permission denied when writing pages, builds, or featured images | Systemd service lacks write permissions. | Update `ReadWritePaths` for `content`, `resources`, and `public`, then reload. |
 | OpenResty returns HTML 503 under load | Reverse proxy treats upstream 429 as a connection error. | See Pitfall 4 below. |
 
 ## Known Deployment Pitfalls
@@ -582,29 +587,36 @@ sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
 
 Or edit `/etc/systemd/system/mcp-hugo-server-go.service` manually:
 ```ini
-ReadWritePaths=/var/lib/mcp-hugo-server-go /home/user/hugo-site/content
+ReadWritePaths=/var/lib/mcp-hugo-server-go /home/user/hugo-site/content /home/user/hugo-site/resources /home/user/hugo-site/public
 ```
 
 ---
 
-### Pitfall 2 — Write tools fail with "read-only file system"
+### Pitfall 2 — Write/build/image tools fail with "read-only file system"
 
-**Symptom:** `create_page`, `update_page`, `delete_page` return a write error even though the service user has group access to the content directory.
+**Symptom:** `create_page`, `update_page`, `delete_page`, `build_site`, `preview_build`, or `generate_featured_image` fail even though the service user has Unix access to the Hugo tree.
 
 **Cause:** `ProtectHome=read-only` blocks all writes under `/home/`, including directories the service user owns or belongs to via group membership. Group membership is not sufficient — systemd's namespace isolation applies before Unix permissions.
 
 **Fix:**
 
 ```bash
-# Add content_root to ReadWritePaths
-sudo sed -i 's|ReadWritePaths=|ReadWritePaths=/home/user/hugo-site/content |' \
+# Add all Hugo write paths to ReadWritePaths
+sudo sed -i 's|ReadWritePaths=|ReadWritePaths=/home/user/hugo-site/content /home/user/hugo-site/resources /home/user/hugo-site/public |' \
     /etc/systemd/system/mcp-hugo-server-go.service
 sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
 ```
 
-Also ensure the service user has group write access to the content directory:
+Also ensure the service user has group write access to the relevant directories:
 ```bash
 sudo usermod -aG <site-owner-group> mcp-hugo-server-go
+```
+
+If `build_site` still fails with `operation not permitted` on `public/`, fix the
+directory mode/ownership too. The live `mcp.arleo.eu` failure was:
+
+```text
+Error: error copying static files: chtimes /home/jm/hugo-site/public: operation not permitted
 ```
 
 ---

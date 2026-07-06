@@ -190,11 +190,15 @@ func TestBuildSiteFailureStructuredError(t *testing.T) {
 	if _, ok := out["duration_ms"].(float64); !ok {
 		t.Errorf("duration_ms missing or not a number: %v", out["duration_ms"])
 	}
-	if out["command"] != "hugo" {
-		t.Errorf("command: want %q, got %v", "hugo", out["command"])
+	command, _ := out["command"].(string)
+	if !strings.Contains(command, "hugo --noBuildLock --cacheDir ") {
+		t.Errorf("command %q does not include expected Hugo flags", command)
 	}
 	if wd, _ := out["working_directory"].(string); wd == "" {
 		t.Error("working_directory is empty")
+	}
+	if cacheDir, _ := out["cache_directory"].(string); cacheDir == "" {
+		t.Error("cache_directory is empty")
 	}
 }
 
