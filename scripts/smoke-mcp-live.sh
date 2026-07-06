@@ -249,7 +249,7 @@ call_tool "search_content" "search_content" '{"query":"arleo","limit":3,"offset"
 sleep "$SMOKE_DELAY"
 call_tool "get_site_health" "get_site_health" "{}"
 sleep "$SMOKE_DELAY"
-call_tool "validate_site" "validate_site" '{"limit":5,"offset":0}'
+call_tool "validate_site" "validate_site" "{}"
 
 if [[ "${MCP_SMOKE_BURST:-0}" == "1" ]]; then
   echo "Burst probe: $BURST_COUNT calls without pacing"
