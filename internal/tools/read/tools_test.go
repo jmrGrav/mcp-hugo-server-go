@@ -468,7 +468,7 @@ func TestValidateFrontMatterOutputFields(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 10, "offset": 0})
+	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 1, "offset": 0})
 	if res.IsError {
 		t.Fatalf("validate_front_matter returned error: %v", res.Content)
 	}
@@ -491,6 +491,16 @@ func TestValidateFrontMatterOutputFields(t *testing.T) {
 	}
 	if _, ok := data["valid"]; ok {
 		t.Fatal("validate_front_matter: old 'valid' field must not be present")
+	}
+	pagesChecked := int(data["pages_checked"].(float64))
+	pagesPassed := int(data["pages_passed"].(float64))
+	invalid := int(data["invalid"].(float64))
+	if pagesPassed+invalid != pagesChecked {
+		t.Fatalf("aggregate counters are paginated: pages_passed(%d)+invalid(%d) != pages_checked(%d)", pagesPassed, invalid, pagesChecked)
+	}
+	pages := data["pages"].([]any)
+	if len(pages) != 1 {
+		t.Fatalf("limit=1 should return exactly one page detail, got %d", len(pages))
 	}
 }
 

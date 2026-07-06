@@ -100,6 +100,9 @@ type validateOutputData struct {
 	PagesChecked int                   `json:"pages_checked"`
 	PagesPassed  int                   `json:"pages_passed"`
 	Invalid      int                   `json:"invalid"`
+	Returned     int                   `json:"returned_count,omitempty"`
+	Limit        int                   `json:"limit,omitempty"`
+	Offset       int                   `json:"offset,omitempty"`
 	Pages        []frontMatterIssueDTO `json:"pages"`
 }
 
@@ -574,24 +577,25 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) val
 	if limit <= 0 {
 		limit = total
 	}
-	slice := pages
-	if offset < len(slice) {
-		slice = slice[offset:]
-	} else {
-		slice = []hugosite.SourcePage{}
-	}
-	if len(slice) > limit {
-		slice = slice[:limit]
-	}
 
-	results := make([]frontMatterIssueDTO, 0, len(slice))
+	allResults := make([]frontMatterIssueDTO, 0, len(pages))
 	invalid := 0
-	for _, p := range slice {
+	for _, p := range pages {
 		issues := validateFrontMatterPage(p)
 		if len(issues) > 0 {
 			invalid++
 		}
-		results = append(results, frontMatterIssueDTO{Slug: p.Slug, Lang: p.Lang, Issues: issues})
+		allResults = append(allResults, frontMatterIssueDTO{Slug: p.Slug, Lang: p.Lang, Issues: issues})
+	}
+
+	results := allResults
+	if offset < len(results) {
+		results = results[offset:]
+	} else {
+		results = []frontMatterIssueDTO{}
+	}
+	if len(results) > limit {
+		results = results[:limit]
 	}
 	return validateOutput{
 		Success:     true,
@@ -599,8 +603,11 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) val
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Data: validateOutputData{
 			PagesChecked: total,
-			PagesPassed:  len(slice) - invalid,
+			PagesPassed:  total - invalid,
 			Invalid:      invalid,
+			Returned:     len(results),
+			Limit:        limit,
+			Offset:       offset,
 			Pages:        results,
 		},
 		Warnings: []string{},
