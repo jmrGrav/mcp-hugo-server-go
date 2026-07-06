@@ -160,6 +160,14 @@ func TestGetPageFrontmatter(t *testing.T) {
 	if !ok || len(cats) != 1 || cats[0] != "tutorials" {
 		t.Fatalf("get_page_frontmatter categories = %#v, want source frontmatter category", fm["categories"])
 	}
+	categoryTerms, ok := fm["category_terms"].([]any)
+	if !ok || len(categoryTerms) != 1 {
+		t.Fatalf("get_page_frontmatter category_terms = %#v, want one normalized term", fm["category_terms"])
+	}
+	term := categoryTerms[0].(map[string]any)
+	if term["source"] != "tutorials" || term["slug"] != "tutorials" || term["label"] != "Tutorials" {
+		t.Fatalf("category term = %#v, want source/slug/label for tutorials", term)
+	}
 }
 
 func TestGetRelatedContent(t *testing.T) {

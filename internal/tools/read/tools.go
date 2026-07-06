@@ -18,14 +18,16 @@ type getFullPageMarkdownInput struct {
 }
 
 type pageMarkdownDTO struct {
-	Slug       string   `json:"slug"`
-	Title      string   `json:"title"`
-	Date       string   `json:"date"`
-	Tags       []string `json:"tags"`
-	Categories []string `json:"categories"`
-	URL        string   `json:"url"`
-	Lang       string   `json:"lang"`
-	Markdown   string   `json:"markdown"`
+	Slug          string              `json:"slug"`
+	Title         string              `json:"title"`
+	Date          string              `json:"date"`
+	Tags          []string            `json:"tags"`
+	Categories    []string            `json:"categories"`
+	TagTerms      []site.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms []site.TaxonomyTerm `json:"category_terms,omitempty"`
+	URL           string              `json:"url"`
+	Lang          string              `json:"lang"`
+	Markdown      string              `json:"markdown"`
 }
 
 type getFullPageMarkdownOutput struct {
@@ -37,14 +39,16 @@ type getPageFrontmatterInput struct {
 }
 
 type frontmatterDTO struct {
-	Slug           string   `json:"slug"`
-	Title          string   `json:"title"`
-	Date           string   `json:"date"`
-	Tags           []string `json:"tags"`
-	Categories     []string `json:"categories"`
-	URL            string   `json:"url"`
-	Lang           string   `json:"lang"`
-	ReadingTimeMin int      `json:"reading_time_minutes"`
+	Slug           string              `json:"slug"`
+	Title          string              `json:"title"`
+	Date           string              `json:"date"`
+	Tags           []string            `json:"tags"`
+	Categories     []string            `json:"categories"`
+	TagTerms       []site.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms  []site.TaxonomyTerm `json:"category_terms,omitempty"`
+	URL            string              `json:"url"`
+	Lang           string              `json:"lang"`
+	ReadingTimeMin int                 `json:"reading_time_minutes"`
 }
 
 type getPageFrontmatterOutput struct {
@@ -235,14 +239,16 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 func toPageMarkdownDTO(p site.Page, md string) pageMarkdownDTO {
 	return pageMarkdownDTO{
-		Slug:       p.Slug,
-		Title:      p.Title,
-		Date:       p.Date,
-		Tags:       nullsafeStrings(p.Tags),
-		Categories: nullsafeStrings(p.Categories),
-		URL:        p.URL,
-		Lang:       p.Lang,
-		Markdown:   md,
+		Slug:          p.Slug,
+		Title:         p.Title,
+		Date:          p.Date,
+		Tags:          nullsafeStrings(p.Tags),
+		Categories:    nullsafeStrings(p.Categories),
+		TagTerms:      site.NormalizeTaxonomyTerms(p.Tags),
+		CategoryTerms: site.NormalizeTaxonomyTerms(p.Categories),
+		URL:           p.URL,
+		Lang:          p.Lang,
+		Markdown:      md,
 	}
 }
 
@@ -293,6 +299,8 @@ func toFrontmatterDTO(p site.Page, readingTimeMin int) frontmatterDTO {
 		Date:           p.Date,
 		Tags:           nullsafeStrings(p.Tags),
 		Categories:     nullsafeStrings(p.Categories),
+		TagTerms:       site.NormalizeTaxonomyTerms(p.Tags),
+		CategoryTerms:  site.NormalizeTaxonomyTerms(p.Categories),
 		URL:            p.URL,
 		Lang:           p.Lang,
 		ReadingTimeMin: readingTimeMin,

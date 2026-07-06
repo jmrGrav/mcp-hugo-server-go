@@ -45,6 +45,25 @@ This document reflects the current MCP registry. Tool IDs are stable; titles and
 
 `system.admin` is accepted as a legacy compatibility alias for `site.admin`, but it is not advertised as a canonical tool tier.
 
+## Taxonomy Fields
+
+Existing `tags` and `categories` arrays are preserved for backward compatibility. Read tools that return page/frontmatter DTOs may also include:
+
+- `tag_terms`
+- `category_terms`
+
+Each term contains:
+
+```json
+{
+  "source": "postmortem",
+  "slug": "postmortem",
+  "label": "Postmortem"
+}
+```
+
+Use `slug` for stable filtering/grouping and `label` for display. The original `source` value remains available for auditing content taxonomy drift.
+
 ## Discovery
 
 - `/.well-known/agent.json` - A2A agent card for Google-compatible discovery

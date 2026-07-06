@@ -86,14 +86,16 @@ type sectionDTO struct {
 }
 
 type pageDTO struct {
-	Slug       string   `json:"slug"`
-	Title      string   `json:"title"`
-	Summary    string   `json:"summary"`
-	Tags       []string `json:"tags"`
-	Categories []string `json:"categories"`
-	Date       string   `json:"date"`
-	URL        string   `json:"url"`
-	Lang       string   `json:"lang"`
+	Slug          string              `json:"slug"`
+	Title         string              `json:"title"`
+	Summary       string              `json:"summary"`
+	Tags          []string            `json:"tags"`
+	Categories    []string            `json:"categories"`
+	TagTerms      []site.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms []site.TaxonomyTerm `json:"category_terms,omitempty"`
+	Date          string              `json:"date"`
+	URL           string              `json:"url"`
+	Lang          string              `json:"lang"`
 }
 
 type validateOutputData struct {
@@ -768,14 +770,16 @@ func toPageDTO(p site.Page) pageDTO {
 		cats = []string{}
 	}
 	return pageDTO{
-		Slug:       p.Slug,
-		Title:      p.Title,
-		Summary:    p.Summary,
-		Tags:       tags,
-		Categories: cats,
-		Date:       p.Date,
-		URL:        p.URL,
-		Lang:       p.Lang,
+		Slug:          p.Slug,
+		Title:         p.Title,
+		Summary:       p.Summary,
+		Tags:          tags,
+		Categories:    cats,
+		TagTerms:      site.NormalizeTaxonomyTerms(tags),
+		CategoryTerms: site.NormalizeTaxonomyTerms(cats),
+		Date:          p.Date,
+		URL:           p.URL,
+		Lang:          p.Lang,
 	}
 }
 
