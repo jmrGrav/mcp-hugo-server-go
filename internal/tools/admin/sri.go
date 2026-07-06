@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -22,10 +23,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var sriIntegrityRe = regexp.MustCompile(`(?:integrity:\s*|integrity="|hash:\s*|sha:\s*|:\s*)["']?(sha(?:256|384|512)-[A-Za-z0-9+/=]+)["']?`)
+var sriIntegrityRe = regexp.MustCompile(`(?:integrity:\s*|integrity="|hash:\s*|sha:\s*)["']?(sha(?:256|384|512)-[A-Za-z0-9+/=]+)["']?`)
 var sriHashRe = regexp.MustCompile(`sha(?:256|384|512)-[A-Za-z0-9+/=]+`)
 var sriURLRe = regexp.MustCompile(`(?:src|href)="(https?://[^"]+)"`)
 var sriDataLookupRe = regexp.MustCompile(`index\s+site\.Data\.sri\b`)
+var sriTagRe = regexp.MustCompile(`(?is)<(?:script|link)\b[^>]*>`)
 
 type sriCheckInput struct{}
 
@@ -183,7 +185,7 @@ func scanSRIReferences(cfg config.Config, dataEntries []sriDataEntry) ([]sriPair
 				continue
 			}
 			seen[key] = true
-			all = append(all, sriPair{URL: entry.URL, Hash: entry.Hash})
+			all = append(all, sriPair(entry))
 		}
 	}
 	return all, stats, nil
@@ -212,6 +214,9 @@ func scanDirForSRI(dir string) ([]sriPair, sriScanStats, error) {
 		if d.IsDir() {
 			return nil
 		}
+		if !sriScannableFile(path) {
+			return nil
+		}
 		stats.FilesScanned++
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -221,7 +226,7 @@ func scanDirForSRI(dir string) ([]sriPair, sriScanStats, error) {
 			stats.UsesDataLookup = true
 			stats.FilesWithSRIAttributes++
 		}
-		extracted := extractSRIPairs(string(data))
+		extracted := extractSRIPairs(html.UnescapeString(string(data)))
 		if len(extracted) > 0 {
 			stats.FilesWithSRIAttributes++
 		}
@@ -240,63 +245,33 @@ func scanDirForSRI(dir string) ([]sriPair, sriScanStats, error) {
 	return pairs, stats, nil
 }
 
+func sriScannableFile(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".html", ".htm", ".xml":
+		return true
+	default:
+		return false
+	}
+}
+
 func extractSRIPairs(content string) []sriPair {
 	var pairs []sriPair
-	for _, m := range sriIntegrityRe.FindAllStringIndex(content, -1) {
-		sub := sriIntegrityRe.FindStringSubmatch(content[m[0]:m[1]])
-		if len(sub) < 2 {
+	for _, tag := range sriTagRe.FindAllString(content, -1) {
+		hashes := sriIntegrityRe.FindAllStringSubmatch(tag, -1)
+		urls := sriURLRe.FindAllStringSubmatch(tag, -1)
+		if len(hashes) == 0 || len(urls) == 0 {
 			continue
 		}
-		hash := sub[1]
-		pos := m[0]
-
-		// Look backward 500 chars from integrity match
-		backStart := pos - 500
-		if backStart < 0 {
-			backStart = 0
-		}
-		backwardMatches := sriURLRe.FindAllStringSubmatchIndex(content[backStart:pos], -1)
-
-		// Look forward 500 chars from integrity match
-		forwardEnd := pos + 500
-		if forwardEnd > len(content) {
-			forwardEnd = len(content)
-		}
-		forwardMatches := sriURLRe.FindAllStringSubmatchIndex(content[pos:forwardEnd], -1)
-
-		// Find the closest URL (forward or backward)
-		var bestURL string
-		var bestDistance int = 1000000
-
-		// Check backward matches
-		if len(backwardMatches) > 0 {
-			// Get the last backward match (closest to integrity)
-			lastMatch := backwardMatches[len(backwardMatches)-1]
-			// lastMatch[0] and lastMatch[1] are the bounds in the substring
-			distance := pos - (backStart + lastMatch[1])
-			if distance < bestDistance {
-				bestDistance = distance
-				// Extract the URL from the submatch
-				urlStart := backStart + lastMatch[2]
-				urlEnd := backStart + lastMatch[3]
-				bestURL = content[urlStart:urlEnd]
+		for _, hash := range hashes {
+			if len(hash) < 2 {
+				continue
 			}
-		}
-
-		// Check forward matches
-		if len(forwardMatches) > 0 {
-			// Get the first forward match (closest to integrity)
-			firstMatch := forwardMatches[0]
-			distance := firstMatch[0]
-			if distance < bestDistance {
-				urlStart := pos + firstMatch[2]
-				urlEnd := pos + firstMatch[3]
-				bestURL = content[urlStart:urlEnd]
+			for _, url := range urls {
+				if len(url) < 2 {
+					continue
+				}
+				pairs = append(pairs, sriPair{URL: url[1], Hash: hash[1]})
 			}
-		}
-
-		if bestURL != "" {
-			pairs = append(pairs, sriPair{URL: bestURL, Hash: hash})
 		}
 	}
 	return pairs
