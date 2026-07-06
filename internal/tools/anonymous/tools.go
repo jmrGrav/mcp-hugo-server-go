@@ -150,7 +150,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 	addReadOnlyTool(s, "get_page", "Read page",
 		"Read a published Hugo page by slug. Returns metadata, rendered HTML, and a short summary. "+
-			"Pass content_only=true to omit the html field for lightweight metadata queries. "+
+			"Pass content_only=true to clear the html field (returns html as empty string) for lightweight metadata queries. "+
 			"For the raw Markdown source, use get_full_page_markdown (requires content.read). "+
 			"Does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {

@@ -4,6 +4,49 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [v1.3.3] - 2026-07-06
+
+### Added
+- `build_site` and `preview_build` now return a structured JSON error on Hugo failure containing
+  `error`, `exit_code`, `command`, `working_directory`, `duration_ms`, `stderr_summary` (≤500 bytes,
+  paths sanitised), `build_id` (`YYYYMMDD-HHMMSS-<4 hex chars>`), and `log_hint`. Full stderr is
+  logged via `slog.Error` with the `build_id` key for log correlation (#160).
+- `check_sri_versions` now returns a structured envelope `{files_scanned, sri_checked, summary,
+  findings}` instead of a bare array. The `summary` field always contains a human-readable verdict
+  ("No SRI attributes found", "All N passed", or "N/M passed, M mismatches"). **Breaking shape
+  change:** existing code that destructures the flat `[]sriCheckEntry` array must be updated to
+  access `.findings` (#162).
+- `generate_featured_image` description in `tools/list` now appends
+  `(not configured: set image_gen_url in config)` when `image_gen_url` is absent, so agents
+  discover the configuration gap before calling. Operator guide documents `image_gen_url` and
+  `image_gen_key` (#161).
+- `get_page` accepts an optional `content_only=true` parameter that clears the `html` field
+  (returns `html` as empty string) for lightweight metadata queries. Description now distinguishes
+  `get_page` (rendered HTML) from `get_full_page_markdown` (raw Markdown, requires content.read)
+  (#169).
+- `frontMatterIssueDTO` (returned by `validate_front_matter` and `validate_site`) gains a `lang`
+  field derived from the multilingual branch-bundle filename (`index.en.md` → `"en"`). `SourcePage`
+  in the source index now carries a `Lang` field populated at index-build time (#168).
+
+### Fixed
+- `explain_site_structure` now uses `srcIdx.AllTags()` / `srcIdx.AllCategories()` when the source
+  index is available, matching `get_site_health`. Previously reported 0 categories on sites where
+  the HTML index carried no `article:section` meta tags (#163).
+- `build_agent_context` now passes the raw public-index page to `computeRelated` (same pattern as
+  `get_related_content`), preventing empty `related_pages` caused by source-merged tags not matching
+  HTML-indexed sitemap entries (#164).
+- `ContentClassifier` classifies `/404.html`, `/404/`, `/500.html`, `/500/` as `KindTechnical`,
+  removing error pages from `get_feed` and `export_agent_context` output (#167).
+- `get_broken_links` no longer reports false positives for `.md`-suffixed hrefs (LoveIt/PaperMod
+  source-file links rendered as `<a href="./index.md">`) (#166).
+- Smoke script `generate_featured_image` check now SKIPs instead of FAILing when the tool returns
+  `config_error`, and the call now correctly includes the required `prompt` argument (#161).
+
+### Changed
+- **Breaking:** `validate_front_matter` and `validate_site` response `data` object field names
+  renamed for clarity: `total` → `pages_checked`, `valid` → `pages_passed`. `invalid` unchanged.
+  Update any agent prompts or custom tooling that references the old field names (#165).
+
 ## [v1.3.2] - 2026-07-06
 
 ### Fixed
