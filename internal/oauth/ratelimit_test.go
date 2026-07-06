@@ -196,7 +196,6 @@ func TestRateLimiterOnlyCountsLogicalToolCalls(t *testing.T) {
 	}
 }
 
-
 func TestRateLimiter429ViaSessionUsesHTTP200(t *testing.T) {
 	rl := NewRateLimiter(smallCfg())
 	h := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
