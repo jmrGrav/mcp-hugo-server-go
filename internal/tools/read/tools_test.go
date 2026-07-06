@@ -385,6 +385,62 @@ func TestExtendedReadAnnotations(t *testing.T) {
 	}
 }
 
+func TestExplainSiteStructureUsesSourceIndexCategories(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	srcIdx := mustTestSourceIndex(t)
+	wantCats := len(srcIdx.AllCategories())
+	if wantCats == 0 {
+		t.Fatal("test precondition: source index must have at least one category")
+	}
+
+	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	if res.IsError {
+		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("explain_site_structure data type = %T", m["data"])
+	}
+	gotCats, ok := data["categories"].(float64)
+	if !ok {
+		t.Fatalf("explain_site_structure categories type = %T, value = %v", data["categories"], data["categories"])
+	}
+	if int(gotCats) != wantCats {
+		t.Fatalf("explain_site_structure categories = %d, want %d (source index count)", int(gotCats), wantCats)
+	}
+}
+
+func TestBuildAgentContextRelatedPagesMatchSitemap(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	// /posts/hello has HTML-indexed tags ["Hugo", "Read-only"]; /posts/bonjour also has "Hugo".
+	// Without the fix, build_agent_context would use source-merged tags (["go", "hugo"]) which
+	// do not case-match the HTML-indexed "Hugo" in the sitemap, yielding empty related_pages.
+	// With the fix, the raw public tags are used for matching, so bonjour is found.
+	res := callTool(t, session, "build_agent_context", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("build_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	ctx, ok := m["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("build_agent_context context type = %T", m["context"])
+	}
+	related, ok := ctx["related_pages"].([]any)
+	if !ok {
+		t.Fatalf("build_agent_context related_pages type = %T", ctx["related_pages"])
+	}
+	if len(related) == 0 {
+		t.Fatal("build_agent_context: expected non-empty related_pages (bonjour shares 'Hugo' tag via HTML index)")
+	}
+}
+
 func TestGetBrokenLinks(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

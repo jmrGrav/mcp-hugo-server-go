@@ -200,8 +200,14 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if len(recent) > 5 {
 				recent = recent[:5]
 			}
+			tagCount := len(idx.AllTags())
+			catCount := len(idx.AllCategories())
+			if srcIdx != nil {
+				tagCount = len(srcIdx.AllTags())
+				catCount = len(srcIdx.AllCategories())
+			}
 			summary := fmt.Sprintf("%d published pages across %d sections, %d tags, and %d categories.",
-				len(contentPages), len(sections), len(idx.AllTags()), len(idx.AllCategories()))
+				len(contentPages), len(sections), tagCount, catCount)
 			now := time.Now().UTC().Format(time.RFC3339)
 			return nil, contentEnvelope{
 				Success:     true,
@@ -211,8 +217,8 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					Summary:     summary,
 					Sections:    sections,
 					Languages:   languages,
-					Tags:        len(idx.AllTags()),
-					Categories:  len(idx.AllCategories()),
+					Tags:        tagCount,
+					Categories:  catCount,
 					RecentPages: toPageDTOs(recent),
 					Notes: []string{
 						"Top-level sections are derived from page slugs.",

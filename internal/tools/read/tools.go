@@ -175,7 +175,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
 			fm := toFrontmatterDTO(p, rt)
-			related := computeRelated(idx, p, 5)
+			ref := p
+			if resolved.Public != nil {
+				ref = *resolved.Public
+			}
+			related := computeRelated(idx, ref, 5)
 			ac := agentContextDTO{
 				Frontmatter:  fm,
 				Markdown:     md,
