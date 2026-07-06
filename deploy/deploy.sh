@@ -13,7 +13,7 @@ GOOS=linux GOARCH=amd64 go build \
 
 scp "$BINARY" "$REMOTE:/tmp/$BINARY"
 
-ssh "$REMOTE" "sudo mv /tmp/$BINARY /usr/local/bin/$BINARY && sudo chmod 755 /usr/local/bin/$BINARY"
+ssh "$REMOTE" 'sudo mv /tmp/mcp-hugo-server-go /usr/local/bin/mcp-hugo-server-go && sudo chmod 755 /usr/local/bin/mcp-hugo-server-go'
 
 ssh "$REMOTE" "sudo systemctl stop hugo-public-mcp 2>/dev/null || true"
 ssh "$REMOTE" "sudo systemctl disable hugo-public-mcp 2>/dev/null || true"
@@ -35,8 +35,8 @@ fi
 sudo mkdir -p /etc/systemd/system/mcp-hugo-server-go.service.d
 if [ ! -f /etc/systemd/system/mcp-hugo-server-go.service.d/override.conf ]; then
   sudo cp /tmp/mcp-hugo-server-go-override.conf.example \
-    /etc/systemd/system/mcp-hugo-server-go.service.d/override.conf
-  echo "Installed override.conf example — edit it to match your site paths."
+    /etc/systemd/system/mcp-hugo-server-go.service.d/override.conf.example
+  echo "Installed override.conf.example; no active override.conf was created."
 else
   echo "Preserving existing override.conf."
 fi
