@@ -77,14 +77,16 @@ post_mcp() {
   write_curl_config "$cfg"
   HTTP_STATUS="$(
     curl -sS -D "$headers" -o "$body" -w '%{http_code}' \
+      --max-time 30 --connect-timeout 10 \
       -X POST "$BASE_URL/mcp" \
       --config "$cfg" \
       --data-binary "@$request_file"
   )"
-  RETRY_AFTER="$(awk 'BEGIN{IGNORECASE=1} /^retry-after:/ {gsub(/\r/,""); print $2}' "$headers" | tail -1)"
-  CONTENT_TYPE="$(awk 'BEGIN{IGNORECASE=1} /^content-type:/ {sub(/^[Cc]ontent-[Tt]ype:[[:space:]]*/,""); gsub(/\r/,""); print}' "$headers" | tail -1)"
+  # tolower($1) is POSIX awk; avoids gawk-only BEGIN{IGNORECASE=1}
+  RETRY_AFTER="$(awk 'tolower($1) == "retry-after:" {gsub(/\r/,""); print $2}' "$headers" | tail -1)"
+  CONTENT_TYPE="$(awk 'tolower($1) == "content-type:" {line=$0; gsub(/\r/,"",line); sub(/^[^:]*:[[:space:]]*/,"",line); print line}' "$headers" | tail -1)"
   local session
-  session="$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ {gsub(/\r/,""); print $2}' "$headers" | tail -1)"
+  session="$(awk 'tolower($1) == "mcp-session-id:" {gsub(/\r/,""); print $2}' "$headers" | tail -1)"
   if [[ -n "$session" ]]; then
     MCP_SESSION_ID="$session"
   fi
@@ -237,7 +239,10 @@ call_tool "unknown_tool" "codex_unknown_tool" "{}" 0
 call_tool "get_site_information" "get_site_information" "{}"
 sleep "$SMOKE_DELAY"
 call_tool "list_pages" "list_pages" '{"limit":5,"offset":0}'
-if jq -e 'any(.result.structuredContent.pages[]?.slug; test("/(tags|categories|series)/"))' "$TMPDIR/last-list_pages.json" >/dev/null; then
+# Parse the nested JSON from result.content[0].text — the go-sdk serialises
+# tool output as a JSON string inside content[], not in structuredContent.
+pages_text="$(jq -r '.result.content[0].text // empty' "$TMPDIR/last-list_pages.json" 2>/dev/null || true)"
+if [[ -n "$pages_text" ]] && printf '%s' "$pages_text" | jq -e 'any(.pages[]?.slug // ""; test("/(tags|categories|series)/"))' >/dev/null 2>&1; then
   fail "list_pages returned taxonomy slugs"
 fi
 sleep "$SMOKE_DELAY"
