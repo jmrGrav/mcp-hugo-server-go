@@ -133,7 +133,7 @@ func TestReadHelperBranches(t *testing.T) {
 	if got := nullsafeStrings(nil); len(got) != 0 {
 		t.Fatalf("nullsafeStrings(nil) = %#v", got)
 	}
-if got := readingTimeMinutes(""); got != 1 {
+	if got := readingTimeMinutes(""); got != 1 {
 		t.Fatalf("readingTimeMinutes(empty) = %d", got)
 	}
 	if got := readingTimeMinutes(strings.Repeat("word ", 201)); got != 2 {

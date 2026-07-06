@@ -62,11 +62,11 @@ type getRelatedContentInput struct {
 }
 
 type relatedPageDTO struct {
-	Slug                string                `json:"slug"`
-	Title               string                `json:"title"`
-	URL                 string                `json:"url"`
-	SharedTags          []string              `json:"shared_tags,omitempty"`
-	SharedCategories    []string              `json:"shared_categories,omitempty"`
+	Slug                string                  `json:"slug"`
+	Title               string                  `json:"title"`
+	URL                 string                  `json:"url"`
+	SharedTags          []string                `json:"shared_tags,omitempty"`
+	SharedCategories    []string                `json:"shared_categories,omitempty"`
 	SharedTagTerms      []taxonomy.TaxonomyTerm `json:"shared_tag_terms,omitempty"`
 	SharedCategoryTerms []taxonomy.TaxonomyTerm `json:"shared_category_terms,omitempty"`
 }
@@ -419,7 +419,6 @@ func nullsafeStrings(s []string) []string {
 	}
 	return s
 }
-
 
 // Defs returns the tool definitions for this package (used to build the global registry).
 func Defs() []tools.ToolDef {
