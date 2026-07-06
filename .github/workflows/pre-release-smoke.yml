@@ -1,8 +1,6 @@
-name: Pre-release Smoke
+name: Live Smoke
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
     inputs:
       ref:
@@ -17,7 +15,7 @@ permissions:
 
 jobs:
   production-smoke:
-    name: Pre-release smoke test
+    name: Live smoke test
     runs-on: ubuntu-latest
     environment: production
     steps:

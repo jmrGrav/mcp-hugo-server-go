@@ -2,7 +2,6 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     branches: [main]
 
@@ -35,9 +34,8 @@ jobs:
           govulncheck ./...
       - name: build
         run: go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=${GITHUB_REF_NAME:-dev}" ./...
-      - name: changelog release gate
-        if: startsWith(github.ref, 'refs/tags/')
-        run: go run ./cmd/check-changelog -version "${GITHUB_REF_NAME}"
+      - name: README release policy gate
+        run: go run ./cmd/check-readme-release
       - name: oauth-clients registry lint
         run: bash scripts/lint-registry.sh docs/oauth-clients.example.yaml
       - run: go test -cover -coverprofile=coverage.out ./internal/...
