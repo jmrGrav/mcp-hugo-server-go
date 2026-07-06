@@ -7,12 +7,11 @@ All notable changes to this project are documented here.
 ## [v1.3.2] - 2026-07-06
 
 ### Fixed
-- Rate limiter now counts logical MCP tool calls instead of raw HTTP requests.
-  In MCP Streamable HTTP stateful transport, each `tools/call` produces two HTTP
-  requests (phase-1: no session, 202 Accepted; phase-2: session present, 200 OK).
-  Previously both consumed a token, halving the effective burst budget. Phase-1
-  now stores a credit; phase-2 consumes it, so each logical call costs exactly
-  one token (#156).
+- Rate limiter now only counts `tools/call` requests against the budget.
+  Control-plane messages (`initialize`, `notifications/initialized`, `tools/list`,
+  `resources/list`, etc.) pass through without consuming a token, so the
+  configured rate limit reflects actual tool invocations rather than MCP
+  handshake overhead (#156).
 - When the rate limit fires inside an established MCP session
   (`Mcp-Session-Id` present), the server returns HTTP 200 with a JSON-RPC 2.0
   error body instead of HTTP 429. The go-sdk Streamable HTTP transport discards

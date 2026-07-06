@@ -26,20 +26,13 @@ type RateLimiter struct {
 	mu       sync.Mutex
 	limiters map[string]*rate.Limiter
 	lastSeen map[string]time.Time
-	// credits stores pending phase-1 refunds per key.
-	// In MCP Streamable HTTP stateful transport, a tools/call is split into two
-	// HTTP requests: phase-1 (no session, server returns 202) and phase-2 (session
-	// present, server returns 200 with result). Phase-1 charges a token and stores
-	// one credit; phase-2 consumes the credit so it is not charged again.
-	credits map[string]int
-	cfg     config.RateLimitConfig
+	cfg      config.RateLimitConfig
 }
 
 func NewRateLimiter(cfg config.RateLimitConfig) *RateLimiter {
 	rl := &RateLimiter{
 		limiters: make(map[string]*rate.Limiter),
 		lastSeen: make(map[string]time.Time),
-		credits:  make(map[string]int),
 		cfg:      cfg,
 	}
 	go rl.gcLoop()
@@ -91,7 +84,6 @@ func (rl *RateLimiter) gc() {
 		if last.Before(cutoff) {
 			delete(rl.limiters, key)
 			delete(rl.lastSeen, key)
-			delete(rl.credits, key)
 		}
 	}
 }
@@ -109,7 +101,6 @@ func (rl *RateLimiter) evictOldest() {
 	if oldest != "" {
 		delete(rl.limiters, oldest)
 		delete(rl.lastSeen, oldest)
-		delete(rl.credits, oldest)
 	}
 }
 
@@ -163,25 +154,6 @@ func mcpToolCallRequest(r *http.Request) (bool, json.RawMessage) {
 	return false, nil
 }
 
-// statusWriter captures the HTTP response status code so the middleware can
-// detect 202 Accepted (MCP stateful phase-1) responses after the handler runs.
-type statusWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (sw *statusWriter) WriteHeader(code int) {
-	sw.status = code
-	sw.ResponseWriter.WriteHeader(code)
-}
-
-func (sw *statusWriter) Write(b []byte) (int, error) {
-	if sw.status == 0 {
-		sw.status = http.StatusOK
-	}
-	return sw.ResponseWriter.Write(b)
-}
-
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		limit, requestID := mcpToolCallRequest(r)
@@ -191,25 +163,6 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 		scope, _ := r.Context().Value(CtxScope).(string)
 		key := callerKey(r.RemoteAddr, scope)
-
-		// In MCP Streamable HTTP stateful transport, each logical tool call
-		// produces two HTTP requests:
-		//   Phase 1: tools/call (no Mcp-Session-Id) → server 202 Accepted (session init)
-		//   Phase 2: tools/call (Mcp-Session-Id present) → server 200 OK (result)
-		// Phase-1 charges one token and stores a credit. Phase-2 consumes the
-		// credit, so the two HTTP requests count as one logical tool call.
-		rl.mu.Lock()
-		hasCredit := rl.credits[key] > 0
-		if hasCredit {
-			rl.credits[key]--
-		}
-		rl.mu.Unlock()
-
-		if hasCredit {
-			// Phase-2: already paid for by phase-1. Let it through at no cost.
-			next.ServeHTTP(w, r)
-			return
-		}
 
 		res := rl.limiterFor(key, scope).Reserve()
 		if delay := res.Delay(); delay > 0 {
@@ -248,15 +201,6 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Wrap the response writer to detect phase-1 (202 Accepted).
-		// When the server responds 202, a credit is stored so the follow-up
-		// phase-2 request does not charge the token again.
-		sw := &statusWriter{ResponseWriter: w}
-		next.ServeHTTP(sw, r)
-		if sw.status == http.StatusAccepted {
-			rl.mu.Lock()
-			rl.credits[key]++
-			rl.mu.Unlock()
-		}
+		next.ServeHTTP(w, r)
 	})
 }

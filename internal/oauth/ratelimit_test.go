@@ -196,40 +196,6 @@ func TestRateLimiterOnlyCountsLogicalToolCalls(t *testing.T) {
 	}
 }
 
-func TestRateLimiter202DoesNotConsumeToken(t *testing.T) {
-	cfg := smallCfg()
-	cfg.AnonymousPerMin = 1
-	rl := NewRateLimiter(cfg)
-
-	returnCode := http.StatusAccepted
-	h := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(returnCode)
-	}))
-
-	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_site_information","arguments":{}}}`
-
-	// Phase-1 (202 session-init): token consumed and credit stored.
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, makeJSONRPCReq("8.8.8.8:1234", body))
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("phase-1: expected 202, got %d", rec.Code)
-	}
-
-	// Phase-2 (200 result): uses the credit from phase-1, no new token charged.
-	returnCode = http.StatusOK
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, makeJSONRPCReq("8.8.8.8:1234", body))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("phase-2: expected 200 (credit must cover phase-2), got %d", rec.Code)
-	}
-
-	// Third call: bucket empty — one logical tool call used the single token.
-	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, makeJSONRPCReq("8.8.8.8:1234", body))
-	if rec.Code != http.StatusTooManyRequests {
-		t.Fatalf("third call: expected 429 (limit=1), got %d", rec.Code)
-	}
-}
 
 func TestRateLimiter429ViaSessionUsesHTTP200(t *testing.T) {
 	rl := NewRateLimiter(smallCfg())
