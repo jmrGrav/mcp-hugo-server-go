@@ -11,7 +11,11 @@ func TestContentClassifierClassifiesHugoGeneratedPages(t *testing.T) {
 			{page: Page{Slug: "/about/"}},
 			{page: Page{Slug: "/tags/go/"}},
 			{page: Page{Slug: "/categories/security/"}},
+			{page: Page{Slug: "/en/tags/webhook/"}},
+			{page: Page{Slug: "/fr/categories/securite/"}},
+			{page: Page{Slug: "/fr/posts/bonjour/"}},
 			{page: Page{Slug: "/page/2/"}},
+			{page: Page{Slug: "/en/page/2/"}},
 			{page: Page{Slug: "/posts/page/2/"}},
 			{page: Page{Slug: "/robots.txt"}},
 			{page: Page{Slug: "/security.txt"}},
@@ -34,7 +38,11 @@ func TestContentClassifierClassifiesHugoGeneratedPages(t *testing.T) {
 		{name: "normal page", slug: "/about/", wantKind: KindPage, content: true},
 		{name: "tag taxonomy", slug: "/tags/go/", wantKind: KindTaxonomy},
 		{name: "category taxonomy", slug: "/categories/security/", wantKind: KindTaxonomy},
+		{name: "language-prefixed tag taxonomy", slug: "/en/tags/webhook/", wantKind: KindTaxonomy},
+		{name: "language-prefixed category taxonomy", slug: "/fr/categories/securite/", wantKind: KindTaxonomy},
+		{name: "language-prefixed article", slug: "/fr/posts/bonjour/", wantKind: KindArticle, content: true, article: true},
 		{name: "root pagination", slug: "/page/2/", wantKind: KindPagination},
+		{name: "language-prefixed pagination", slug: "/en/page/2/", wantKind: KindPagination},
 		{name: "section pagination", slug: "/posts/page/2/", wantKind: KindPagination},
 		{name: "robots", slug: "/robots.txt", wantKind: KindTechnical, technical: true},
 		{name: "security", slug: "/security.txt", wantKind: KindTechnical, technical: true},
@@ -69,16 +77,20 @@ func TestContentPagesExcludeTaxonomyPaginationSectionsAndTechnicalFiles(t *testi
 			{page: Page{Slug: "/about/", Date: "2026-07-04"}},
 			{page: Page{Slug: "/tags/go/", Date: "2026-07-05"}},
 			{page: Page{Slug: "/categories/security/", Date: "2026-07-06"}},
+			{page: Page{Slug: "/en/tags/webhook/", Date: "2026-07-06"}},
+			{page: Page{Slug: "/fr/categories/securite/", Date: "2026-07-06"}},
+			{page: Page{Slug: "/fr/posts/bonjour/", Date: "2026-07-06"}},
 			{page: Page{Slug: "/page/2/", Date: "2026-07-07"}},
+			{page: Page{Slug: "/en/page/2/", Date: "2026-07-07"}},
 			{page: Page{Slug: "/robots.txt", Date: "2026-07-08"}},
 		},
 	}
 
 	got := idx.ContentPages()
-	if len(got) != 2 {
-		t.Fatalf("ContentPages() len = %d, want 2: %#v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("ContentPages() len = %d, want 3: %#v", len(got), got)
 	}
-	if got[0].Slug != "/posts/foo/" || got[1].Slug != "/about/" {
+	if got[0].Slug != "/posts/foo/" || got[1].Slug != "/about/" || got[2].Slug != "/fr/posts/bonjour/" {
 		t.Fatalf("ContentPages() = %#v", got)
 	}
 }

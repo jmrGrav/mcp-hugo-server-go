@@ -76,9 +76,8 @@ func Default() Config {
 		RejectSymlinks:      true,
 		RejectHiddenPath:    true,
 		BuildTimeoutSeconds: 120,
-		// Note: in stateful Streamable HTTP mode the MCP transport uses two HTTP
-		// requests per tool call (202 session-init + 200 response). Effective
-		// tool-call budget = configured value / 2.
+		// MCP rate limiting is enforced on logical tools/call requests rather than
+		// Streamable HTTP session-control traffic.
 		RateLimit: RateLimitConfig{
 			AnonymousPerMin:    120,
 			ContentReadPerMin:  240,

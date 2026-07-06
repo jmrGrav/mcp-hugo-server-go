@@ -1,6 +1,8 @@
 package oauth
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,8 +27,13 @@ func smallCfg() config.RateLimitConfig {
 }
 
 func makeReq(remoteAddr string) *http.Request {
-	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	return makeJSONRPCReq(remoteAddr, `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_site_information","arguments":{}}}`)
+}
+
+func makeJSONRPCReq(remoteAddr, body string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewBufferString(body))
 	req.RemoteAddr = remoteAddr
+	req.Header.Set("Content-Type", "application/json")
 	return req
 }
 
@@ -92,7 +99,7 @@ func TestRateLimiter429Response(t *testing.T) {
 	}
 
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, makeReq("9.9.9.9:9999"))
+	h.ServeHTTP(rec, makeJSONRPCReq("9.9.9.9:9999", `{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"get_site_information","arguments":{}}}`))
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d", rec.Code)
@@ -128,6 +135,64 @@ func TestRateLimiter429Response(t *testing.T) {
 	}
 	if msg, _ := errorObj["message"].(string); msg == "" {
 		t.Fatalf("missing message in 429 error object: %v", errorObj)
+	}
+	if got := body["id"]; got != float64(99) {
+		t.Fatalf("expected 429 body to preserve request id 99, got %v", got)
+	}
+}
+
+func TestRateLimiterOnlyCountsLogicalToolCalls(t *testing.T) {
+	cfg := smallCfg()
+	cfg.SiteAdminPerMin = 2
+	rl := NewRateLimiter(cfg)
+	h := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	scopeReq := func(body string) *http.Request {
+		req := makeJSONRPCReq("7.7.7.7:7777", body)
+		req = req.WithContext(context.WithValue(req.Context(), CtxScope, "site.admin"))
+		return req
+	}
+
+	controlTraffic := []string{
+		`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`,
+		`{"jsonrpc":"2.0","id":2,"method":"resources/list"}`,
+	}
+	for i, body := range controlTraffic {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, scopeReq(body))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("control request %d status = %d, want 200", i+1, rec.Code)
+		}
+	}
+
+	for i := 0; i < 2; i++ {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, scopeReq(fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"method":"tools/call","params":{"name":"get_site_information","arguments":{}}}`, i+10)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("logical tool call %d status = %d, want 200", i+1, rec.Code)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, scopeReq(`{"jsonrpc":"2.0","id":99,"method":"tools/call","params":{"name":"get_site_information","arguments":{}}}`))
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("third logical tool call status = %d, want 429", rec.Code)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode 429 body: %v", err)
+	}
+	if got := body["id"]; got != float64(99) {
+		t.Fatalf("429 id = %v, want 99", got)
+	}
+	errObj, _ := body["error"].(map[string]any)
+	if got := errObj["code"]; got != float64(-32029) {
+		t.Fatalf("429 error code = %v, want -32029", got)
 	}
 }
 

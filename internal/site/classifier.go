@@ -72,6 +72,7 @@ func (c *ContentClassifier) Classify(p Page) PageKind {
 	if len(parts) == 0 {
 		return KindHome
 	}
+	parts = stripLanguagePrefix(parts)
 	if isTechnicalSlugParts(parts) {
 		return KindTechnical
 	}
@@ -145,6 +146,34 @@ func slugParts(slug string) []string {
 		return nil
 	}
 	return strings.Split(slug, "/")
+}
+
+func stripLanguagePrefix(parts []string) []string {
+	if len(parts) < 2 {
+		return parts
+	}
+	if !looksLikeLanguageCode(parts[0]) {
+		return parts
+	}
+	return parts[1:]
+}
+
+func looksLikeLanguageCode(v string) bool {
+	if len(v) != 2 && len(v) != 5 {
+		return false
+	}
+	for i, r := range v {
+		if i == 2 {
+			if r != '-' && r != '_' {
+				return false
+			}
+			continue
+		}
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 func isTechnicalSlugParts(parts []string) bool {

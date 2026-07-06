@@ -1,7 +1,9 @@
 package oauth
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -115,8 +117,50 @@ func (rl *RateLimiter) perMinFor(scope string) int {
 	}
 }
 
+type jsonrpcRateLimitRequest struct {
+	ID     json.RawMessage `json:"id,omitempty"`
+	Method string          `json:"method,omitempty"`
+}
+
+func mcpToolCallRequest(r *http.Request) (bool, json.RawMessage) {
+	if r.Method != http.MethodPost || r.Body == nil {
+		return false, nil
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		r.Body = io.NopCloser(bytes.NewReader(nil))
+		return false, nil
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	body = bytes.TrimSpace(body)
+	if len(body) == 0 {
+		return false, nil
+	}
+
+	var single jsonrpcRateLimitRequest
+	if err := json.Unmarshal(body, &single); err == nil && single.Method != "" {
+		return single.Method == "tools/call", single.ID
+	}
+
+	var batch []jsonrpcRateLimitRequest
+	if err := json.Unmarshal(body, &batch); err != nil {
+		return false, nil
+	}
+	for _, req := range batch {
+		if req.Method == "tools/call" {
+			return true, req.ID
+		}
+	}
+	return false, nil
+}
+
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		limit, requestID := mcpToolCallRequest(r)
+		if !limit {
+			next.ServeHTTP(w, r)
+			return
+		}
 		scope, _ := r.Context().Value(CtxScope).(string)
 		key := callerKey(r.RemoteAddr, scope)
 		res := rl.limiterFor(key, scope).Reserve()
@@ -129,9 +173,13 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			w.WriteHeader(http.StatusTooManyRequests)
+			var id any
+			if len(requestID) > 0 {
+				id = requestID
+			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"jsonrpc": "2.0",
-				"id":      nil,
+				"id":      id,
 				"error": map[string]any{
 					"code":    -32029,
 					"message": "rate limit exceeded; retry after " + strconv.Itoa(retryAfter) + " second(s)",

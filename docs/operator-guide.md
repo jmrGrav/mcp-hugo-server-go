@@ -67,14 +67,17 @@ Configuration is stored in YAML format. The following table lists all available 
 
 ### Rate Limiting
 
-The `rate_limit` section controls per-scope request rates (per minute):
+The `rate_limit` section controls per-scope logical MCP `tools/call` rates
+(per minute). Streamable HTTP session-control traffic such as `initialize`,
+`notifications/initialized`, and `tools/list` is not counted against the tool
+call budget.
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `rate_limit.anonymous_per_min` | int | `60` | Requests per minute for anonymous (no-auth) scope. |
-| `rate_limit.content_read_per_min` | int | `120` | Requests per minute for `content.read` scope. |
-| `rate_limit.content_write_per_min` | int | `30` | Requests per minute for `content.write` scope. |
-| `rate_limit.site_admin_per_min` | int | `10` | Requests per minute for `site.admin` scope. |
+| `rate_limit.anonymous_per_min` | int | `120` | Logical tool calls per minute for anonymous (no-auth) scope. |
+| `rate_limit.content_read_per_min` | int | `240` | Logical tool calls per minute for `content.read` scope. |
+| `rate_limit.content_write_per_min` | int | `60` | Logical tool calls per minute for `content.write` scope. |
+| `rate_limit.site_admin_per_min` | int | `60` | Logical tool calls per minute for `site.admin` scope. |
 | `rate_limit.destructive_per_min` | int | `5` | Requests per minute for destructive operations. |
 
 ### OAuth Configuration
