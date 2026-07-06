@@ -4,6 +4,36 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [v1.3.4] - 2026-07-06
+
+### Added
+- A secret-free staging profile is now versioned in-repo via `deploy/config-staging.yaml`,
+  `deploy/systemd/mcp-hugo-server-go-staging.service.example`, `docs/staging-runbook.md`,
+  and `scripts/staging-smoke-local.sh`. CI now exercises that synthetic staging profile before
+  production deploys (#176).
+- `internal/taxonomy` is now the shared normalization package for tags and categories. Read tools
+  expose consistent `tag_terms` / `category_terms`, and the repo now documents the convention in
+  `docs/taxonomy-convention.md` (#175).
+
+### Fixed
+- `build_site` and `preview_build` now work with the hardened systemd service layout and return
+  actionable build diagnostics, including `exit_code`, `duration_ms`, `working_directory`,
+  `build_id`, `log_hint`, and a useful `stderr_summary` even when Hugo only writes to stdout
+  (#170).
+- `check_sri_versions` now verifies data-driven SRI references correctly: it reads the configured
+  SRI data source, decodes HTML entities, pairs hashes with the correct asset tags, and reports
+  structured scan statistics instead of false `sri_checked=0` results (#171).
+- `validate_front_matter` now computes aggregate counters before pagination, so `pages_checked` and
+  `pages_passed` reflect the full scan instead of the current page size (#172).
+- `export_agent_context` now uses the same source-markdown path as `build_agent_context`, removing
+  theme chrome and HTML navigation artifacts from exported markdown (#173).
+- `generate_featured_image` now returns structured, operator-actionable diagnostics when image
+  generation is not configured or the output path is not writable, without changing the MCP tool
+  contract (#174).
+- The production deploy workflow now promotes refs without auto-creating a GitHub release, and the
+  pre-release smoke gate runs from its own workflow instead of polluting push/PR checks with a
+  skipped job state (#177, #178).
+
 ## [v1.3.3] - 2026-07-06
 
 ### Added
