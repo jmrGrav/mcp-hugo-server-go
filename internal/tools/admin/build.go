@@ -50,23 +50,29 @@ func truncateUTF8(b []byte, maxBytes int) string {
 		return string(b)
 	}
 	b = b[:maxBytes]
-	// Walk back to a valid UTF-8 boundary.
+	// Walk back continuation bytes (0x80–0xBF).
 	for len(b) > 0 && b[len(b)-1]&0xC0 == 0x80 {
+		b = b[:len(b)-1]
+	}
+	// Remove a stranded leading byte (0xC0–0xFF) left by the walk-back.
+	if len(b) > 0 && b[len(b)-1]&0xC0 == 0xC0 {
 		b = b[:len(b)-1]
 	}
 	return string(b)
 }
 
-// sanitiseStderr truncates raw stderr to 500 bytes and redacts absolute paths.
+// sanitiseStderr redacts absolute paths in raw stderr, then truncates to 500
+// bytes on a valid UTF-8 boundary. Sanitisation happens before truncation so
+// that paths near the 500-byte limit are always redacted.
 func sanitiseStderr(raw []byte, hugoRoot, siteRoot string) string {
-	s := truncateUTF8(raw, 500)
+	s := string(raw)
 	if hugoRoot != "" {
 		s = strings.ReplaceAll(s, hugoRoot, "<site_root>")
 	}
 	if siteRoot != "" && siteRoot != hugoRoot {
 		s = strings.ReplaceAll(s, siteRoot, "<site_root>")
 	}
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(truncateUTF8([]byte(s), 500))
 }
 
 func RegisterBuild(s *mcp.Server, cfg config.Config) {
