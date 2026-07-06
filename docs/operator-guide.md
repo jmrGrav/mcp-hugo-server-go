@@ -481,8 +481,8 @@ main branch merge
   ├── boot-check (binary starts, 7 endpoints respond)
   └── secret scans (gitleaks + trufflehog)
       │
-      ▼  (on tag push)
-  pre-release smoke (production-smoke job)
+      ▼  (on tag push or manual dispatch)
+  Pre-release Smoke workflow
   └── smoke-mcp-live.sh against live server (read-only)
   └── smoke-agent-interop.sh (OAuth discovery, DCR probe)
       │
@@ -490,17 +490,16 @@ main branch merge
   deploy.yml
   ├── validate (build + tests)
   ├── deploy (environment: production — requires reviewer approval)
-  │   ├── SSH deploy binary to server
+  │   ├── self-hosted runner promotes the selected ref on the VM
   │   ├── systemctl restart
   │   └── post-deploy smoke (smoke-mcp-live.sh)
-  └── release (create GitHub Release + attach binary)
 ```
 
 ### GitHub Environments
 
 | Environment | Protection | Purpose |
 |-------------|-----------|---------|
-| `production` | Required reviewer (jmrGrav) | SSH deployment + post-deploy smoke |
+| `production` | Required reviewer (jmrGrav) | Self-hosted deployment + post-deploy smoke |
 | `staging` | None | Isolated operator-managed staging instance or local synthetic smoke |
 
 > **Note:** The repository now keeps a secret-free staging profile and a local
@@ -509,20 +508,21 @@ main branch merge
 
 ### Manual Deployment Steps
 
-1. **Tag the release:**
-   ```bash
-   git tag -a v1.3.2 -m "v1.3.2: <summary>"
-   git push origin v1.3.2
-   ```
+1. **Merge the promotion candidate to `main`.**
 
-2. **CI runs automatically** — watch the `production-smoke` job for green.
+2. **CI runs automatically** — watch the `test`, `boot-check`, local staging smoke,
+   secret scans, and CodeQL checks for green.
 
-3. **Trigger deploy.yml from GitHub Actions → Run workflow:**
-   - Input the tag (e.g. `v1.3.2`)
+3. **Trigger `deploy.yml` from GitHub Actions → Run workflow:**
+   - Input the git ref to promote (default: `main`; tag or SHA also supported)
    - Approve the `production` environment gate in the Actions UI
-   - The workflow: builds, deploys via SSH, runs post-deploy smoke, creates the Release
+   - The workflow builds the selected ref, deploys it on the self-hosted runner,
+     restarts the service, and runs the post-deploy smoke
 
-4. **Close the milestone** on GitHub once the release is published.
+4. **Create a Git tag and GitHub Release separately** only after the promoted
+   commit is verified in production.
+
+5. **Close the milestone** on GitHub once the release is published.
 
 ### Required Secrets for deploy.yml
 
@@ -530,10 +530,6 @@ Configure these under **Settings → Secrets and variables → Actions**:
 
 | Secret | Description |
 |--------|-------------|
-| `SSH_PRIVATE_KEY` | Ed25519 private key with access to the production server |
-| `SSH_HOST` | Hostname or IP of the production server |
-| `SSH_USER` | SSH user (default: `root`) |
-| `SSH_PORT` | SSH port (default: `22`) |
 | `PRODUCTION_URL` | Base URL of the MCP server (e.g. `https://mcp.arleo.eu`) |
 | `MCP_ACCESS_TOKEN` | Bearer token for post-deploy smoke read-only calls |
 
