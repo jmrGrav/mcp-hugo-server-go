@@ -15,8 +15,8 @@ func TestSRIHelperBranches(t *testing.T) {
 		t.Fatal("runSRICheck() should fail without hugo_root")
 	}
 
-	if pairs, _, err := scanLayoutsForSRI(filepath.Join(t.TempDir(), "missing")); err != nil || len(pairs) != 0 {
-		t.Fatalf("scanLayoutsForSRI(missing) = %#v, %v", pairs, err)
+	if pairs, _, err := scanDirForSRI(filepath.Join(t.TempDir(), "missing")); err != nil || len(pairs) != 0 {
+		t.Fatalf("scanDirForSRI(missing) = %#v, %v", pairs, err)
 	}
 
 	pairs := extractSRIPairs(`<script src="https://cdn.example/test.js" integrity="sha384-abc"></script>`)
