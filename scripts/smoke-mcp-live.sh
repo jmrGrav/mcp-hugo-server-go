@@ -254,10 +254,7 @@ call_tool "validate_site" "validate_site" "{}"
 if [[ "${MCP_SMOKE_BURST:-0}" == "1" ]]; then
   echo "Burst probe: $BURST_COUNT calls without pacing"
   for i in $(seq 1 "$BURST_COUNT"); do
-    if ! call_tool "burst_get_site_information_$i" "get_site_information" "{}"; then
-      warn "burst stopped at call $i"
-      break
-    fi
+    call_tool "burst_get_site_information_$i" "get_site_information" "{}" || fail "burst failed at call $i"
   done
 fi
 
