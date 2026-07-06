@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -255,6 +256,39 @@ func TestExportAgentContext(t *testing.T) {
 	slug1 := pages1[0].(map[string]any)["frontmatter"].(map[string]any)["slug"]
 	if slug0 == slug1 {
 		t.Fatalf("export_agent_context offset should skip pages: got same slug %v at offset 0 and 1", slug0)
+	}
+}
+
+func TestExportAgentContextUsesSourceMarkdownForPublicLanguageSlug(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "export_agent_context", map[string]any{"tag": "Hugo", "limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("export_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	exportVal, ok := m["export"].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context: 'export' is %T, want map", m["export"])
+	}
+	pages, ok := exportVal["pages"].([]any)
+	if !ok || len(pages) != 1 {
+		t.Fatalf("export_agent_context pages = %#v, want one page", exportVal["pages"])
+	}
+	first, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("export page type = %T", pages[0])
+	}
+	md, _ := first["markdown"].(string)
+	if !strings.Contains(md, "This is the hello world post body.") {
+		t.Fatalf("markdown = %q, want source body", md)
+	}
+	for _, bad := range []string{"javascript:void(0)", "Read Markdown", "Share"} {
+		if strings.Contains(md, bad) {
+			t.Fatalf("markdown contains theme artifact %q: %q", bad, md)
+		}
 	}
 }
 

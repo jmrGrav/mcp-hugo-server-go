@@ -37,7 +37,7 @@ func (r *PageResolver) Resolve(rawSlug string) (ResolvedPage, bool) {
 		}
 	}
 	if r != nil && r.srcIdx != nil {
-		if p, ok := r.srcIdx.GetBySlug(sourceSlug); ok {
+		if p, ok := r.resolveSource(sourceSlug); ok {
 			out.Source = p
 			out.SourcePath = p.FilePath
 			if out.Public == nil && r.idx != nil {
@@ -48,6 +48,29 @@ func (r *PageResolver) Resolve(rawSlug string) (ResolvedPage, bool) {
 		}
 	}
 	return out, out.Public != nil || out.Source != nil
+}
+
+func (r *PageResolver) resolveSource(sourceSlug string) (*hugosite.SourcePage, bool) {
+	for _, candidate := range sourceSlugCandidates(sourceSlug) {
+		if p, ok := r.srcIdx.GetBySlug(candidate); ok {
+			return p, true
+		}
+	}
+	return nil, false
+}
+
+func sourceSlugCandidates(sourceSlug string) []string {
+	sourceSlug = strings.Trim(sourceSlug, "/")
+	if sourceSlug == "" {
+		return nil
+	}
+	out := []string{sourceSlug}
+	parts := strings.Split(sourceSlug, "/")
+	langless := strings.Join(stripLanguagePrefix(parts), "/")
+	if langless != "" && langless != sourceSlug {
+		out = append(out, langless)
+	}
+	return out
 }
 
 func normalizeResolverSlugs(raw string) (publicSlug, sourceSlug string) {
