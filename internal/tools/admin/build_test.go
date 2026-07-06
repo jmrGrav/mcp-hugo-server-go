@@ -198,6 +198,41 @@ func TestBuildSiteFailureStructuredError(t *testing.T) {
 	}
 }
 
+func TestBuildSiteFailureUsesStdoutWhenStderrEmpty(t *testing.T) {
+	dir := writeMockHugo(t, "#!/bin/sh\necho 'Error: module not found'\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result, got success")
+	}
+
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON object in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v — got %q", err, text)
+	}
+
+	summary, _ := out["stderr_summary"].(string)
+	if !strings.Contains(summary, "module not found") {
+		t.Errorf("stderr_summary %q does not include stdout failure text", summary)
+	}
+}
+
 func TestBuildSiteStderrSanitised(t *testing.T) {
 	secretRoot := t.TempDir()
 	dir := writeMockHugo(t, "#!/bin/sh\necho '"+secretRoot+": Error occurred' >&2\nexit 1\n")

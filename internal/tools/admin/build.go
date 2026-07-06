@@ -75,6 +75,13 @@ func sanitiseStderr(raw []byte, hugoRoot, siteRoot string) string {
 	return strings.TrimSpace(truncateUTF8([]byte(s), 500))
 }
 
+func buildOutputSummary(stderr, stdout []byte, hugoRoot, siteRoot string) string {
+	if strings.TrimSpace(string(stderr)) != "" {
+		return sanitiseStderr(stderr, hugoRoot, siteRoot)
+	}
+	return sanitiseStderr(stdout, hugoRoot, siteRoot)
+}
+
 func RegisterBuild(s *mcp.Server, cfg config.Config) {
 	if s == nil {
 		return
@@ -110,7 +117,9 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 		cmd := exec.CommandContext(tctx, "hugo")
 		cmd.Dir = cfg.HugoRoot
 		var stderrBuf bytes.Buffer
+		var stdoutBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
+		cmd.Stdout = &stdoutBuf
 		err := cmd.Run()
 		durationMs := time.Since(start).Milliseconds()
 
@@ -125,7 +134,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 				"build_id", buildID,
 				"duration_ms", durationMs,
 				"exit_code", exitCode,
-				"stderr", stderrBuf.String(),
+				"output_summary", buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
 				"error", err,
 			)
 
@@ -140,7 +149,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 				Command:          "hugo",
 				WorkingDirectory: cfg.HugoRoot,
 				DurationMs:       durationMs,
-				StderrSummary:    sanitiseStderr(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				StderrSummary:    buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
 				BuildID:          buildID,
 				LogHint:          "Search server logs for build_id=" + buildID,
 			}

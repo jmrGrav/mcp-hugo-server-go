@@ -66,7 +66,9 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		cmd := exec.CommandContext(tctx, "hugo", "--renderToMemory")
 		cmd.Dir = cfg.HugoRoot
 		var stderrBuf bytes.Buffer
+		var stdoutBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
+		cmd.Stdout = &stdoutBuf
 		err := cmd.Run()
 		durationMs := time.Since(start).Milliseconds()
 
@@ -81,7 +83,7 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 				"build_id", buildID,
 				"duration_ms", durationMs,
 				"exit_code", exitCode,
-				"stderr", stderrBuf.String(),
+				"output_summary", buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
 				"error", err,
 			)
 
@@ -96,7 +98,7 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 				Command:          "hugo --renderToMemory",
 				WorkingDirectory: cfg.HugoRoot,
 				DurationMs:       durationMs,
-				StderrSummary:    sanitiseStderr(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				StderrSummary:    buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
 				BuildID:          buildID,
 				LogHint:          "Search server logs for build_id=" + buildID,
 			}
