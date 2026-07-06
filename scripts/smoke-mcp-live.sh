@@ -175,11 +175,14 @@ classify_response() {
 }
 
 mcp_request() {
-  local label="$1"
-  local method="$2"
-  local params="${3:-null}"
-  local expect_success="${4:-1}"
-  local req="$TMPDIR/request-$label.json"
+	local label="$1"
+	local method="$2"
+	local params="${3-}"
+	local expect_success="${4:-1}"
+	local req="$TMPDIR/request-$label.json"
+	if [[ -z "$params" ]]; then
+		params="null"
+	fi
   if [[ "$params" == "null" ]]; then
     jq -nc --arg m "$method" '{jsonrpc:"2.0",id:1,method:$m}' > "$req"
   else
@@ -190,11 +193,14 @@ mcp_request() {
 }
 
 call_tool() {
-  local label="$1"
-  local tool="$2"
-  local args="${3:-{}}"
-  local expect_success="${4:-1}"
-  local params
+	local label="$1"
+	local tool="$2"
+	local args="${3-}"
+	local expect_success="${4:-1}"
+	local params
+	if [[ -z "$args" ]]; then
+		args="{}"
+	fi
   params="$(jq -nc --arg name "$tool" --argjson args "$args" '{name:$name,arguments:$args}')"
   mcp_request "$label" "tools/call" "$params" "$expect_success"
 }
