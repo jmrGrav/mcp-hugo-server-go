@@ -470,7 +470,7 @@ client disconnects mid-run.
 
 ### Overview
 
-The project uses a two-workflow promotion model:
+The project now uses a three-workflow promotion model:
 
 ```
 main branch merge
@@ -478,13 +478,9 @@ main branch merge
       ▼
   CI (ci.yml)
   ├── unit tests, vet, staticcheck, govulncheck
+  ├── README release-metadata gate
   ├── boot-check (binary starts, 7 endpoints respond)
   └── secret scans (gitleaks + trufflehog)
-      │
-      ▼  (on tag push or manual dispatch)
-  Pre-release Smoke workflow
-  └── smoke-mcp-live.sh against live server (read-only)
-  └── smoke-agent-interop.sh (OAuth discovery, DCR probe)
       │
       ▼  (manually: run deploy.yml)
   deploy.yml
@@ -493,6 +489,19 @@ main branch merge
   │   ├── self-hosted runner promotes the selected ref on the VM
   │   ├── systemctl restart
   │   └── post-deploy smoke (smoke-mcp-live.sh)
+  └── dry-run validation (no production environment, no deployment record)
+      │
+      ▼  (manually: run release.yml)
+  release.yml
+  ├── requires current origin/main HEAD
+  ├── requires successful production deployment for that SHA
+  ├── checks CHANGELOG.md and README release metadata
+  └── creates tag + GitHub release
+      │
+      ▼  (optional/manual)
+  Live Smoke workflow
+  └── smoke-mcp-live.sh against live server (read-only)
+  └── smoke-agent-interop.sh (OAuth discovery, DCR probe)
 ```
 
 ### GitHub Environments
@@ -514,13 +523,20 @@ main branch merge
    secret scans, and CodeQL checks for green.
 
 3. **Trigger `deploy.yml` from GitHub Actions → Run workflow:**
-   - Input the git ref to promote (default: `main`; tag or SHA also supported)
+   - Input the git ref to promote (default: `main`; SHA allowed)
+   - The workflow rejects refs that are not reachable from `origin/main`
    - Approve the `production` environment gate in the Actions UI
    - The workflow builds the selected ref, deploys it on the self-hosted runner,
      restarts the service, and runs the post-deploy smoke
 
-4. **Create a Git tag and GitHub Release separately** only after the promoted
-   commit is verified in production.
+4. **Trigger `release.yml` only after the deploy succeeds:**
+   - Input the release version (for example `v1.3.5`)
+   - Input the release ref (normally `main`)
+   - The workflow refuses to publish unless the target ref:
+     - resolves to the current `origin/main` HEAD;
+     - already has a successful `production` deployment record;
+     - passes the `CHANGELOG.md` gate;
+     - passes the machine-checkable README release metadata gate.
 
 5. **Close the milestone** on GitHub once the release is published.
 
