@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -25,6 +26,13 @@ type sriResult struct {
 	CurrentHash  string `json:"current_hash"`
 	Match        bool   `json:"match"`
 	Error        string `json:"error"`
+}
+
+type sriOutput struct {
+	FilesScanned int         `json:"files_scanned"`
+	SRIChecked   int         `json:"sri_checked"`
+	Summary      string      `json:"summary"`
+	Findings     []sriResult `json:"findings"`
 }
 
 func setupSRILayout(t *testing.T, url, hash string) string {
@@ -67,14 +75,14 @@ func TestSRIMatchingHash(t *testing.T) {
 	}
 
 	text := resultText(res)
-	var out []sriResult
+	var out sriOutput
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatalf("response not JSON: %v — got %q", err, text)
 	}
-	if len(out) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(out))
+	if out.SRIChecked < 1 {
+		t.Fatal("expected at least 1 SRI check")
 	}
-	r := out[0]
+	r := out.Findings[0]
 	if r.Error != "" {
 		t.Fatalf("unexpected error in result: %s", r.Error)
 	}
@@ -109,18 +117,66 @@ func TestSRIMismatchHash(t *testing.T) {
 	}
 
 	text := resultText(res)
-	var out []sriResult
+	var out sriOutput
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatalf("response not JSON: %v — got %q", err, text)
 	}
-	if len(out) != 1 {
-		t.Fatalf("expected 1 result, got %d", len(out))
+	if out.SRIChecked < 1 {
+		t.Fatal("expected at least 1 SRI check")
 	}
-	r := out[0]
+	r := out.Findings[0]
 	if r.Error != "" {
 		t.Fatalf("unexpected error in result: %s", r.Error)
 	}
 	if r.Match {
 		t.Errorf("expected match=false, got true (template=%s current=%s)", r.TemplateHash, r.CurrentHash)
+	}
+}
+
+func TestSRICheckSummaryFields(t *testing.T) {
+	body := []byte("console.log('hello');")
+	correctHash := computeTestSHA384(body)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	hugoRoot := setupSRILayout(t, srv.URL+"/lib.js", correctHash)
+
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "check_sri_versions", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+
+	text := resultText(res)
+	var out sriOutput
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("response not JSON: %v — got %q", err, text)
+	}
+
+	if out.FilesScanned < 1 {
+		t.Errorf("expected files_scanned >= 1, got %d", out.FilesScanned)
+	}
+	if out.SRIChecked != 1 {
+		t.Errorf("expected sri_checked == 1, got %d", out.SRIChecked)
+	}
+	if out.Summary == "" {
+		t.Error("expected non-empty summary")
+	}
+	if !strings.Contains(out.Summary, "passed") && !strings.Contains(out.Summary, "mismatch") {
+		t.Errorf("summary should contain 'passed' or 'mismatch', got %q", out.Summary)
+	}
+	if out.Summary != "All 1 SRI integrity check(s) passed." {
+		t.Errorf("unexpected summary: %q", out.Summary)
 	}
 }
