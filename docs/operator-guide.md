@@ -58,6 +58,30 @@ Configuration is stored in YAML format. The following table lists all available 
 | `image_gen_url` | string | (empty) | External API URL for AI-powered image generation. Omit if not used. |
 | `image_gen_key` | string | (empty) | API key for the image generation service. |
 
+### Featured image generation
+
+`generate_featured_image` calls an external HTTP API to produce AI-generated images for pages.
+Two config keys control it:
+
+| Key | Description |
+|-----|-------------|
+| `image_gen_url` | POST endpoint that accepts a plain-text prompt body and returns an `image/*` response |
+| `image_gen_key` | Optional Bearer token sent in the `Authorization` header |
+
+The tool is always listed in `tools/list`. When `image_gen_url` is not set, the description
+includes `(not configured: set image_gen_url in config)` and any call returns
+`config_error: image_gen_url is not configured`.
+
+**Minimal config example:**
+
+```yaml
+image_gen_url: https://api.example.com/generate-image
+image_gen_key: sk-...  # optional
+```
+
+The generated image is saved to `{site_root}/images/featured/{slug}.jpg` and must be
+committed/deployed separately.
+
 ### Build Configuration
 
 | Field | Type | Default | Purpose |

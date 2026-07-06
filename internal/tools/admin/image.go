@@ -61,10 +61,14 @@ func Defs() []tools.ToolDef {
 }
 
 func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
+	desc := "Generate a featured image for a page using the configured image generation API and save it to {SiteRoot}/images/featured/{slug}.jpg."
+	if cfg.ImageGenURL == "" {
+		desc += " (not configured: set image_gen_url in config)"
+	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "generate_featured_image",
 		Title:       "Generate featured image",
-		Description: "Generate a featured image for a page using the configured image generation API and save it to {SiteRoot}/images/featured/{slug}.jpg.",
+		Description: desc,
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),

@@ -165,6 +165,56 @@ func TestGenerateFeaturedImage_Timeout(t *testing.T) {
 	}
 }
 
+func TestGenerateFeaturedImageDescriptionWhenUnconfigured(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	// cfg.ImageGenURL left empty
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	ctx := context.Background()
+	result, err := session.ListTools(ctx, &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range result.Tools {
+		if tool.Name == "generate_featured_image" {
+			if !strings.Contains(tool.Description, "not configured") {
+				t.Errorf("expected description to contain 'not configured', got: %q", tool.Description)
+			}
+			return
+		}
+	}
+	t.Fatal("generate_featured_image not found in tools list")
+}
+
+func TestGenerateFeaturedImageDescriptionWhenConfigured(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.ImageGenURL = "https://example.test/gen"
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	ctx := context.Background()
+	result, err := session.ListTools(ctx, &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range result.Tools {
+		if tool.Name == "generate_featured_image" {
+			if strings.Contains(tool.Description, "not configured") {
+				t.Errorf("description should not contain 'not configured' when configured, got: %q", tool.Description)
+			}
+			return
+		}
+	}
+	t.Fatal("generate_featured_image not found in tools list")
+}
+
 func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
 	siteRoot := t.TempDir()
 	cfg := config.Default()
