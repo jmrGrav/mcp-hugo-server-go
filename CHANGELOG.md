@@ -4,6 +4,34 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [v1.3.2] - 2026-07-06
+
+### Fixed
+- Rate limiter now counts logical MCP tool calls instead of raw HTTP requests.
+  In MCP Streamable HTTP stateful transport, each `tools/call` produces two HTTP
+  requests (phase-1: no session, 202 Accepted; phase-2: session present, 200 OK).
+  Previously both consumed a token, halving the effective burst budget. Phase-1
+  now stores a credit; phase-2 consumes it, so each logical call costs exactly
+  one token (#156).
+- When the rate limit fires inside an established MCP session
+  (`Mcp-Session-Id` present), the server returns HTTP 200 with a JSON-RPC 2.0
+  error body instead of HTTP 429. The go-sdk Streamable HTTP transport discards
+  non-2xx response bodies before the MCP layer can surface the error; HTTP 200
+  ensures the structured JSON-RPC error (`code: -32029`, `Retry-After`) reaches
+  the MCP client (#155).
+- `ContentClassifier` correctly classifies multilingual taxonomy slugs
+  (`/en/tags/webhook/`, `/fr/categories/securite/`) via `stripLanguagePrefix`
+  (added in v1.3.0); test coverage added in v1.3.1 confirms the fix. Closing
+  #157 as resolved.
+- `operator-guide.md`: new Pitfall 4 section documenting why OpenResty returns
+  HTML 503 under rate-limit saturation and how to configure
+  `proxy_intercept_errors` / `proxy_pass_header Retry-After` to forward the
+  upstream JSON-RPC error body correctly (#158).
+- `smoke-mcp-live.sh`: `generate_featured_image` is now called in the
+  `MCP_SMOKE_ENABLE_WRITES=1` section (after `update_page`, while the page
+  still exists); asserts `result.isError` via `classify_response` and verifies
+  that `result.content[0].text` is non-empty (#159).
+
 ## [v1.3.1] - 2026-07-06
 
 ### Fixed

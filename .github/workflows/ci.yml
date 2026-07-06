@@ -198,31 +198,47 @@ jobs:
           path: ./
           extra_args: --only-verified
 
-  # Optional: run the full smoke test against the live staging/production server.
-  # Only runs on tag pushes and only when the STAGING_URL secret is configured.
-  # Set STAGING_URL to the base URL (e.g. https://mcp.arleo.eu) in repo secrets.
-  staging-smoke:
-    name: Staging smoke test
+  # Pre-release smoke test against the live production server.
+  # Runs on every tag push when PRODUCTION_URL secret is set.
+  # Uses the production GitHub Environment so the deployment appears in the
+  # GitHub Deployments history. This is validation (read-only smoke), not
+  # an actual deployment — the deploy.yml workflow handles SSH deployments.
+  #
+  # Required repo secret:
+  #   PRODUCTION_URL   — base URL of the MCP server (e.g. https://mcp.arleo.eu)
+  #
+  # Optional repo secrets (enables richer smoke coverage):
+  #   MCP_ACCESS_TOKEN — Bearer token for authenticated tool calls
+  production-smoke:
+    name: Pre-release smoke test
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    environment: staging
+    environment: production
     steps:
       - uses: actions/checkout@v4
-      - name: Check STAGING_URL secret available
+      - name: Check PRODUCTION_URL secret available
         id: check-secret
         run: |
-          if [[ -z "${{ secrets.STAGING_URL }}" ]]; then
-            echo "STAGING_URL not configured — skipping smoke test"
+          if [[ -z "${{ secrets.PRODUCTION_URL }}" ]]; then
+            echo "PRODUCTION_URL not configured — skipping smoke test"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Run smoke test against staging
+      - name: MCP live smoke (read-only)
         if: steps.check-secret.outputs.skip == 'false'
         env:
-          BASE_URL: ${{ secrets.STAGING_URL }}
+          MCP_SMOKE_LIVE: "1"
+          MCP_BASE_URL: ${{ secrets.PRODUCTION_URL }}
+          MCP_ACCESS_TOKEN: ${{ secrets.MCP_ACCESS_TOKEN }}
+          MCP_SMOKE_DELAY: "4"
+        run: bash scripts/smoke-mcp-live.sh
+      - name: Agent interop smoke
+        if: steps.check-secret.outputs.skip == 'false'
+        env:
+          SMOKE_LIVE: "1"
+          BASE_URL: ${{ secrets.PRODUCTION_URL }}
           SMOKE_DCR_PROBE: "1"
           CLAUDE_REDIRECT_URI: https://claude.ai/api/mcp/auth_callback
           CHATGPT_REDIRECT_URI: https://chatgpt.com/connector/oauth/boot-check
-        run: |
-          bash scripts/smoke-agent-interop.sh
+        run: bash scripts/smoke-agent-interop.sh

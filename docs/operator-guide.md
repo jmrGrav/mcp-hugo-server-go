@@ -427,6 +427,90 @@ Do not run write-enabled smoke against production unless you have confirmed the
 test slug does not already exist and you are ready to clean it manually if a
 client disconnects mid-run.
 
+## Deployment Pipeline
+
+### Overview
+
+The project uses a two-workflow promotion model:
+
+```
+main branch merge
+      │
+      ▼
+  CI (ci.yml)
+  ├── unit tests, vet, staticcheck, govulncheck
+  ├── boot-check (binary starts, 7 endpoints respond)
+  └── secret scans (gitleaks + trufflehog)
+      │
+      ▼  (on tag push)
+  pre-release smoke (production-smoke job)
+  └── smoke-mcp-live.sh against live server (read-only)
+  └── smoke-agent-interop.sh (OAuth discovery, DCR probe)
+      │
+      ▼  (manually: run deploy.yml)
+  deploy.yml
+  ├── validate (build + tests)
+  ├── deploy (environment: production — requires reviewer approval)
+  │   ├── SSH deploy binary to server
+  │   ├── systemctl restart
+  │   └── post-deploy smoke (smoke-mcp-live.sh)
+  └── release (create GitHub Release + attach binary)
+```
+
+### GitHub Environments
+
+| Environment | Protection | Purpose |
+|-------------|-----------|---------|
+| `production` | Required reviewer (jmrGrav) | SSH deployment + post-deploy smoke |
+| `staging` | None | Reserved for a dedicated staging VM (future) |
+
+> **Note:** The project currently runs on a single VM (mcp.arleo.eu). A separate
+> staging VM does not exist yet. When one is provisioned, add it as the target for
+> the `staging` environment and add a pre-deploy staging smoke step to `deploy.yml`
+> before the production gate. See GitHub issue for the tracking item.
+
+### Manual Deployment Steps
+
+1. **Tag the release:**
+   ```bash
+   git tag -a v1.3.2 -m "v1.3.2: <summary>"
+   git push origin v1.3.2
+   ```
+
+2. **CI runs automatically** — watch the `production-smoke` job for green.
+
+3. **Trigger deploy.yml from GitHub Actions → Run workflow:**
+   - Input the tag (e.g. `v1.3.2`)
+   - Approve the `production` environment gate in the Actions UI
+   - The workflow: builds, deploys via SSH, runs post-deploy smoke, creates the Release
+
+4. **Close the milestone** on GitHub once the release is published.
+
+### Required Secrets for deploy.yml
+
+Configure these under **Settings → Secrets and variables → Actions**:
+
+| Secret | Description |
+|--------|-------------|
+| `SSH_PRIVATE_KEY` | Ed25519 private key with access to the production server |
+| `SSH_HOST` | Hostname or IP of the production server |
+| `SSH_USER` | SSH user (default: `root`) |
+| `SSH_PORT` | SSH port (default: `22`) |
+| `PRODUCTION_URL` | Base URL of the MCP server (e.g. `https://mcp.arleo.eu`) |
+| `MCP_ACCESS_TOKEN` | Bearer token for post-deploy smoke read-only calls |
+
+### Rollback
+
+If the post-deploy smoke fails:
+```bash
+# On the production server:
+sudo cp /usr/local/bin/mcp-hugo-server-go.prev /usr/local/bin/mcp-hugo-server-go
+sudo systemctl restart mcp-hugo-server-go
+```
+
+To preserve the previous binary, add `cp /usr/local/bin/mcp-hugo-server-go{,.prev}` to
+the deploy SSH block before the new binary is moved into place.
+
 ## Troubleshooting
 
 | Issue | Cause | Solution |
