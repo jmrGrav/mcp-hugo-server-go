@@ -591,7 +591,7 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) val
 		if len(issues) > 0 {
 			invalid++
 		}
-		results = append(results, frontMatterIssueDTO{Slug: p.Slug, Issues: issues})
+		results = append(results, frontMatterIssueDTO{Slug: p.Slug, Lang: p.Lang, Issues: issues})
 	}
 	return validateOutput{
 		Success:     true,

@@ -23,6 +23,7 @@ var ContentMu sync.RWMutex
 type SourcePage struct {
 	Slug           string
 	FilePath       string
+	Lang           string
 	Title          string
 	Date           string
 	Draft          bool
@@ -71,6 +72,7 @@ func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
 		page := SourcePage{
 			Slug:           slug,
 			FilePath:       path,
+			Lang:           langFromRel(rel),
 			Title:          stringVal(fm["title"]),
 			Date:           stringVal(fm["date"]),
 			Draft:          boolVal(fm["draft"]),
@@ -217,6 +219,20 @@ func SlugFromRel(rel string) string {
 		}
 	}
 	return strings.TrimSuffix(rel, ".md")
+}
+
+func langFromRel(rel string) string {
+	rel = filepath.ToSlash(rel)
+	if i := strings.LastIndex(rel, "/index."); i >= 0 {
+		after := rel[i+len("/index."):]
+		if strings.HasSuffix(after, ".md") {
+			lang := strings.TrimSuffix(after, ".md")
+			if len(lang) >= 2 && len(lang) <= 5 {
+				return lang
+			}
+		}
+	}
+	return ""
 }
 
 func splitFrontmatter(raw []byte) (map[string]any, string) {
