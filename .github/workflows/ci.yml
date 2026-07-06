@@ -173,6 +173,19 @@ jobs:
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true
 
+  staging-smoke-local:
+    name: Staging smoke (local synthetic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Run secret-free staging smoke
+        env:
+          MCP_SMOKE_DELAY: "1"
+        run: bash scripts/staging-smoke-local.sh
+
   secret-scan:
     name: Secret Scan (gitleaks)
     runs-on: ubuntu-latest

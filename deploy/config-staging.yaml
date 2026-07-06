@@ -1,0 +1,39 @@
+site_root: /var/lib/mcp-hugo-server-go-staging/site/public
+hugo_root: /var/lib/mcp-hugo-server-go-staging/site
+content_root: /var/lib/mcp-hugo-server-go-staging/site/content
+site_url: https://staging.example.invalid
+site_name: mcp-hugo-server-go staging
+language_default: fr
+
+transport: http
+http_bind_addr: 127.0.0.1
+http_bind_port: 18088
+streaming_enabled: true
+
+max_index_entries: 5000
+max_result_items: 50
+max_request_bytes: 1048576
+reject_symlinks: true
+reject_hidden_paths: true
+
+build_timeout_seconds: 120
+
+rate_limit:
+  anonymous_per_min: 120
+  content_read_per_min: 240
+  content_write_per_min: 60
+  site_admin_per_min: 60
+  destructive_per_min: 10
+
+oauth:
+  enabled: true
+  issuer: http://127.0.0.1:18088
+  resource: http://127.0.0.1:18088/mcp
+  dynamic_client_enabled: true
+  auth_code_ttl_seconds: 300
+  access_token_ttl_seconds: 3600
+  trusted_authorize_cidrs:
+    - 127.0.0.1/32
+  client_registry_path: /etc/mcp-hugo-server-go/oauth-clients.yaml
+  storage_backend: sqlite
+  storage_path: /var/lib/mcp-hugo-server-go-staging/tokens.db

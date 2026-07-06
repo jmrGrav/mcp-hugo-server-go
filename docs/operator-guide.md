@@ -501,12 +501,11 @@ main branch merge
 | Environment | Protection | Purpose |
 |-------------|-----------|---------|
 | `production` | Required reviewer (jmrGrav) | SSH deployment + post-deploy smoke |
-| `staging` | None | Reserved for a dedicated staging VM (future) |
+| `staging` | None | Isolated operator-managed staging instance or local synthetic smoke |
 
-> **Note:** The project currently runs on a single VM (mcp.arleo.eu). A separate
-> staging VM does not exist yet. When one is provisioned, add it as the target for
-> the `staging` environment and add a pre-deploy staging smoke step to `deploy.yml`
-> before the production gate. See GitHub issue for the tracking item.
+> **Note:** The repository now keeps a secret-free staging profile and a local
+> synthetic staging smoke. See [docs/staging-runbook.md](staging-runbook.md)
+> for the isolated Hugo VM staging layout and the CI/local smoke flow.
 
 ### Manual Deployment Steps
 
