@@ -436,6 +436,7 @@ client disconnects mid-run.
 | Post-build hooks not firing | Hook URL is invalid or uses a private IP. | Validate the URL format and DNS resolution. |
 | `build_site` timeout | Hugo build takes longer than `build_timeout_seconds`. | Increase the timeout value in config. |
 | Permission denied when writing pages | Systemd service lacks write permissions. | Update `ReadWritePaths` in the service file and reload. |
+| OpenResty returns HTML 503 under load | Reverse proxy treats upstream 429 as a connection error. | See Pitfall 4 below. |
 
 ## Known Deployment Pitfalls
 
@@ -515,6 +516,56 @@ sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
 Verify:
 ```bash
 sudo -u mcp-hugo-server-go env PATH=/usr/local/bin:/usr/bin:/bin which hugo
+```
+
+---
+
+### Pitfall 4 — OpenResty / nginx returns HTML 503 after rate-limit saturation
+
+**Symptom:** When a burst of MCP tool calls exhausts the rate limit, the reverse proxy returns a generic HTML page with `503 Service Temporarily Unavailable` instead of the JSON-RPC 429 body from the server. Smoke test prints `PROXY_FAIL ... html=true`.
+
+**Cause:** Some OpenResty / nginx configurations treat upstream responses that arrive very quickly (including rate-limit 429s) as upstream errors, or the `proxy_pass` buffer is too small to forward the JSON body. The default `error_page 503` directive rewrites the body with OpenResty's built-in HTML page.
+
+**Fix — forward the upstream 429 as-is:**
+
+Add the following directives inside the relevant `location /mcp` block:
+
+```nginx
+location /mcp {
+    proxy_pass http://127.0.0.1:8088;
+
+    # Forward the upstream 429 body without modification.
+    # Without this, nginx replaces upstream error bodies with its own HTML page.
+    proxy_intercept_errors off;
+
+    # Ensure the Retry-After header from the upstream reaches the MCP client.
+    proxy_pass_header Retry-After;
+
+    # Allow time for the MCP streaming response to complete.
+    proxy_read_timeout 120s;
+
+    # Keep response buffering off so streaming MCP responses flow immediately.
+    proxy_buffering off;
+}
+```
+
+If `proxy_intercept_errors` must remain `on` (e.g., to serve a custom 502 error page), add a passthrough for 429:
+
+```nginx
+proxy_intercept_errors on;
+error_page 400 401 403 404 /4xx.html;  # custom pages for these codes
+# 429 intentionally omitted — let the upstream JSON body flow through
+```
+
+**Verify the fix:**
+
+```bash
+# Should print JSON, not HTML
+curl -sS -o /dev/null -w '%{content_type}' \
+  -X POST https://mcp.arleo.eu/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_site_information","arguments":{}}}' \
+  | grep -q application/json && echo OK || echo FAIL
 ```
 
 ## References

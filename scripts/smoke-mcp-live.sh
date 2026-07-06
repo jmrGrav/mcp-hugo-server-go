@@ -270,6 +270,13 @@ if [[ "$ENABLE_WRITES" == "1" ]]; then
   sleep "$SMOKE_DELAY"
   call_tool "update_page" "update_page" "$(jq -nc --arg slug "$WRITE_SLUG" '{slug:$slug,title:"MCP live smoke updated",body:"Temporary MCP smoke page updated. Safe to delete."}')"
   sleep "$SMOKE_DELAY"
+  call_tool "generate_featured_image" "generate_featured_image" "$(jq -nc --arg slug "$WRITE_SLUG" '{slug:$slug}')"
+  img_text="$(jq -r '.result.content[0].text // empty' "$TMPDIR/last-generate_featured_image.json" 2>/dev/null || true)"
+  if [[ -z "$img_text" ]]; then
+    fail "generate_featured_image returned empty content"
+  fi
+  pass "generate_featured_image: content present (${#img_text} chars)"
+  sleep "$SMOKE_DELAY"
   call_tool "get_page_created" "get_page" "$(jq -nc --arg slug "$WRITE_SLUG" '{slug:$slug}')"
   sleep "$SMOKE_DELAY"
   call_tool "delete_page" "delete_page" "$(jq -nc --arg slug "$WRITE_SLUG" '{slug:$slug}')"
