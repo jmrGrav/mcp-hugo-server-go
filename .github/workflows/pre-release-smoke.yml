@@ -1,0 +1,50 @@
+name: Pre-release Smoke
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to validate (tag or SHA). Default: current main'
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  production-smoke:
+    name: Pre-release smoke test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.ref }}
+
+      - name: Check PRODUCTION_URL secret available
+        run: |
+          if [[ -z "${{ secrets.PRODUCTION_URL }}" ]]; then
+            echo "PRODUCTION_URL is required for the pre-release smoke workflow" >&2
+            exit 1
+          fi
+
+      - name: MCP live smoke (read-only)
+        env:
+          MCP_SMOKE_LIVE: "1"
+          MCP_BASE_URL: ${{ secrets.PRODUCTION_URL }}
+          MCP_ACCESS_TOKEN: ${{ secrets.MCP_ACCESS_TOKEN }}
+          MCP_SMOKE_DELAY: "4"
+        run: bash scripts/smoke-mcp-live.sh
+
+      - name: Agent interop smoke
+        env:
+          SMOKE_LIVE: "1"
+          BASE_URL: ${{ secrets.PRODUCTION_URL }}
+          SMOKE_DCR_PROBE: "1"
+          CLAUDE_REDIRECT_URI: https://claude.ai/api/mcp/auth_callback
+          CHATGPT_REDIRECT_URI: https://chatgpt.com/connector/oauth/boot-check
+        run: bash scripts/smoke-agent-interop.sh
