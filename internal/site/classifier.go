@@ -187,7 +187,8 @@ func isTechnicalSlugParts(parts []string) bool {
 		return false
 	}
 	switch parts[0] {
-	case "robots.txt", "security.txt", "llms.txt", "humans.txt", "ai.txt":
+	case "robots.txt", "security.txt", "llms.txt", "humans.txt", "ai.txt",
+		"404.html", "404", "500.html", "500":
 		return true
 	default:
 		return false

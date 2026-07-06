@@ -1,6 +1,7 @@
 package read
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,25 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 )
+
+func TestResolveInternalLinkSkipsMdSuffix(t *testing.T) {
+	base, _ := url.Parse("https://example.test/posts/hello/")
+	cases := []struct {
+		href string
+		want bool
+	}{
+		{"./index.md", false},
+		{"../other.md", false},
+		{"/posts/world/", true},
+		{"#section", false}, // already filtered
+	}
+	for _, tc := range cases {
+		_, ok := resolveInternalLink(base, tc.href)
+		if ok != tc.want {
+			t.Errorf("resolveInternalLink(%q) ok=%v, want %v", tc.href, ok, tc.want)
+		}
+	}
+}
 
 func TestCollectBrokenLinks(t *testing.T) {
 	root := t.TempDir()

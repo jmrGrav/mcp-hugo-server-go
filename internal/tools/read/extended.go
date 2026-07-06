@@ -532,6 +532,9 @@ func resolveInternalLink(base *url.URL, raw string) (*url.URL, bool) {
 	if target.Host != "" && target.Host != base.Host {
 		return nil, false
 	}
+	if strings.HasSuffix(target.Path, ".md") {
+		return nil, false
+	}
 	return target, true
 }
 

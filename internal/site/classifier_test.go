@@ -68,6 +68,58 @@ func TestContentClassifierClassifiesHugoGeneratedPages(t *testing.T) {
 	}
 }
 
+func TestContentClassifierClassifiesErrorPagesAsTechnical(t *testing.T) {
+	classifier := NewClassifier(nil)
+
+	cases := []struct {
+		name      string
+		slug      string
+		wantKind  PageKind
+		technical bool
+	}{
+		{name: "404.html", slug: "/404.html", wantKind: KindTechnical, technical: true},
+		{name: "404 bare", slug: "/404/", wantKind: KindTechnical, technical: true},
+		{name: "500.html", slug: "/500.html", wantKind: KindTechnical, technical: true},
+		{name: "500 bare", slug: "/500/", wantKind: KindTechnical, technical: true},
+		{name: "normal page not technical", slug: "/posts/hello/", wantKind: KindArticle, technical: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			page := Page{Slug: tc.slug}
+			if got := classifier.Classify(page); got != tc.wantKind {
+				t.Fatalf("Classify(%q) = %v, want %v", tc.slug, got, tc.wantKind)
+			}
+			if got := classifier.IsTechnical(page); got != tc.technical {
+				t.Fatalf("IsTechnical(%q) = %v, want %v", tc.slug, got, tc.technical)
+			}
+		})
+	}
+}
+
+func TestContentPagesExcludesErrorPages(t *testing.T) {
+	idx := &Index{
+		entries: []entry{
+			{page: Page{Slug: "/posts/hello/", Date: "2026-07-01"}},
+			{page: Page{Slug: "/about/", Date: "2026-07-02"}},
+			{page: Page{Slug: "/404.html", Date: "2026-07-03"}},
+			{page: Page{Slug: "/404/", Date: "2026-07-04"}},
+			{page: Page{Slug: "/500.html", Date: "2026-07-05"}},
+		},
+	}
+
+	got := idx.ContentPages()
+	if len(got) != 2 {
+		t.Fatalf("ContentPages() len = %d, want 2: %#v", len(got), got)
+	}
+	for _, p := range got {
+		switch p.Slug {
+		case "/404.html", "/404/", "/500.html":
+			t.Fatalf("ContentPages() included error page %q", p.Slug)
+		}
+	}
+}
+
 func TestContentPagesExcludeTaxonomyPaginationSectionsAndTechnicalFiles(t *testing.T) {
 	idx := &Index{
 		entries: []entry{
