@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -152,25 +153,11 @@ func (idx *SourceIndex) AllCategories() []string {
 }
 
 func uniqueSortedSourceStrings(values func(SourcePage) []string, pages []SourcePage) []string {
-	seen := map[string]string{}
+	var all []string
 	for _, page := range pages {
-		for _, raw := range values(page) {
-			v := strings.TrimSpace(raw)
-			if v == "" {
-				continue
-			}
-			key := strings.ToLower(v)
-			if _, ok := seen[key]; !ok {
-				seen[key] = v
-			}
-		}
+		all = append(all, values(page)...)
 	}
-	out := make([]string, 0, len(seen))
-	for _, v := range seen {
-		out = append(out, v)
-	}
-	sort.Strings(out)
-	return out
+	return taxonomy.DeduplicateRaw(all)
 }
 
 // Upsert adds or replaces the index entry for page. It must be called while

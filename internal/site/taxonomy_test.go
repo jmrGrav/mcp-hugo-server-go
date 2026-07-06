@@ -2,6 +2,9 @@ package site
 
 import "testing"
 
+// TestNormalizeTaxonomyTerms verifies that the site-level wrapper delegates
+// correctly to the taxonomy package. Comprehensive tests live in
+// internal/taxonomy/taxonomy_test.go.
 func TestNormalizeTaxonomyTerms(t *testing.T) {
 	got := NormalizeTaxonomyTerms([]string{" postmortem ", "Post-mortems", "security", "sécurité", "", "security"})
 	if len(got) != 4 {

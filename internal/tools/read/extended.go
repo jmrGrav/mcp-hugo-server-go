@@ -11,6 +11,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
@@ -331,10 +332,10 @@ func matchContentFilters(p site.Page, in searchContentInput, classifier *site.Co
 	if query != "" && scoreContentPage(p, query) == 0 {
 		return false
 	}
-	if in.Tag != "" && !sliceContains(p.Tags, in.Tag) {
+	if in.Tag != "" && !taxonomy.MatchesSlug(p.Tags, taxonomy.Slug(in.Tag)) {
 		return false
 	}
-	if in.Category != "" && !sliceContains(p.Categories, in.Category) {
+	if in.Category != "" && !taxonomy.MatchesSlug(p.Categories, taxonomy.Slug(in.Category)) {
 		return false
 	}
 	if in.Language != "" && !strings.EqualFold(p.Lang, in.Language) {

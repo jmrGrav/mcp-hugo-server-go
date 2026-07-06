@@ -7,6 +7,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -46,15 +47,17 @@ type pageDTO struct {
 }
 
 type pageDetailDTO struct {
-	Slug       string   `json:"slug"`
-	Title      string   `json:"title"`
-	Summary    string   `json:"summary"`
-	Tags       []string `json:"tags"`
-	Categories []string `json:"categories"`
-	Date       string   `json:"date"`
-	URL        string   `json:"url"`
-	Lang       string   `json:"lang"`
-	HTML       string   `json:"html"`
+	Slug          string                  `json:"slug"`
+	Title         string                  `json:"title"`
+	Summary       string                  `json:"summary"`
+	Tags          []string                `json:"tags"`
+	Categories    []string                `json:"categories"`
+	TagTerms      []taxonomy.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms []taxonomy.TaxonomyTerm `json:"category_terms,omitempty"`
+	Date          string                  `json:"date"`
+	URL           string                  `json:"url"`
+	Lang          string                  `json:"lang"`
+	HTML          string                  `json:"html"`
 }
 
 type getSitemapInput struct {
@@ -342,15 +345,17 @@ func toPageDetailDTO(p site.Page) pageDetailDTO {
 		cats = []string{}
 	}
 	return pageDetailDTO{
-		Slug:       p.Slug,
-		Title:      p.Title,
-		Summary:    p.Summary,
-		Tags:       tags,
-		Categories: cats,
-		Date:       p.Date,
-		URL:        p.URL,
-		Lang:       p.Lang,
-		HTML:       p.RawHTML,
+		Slug:          p.Slug,
+		Title:         p.Title,
+		Summary:       p.Summary,
+		Tags:          tags,
+		Categories:    cats,
+		TagTerms:      taxonomy.Normalize(tags),
+		CategoryTerms: taxonomy.Normalize(cats),
+		Date:          p.Date,
+		URL:           p.URL,
+		Lang:          p.Lang,
+		HTML:          p.RawHTML,
 	}
 }
 
@@ -376,12 +381,14 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		cats = []string{}
 	}
 	return pageDetailDTO{
-		Slug:       "/" + src.Slug + "/",
-		Title:      src.Title,
-		Tags:       tags,
-		Categories: cats,
-		Date:       src.Date,
-		HTML:       src.Body,
+		Slug:          "/" + src.Slug + "/",
+		Title:         src.Title,
+		Tags:          tags,
+		Categories:    cats,
+		TagTerms:      taxonomy.Normalize(tags),
+		CategoryTerms: taxonomy.Normalize(cats),
+		Date:          src.Date,
+		HTML:          src.Body,
 	}
 }
 

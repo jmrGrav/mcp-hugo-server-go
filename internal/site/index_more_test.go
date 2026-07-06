@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"golang.org/x/net/html"
 )
 
@@ -53,8 +54,8 @@ func TestSiteIndexHelpers(t *testing.T) {
 		if got := firstNonZeroTime(time.Time{}, time.Unix(100, 0)); got.Unix() != 100 {
 			t.Fatalf("firstNonZeroTime() = %v", got)
 		}
-		if got := uniqueStrs([]string{"Go", " go ", "", "Rust", "rust"}); len(got) != 2 || got[0] != "Go" || got[1] != "Rust" {
-			t.Fatalf("uniqueStrs() = %#v", got)
+		if got := taxonomy.DeduplicateRaw([]string{"Go", " go ", "", "Rust", "rust"}); len(got) != 2 || got[0] != "Go" || got[1] != "Rust" {
+			t.Fatalf("DeduplicateRaw() = %#v", got)
 		}
 		if got := splitCSV("alpha, beta, ,gamma"); len(got) != 3 || got[1] != "beta" {
 			t.Fatalf("splitCSV() = %#v", got)
