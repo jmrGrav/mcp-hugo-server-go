@@ -190,6 +190,72 @@ func TestGenerateFeaturedImageDescriptionWhenUnconfigured(t *testing.T) {
 	t.Fatal("generate_featured_image not found in tools list")
 }
 
+func TestGenerateFeaturedImageConfigMissingErrorIsActionable(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	// cfg.ImageGenURL left empty
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+		"slug":   "test-post",
+		"prompt": "test prompt",
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected config error when image_gen_url is absent")
+	}
+	text := resultText(res)
+	for _, want := range []string{"config_error", "missing_setting", "image_gen_url", "operator_hint", "retryable", "false"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("error text %q does not contain %q", text, want)
+		}
+	}
+}
+
+func TestGenerateFeaturedImageWriteErrorIsActionable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write([]byte{0xFF, 0xD8, 0xFF})
+	}))
+	defer srv.Close()
+
+	siteRoot := filepath.Join(t.TempDir(), "readonly")
+	if err := os.MkdirAll(siteRoot, 0o555); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	defer func() { _ = os.Chmod(siteRoot, 0o755) }()
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = t.TempDir()
+	cfg.ImageGenURL = srv.URL
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+		"slug":   "test-post",
+		"prompt": "test prompt",
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected write error when site_root is not writable")
+	}
+	text := resultText(res)
+	for _, want := range []string{"write_error", "target_directory", "target_path", "ReadWritePaths"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("error text %q does not contain %q", text, want)
+		}
+	}
+}
+
 func TestGenerateFeaturedImageDescriptionWhenConfigured(t *testing.T) {
 	cfg := config.Default()
 	cfg.SiteRoot = t.TempDir()

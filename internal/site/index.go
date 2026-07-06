@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"golang.org/x/net/html"
 )
 
@@ -304,8 +305,8 @@ func parseHTMLPage(raw []byte, rel string, modTime time.Time, siteURL, defaultLa
 		canonicalURL = joinURL(siteURL, slug)
 	}
 
-	tags := uniqueStrs(meta.tags)
-	cats := uniqueStrs(meta.categories)
+	tags := taxonomy.DeduplicateRaw(meta.tags)
+	cats := taxonomy.DeduplicateRaw(meta.categories)
 
 	pg := Page{
 		Slug:       slug,
@@ -605,24 +606,6 @@ func firstNonZeroTime(values ...time.Time) time.Time {
 		}
 	}
 	return time.Time{}
-}
-
-func uniqueStrs(in []string) []string {
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(in))
-	for _, raw := range in {
-		v := strings.TrimSpace(raw)
-		if v == "" {
-			continue
-		}
-		key := strings.ToLower(v)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, v)
-	}
-	return out
 }
 
 func splitCSV(raw string) []string {

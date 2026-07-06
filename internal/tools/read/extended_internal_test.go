@@ -133,9 +133,6 @@ func TestReadHelperBranches(t *testing.T) {
 	if got := nullsafeStrings(nil); len(got) != 0 {
 		t.Fatalf("nullsafeStrings(nil) = %#v", got)
 	}
-	if !sliceContains([]string{"go", "mcp"}, "go") || sliceContains([]string{"go"}, "rust") {
-		t.Fatal("sliceContains() failed expected cases")
-	}
 	if got := readingTimeMinutes(""); got != 1 {
 		t.Fatalf("readingTimeMinutes(empty) = %d", got)
 	}

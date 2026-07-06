@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -159,6 +160,14 @@ func TestGetPageFrontmatter(t *testing.T) {
 	if !ok || len(cats) != 1 || cats[0] != "tutorials" {
 		t.Fatalf("get_page_frontmatter categories = %#v, want source frontmatter category", fm["categories"])
 	}
+	categoryTerms, ok := fm["category_terms"].([]any)
+	if !ok || len(categoryTerms) != 1 {
+		t.Fatalf("get_page_frontmatter category_terms = %#v, want one normalized term", fm["category_terms"])
+	}
+	term := categoryTerms[0].(map[string]any)
+	if term["source"] != "tutorials" || term["slug"] != "tutorials" || term["label"] != "Tutorials" {
+		t.Fatalf("category term = %#v, want source/slug/label for tutorials", term)
+	}
 }
 
 func TestGetRelatedContent(t *testing.T) {
@@ -255,6 +264,39 @@ func TestExportAgentContext(t *testing.T) {
 	slug1 := pages1[0].(map[string]any)["frontmatter"].(map[string]any)["slug"]
 	if slug0 == slug1 {
 		t.Fatalf("export_agent_context offset should skip pages: got same slug %v at offset 0 and 1", slug0)
+	}
+}
+
+func TestExportAgentContextUsesSourceMarkdownForPublicLanguageSlug(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "export_agent_context", map[string]any{"tag": "Hugo", "limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("export_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	exportVal, ok := m["export"].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context: 'export' is %T, want map", m["export"])
+	}
+	pages, ok := exportVal["pages"].([]any)
+	if !ok || len(pages) != 1 {
+		t.Fatalf("export_agent_context pages = %#v, want one page", exportVal["pages"])
+	}
+	first, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("export page type = %T", pages[0])
+	}
+	md, _ := first["markdown"].(string)
+	if !strings.Contains(md, "This is the hello world post body.") {
+		t.Fatalf("markdown = %q, want source body", md)
+	}
+	for _, bad := range []string{"javascript:void(0)", "Read Markdown", "Share"} {
+		if strings.Contains(md, bad) {
+			t.Fatalf("markdown contains theme artifact %q: %q", bad, md)
+		}
 	}
 }
 
@@ -468,7 +510,7 @@ func TestValidateFrontMatterOutputFields(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 10, "offset": 0})
+	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 1, "offset": 0})
 	if res.IsError {
 		t.Fatalf("validate_front_matter returned error: %v", res.Content)
 	}
@@ -491,6 +533,16 @@ func TestValidateFrontMatterOutputFields(t *testing.T) {
 	}
 	if _, ok := data["valid"]; ok {
 		t.Fatal("validate_front_matter: old 'valid' field must not be present")
+	}
+	pagesChecked := int(data["pages_checked"].(float64))
+	pagesPassed := int(data["pages_passed"].(float64))
+	invalid := int(data["invalid"].(float64))
+	if pagesPassed+invalid != pagesChecked {
+		t.Fatalf("aggregate counters are paginated: pages_passed(%d)+invalid(%d) != pages_checked(%d)", pagesPassed, invalid, pagesChecked)
+	}
+	pages := data["pages"].([]any)
+	if len(pages) != 1 {
+		t.Fatalf("limit=1 should return exactly one page detail, got %d", len(pages))
 	}
 }
 

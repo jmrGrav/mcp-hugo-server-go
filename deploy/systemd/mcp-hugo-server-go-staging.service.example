@@ -1,0 +1,29 @@
+[Unit]
+Description=mcp-hugo-server-go staging
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mcp-hugo-server-go
+Group=mcp-hugo-server-go
+Environment=MCP_HUGO_SERVER_CONFIG=/var/lib/mcp-hugo-server-go-staging/config.yaml
+ExecStart=/var/lib/mcp-hugo-server-go-staging/bin/mcp-hugo-server-go-staging
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadOnlyPaths=/etc/mcp-hugo-server-go
+ReadWritePaths=/var/lib/mcp-hugo-server-go-staging /var/lib/mcp-hugo-server-go-staging/site/content /var/lib/mcp-hugo-server-go-staging/site/resources /var/lib/mcp-hugo-server-go-staging/site/public
+
+[Install]
+WantedBy=multi-user.target

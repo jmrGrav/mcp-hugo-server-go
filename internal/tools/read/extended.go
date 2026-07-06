@@ -11,6 +11,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
@@ -86,20 +87,25 @@ type sectionDTO struct {
 }
 
 type pageDTO struct {
-	Slug       string   `json:"slug"`
-	Title      string   `json:"title"`
-	Summary    string   `json:"summary"`
-	Tags       []string `json:"tags"`
-	Categories []string `json:"categories"`
-	Date       string   `json:"date"`
-	URL        string   `json:"url"`
-	Lang       string   `json:"lang"`
+	Slug          string              `json:"slug"`
+	Title         string              `json:"title"`
+	Summary       string              `json:"summary"`
+	Tags          []string            `json:"tags"`
+	Categories    []string            `json:"categories"`
+	TagTerms      []site.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms []site.TaxonomyTerm `json:"category_terms,omitempty"`
+	Date          string              `json:"date"`
+	URL           string              `json:"url"`
+	Lang          string              `json:"lang"`
 }
 
 type validateOutputData struct {
 	PagesChecked int                   `json:"pages_checked"`
 	PagesPassed  int                   `json:"pages_passed"`
 	Invalid      int                   `json:"invalid"`
+	Returned     int                   `json:"returned_count,omitempty"`
+	Limit        int                   `json:"limit,omitempty"`
+	Offset       int                   `json:"offset,omitempty"`
 	Pages        []frontMatterIssueDTO `json:"pages"`
 }
 
@@ -326,10 +332,10 @@ func matchContentFilters(p site.Page, in searchContentInput, classifier *site.Co
 	if query != "" && scoreContentPage(p, query) == 0 {
 		return false
 	}
-	if in.Tag != "" && !sliceContains(p.Tags, in.Tag) {
+	if in.Tag != "" && !taxonomy.MatchesSlug(p.Tags, taxonomy.Slug(in.Tag)) {
 		return false
 	}
-	if in.Category != "" && !sliceContains(p.Categories, in.Category) {
+	if in.Category != "" && !taxonomy.MatchesSlug(p.Categories, taxonomy.Slug(in.Category)) {
 		return false
 	}
 	if in.Language != "" && !strings.EqualFold(p.Lang, in.Language) {
@@ -574,24 +580,25 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) val
 	if limit <= 0 {
 		limit = total
 	}
-	slice := pages
-	if offset < len(slice) {
-		slice = slice[offset:]
-	} else {
-		slice = []hugosite.SourcePage{}
-	}
-	if len(slice) > limit {
-		slice = slice[:limit]
-	}
 
-	results := make([]frontMatterIssueDTO, 0, len(slice))
+	allResults := make([]frontMatterIssueDTO, 0, len(pages))
 	invalid := 0
-	for _, p := range slice {
+	for _, p := range pages {
 		issues := validateFrontMatterPage(p)
 		if len(issues) > 0 {
 			invalid++
 		}
-		results = append(results, frontMatterIssueDTO{Slug: p.Slug, Lang: p.Lang, Issues: issues})
+		allResults = append(allResults, frontMatterIssueDTO{Slug: p.Slug, Lang: p.Lang, Issues: issues})
+	}
+
+	results := allResults
+	if offset < len(results) {
+		results = results[offset:]
+	} else {
+		results = []frontMatterIssueDTO{}
+	}
+	if len(results) > limit {
+		results = results[:limit]
 	}
 	return validateOutput{
 		Success:     true,
@@ -599,8 +606,11 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) val
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Data: validateOutputData{
 			PagesChecked: total,
-			PagesPassed:  len(slice) - invalid,
+			PagesPassed:  total - invalid,
 			Invalid:      invalid,
+			Returned:     len(results),
+			Limit:        limit,
+			Offset:       offset,
 			Pages:        results,
 		},
 		Warnings: []string{},
@@ -761,14 +771,16 @@ func toPageDTO(p site.Page) pageDTO {
 		cats = []string{}
 	}
 	return pageDTO{
-		Slug:       p.Slug,
-		Title:      p.Title,
-		Summary:    p.Summary,
-		Tags:       tags,
-		Categories: cats,
-		Date:       p.Date,
-		URL:        p.URL,
-		Lang:       p.Lang,
+		Slug:          p.Slug,
+		Title:         p.Title,
+		Summary:       p.Summary,
+		Tags:          tags,
+		Categories:    cats,
+		TagTerms:      site.NormalizeTaxonomyTerms(tags),
+		CategoryTerms: site.NormalizeTaxonomyTerms(cats),
+		Date:          p.Date,
+		URL:           p.URL,
+		Lang:          p.Lang,
 	}
 }
 

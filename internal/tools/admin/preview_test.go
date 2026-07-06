@@ -85,11 +85,50 @@ func TestPreviewBuildFailureStructuredError(t *testing.T) {
 	if _, ok := out["duration_ms"].(float64); !ok {
 		t.Errorf("duration_ms missing or not a number: %v", out["duration_ms"])
 	}
-	if out["command"] != "hugo --renderToMemory" {
-		t.Errorf("command: want %q, got %v", "hugo --renderToMemory", out["command"])
+	command, _ := out["command"].(string)
+	if !strings.Contains(command, "hugo --noBuildLock --cacheDir ") || !strings.Contains(command, "--renderToMemory") {
+		t.Errorf("command %q does not include expected Hugo flags", command)
 	}
 	if wd, _ := out["working_directory"].(string); wd == "" {
 		t.Error("working_directory is empty")
+	}
+	if cacheDir, _ := out["cache_directory"].(string); cacheDir == "" {
+		t.Error("cache_directory is empty")
+	}
+}
+
+func TestPreviewBuildFailureUsesStdoutWhenStderrEmpty(t *testing.T) {
+	dir := writeMockHugo(t, "#!/bin/sh\necho 'Error: template failed'\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "preview_build", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result, got success")
+	}
+
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON object in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v — got %q", err, text)
+	}
+
+	summary, _ := out["stderr_summary"].(string)
+	if !strings.Contains(summary, "template failed") {
+		t.Errorf("stderr_summary %q does not include stdout failure text", summary)
 	}
 }
 

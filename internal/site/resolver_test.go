@@ -43,6 +43,32 @@ func TestPageResolverResolvesPublicAndSourceSlugs(t *testing.T) {
 	}
 }
 
+func TestPageResolverResolvesLanguagePrefixedPublicSlugToSource(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSourcePage(t, contentRoot, "posts/hello/index.md", "---\ntitle: Hello\n---\nClean source body\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &Index{
+		entries: []entry{{page: Page{Slug: "/en/posts/hello/", Title: "Rendered", RawHTML: "<nav>Share</nav><article>Rendered</article>"}}},
+		bySlug:  map[string]int{"/en/posts/hello/": 0},
+		info:    map[string]string{},
+	}
+	resolver := NewPageResolver(idx, srcIdx, config.Config{ContentRoot: contentRoot})
+
+	got, ok := resolver.Resolve("/en/posts/hello/")
+	if !ok {
+		t.Fatal("Resolve(language-prefixed public slug) not found")
+	}
+	if got.Public == nil || got.Public.Title != "Rendered" {
+		t.Fatalf("Resolve(language-prefixed).Public = %#v", got.Public)
+	}
+	if got.Source == nil || got.Source.Body != "Clean source body" {
+		t.Fatalf("Resolve(language-prefixed).Source = %#v", got.Source)
+	}
+}
+
 func TestPageResolverResolvesSourceOnlyPageAfterCreateWithoutBuild(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeSourcePage(t, contentRoot, "drafts/fresh/index.md", "---\ntitle: Fresh\n---\nFresh source body\n")

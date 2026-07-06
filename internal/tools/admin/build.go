@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -27,11 +30,14 @@ type buildSiteOutput struct {
 // buildErrorPayload is the structured JSON returned on Hugo failure.
 type buildErrorPayload struct {
 	Error            string `json:"error"`
+	ErrorClass       string `json:"error_class,omitempty"`
 	ExitCode         int    `json:"exit_code"`
 	Command          string `json:"command"`
 	WorkingDirectory string `json:"working_directory"`
+	CacheDirectory   string `json:"cache_directory,omitempty"`
 	DurationMs       int64  `json:"duration_ms"`
 	StderrSummary    string `json:"stderr_summary"`
+	StdoutSummary    string `json:"stdout_summary,omitempty"`
 	BuildID          string `json:"build_id"`
 	LogHint          string `json:"log_hint"`
 }
@@ -75,6 +81,60 @@ func sanitiseStderr(raw []byte, hugoRoot, siteRoot string) string {
 	return strings.TrimSpace(truncateUTF8([]byte(s), 500))
 }
 
+func buildOutputSummary(stderr, stdout []byte, hugoRoot, siteRoot string) string {
+	if strings.TrimSpace(string(stderr)) != "" {
+		return sanitiseStderr(stderr, hugoRoot, siteRoot)
+	}
+	return sanitiseStderr(stdout, hugoRoot, siteRoot)
+}
+
+func outputTail(raw []byte, hugoRoot, siteRoot string) string {
+	return sanitiseStderr(raw, hugoRoot, siteRoot)
+}
+
+func hugoCacheDir(cfg config.Config) string {
+	if p := strings.TrimSpace(cfg.OAuth.StoragePath); p != "" {
+		return filepath.Join(filepath.Dir(p), "hugo-cache")
+	}
+	return filepath.Join(os.TempDir(), "mcp-hugo-server-go", "hugo-cache")
+}
+
+func buildCommandArgs(cacheDir string, preview bool) []string {
+	args := []string{"--noBuildLock", "--cacheDir", cacheDir}
+	if preview {
+		args = append(args, "--renderToMemory")
+	}
+	return args
+}
+
+func commandString(name string, args []string) string {
+	if len(args) == 0 {
+		return name
+	}
+	return name + " " + strings.Join(args, " ")
+}
+
+func currentUserForLog() string {
+	u, err := user.Current()
+	if err != nil {
+		return "unknown"
+	}
+	return u.Username
+}
+
+func classifyBuildFailure(ctx context.Context, summary string) string {
+	switch {
+	case ctx.Err() != nil:
+		return "timeout"
+	case strings.Contains(strings.ToLower(summary), "permission denied"),
+		strings.Contains(strings.ToLower(summary), "read-only file system"),
+		strings.Contains(strings.ToLower(summary), "operation not permitted"):
+		return "permission_denied"
+	default:
+		return "build_error"
+	}
+}
+
 func RegisterBuild(s *mcp.Server, cfg config.Config) {
 	if s == nil {
 		return
@@ -103,14 +163,22 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 		if timeout <= 0 {
 			timeout = 120
 		}
+		cacheDir := hugoCacheDir(cfg)
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			return nil, buildSiteOutput{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
+		}
 		tctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 		defer cancel()
 
 		start := time.Now()
-		cmd := exec.CommandContext(tctx, "hugo")
+		runID := newBuildID(start)
+		args := buildCommandArgs(cacheDir, false)
+		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
 		var stderrBuf bytes.Buffer
+		var stdoutBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
+		cmd.Stdout = &stdoutBuf
 		err := cmd.Run()
 		durationMs := time.Since(start).Milliseconds()
 
@@ -120,12 +188,21 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 		}
 
 		if err != nil {
-			buildID := newBuildID(start)
+			summary := buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot)
+			errClass := classifyBuildFailure(tctx, summary)
 			slog.Error("build_site failed",
-				"build_id", buildID,
+				"build_id", runID,
+				"tool", "build_site",
+				"user", currentUserForLog(),
+				"command", commandString("hugo", args),
+				"cwd", cfg.HugoRoot,
+				"cache_dir", cacheDir,
 				"duration_ms", durationMs,
 				"exit_code", exitCode,
-				"stderr", stderrBuf.String(),
+				"error_class", errClass,
+				"stdout_tail", outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				"stderr_tail", outputTail(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				"output_summary", summary,
 				"error", err,
 			)
 
@@ -136,19 +213,31 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 
 			payload := buildErrorPayload{
 				Error:            errKind,
+				ErrorClass:       errClass,
 				ExitCode:         exitCode,
-				Command:          "hugo",
+				Command:          commandString("hugo", args),
 				WorkingDirectory: cfg.HugoRoot,
+				CacheDirectory:   cacheDir,
 				DurationMs:       durationMs,
-				StderrSummary:    sanitiseStderr(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
-				BuildID:          buildID,
-				LogHint:          "Search server logs for build_id=" + buildID,
+				StderrSummary:    summary,
+				StdoutSummary:    outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+				BuildID:          runID,
+				LogHint:          "Search server logs for build_id=" + runID,
 			}
 			jsonPayload, _ := json.Marshal(payload)
 			return nil, buildSiteOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
 		}
 
-		slog.Info("build_site completed", "duration_ms", durationMs, "exit_code", exitCode)
+		slog.Info("build_site completed",
+			"build_id", runID,
+			"tool", "build_site",
+			"user", currentUserForLog(),
+			"command", commandString("hugo", args),
+			"cwd", cfg.HugoRoot,
+			"cache_dir", cacheDir,
+			"duration_ms", durationMs,
+			"exit_code", exitCode,
+		)
 		return nil, buildSiteOutput{Status: "ok", DurationMs: durationMs}, nil
 	})
 }

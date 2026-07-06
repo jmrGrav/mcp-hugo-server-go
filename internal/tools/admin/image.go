@@ -2,10 +2,12 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -30,6 +32,23 @@ type generateFeaturedImageInput struct {
 
 type generateFeaturedImageOutput struct {
 	Path string `json:"path"`
+}
+
+type configMissingPayload struct {
+	Error          string `json:"error"`
+	MissingSetting string `json:"missing_setting"`
+	OperatorHint   string `json:"operator_hint"`
+	Retryable      bool   `json:"retryable"`
+	Docs           string `json:"docs"`
+}
+
+type imageWriteErrorPayload struct {
+	Error           string `json:"error"`
+	TargetDirectory string `json:"target_directory"`
+	TargetPath      string `json:"target_path"`
+	OperatorHint    string `json:"operator_hint"`
+	Retryable       bool   `json:"retryable"`
+	Docs            string `json:"docs"`
 }
 
 // Register wires all admin tools (site.admin scope).
@@ -86,7 +105,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: prompt must not be empty")
 		}
 		if cfg.ImageGenURL == "" {
-			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: image_gen_url is not configured")
+			return nil, generateFeaturedImageOutput{}, missingImageGenURLError()
 		}
 
 		pg, err := security.New(cfg.SiteRoot, false)
@@ -101,6 +120,10 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			slog.Warn("generate_featured_image: path validation failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
+		if err := ensureImageTargetWritable(destPath); err != nil {
+			slog.Error("generate_featured_image: destination not writable", "slug", in.Slug, "path", destPath, "error", err)
+			return nil, generateFeaturedImageOutput{}, err
+		}
 
 		imgBytes, err := fetchImage(ctx, cfg.ImageGenURL, cfg.ImageGenKey, in.Prompt)
 		if err != nil {
@@ -109,11 +132,51 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 
 		if err := fileutil.AtomicWriteBytes(destPath, imgBytes); err != nil {
 			slog.Error("generate_featured_image: write failed", "slug", in.Slug, "error", err)
-			return nil, generateFeaturedImageOutput{}, fmt.Errorf("write_error: failed to write image")
+			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 		}
 
 		return nil, generateFeaturedImageOutput{Path: destPath}, nil
 	})
+}
+
+func missingImageGenURLError() error {
+	payload := configMissingPayload{
+		Error:          "config_error",
+		MissingSetting: "image_gen_url",
+		OperatorHint:   "Set image_gen_url to an HTTPS image generation endpoint, or leave this feature disabled and skip generate_featured_image.",
+		Retryable:      false,
+		Docs:           "docs/operator-guide.md#image-generation-configuration",
+	}
+	b, _ := json.Marshal(payload)
+	return fmt.Errorf("config_error: %s", b)
+}
+
+func imageWriteError(destPath string) error {
+	payload := imageWriteErrorPayload{
+		Error:           "write_error",
+		TargetDirectory: filepath.Dir(destPath),
+		TargetPath:      destPath,
+		OperatorHint:    "Ensure site_root is writable by the MCP service user and included in systemd ReadWritePaths before using generate_featured_image.",
+		Retryable:       false,
+		Docs:            "docs/operator-guide.md#image-generation-configuration",
+	}
+	b, _ := json.Marshal(payload)
+	return fmt.Errorf("write_error: %s", b)
+}
+
+func ensureImageTargetWritable(destPath string) error {
+	dir := filepath.Dir(destPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return imageWriteError(destPath)
+	}
+	f, err := os.CreateTemp(dir, ".mcp-image-*.tmp")
+	if err != nil {
+		return imageWriteError(destPath)
+	}
+	name := f.Name()
+	_ = f.Close()
+	_ = os.Remove(name)
+	return nil
 }
 
 // fetchImage calls the image generation API and returns the image bytes.

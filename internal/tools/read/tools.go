@@ -9,6 +9,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -18,14 +19,16 @@ type getFullPageMarkdownInput struct {
 }
 
 type pageMarkdownDTO struct {
-	Slug       string   `json:"slug"`
-	Title      string   `json:"title"`
-	Date       string   `json:"date"`
-	Tags       []string `json:"tags"`
-	Categories []string `json:"categories"`
-	URL        string   `json:"url"`
-	Lang       string   `json:"lang"`
-	Markdown   string   `json:"markdown"`
+	Slug          string              `json:"slug"`
+	Title         string              `json:"title"`
+	Date          string              `json:"date"`
+	Tags          []string            `json:"tags"`
+	Categories    []string            `json:"categories"`
+	TagTerms      []site.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms []site.TaxonomyTerm `json:"category_terms,omitempty"`
+	URL           string              `json:"url"`
+	Lang          string              `json:"lang"`
+	Markdown      string              `json:"markdown"`
 }
 
 type getFullPageMarkdownOutput struct {
@@ -37,14 +40,16 @@ type getPageFrontmatterInput struct {
 }
 
 type frontmatterDTO struct {
-	Slug           string   `json:"slug"`
-	Title          string   `json:"title"`
-	Date           string   `json:"date"`
-	Tags           []string `json:"tags"`
-	Categories     []string `json:"categories"`
-	URL            string   `json:"url"`
-	Lang           string   `json:"lang"`
-	ReadingTimeMin int      `json:"reading_time_minutes"`
+	Slug           string              `json:"slug"`
+	Title          string              `json:"title"`
+	Date           string              `json:"date"`
+	Tags           []string            `json:"tags"`
+	Categories     []string            `json:"categories"`
+	TagTerms       []site.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms  []site.TaxonomyTerm `json:"category_terms,omitempty"`
+	URL            string              `json:"url"`
+	Lang           string              `json:"lang"`
+	ReadingTimeMin int                 `json:"reading_time_minutes"`
 }
 
 type getPageFrontmatterOutput struct {
@@ -57,11 +62,13 @@ type getRelatedContentInput struct {
 }
 
 type relatedPageDTO struct {
-	Slug             string   `json:"slug"`
-	Title            string   `json:"title"`
-	URL              string   `json:"url"`
-	SharedTags       []string `json:"shared_tags,omitempty"`
-	SharedCategories []string `json:"shared_categories,omitempty"`
+	Slug                string                  `json:"slug"`
+	Title               string                  `json:"title"`
+	URL                 string                  `json:"url"`
+	SharedTags          []string                `json:"shared_tags,omitempty"`
+	SharedCategories    []string                `json:"shared_categories,omitempty"`
+	SharedTagTerms      []taxonomy.TaxonomyTerm `json:"shared_tag_terms,omitempty"`
+	SharedCategoryTerms []taxonomy.TaxonomyTerm `json:"shared_category_terms,omitempty"`
 }
 
 type getRelatedContentOutput struct {
@@ -197,11 +204,13 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			limit := clampLimit(in.Limit, 10, 50)
 			all := idx.ContentPages()
 			var filtered []site.Page
+			tagSlug := taxonomy.Slug(in.Tag)
+			catSlug := taxonomy.Slug(in.Category)
 			for _, pg := range all {
-				if in.Tag != "" && !sliceContains(pg.Tags, in.Tag) {
+				if in.Tag != "" && !taxonomy.MatchesSlug(pg.Tags, tagSlug) {
 					continue
 				}
-				if in.Category != "" && !sliceContains(pg.Categories, in.Category) {
+				if in.Category != "" && !taxonomy.MatchesSlug(pg.Categories, catSlug) {
 					continue
 				}
 				filtered = append(filtered, pg)
@@ -235,14 +244,16 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 func toPageMarkdownDTO(p site.Page, md string) pageMarkdownDTO {
 	return pageMarkdownDTO{
-		Slug:       p.Slug,
-		Title:      p.Title,
-		Date:       p.Date,
-		Tags:       nullsafeStrings(p.Tags),
-		Categories: nullsafeStrings(p.Categories),
-		URL:        p.URL,
-		Lang:       p.Lang,
-		Markdown:   md,
+		Slug:          p.Slug,
+		Title:         p.Title,
+		Date:          p.Date,
+		Tags:          nullsafeStrings(p.Tags),
+		Categories:    nullsafeStrings(p.Categories),
+		TagTerms:      site.NormalizeTaxonomyTerms(p.Tags),
+		CategoryTerms: site.NormalizeTaxonomyTerms(p.Categories),
+		URL:           p.URL,
+		Lang:          p.Lang,
+		Markdown:      md,
 	}
 }
 
@@ -293,6 +304,8 @@ func toFrontmatterDTO(p site.Page, readingTimeMin int) frontmatterDTO {
 		Date:           p.Date,
 		Tags:           nullsafeStrings(p.Tags),
 		Categories:     nullsafeStrings(p.Categories),
+		TagTerms:       site.NormalizeTaxonomyTerms(p.Tags),
+		CategoryTerms:  site.NormalizeTaxonomyTerms(p.Categories),
 		URL:            p.URL,
 		Lang:           p.Lang,
 		ReadingTimeMin: readingTimeMin,
@@ -300,8 +313,18 @@ func toFrontmatterDTO(p site.Page, readingTimeMin int) frontmatterDTO {
 }
 
 func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO {
-	tagSet := strSet(ref.Tags)
-	catSet := strSet(ref.Categories)
+	refTagSlugs := make(map[string]bool, len(ref.Tags))
+	for _, t := range ref.Tags {
+		if s := taxonomy.Slug(t); s != "" {
+			refTagSlugs[s] = true
+		}
+	}
+	refCatSlugs := make(map[string]bool, len(ref.Categories))
+	for _, c := range ref.Categories {
+		if s := taxonomy.Slug(c); s != "" {
+			refCatSlugs[s] = true
+		}
+	}
 
 	type scored struct {
 		page  site.Page
@@ -313,18 +336,9 @@ func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO 
 		if pg.Slug == ref.Slug {
 			continue
 		}
-		var sharedTags, sharedCats []string
-		for _, t := range pg.Tags {
-			if _, ok := tagSet[t]; ok {
-				sharedTags = append(sharedTags, t)
-			}
-		}
-		for _, c := range pg.Categories {
-			if _, ok := catSet[c]; ok {
-				sharedCats = append(sharedCats, c)
-			}
-		}
-		score := len(sharedTags) + len(sharedCats)
+		sharedTagTerms := taxonomy.SharedTerms(pg.Tags, ref.Tags)
+		sharedCatTerms := taxonomy.SharedTerms(pg.Categories, ref.Categories)
+		score := len(sharedTagTerms) + len(sharedCatTerms)
 		if score == 0 {
 			continue
 		}
@@ -332,11 +346,13 @@ func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO 
 			page:  pg,
 			score: score,
 			dto: relatedPageDTO{
-				Slug:             pg.Slug,
-				Title:            pg.Title,
-				URL:              pg.URL,
-				SharedTags:       sharedTags,
-				SharedCategories: sharedCats,
+				Slug:                pg.Slug,
+				Title:               pg.Title,
+				URL:                 pg.URL,
+				SharedTags:          taxonomy.Slugs(sharedTagTerms),
+				SharedCategories:    taxonomy.Slugs(sharedCatTerms),
+				SharedTagTerms:      sharedTagTerms,
+				SharedCategoryTerms: sharedCatTerms,
 			},
 		})
 	}
@@ -402,23 +418,6 @@ func nullsafeStrings(s []string) []string {
 		return []string{}
 	}
 	return s
-}
-
-func strSet(ss []string) map[string]struct{} {
-	m := make(map[string]struct{}, len(ss))
-	for _, s := range ss {
-		m[s] = struct{}{}
-	}
-	return m
-}
-
-func sliceContains(slice []string, v string) bool {
-	for _, s := range slice {
-		if s == v {
-			return true
-		}
-	}
-	return false
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).
