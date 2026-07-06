@@ -69,8 +69,18 @@ Two config keys control it:
 | `image_gen_key` | Optional Bearer token sent in the `Authorization` header |
 
 The tool is always listed in `tools/list`. When `image_gen_url` is not set, the description
-includes `(not configured: set image_gen_url in config)` and any call returns
-`config_error: image_gen_url is not configured`.
+includes `(not configured: set image_gen_url in config)` and calls return a structured
+configuration error:
+
+```json
+{
+  "error": "config_error",
+  "missing_setting": "image_gen_url",
+  "operator_hint": "Set image_gen_url to an HTTPS image generation endpoint, or leave this feature disabled and skip generate_featured_image.",
+  "retryable": false,
+  "docs": "docs/operator-guide.md#image-generation-configuration"
+}
+```
 
 **Minimal config example:**
 

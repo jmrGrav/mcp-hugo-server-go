@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +31,14 @@ type generateFeaturedImageInput struct {
 
 type generateFeaturedImageOutput struct {
 	Path string `json:"path"`
+}
+
+type configMissingPayload struct {
+	Error          string `json:"error"`
+	MissingSetting string `json:"missing_setting"`
+	OperatorHint   string `json:"operator_hint"`
+	Retryable      bool   `json:"retryable"`
+	Docs           string `json:"docs"`
 }
 
 // Register wires all admin tools (site.admin scope).
@@ -86,7 +95,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: prompt must not be empty")
 		}
 		if cfg.ImageGenURL == "" {
-			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: image_gen_url is not configured")
+			return nil, generateFeaturedImageOutput{}, missingImageGenURLError()
 		}
 
 		pg, err := security.New(cfg.SiteRoot, false)
@@ -114,6 +123,18 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 
 		return nil, generateFeaturedImageOutput{Path: destPath}, nil
 	})
+}
+
+func missingImageGenURLError() error {
+	payload := configMissingPayload{
+		Error:          "config_error",
+		MissingSetting: "image_gen_url",
+		OperatorHint:   "Set image_gen_url to an HTTPS image generation endpoint, or leave this feature disabled and skip generate_featured_image.",
+		Retryable:      false,
+		Docs:           "docs/operator-guide.md#image-generation-configuration",
+	}
+	b, _ := json.Marshal(payload)
+	return fmt.Errorf("config_error: %s", b)
 }
 
 // fetchImage calls the image generation API and returns the image bytes.
