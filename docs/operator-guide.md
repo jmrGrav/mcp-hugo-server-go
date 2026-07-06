@@ -466,8 +466,8 @@ main branch merge
   ├── boot-check (binary starts, 7 endpoints respond)
   └── secret scans (gitleaks + trufflehog)
       │
-      ▼  (on tag push)
-  pre-release smoke (production-smoke job)
+      ▼  (on tag push or manual dispatch)
+  Pre-release Smoke workflow
   └── smoke-mcp-live.sh against live server (read-only)
   └── smoke-agent-interop.sh (OAuth discovery, DCR probe)
       │
