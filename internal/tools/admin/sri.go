@@ -25,6 +25,7 @@ import (
 var sriIntegrityRe = regexp.MustCompile(`(?:integrity:\s*|integrity="|hash:\s*|sha:\s*|:\s*)["']?(sha(?:256|384|512)-[A-Za-z0-9+/=]+)["']?`)
 var sriHashRe = regexp.MustCompile(`sha(?:256|384|512)-[A-Za-z0-9+/=]+`)
 var sriURLRe = regexp.MustCompile(`(?:src|href)="(https?://[^"]+)"`)
+var sriDataLookupRe = regexp.MustCompile(`index\s+site\.Data\.sri\b`)
 
 type sriCheckInput struct{}
 
@@ -44,6 +45,11 @@ type sriCheckOutput struct {
 	Status                 string          `json:"status"`
 	Summary                string          `json:"summary"`
 	Findings               []sriCheckEntry `json:"findings"`
+}
+
+type sriDataEntry struct {
+	URL  string
+	Hash string
 }
 
 func RegisterSRI(s *mcp.Server, cfg config.Config) {
@@ -78,7 +84,7 @@ func runSRICheck(ctx context.Context, cfg config.Config) (sriCheckOutput, error)
 	if err != nil {
 		return sriCheckOutput{}, err
 	}
-	pairs, scanStats, err := scanSRIReferences(cfg)
+	pairs, scanStats, err := scanSRIReferences(cfg, dataEntries)
 	if err != nil {
 		slog.Error("check_sri_versions: scan failed", "error", err)
 		return sriCheckOutput{}, fmt.Errorf("scan_error: failed to scan SRI references")
@@ -147,9 +153,10 @@ type sriPair struct {
 type sriScanStats struct {
 	FilesScanned           int
 	FilesWithSRIAttributes int
+	UsesDataLookup         bool
 }
 
-func scanSRIReferences(cfg config.Config) ([]sriPair, sriScanStats, error) {
+func scanSRIReferences(cfg config.Config, dataEntries []sriDataEntry) ([]sriPair, sriScanStats, error) {
 	var all []sriPair
 	var stats sriScanStats
 	seen := map[string]bool{}
@@ -160,12 +167,23 @@ func scanSRIReferences(cfg config.Config) ([]sriPair, sriScanStats, error) {
 		}
 		stats.FilesScanned += dirStats.FilesScanned
 		stats.FilesWithSRIAttributes += dirStats.FilesWithSRIAttributes
+		stats.UsesDataLookup = stats.UsesDataLookup || dirStats.UsesDataLookup
 		for _, p := range pairs {
 			key := p.URL + "|" + p.Hash
 			if !seen[key] {
 				seen[key] = true
 				all = append(all, p)
 			}
+		}
+	}
+	if stats.UsesDataLookup {
+		for _, entry := range dataEntries {
+			key := entry.URL + "|" + entry.Hash
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			all = append(all, sriPair{URL: entry.URL, Hash: entry.Hash})
 		}
 	}
 	return all, stats, nil
@@ -198,6 +216,10 @@ func scanDirForSRI(dir string) ([]sriPair, sriScanStats, error) {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil
+		}
+		if sriDataLookupRe.Match(data) {
+			stats.UsesDataLookup = true
+			stats.FilesWithSRIAttributes++
 		}
 		extracted := extractSRIPairs(string(data))
 		if len(extracted) > 0 {
@@ -327,7 +349,7 @@ func computeSHA384(data []byte) string {
 	return "sha384-" + base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
-func loadSRIDataFile(path string) ([]string, error) {
+func loadSRIDataFile(path string) ([]sriDataEntry, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -340,27 +362,71 @@ func loadSRIDataFile(path string) ([]string, error) {
 		return nil, fmt.Errorf("scan_error: failed to parse data/sri.yaml")
 	}
 	seen := map[string]bool{}
-	var out []string
-	collectSRIHashes(doc, seen, &out)
+	var out []sriDataEntry
+	collectSRIEntries(doc, "", seen, &out)
 	return out, nil
 }
 
-func collectSRIHashes(v any, seen map[string]bool, out *[]string) {
+func collectSRIEntries(v any, currentURL string, seen map[string]bool, out *[]sriDataEntry) {
 	switch x := v.(type) {
 	case map[string]any:
+		url := currentURL
+		if rawURL, ok := x["url"].(string); ok && strings.HasPrefix(rawURL, "http") {
+			url = rawURL
+		}
+		for key, child := range x {
+			if strings.HasPrefix(key, "http") {
+				appendHashesForURL(key, extractHashes(child), seen, out)
+			}
+		}
+		if url != "" {
+			appendHashesForURL(url, extractHashesFromFields(x), seen, out)
+		}
 		for _, child := range x {
-			collectSRIHashes(child, seen, out)
+			collectSRIEntries(child, url, seen, out)
 		}
 	case []any:
 		for _, child := range x {
-			collectSRIHashes(child, seen, out)
+			collectSRIEntries(child, currentURL, seen, out)
 		}
 	case string:
-		for _, hash := range sriHashRe.FindAllString(x, -1) {
-			if !seen[hash] {
-				seen[hash] = true
-				*out = append(*out, hash)
-			}
+		if currentURL != "" {
+			appendHashesForURL(currentURL, sriHashRe.FindAllString(x, -1), seen, out)
 		}
+	}
+}
+
+func extractHashes(v any) []string {
+	switch x := v.(type) {
+	case string:
+		return sriHashRe.FindAllString(x, -1)
+	case map[string]any:
+		return extractHashesFromFields(x)
+	default:
+		return nil
+	}
+}
+
+func extractHashesFromFields(m map[string]any) []string {
+	var hashes []string
+	for _, key := range []string{"integrity", "hash", "sha"} {
+		if raw, ok := m[key].(string); ok {
+			hashes = append(hashes, sriHashRe.FindAllString(raw, -1)...)
+		}
+	}
+	return hashes
+}
+
+func appendHashesForURL(url string, hashes []string, seen map[string]bool, out *[]sriDataEntry) {
+	if url == "" {
+		return
+	}
+	for _, hash := range hashes {
+		key := url + "|" + hash
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		*out = append(*out, sriDataEntry{URL: url, Hash: hash})
 	}
 }

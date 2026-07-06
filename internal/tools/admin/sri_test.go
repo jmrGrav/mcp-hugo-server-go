@@ -198,15 +198,26 @@ func TestSRICheckLoadsDataSRIYAML(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(hugoRoot, "data"), 0o755); err != nil {
 		t.Fatalf("mkdir data: %v", err)
 	}
+	body := []byte("console.log('from data file');")
+	hash := computeTestSHA384(body)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
 	if err := os.WriteFile(filepath.Join(hugoRoot, "data", "sri.yaml"), []byte(`
+"`+srv.URL+`/fontawesome.css": "`+hash+`"
 assets:
-  fontawesome:
-    url: https://cdn.example.test/fontawesome.css
-    integrity: sha384-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
   theme:
-    hash: sha384-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB
+    url: `+srv.URL+`/theme.js
+    integrity: `+hash+`
 `), 0o644); err != nil {
 		t.Fatalf("write sri.yaml: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(hugoRoot, "layouts"), 0o755); err != nil {
+		t.Fatalf("mkdir layouts: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hugoRoot, "layouts", "plugin.html"), []byte(`{{ with index site.Data.sri $src }}integrity="{{ . }}"{{ end }}`), 0o644); err != nil {
+		t.Fatalf("write plugin.html: %v", err)
 	}
 
 	cfg := config.Default()
@@ -230,14 +241,17 @@ assets:
 	if out.SRIEntriesLoaded != 2 {
 		t.Fatalf("sri_entries_loaded = %d want 2", out.SRIEntriesLoaded)
 	}
-	if out.SRIChecked != 0 {
-		t.Fatalf("sri_checked = %d want 0 when data file has no layout/public references", out.SRIChecked)
+	if out.SRIChecked != 2 {
+		t.Fatalf("sri_checked = %d want 2 when layouts use site.Data.sri", out.SRIChecked)
 	}
-	if out.Status != "configured_no_references" {
-		t.Fatalf("status = %q want configured_no_references", out.Status)
+	if out.Status != "clean" {
+		t.Fatalf("status = %q want clean", out.Status)
 	}
-	if out.Summary == "" || !strings.Contains(out.Summary, "data/sri.yaml") {
-		t.Fatalf("summary = %q want mention data/sri.yaml", out.Summary)
+	if out.FilesWithSRIAttributes != 1 {
+		t.Fatalf("files_with_sri_attributes = %d want 1", out.FilesWithSRIAttributes)
+	}
+	if out.Summary == "" || !strings.Contains(out.Summary, "passed") {
+		t.Fatalf("summary = %q want passed summary", out.Summary)
 	}
 }
 

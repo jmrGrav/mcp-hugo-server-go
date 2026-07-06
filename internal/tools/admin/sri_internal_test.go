@@ -28,4 +28,9 @@ func TestSRIHelperBranches(t *testing.T) {
 	if entry.Error == "" {
 		t.Fatal("verifySRIEntry() should surface request errors")
 	}
+
+	entries, err := loadSRIDataFile(filepath.Join(t.TempDir(), "missing.yaml"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("loadSRIDataFile(missing) = %#v, %v", entries, err)
+	}
 }
