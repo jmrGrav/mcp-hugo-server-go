@@ -76,6 +76,7 @@ type validateFrontMatterInput struct {
 
 type frontMatterIssueDTO struct {
 	Slug   string   `json:"slug"`
+	Lang   string   `json:"lang"`
 	Issues []string `json:"issues"`
 }
 
@@ -96,10 +97,10 @@ type pageDTO struct {
 }
 
 type validateOutputData struct {
-	Total   int                   `json:"total"`
-	Valid   int                   `json:"valid"`
-	Invalid int                   `json:"invalid"`
-	Pages   []frontMatterIssueDTO `json:"pages"`
+	PagesChecked int                   `json:"pages_checked"`
+	PagesPassed  int                   `json:"pages_passed"`
+	Invalid      int                   `json:"invalid"`
+	Pages        []frontMatterIssueDTO `json:"pages"`
 }
 
 type validateOutput struct {
@@ -597,10 +598,10 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) val
 		Version:     toolResultVersion,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Data: validateOutputData{
-			Total:   total,
-			Valid:   len(slice) - invalid,
-			Invalid: invalid,
-			Pages:   results,
+			PagesChecked: total,
+			PagesPassed:  len(slice) - invalid,
+			Invalid:      invalid,
+			Pages:        results,
 		},
 		Warnings: []string{},
 		Errors:   []string{},

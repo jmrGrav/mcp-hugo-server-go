@@ -17,7 +17,8 @@ type listPagesInput struct {
 }
 
 type getPageInput struct {
-	Slug string `json:"slug"`
+	Slug        string `json:"slug"`
+	ContentOnly bool   `json:"content_only,omitempty"`
 }
 
 type searchPagesInput struct {
@@ -147,7 +148,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			return nil, listPagesOutput{Pages: toPageDTOs(slice)}, nil
 		})
 
-	addReadOnlyTool(s, "get_page", "Read page", "Read a published Hugo page by slug. Returns metadata, rendered HTML, and a short summary. Does not require authentication.",
+	addReadOnlyTool(s, "get_page", "Read page",
+		"Read a published Hugo page by slug. Returns metadata, rendered HTML, and a short summary. "+
+			"Pass content_only=true to omit the html field for lightweight metadata queries. "+
+			"For the raw Markdown source, use get_full_page_markdown (requires content.read). "+
+			"Does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
 			if idx == nil && srcIdx == nil {
 				return nil, getPageOutput{}, fmt.Errorf("index not initialized")
@@ -159,7 +164,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if !ok {
 				return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			return nil, getPageOutput{Page: toResolvedPageDetailDTO(resolved)}, nil
+			dto := toResolvedPageDetailDTO(resolved)
+			if in.ContentOnly {
+				dto.HTML = ""
+			}
+			return nil, getPageOutput{Page: dto}, nil
 		})
 
 	addReadOnlyTool(s, "search_pages", "Search content", "Search the published index by title, summary, tags, categories, and URL. Use this for simple keyword lookup without authentication.",

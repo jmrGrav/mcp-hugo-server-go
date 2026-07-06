@@ -483,6 +483,47 @@ func TestGetSiteInformation(t *testing.T) {
 	}
 }
 
+func TestGetPageContentOnly(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello", "content_only": true})
+	if res.IsError {
+		t.Fatalf("get_page content_only returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page: 'page' is %T, want map", m["page"])
+	}
+	if slug, _ := page["slug"].(string); slug == "" {
+		t.Fatal("get_page content_only: slug must be non-empty (metadata present)")
+	}
+	if html, _ := page["html"].(string); html != "" {
+		t.Fatalf("get_page content_only: html must be empty, got %q", html)
+	}
+}
+
+func TestGetPageFullHTML(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page: 'page' is %T, want map", m["page"])
+	}
+	if html, _ := page["html"].(string); html == "" {
+		t.Fatal("get_page: html must be non-empty when content_only is not set")
+	}
+}
+
 func TestReadOnlyAnnotations(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

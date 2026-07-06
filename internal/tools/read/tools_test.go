@@ -347,8 +347,8 @@ func TestValidateSite(t *testing.T) {
 	if !ok {
 		t.Fatalf("validate_site data type = %T", m["data"])
 	}
-	if _, ok := data["total"]; !ok {
-		t.Fatal("validate_site missing total")
+	if _, ok := data["pages_checked"]; !ok {
+		t.Fatal("validate_site missing pages_checked")
 	}
 }
 
@@ -460,5 +460,63 @@ func TestGetBrokenLinks(t *testing.T) {
 	}
 	if _, ok := data["broken_links"]; !ok {
 		t.Fatal("get_broken_links missing broken_links")
+	}
+}
+
+func TestValidateFrontMatterOutputFields(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_front_matter returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_front_matter data type = %T", m["data"])
+	}
+	if _, ok := data["pages_checked"]; !ok {
+		t.Fatal("validate_front_matter: pages_checked field missing (was 'total')")
+	}
+	if _, ok := data["pages_passed"]; !ok {
+		t.Fatal("validate_front_matter: pages_passed field missing (was 'valid')")
+	}
+	if _, ok := data["invalid"]; !ok {
+		t.Fatal("validate_front_matter: invalid field missing")
+	}
+	if _, ok := data["total"]; ok {
+		t.Fatal("validate_front_matter: old 'total' field must not be present")
+	}
+	if _, ok := data["valid"]; ok {
+		t.Fatal("validate_front_matter: old 'valid' field must not be present")
+	}
+}
+
+func TestValidateFrontMatterDTOHasLangField(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "validate_front_matter", map[string]any{})
+	if res.IsError {
+		t.Fatalf("validate_front_matter returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_front_matter data type = %T", m["data"])
+	}
+	pages, ok := data["pages"].([]any)
+	if !ok || len(pages) == 0 {
+		t.Skip("no pages in validate_front_matter output; cannot check DTO shape")
+	}
+	firstDTO, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_front_matter pages[0] type = %T", pages[0])
+	}
+	if _, ok := firstDTO["lang"]; !ok {
+		t.Fatal("validate_front_matter page DTO: 'lang' field missing")
 	}
 }
