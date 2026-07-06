@@ -69,7 +69,7 @@ jobs:
   # ── 2. Deploy (requires production environment approval) ──────────────────────
   deploy:
     name: Deploy to production server
-    runs-on: ubuntu-latest
+    runs-on: self-hosted   # runs directly on the VM — no SSH needed
     needs: validate
     environment: production   # ← gated by required reviewer
     steps:
@@ -82,34 +82,17 @@ jobs:
         with:
           name: mcp-hugo-server-go-linux-amd64
 
-      - name: Configure SSH
-        if: inputs.dry_run == 'false'
-        run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          {
-            printf 'Host hugo-vm\n'
-            printf '  HostName %s\n' "${{ secrets.SSH_HOST }}"
-            printf '  User %s\n'     "${{ secrets.SSH_USER || 'root' }}"
-            printf '  Port %s\n'     "${{ secrets.SSH_PORT || '22' }}"
-            printf '  StrictHostKeyChecking no\n'
-          } > ~/.ssh/config
-
       - name: Deploy binary + restart service
         if: inputs.dry_run == 'false'
         run: |
           chmod 755 mcp-hugo-server-go
-          scp mcp-hugo-server-go hugo-vm:/tmp/mcp-hugo-server-go-new
-          ssh hugo-vm bash -s << 'ENDSSH'
-            sudo mv /tmp/mcp-hugo-server-go-new /usr/local/bin/mcp-hugo-server-go
-            sudo chmod 755 /usr/local/bin/mcp-hugo-server-go
-            sudo systemctl restart mcp-hugo-server-go
-            echo "Waiting for service to stabilise..."
-            sleep 5
-            systemctl is-active mcp-hugo-server-go
-            echo "Version: $(/usr/local/bin/mcp-hugo-server-go --version)"
-          ENDSSH
+          sudo mv mcp-hugo-server-go /usr/local/bin/mcp-hugo-server-go
+          sudo chmod 755 /usr/local/bin/mcp-hugo-server-go
+          sudo systemctl restart mcp-hugo-server-go
+          echo "Waiting for service to stabilise..."
+          sleep 5
+          sudo systemctl is-active mcp-hugo-server-go
+          echo "Version: $(/usr/local/bin/mcp-hugo-server-go --version)"
 
       - name: Post-deploy smoke (read-only)
         if: inputs.dry_run == 'false'
