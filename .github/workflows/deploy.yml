@@ -39,7 +39,7 @@ jobs:
       build_version: ${{ steps.meta.outputs.build_version }}
       build_sha: ${{ steps.meta.outputs.build_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
@@ -66,7 +66,7 @@ jobs:
           echo "Resolved build_sha=$BUILD_SHA"
           echo "Resolved build_version=$BUILD_VERSION"
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: '1.25'
 
@@ -84,7 +84,7 @@ jobs:
         run: go vet ./...
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mcp-hugo-server-go-linux-amd64
           path: mcp-hugo-server-go
@@ -99,12 +99,12 @@ jobs:
     environment:
       name: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.ref }}
 
       - name: Download binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: mcp-hugo-server-go-linux-amd64
 
