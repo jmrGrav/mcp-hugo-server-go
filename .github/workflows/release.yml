@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version to publish, for example v1.3.5'
+        required: true
+        type: string
+      ref:
+        description: 'Git ref to release. Must resolve to the current origin/main HEAD.'
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: write
+  actions: read
+  deployments: read
+
+jobs:
+  release:
+    name: Tag and publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Fetch refs
+        run: git fetch origin main --tags --prune
+
+      - name: Resolve release target
+        id: meta
+        run: |
+          BUILD_SHA="$(git rev-parse HEAD)"
+          MAIN_SHA="$(git rev-parse origin/main)"
+          echo "build_sha=$BUILD_SHA" >> "$GITHUB_OUTPUT"
+          echo "main_sha=$MAIN_SHA" >> "$GITHUB_OUTPUT"
+          if [[ "$BUILD_SHA" != "$MAIN_SHA" ]]; then
+            echo "Release ref must resolve to the current origin/main HEAD." >&2
+            echo "build_sha=$BUILD_SHA" >&2
+            echo "main_sha=$MAIN_SHA" >&2
+            exit 1
+          fi
+
+      - name: Check changelog gate
+        run: go run ./cmd/check-changelog -version "${{ inputs.version }}"
+
+      - name: Check README release policy gate
+        run: go run ./cmd/check-readme-release
+
+      - name: Extract release notes from changelog
+        run: go run ./cmd/extract-changelog-release -version "${{ inputs.version }}" > /tmp/release-notes.md
+
+      - name: Verify production deployment for target SHA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
+        run: |
+          DEPLOYMENTS_JSON="$(gh api "repos/${REPO}/deployments?environment=production&per_page=20")"
+          export DEPLOYMENTS_JSON
+          DEPLOY_ID="$(python3 -c 'import json, os, sys; build_sha = os.environ["BUILD_SHA"]; deployments = json.loads(os.environ["DEPLOYMENTS_JSON"]); match = next((dep["id"] for dep in deployments if dep.get("sha") == build_sha), None); print(match or ""); sys.exit(0 if match else 1)')" || {
+            echo "No production deployment found for ${BUILD_SHA}. Run Deploy to Production first." >&2
+            exit 1
+          }
+          STATUSES_JSON="$(gh api "repos/${REPO}/deployments/${DEPLOY_ID}/statuses?per_page=20")"
+          export STATUSES_JSON
+          python3 -c 'import json, os, sys; statuses = json.loads(os.environ["STATUSES_JSON"]); ok = any(status.get("state") == "success" for status in statuses); print("" if ok else "Production deployment exists but has no success status.", file=sys.stderr); sys.exit(0 if ok else 1)'
+
+      - name: Ensure tag state is valid
+        env:
+          VERSION: ${{ inputs.version }}
+          BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
+        run: |
+          REMOTE_TAG_SHA="$(git ls-remote --tags origin "refs/tags/${VERSION}^{}" | awk '{print $1}')"
+          if [[ -n "$REMOTE_TAG_SHA" && "$REMOTE_TAG_SHA" != "$BUILD_SHA" ]]; then
+            echo "Tag ${VERSION} already exists on a different commit: ${REMOTE_TAG_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Create and push annotated tag if missing
+        env:
+          VERSION: ${{ inputs.version }}
+          BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "Tag ${VERSION} already exists on the correct commit; skipping tag creation."
+            exit 0
+          fi
+          git tag -a "${VERSION}" "${BUILD_SHA}" -m "${VERSION}"
+          git push origin "refs/tags/${VERSION}"
+
+      - name: Create GitHub release if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if gh release view "${VERSION}" >/dev/null 2>&1; then
+            echo "GitHub release ${VERSION} already exists; skipping release creation."
+            exit 0
+          fi
+          gh release create "${VERSION}" \
+            --verify-tag \
+            --title "${VERSION}" \
+            --notes-file /tmp/release-notes.md

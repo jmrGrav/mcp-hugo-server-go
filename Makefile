@@ -1,4 +1,4 @@
-.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-release
+.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
@@ -42,7 +42,10 @@ check-changelog:
 	@test -n "$(RELEASE_VERSION)" || (echo "RELEASE_VERSION is required, e.g. make check-changelog RELEASE_VERSION=v1.2.11" >&2; exit 2)
 	go run ./cmd/check-changelog -version "$(RELEASE_VERSION)"
 
-check-release: check-changelog check-agent-ready smoke-agent-interop
+check-readme-release:
+	go run ./cmd/check-readme-release
+
+check-release: check-changelog check-readme-release check-agent-ready smoke-agent-interop
 
 clean:
 	rm -f $(BIN) coverage.out

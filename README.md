@@ -67,6 +67,18 @@ govulncheck ./...
 gitleaks detect --no-banner --redact --source .
 ```
 
+## Release flow
+
+Production promotion is intentionally split into three explicit stages:
+
+1. Merge to `main` and wait for `CI` to go green.
+2. Run `Deploy to Production` for the exact `main` commit you want live.
+3. Run `Release` only after production deployment succeeds. The release workflow refuses to publish unless:
+   - the requested ref resolves to the current `origin/main` HEAD;
+   - `CHANGELOG.md` contains the requested version;
+   - `README.md` still uses dynamic latest-release metadata;
+   - the target SHA already has a successful `production` deployment record.
+
 ## Project lineage
 
 - [hugo-public-mcp](https://github.com/jmrGrav/hugo-public-mcp) - public agent-ready discovery, OAuth, and `auth.md`
