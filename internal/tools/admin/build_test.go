@@ -312,6 +312,93 @@ func TestBuildSiteStderrTruncated(t *testing.T) {
 	}
 }
 
+func TestBuildSitePreflightFailsWhenNotWritable(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("skipping permission test as root")
+	}
+	siteRoot := filepath.Join(t.TempDir(), "readonly")
+	if err := os.MkdirAll(siteRoot, 0o555); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	defer func() { _ = os.Chmod(siteRoot, 0o755) }()
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected preflight error, got success")
+	}
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON object in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v — got %q", err, text)
+	}
+	if out["error"] != "build_precondition_failed" {
+		t.Errorf("error: want %q, got %v", "build_precondition_failed", out["error"])
+	}
+	if out["error_class"] != "permission_denied" {
+		t.Errorf("error_class: want %q, got %v", "permission_denied", out["error_class"])
+	}
+	if out["path"] == "" {
+		t.Error("path field is empty")
+	}
+	for _, want := range []string{"suggestion", "docs_url", "operator_hint"} {
+		if v, ok := out[want]; !ok || v == "" {
+			t.Errorf("field %q is missing or empty", want)
+		}
+	}
+}
+
+func TestBuildSitePermissionDeniedErrorIncludesSuggestion(t *testing.T) {
+	dir := writeMockHugo(t, "#!/bin/sh\necho 'permission denied' >&2\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error, got success")
+	}
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v", err)
+	}
+	if out["error_class"] != "permission_denied" {
+		t.Errorf("error_class: want permission_denied, got %v", out["error_class"])
+	}
+	if v, _ := out["suggestion"].(string); v == "" {
+		t.Error("suggestion field is missing or empty for permission_denied error")
+	}
+	if v, _ := out["docs_url"].(string); v == "" {
+		t.Error("docs_url field is missing or empty for permission_denied error")
+	}
+}
+
 // matchesBuildIDPattern returns true if s matches YYYYMMDD-HHMMSS-xxxx.
 func matchesBuildIDPattern(s string) bool {
 	if len(s) != 20 {

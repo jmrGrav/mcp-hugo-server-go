@@ -40,6 +40,54 @@ type buildErrorPayload struct {
 	StdoutSummary    string `json:"stdout_summary,omitempty"`
 	BuildID          string `json:"build_id"`
 	LogHint          string `json:"log_hint"`
+	Suggestion       string `json:"suggestion,omitempty"`
+	DocsURL          string `json:"docs_url,omitempty"`
+}
+
+// buildPreflightPayload is the structured JSON returned when a pre-flight check fails.
+type buildPreflightPayload struct {
+	Error        string `json:"error"`
+	ErrorClass   string `json:"error_class"`
+	Path         string `json:"path"`
+	OperatorHint string `json:"operator_hint"`
+	Suggestion   string `json:"suggestion"`
+	DocsURL      string `json:"docs_url"`
+	Retryable    bool   `json:"retryable"`
+}
+
+const buildDocsURL = "docs/operator-guide.md#build-permissions"
+
+// checkBuildWritable verifies that the directories Hugo must write to are
+// accessible before invoking the build. Returns a structured JSON error on
+// the first unwritable path found.
+func checkBuildWritable(paths ...string) error {
+	for _, dir := range paths {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return buildPreflightError(dir)
+		}
+		f, err := os.CreateTemp(dir, ".mcp-preflight-*.tmp")
+		if err != nil {
+			return buildPreflightError(dir)
+		}
+		name := f.Name()
+		_ = f.Close()
+		_ = os.Remove(name)
+	}
+	return nil
+}
+
+func buildPreflightError(dir string) error {
+	payload := buildPreflightPayload{
+		Error:        "build_precondition_failed",
+		ErrorClass:   "permission_denied",
+		Path:         dir,
+		OperatorHint: "Add this path to ReadWritePaths in the systemd service override and reload: sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go",
+		Suggestion:   "Check that the MCP service user owns or has write access to this directory, and that it is listed in ReadWritePaths in the systemd service.",
+		DocsURL:      buildDocsURL,
+		Retryable:    false,
+	}
+	b, _ := json.Marshal(payload)
+	return fmt.Errorf("build_precondition_failed: %s", b)
 }
 
 // newBuildID generates a build identifier of the form YYYYMMDD-HHMMSS-<4 random lowercase hex chars>.
@@ -159,6 +207,10 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 		}
 		defer hugosite.ContentMu.Unlock()
 
+		if err := checkBuildWritable(cfg.SiteRoot, filepath.Join(cfg.HugoRoot, "resources")); err != nil {
+			return nil, buildSiteOutput{}, err
+		}
+
 		timeout := cfg.BuildTimeoutSeconds
 		if timeout <= 0 {
 			timeout = 120
@@ -223,6 +275,10 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 				StdoutSummary:    outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
 				BuildID:          runID,
 				LogHint:          "Search server logs for build_id=" + runID,
+			}
+			if errClass == "permission_denied" {
+				payload.Suggestion = "Verify that site_root and hugo_root/resources are listed in ReadWritePaths in the systemd service override. Run: systemctl cat mcp-hugo-server-go"
+				payload.DocsURL = buildDocsURL
 			}
 			jsonPayload, _ := json.Marshal(payload)
 			return nil, buildSiteOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
