@@ -27,7 +27,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
+SystemCallFilter=@system-service utimensat futimens
 # ReadOnlyPaths and ReadWritePaths are site-specific.
 # Set them directly in this file or via an override.conf drop-in.
 # build_site and preview_build require write access to hugo_root/public
