@@ -34,14 +34,6 @@ type generateFeaturedImageOutput struct {
 	Path string `json:"path"`
 }
 
-type configMissingPayload struct {
-	Error          string `json:"error"`
-	MissingSetting string `json:"missing_setting"`
-	OperatorHint   string `json:"operator_hint"`
-	Retryable      bool   `json:"retryable"`
-	Docs           string `json:"docs"`
-}
-
 type imageWriteErrorPayload struct {
 	Error           string `json:"error"`
 	TargetDirectory string `json:"target_directory"`
@@ -80,14 +72,13 @@ func Defs() []tools.ToolDef {
 }
 
 func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
-	desc := "Generate a featured image for a page using the configured image generation API and save it to {SiteRoot}/images/featured/{slug}.jpg."
 	if cfg.ImageGenURL == "" {
-		desc += " (not configured: set image_gen_url in config)"
+		return
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "generate_featured_image",
 		Title:       "Generate featured image",
-		Description: desc,
+		Description: "Generate a featured image for a page using the configured image generation API and save it to {SiteRoot}/images/featured/{slug}.jpg.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
@@ -103,9 +94,6 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		}
 		if in.Prompt == "" {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: prompt must not be empty")
-		}
-		if cfg.ImageGenURL == "" {
-			return nil, generateFeaturedImageOutput{}, missingImageGenURLError()
 		}
 
 		pg, err := security.New(cfg.SiteRoot, false)
@@ -137,18 +125,6 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 
 		return nil, generateFeaturedImageOutput{Path: destPath}, nil
 	})
-}
-
-func missingImageGenURLError() error {
-	payload := configMissingPayload{
-		Error:          "config_error",
-		MissingSetting: "image_gen_url",
-		OperatorHint:   "Set image_gen_url to an HTTPS image generation endpoint, or leave this feature disabled and skip generate_featured_image.",
-		Retryable:      false,
-		Docs:           "docs/operator-guide.md#image-generation-configuration",
-	}
-	b, _ := json.Marshal(payload)
-	return fmt.Errorf("config_error: %s", b)
 }
 
 func imageWriteError(destPath string) error {
