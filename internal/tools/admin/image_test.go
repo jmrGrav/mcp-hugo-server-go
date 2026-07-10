@@ -165,11 +165,11 @@ func TestGenerateFeaturedImage_Timeout(t *testing.T) {
 	}
 }
 
-func TestGenerateFeaturedImageDescriptionWhenUnconfigured(t *testing.T) {
+func TestGenerateFeaturedImageAbsentWhenUnconfigured(t *testing.T) {
 	cfg := config.Default()
 	cfg.SiteRoot = t.TempDir()
 	cfg.HugoRoot = t.TempDir()
-	// cfg.ImageGenURL left empty
+	// cfg.ImageGenURL left empty → tool must not be registered
 
 	session, done := newTestServer(t, cfg)
 	defer done()
@@ -181,38 +181,7 @@ func TestGenerateFeaturedImageDescriptionWhenUnconfigured(t *testing.T) {
 	}
 	for _, tool := range result.Tools {
 		if tool.Name == "generate_featured_image" {
-			if !strings.Contains(tool.Description, "not configured") {
-				t.Errorf("expected description to contain 'not configured', got: %q", tool.Description)
-			}
-			return
-		}
-	}
-	t.Fatal("generate_featured_image not found in tools list")
-}
-
-func TestGenerateFeaturedImageConfigMissingErrorIsActionable(t *testing.T) {
-	cfg := config.Default()
-	cfg.SiteRoot = t.TempDir()
-	cfg.HugoRoot = t.TempDir()
-	// cfg.ImageGenURL left empty
-
-	session, done := newTestServer(t, cfg)
-	defer done()
-
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
-		"slug":   "test-post",
-		"prompt": "test prompt",
-	})
-	if err != nil {
-		t.Fatalf("unexpected transport error: %v", err)
-	}
-	if !res.IsError {
-		t.Fatal("expected config error when image_gen_url is absent")
-	}
-	text := resultText(res)
-	for _, want := range []string{"config_error", "missing_setting", "image_gen_url", "operator_hint", "retryable", "false"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("error text %q does not contain %q", text, want)
+			t.Errorf("generate_featured_image should not be listed when image_gen_url is empty, got description: %q", tool.Description)
 		}
 	}
 }
