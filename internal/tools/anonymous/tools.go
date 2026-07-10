@@ -3,6 +3,7 @@ package anonymous
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -148,7 +149,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if len(slice) > limit {
 				slice = slice[:limit]
 			}
-			return nil, listPagesOutput{Pages: toPageDTOs(slice)}, nil
+			return nil, listPagesOutput{Pages: toPageDTOsWithSource(slice, srcIdx)}, nil
 		})
 
 	addReadOnlyTool(s, "get_page", "Read page",
@@ -184,7 +185,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			limit := clampLimit(in.Limit, 50, 50)
 			pages := idx.Search(in.Query, limit)
-			return nil, searchPagesOutput{Pages: toPageDTOs(pages)}, nil
+			return nil, searchPagesOutput{Pages: toPageDTOsWithSource(pages, srcIdx)}, nil
 		})
 
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
@@ -194,7 +195,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			limit := clampLimit(in.Limit, 10, 50)
 			pages := idx.RecentPosts(limit)
-			return nil, getRecentPostsOutput{Pages: toPageDTOs(pages)}, nil
+			return nil, getRecentPostsOutput{Pages: toPageDTOsWithSource(pages, srcIdx)}, nil
 		})
 
 	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
@@ -331,6 +332,25 @@ func toPageDTOs(pages []site.Page) []pageDTO {
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
 		out[i] = toPageDTO(p)
+	}
+	return out
+}
+
+// toPageDTOsWithSource maps pages to DTOs and fills in categories from the
+// source index when the HTML index has none. Hugo does not emit categories in
+// standard meta tags (article:category / keywords), so the HTML-only index
+// always returns empty categories for per-page DTOs.
+func toPageDTOsWithSource(pages []site.Page, srcIdx *hugosite.SourceIndex) []pageDTO {
+	out := make([]pageDTO, len(pages))
+	for i, p := range pages {
+		dto := toPageDTO(p)
+		if srcIdx != nil && len(dto.Categories) == 0 {
+			srcSlug := strings.Trim(p.Slug, "/")
+			if src, ok := srcIdx.GetBySlug(srcSlug); ok && len(src.Categories) > 0 {
+				dto.Categories = src.Categories
+			}
+		}
+		out[i] = dto
 	}
 	return out
 }

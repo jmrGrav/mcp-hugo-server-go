@@ -374,6 +374,55 @@ func TestListCategories(t *testing.T) {
 	}
 }
 
+func TestListPagesPrefersSourceCategories(t *testing.T) {
+	// HTML index: minimal fixture — hello page has no categories in HTML meta.
+	// Hugo does not emit article:category or keywords meta tags for taxonomy categories.
+	idx := mustTestIndex(t)
+
+	// Source index: the same page with categories in frontmatter.
+	contentRoot := t.TempDir()
+	full := filepath.Join(contentRoot, "posts", "hello", "index.en.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(full, []byte("---\ntitle: Hello\ncategories: [go, infrastructure]\n---\nBody\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "list_pages", map[string]any{"limit": 10})
+	if res.IsError {
+		t.Fatalf("list_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	pages, _ := m["pages"].([]any)
+
+	var helloPage map[string]any
+	for _, p := range pages {
+		pm, _ := p.(map[string]any)
+		if pm["slug"] == "/posts/hello/" {
+			helloPage = pm
+			break
+		}
+	}
+	if helloPage == nil {
+		t.Fatal("list_pages did not return /posts/hello/")
+	}
+	cats, _ := helloPage["categories"].([]any)
+	if len(cats) == 0 {
+		t.Fatal("list_pages: categories empty — expected source categories [go, infrastructure]")
+	}
+	if cats[0] != "go" || cats[1] != "infrastructure" {
+		t.Fatalf("list_pages: categories = %v, want [go infrastructure]", cats)
+	}
+}
+
 func TestListCategoriesPrefersSourceFrontmatter(t *testing.T) {
 	contentRoot := t.TempDir()
 	full := filepath.Join(contentRoot, "posts", "hello", "index.md")
