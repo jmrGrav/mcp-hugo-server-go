@@ -328,14 +328,6 @@ func toPageDTO(p site.Page) pageDTO {
 	}
 }
 
-func toPageDTOs(pages []site.Page) []pageDTO {
-	out := make([]pageDTO, len(pages))
-	for i, p := range pages {
-		out[i] = toPageDTO(p)
-	}
-	return out
-}
-
 // toPageDTOsWithSource maps pages to DTOs and fills in categories from the
 // source index when the HTML index has none. Hugo does not emit categories in
 // standard meta tags (article:category / keywords), so the HTML-only index
