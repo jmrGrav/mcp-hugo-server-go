@@ -28,14 +28,22 @@ RestrictNamespaces=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-# ReadOnlyPaths and ReadWritePaths are site-specific and must NOT be set here.
-# Create /etc/systemd/system/mcp-hugo-server-go.service.d/override.conf
-# with the paths that apply to your installation. Example:
+# ReadOnlyPaths and ReadWritePaths are site-specific.
+# Set them directly in this file or via an override.conf drop-in.
+# build_site and preview_build require write access to hugo_root/public
+# and hugo_root/resources in addition to content_root.
 #
-#   [Service]
+# Example (inline or override.conf):
 #   ReadOnlyPaths=/etc/mcp-hugo-server-go
-#   ReadWritePaths=/var/lib/mcp-hugo-server-go /srv/hugo-site/content /srv/hugo-site/resources /srv/hugo-site/public
+#   ReadWritePaths=/var/lib/mcp-hugo-server-go \
+#       /your/hugo-site/content \
+#       /your/hugo-site/resources \
+#       /your/hugo-site/public
 #   Environment=PATH=/usr/local/bin:/usr/bin:/bin
+#
+# Also ensure the service user has group-write permission on those directories:
+#   chown -R user:servicegroup /your/hugo-site/public /your/hugo-site/resources
+#   chmod -R ug+w /your/hugo-site/public /your/hugo-site/resources
 
 [Install]
 WantedBy=multi-user.target
