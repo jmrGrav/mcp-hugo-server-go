@@ -46,13 +46,13 @@ type buildErrorPayload struct {
 
 // buildPreflightPayload is the structured JSON returned when a pre-flight check fails.
 type buildPreflightPayload struct {
-	Error       string `json:"error"`
-	ErrorClass  string `json:"error_class"`
-	Path        string `json:"path"`
+	Error        string `json:"error"`
+	ErrorClass   string `json:"error_class"`
+	Path         string `json:"path"`
 	OperatorHint string `json:"operator_hint"`
-	Suggestion  string `json:"suggestion"`
-	DocsURL     string `json:"docs_url"`
-	Retryable   bool   `json:"retryable"`
+	Suggestion   string `json:"suggestion"`
+	DocsURL      string `json:"docs_url"`
+	Retryable    bool   `json:"retryable"`
 }
 
 const buildDocsURL = "docs/operator-guide.md#build-permissions"
@@ -78,13 +78,13 @@ func checkBuildWritable(paths ...string) error {
 
 func buildPreflightError(dir string) error {
 	payload := buildPreflightPayload{
-		Error:       "build_precondition_failed",
-		ErrorClass:  "permission_denied",
-		Path:        dir,
+		Error:        "build_precondition_failed",
+		ErrorClass:   "permission_denied",
+		Path:         dir,
 		OperatorHint: "Add this path to ReadWritePaths in the systemd service override and reload: sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go",
-		Suggestion:  "Check that the MCP service user owns or has write access to this directory, and that it is listed in ReadWritePaths in the systemd service.",
-		DocsURL:     buildDocsURL,
-		Retryable:   false,
+		Suggestion:   "Check that the MCP service user owns or has write access to this directory, and that it is listed in ReadWritePaths in the systemd service.",
+		DocsURL:      buildDocsURL,
+		Retryable:    false,
 	}
 	b, _ := json.Marshal(payload)
 	return fmt.Errorf("build_precondition_failed: %s", b)
