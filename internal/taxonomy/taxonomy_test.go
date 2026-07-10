@@ -216,3 +216,92 @@ func TestSlugs(t *testing.T) {
 		t.Errorf("slugs = %v, unexpected order or values", slugs)
 	}
 }
+
+func TestNormalizeAliasMap(t *testing.T) {
+	aliases := taxonomy.NormalizeAliasMap(map[string]string{
+		"Sécurité":   "Security",
+		"postmortem": "post-mortems",
+		"loop":       "loop", // key == value: must be dropped
+	})
+	if aliases["sécurité"] != "security" {
+		t.Errorf("NormalizeAliasMap: key Sécurité→sécurité not normalized, got %v", aliases)
+	}
+	if aliases["postmortem"] != "post-mortems" {
+		t.Errorf("NormalizeAliasMap: postmortem entry missing, got %v", aliases)
+	}
+	if _, ok := aliases["loop"]; ok {
+		t.Error("NormalizeAliasMap: self-alias loop:loop should be dropped")
+	}
+}
+
+func TestApplyAliases(t *testing.T) {
+	aliases := map[string]string{"sécurité": "security", "postmortem": "post-mortems"}
+	got := taxonomy.ApplyAliases([]string{"sécurité", "docker", "sécurité", "Sécurité"}, aliases)
+	// sécurité → security (merged); docker unchanged; Sécurité slug = sécurité → also security, deduplicated
+	if len(got) != 2 {
+		t.Fatalf("ApplyAliases: got %v, want [security docker]", got)
+	}
+	if got[0] != "security" || got[1] != "docker" {
+		t.Errorf("ApplyAliases: got %v, want [security docker]", got)
+	}
+
+	// Empty aliases: return input unchanged
+	plain := taxonomy.ApplyAliases([]string{"a", "b"}, nil)
+	if len(plain) != 2 {
+		t.Errorf("ApplyAliases(nil aliases): got %v", plain)
+	}
+}
+
+func TestMatchesSlugWithAliases(t *testing.T) {
+	aliases := map[string]string{"sécurité": "security"}
+	// Direct slug match
+	if !taxonomy.MatchesSlugWithAliases([]string{"security"}, "security", aliases) {
+		t.Error("MatchesSlugWithAliases: direct match failed")
+	}
+	// Alias match: page has sécurité, filter by canonical security → should match
+	if !taxonomy.MatchesSlugWithAliases([]string{"sécurité"}, "security", aliases) {
+		t.Error("MatchesSlugWithAliases: alias match failed for sécurité→security")
+	}
+	// No match
+	if taxonomy.MatchesSlugWithAliases([]string{"docker"}, "security", aliases) {
+		t.Error("MatchesSlugWithAliases: should not match docker for security")
+	}
+}
+
+func TestResolveAlias(t *testing.T) {
+	aliases := map[string]string{
+		"sécurité":   "security",
+		"postmortem": "post-mortems",
+	}
+	if got := taxonomy.ResolveAlias("sécurité", aliases); got != "security" {
+		t.Errorf("ResolveAlias: got %q, want %q", got, "security")
+	}
+	if got := taxonomy.ResolveAlias("security", aliases); got != "security" {
+		t.Errorf("ResolveAlias for non-alias: got %q, want %q", got, "security")
+	}
+	if got := taxonomy.ResolveAlias("other", nil); got != "other" {
+		t.Errorf("ResolveAlias nil map: got %q, want %q", got, "other")
+	}
+}
+
+func TestFindSimilarPairs(t *testing.T) {
+	slugs := []string{"security", "sécurité", "postmortem", "post-mortems", "go", "docker"}
+	aliases := map[string]string{"sécurité": "security"}
+
+	// security/sécurité: levenshtein distance=2, but sécurité is aliased to security → excluded
+	// postmortem/post-mortems: distance=2, not aliased → should appear
+	pairs := taxonomy.FindSimilarPairs(slugs, 2, 5, aliases)
+	found := false
+	for _, p := range pairs {
+		if (p[0] == "post-mortems" && p[1] == "postmortem") || (p[0] == "postmortem" && p[1] == "post-mortems") {
+			found = true
+		}
+		// sécurité/security pair must NOT appear (aliased)
+		if (p[0] == "sécurité" && p[1] == "security") || (p[0] == "security" && p[1] == "sécurité") {
+			t.Errorf("aliased pair sécurité/security should not appear in similar pairs")
+		}
+	}
+	if !found {
+		t.Errorf("expected postmortem/post-mortems similar pair, pairs=%v", pairs)
+	}
+}

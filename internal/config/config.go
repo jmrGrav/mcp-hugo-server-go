@@ -11,28 +11,29 @@ import (
 )
 
 type Config struct {
-	SiteRoot            string          `yaml:"site_root"`
-	HugoRoot            string          `yaml:"hugo_root"`
-	ContentRoot         string          `yaml:"content_root"`
-	SiteURL             string          `yaml:"site_url"`
-	SiteName            string          `yaml:"site_name"`
-	DefaultLanguage     string          `yaml:"language_default"`
-	Transport           string          `yaml:"transport"`
-	HTTPBindAddr        string          `yaml:"http_bind_addr"`
-	HTTPBindPort        int             `yaml:"http_bind_port"`
-	StreamingEnabled    bool            `yaml:"streaming_enabled"`
-	MaxIndexEntries     int             `yaml:"max_index_entries"`
-	MaxResultItems      int             `yaml:"max_result_items"`
-	MaxRequestBytes     int64           `yaml:"max_request_bytes"`
-	RejectSymlinks      bool            `yaml:"reject_symlinks"`
-	RejectHiddenPath    bool            `yaml:"reject_hidden_paths"`
-	ImageGenURL         string          `yaml:"image_gen_url"`
-	ImageGenKey         string          `yaml:"image_gen_key"`
-	BuildTimeoutSeconds int             `yaml:"build_timeout_seconds"`
-	PostBuildHooks      []string        `yaml:"post_build_hooks"`
-	SecurityContact     string          `yaml:"security_contact"`
-	OAuth               OAuthConfig     `yaml:"oauth"`
-	RateLimit           RateLimitConfig `yaml:"rate_limit"`
+	SiteRoot            string            `yaml:"site_root"`
+	HugoRoot            string            `yaml:"hugo_root"`
+	ContentRoot         string            `yaml:"content_root"`
+	SiteURL             string            `yaml:"site_url"`
+	SiteName            string            `yaml:"site_name"`
+	DefaultLanguage     string            `yaml:"language_default"`
+	Transport           string            `yaml:"transport"`
+	HTTPBindAddr        string            `yaml:"http_bind_addr"`
+	HTTPBindPort        int               `yaml:"http_bind_port"`
+	StreamingEnabled    bool              `yaml:"streaming_enabled"`
+	MaxIndexEntries     int               `yaml:"max_index_entries"`
+	MaxResultItems      int               `yaml:"max_result_items"`
+	MaxRequestBytes     int64             `yaml:"max_request_bytes"`
+	RejectSymlinks      bool              `yaml:"reject_symlinks"`
+	RejectHiddenPath    bool              `yaml:"reject_hidden_paths"`
+	ImageGenURL         string            `yaml:"image_gen_url"`
+	ImageGenKey         string            `yaml:"image_gen_key"`
+	BuildTimeoutSeconds int               `yaml:"build_timeout_seconds"`
+	PostBuildHooks      []string          `yaml:"post_build_hooks"`
+	TaxonomyAliases     map[string]string `yaml:"taxonomy_aliases"`
+	SecurityContact     string            `yaml:"security_contact"`
+	OAuth               OAuthConfig       `yaml:"oauth"`
+	RateLimit           RateLimitConfig   `yaml:"rate_limit"`
 }
 
 type RateLimitConfig struct {
