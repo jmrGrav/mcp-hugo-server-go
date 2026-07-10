@@ -209,12 +209,14 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if len(recent) > 5 {
 				recent = recent[:5]
 			}
-			tagCount := len(idx.AllTags())
-			catCount := len(idx.AllCategories())
+			rawTags := idx.AllTags()
+			rawCats := idx.AllCategories()
 			if srcIdx != nil {
-				tagCount = len(srcIdx.AllTags())
-				catCount = len(srcIdx.AllCategories())
+				rawTags = srcIdx.AllTags()
+				rawCats = srcIdx.AllCategories()
 			}
+			tagCount := len(taxonomy.ApplyAliases(rawTags, aliases))
+			catCount := len(taxonomy.ApplyAliases(rawCats, aliases))
 			summary := fmt.Sprintf("%d published pages across %d sections, %d tags, and %d categories.",
 				len(contentPages), len(sections), tagCount, catCount)
 			now := time.Now().UTC().Format(time.RFC3339)
@@ -244,7 +246,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
-			health := buildSiteHealth(idx, srcIdx, cfg.TaxonomyAliases)
+			health := buildSiteHealth(idx, srcIdx, aliases)
 			now := time.Now().UTC().Format(time.RFC3339)
 			return nil, contentEnvelope{
 				Success:     true,
@@ -274,7 +276,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
 			pages := sourcePagesForValidation(srcIdx, in.Slug)
-			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, cfg.TaxonomyAliases), nil
+			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
 		})
 
 	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Requires content.read.",
@@ -283,7 +285,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
 			pages := srcIdx.ListPages(0, 0)
-			return nil, validatePagesWithIssues(pages, 0, 0, cfg.TaxonomyAliases), nil
+			return nil, validatePagesWithIssues(pages, 0, 0, aliases), nil
 		})
 
 	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. Returns a limited sample of missing internal targets and requires content.read.",
