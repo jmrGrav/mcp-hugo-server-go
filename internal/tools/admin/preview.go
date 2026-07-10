@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -41,6 +42,9 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ previewBuildInput) (*mcp.CallToolResult, previewBuildOutput, error) {
 		if cfg.HugoRoot == "" {
 			return nil, previewBuildOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
+		}
+		if err := checkBuildWritable(filepath.Join(cfg.HugoRoot, "resources")); err != nil {
+			return nil, previewBuildOutput{}, err
 		}
 		const lockWait = 10 * time.Second
 		deadline := time.Now().Add(lockWait)
@@ -120,6 +124,10 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 				StdoutSummary:    outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
 				BuildID:          runID,
 				LogHint:          "Search server logs for build_id=" + runID,
+			}
+			if errClass == "permission_denied" {
+				payload.Suggestion = "Verify that hugo_root/resources is listed in ReadWritePaths in the systemd service override. Run: systemctl cat mcp-hugo-server-go"
+				payload.DocsURL = buildDocsURL
 			}
 			jsonPayload, _ := json.Marshal(payload)
 			return nil, previewBuildOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
