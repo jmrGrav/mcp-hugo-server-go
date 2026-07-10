@@ -257,6 +257,13 @@ image_gen_key: your-api-key
 build_timeout_seconds: 120
 post_build_hooks:
   - https://example.com/webhook/post-build
+# Taxonomy alias map: maps non-canonical slugs to canonical ones.
+# Keys and values are slugified on load (casing/whitespace-insensitive).
+# Effect: list_tags, list_categories, and page DTOs return the canonical form.
+# Agents filtering by canonical tag also match pages tagged with the alias form.
+taxonomy_aliases:
+  sécurité: security
+  postmortem: post-mortems
 rate_limit:
   anonymous_per_min: 60
   content_read_per_min: 120

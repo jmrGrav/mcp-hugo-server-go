@@ -4,6 +4,40 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [v1.3.5] - 2026-07-10
+
+### Added
+- **Taxonomy alias map** (`taxonomy_aliases` in config): operators define a slug→slug map
+  (e.g. `sécurité: security`) that folds alias terms to their canonical form in all listing
+  and filter paths (`list_tags`, `list_categories`, `list_pages`, `search_pages`,
+  `get_recent_posts`, `search_content`, `explain_site_structure`). Filtering by canonical
+  tag/category now matches pages tagged with any alias form. Near-duplicate tag pairs are
+  detected via Levenshtein distance ≤ 2 and reported in `get_site_health` (#183).
+- `get_site_health` now includes a `taxonomy_inconsistencies` field listing alias-key terms
+  in use and near-duplicate slug pairs that the operator should consolidate (#183).
+- `validate_front_matter` now warns when a page's tags or categories use an alias slug
+  instead of the canonical form (#183).
+- `build_site` and `preview_build` now run a preflight write-check before invoking Hugo.
+  A `build_precondition_failed` error is returned immediately when `public/` or
+  `resources/_gen/` are not writable, with an `operator_hint` that names the missing
+  `ReadWritePaths` entry and the exact `systemctl` command to fix it. Build errors caused
+  by permission denial now also carry `suggestion` and `docs_url` fields pointing to the
+  operator guide (#186).
+- Added `docs/operator-guide.md#build-permissions` section documenting required writable
+  paths per tool and the `ReadOnlyPaths` override precedence rule (#186, #190).
+
+### Fixed
+- `generate_featured_image` is no longer registered when `image_gen_url` is unset. MCP
+  clients no longer see a confusing "available but broken" tool when image generation is
+  not configured (#185).
+- `list_pages`, `search_pages`, and `get_recent_posts` now populate `categories` from the
+  Hugo source index frontmatter when the HTML index has none. Hugo does not emit
+  `article:category` meta tags, so the HTML-only index always returned empty categories
+  for per-page DTOs (#189).
+- Systemd service `ReadWritePaths` configuration documented; deploy script template
+  updated to include all paths Hugo needs to write (`content/`, `resources/`, `public/`)
+  (#190).
+
 ## [v1.3.4] - 2026-07-06
 
 ### Added
