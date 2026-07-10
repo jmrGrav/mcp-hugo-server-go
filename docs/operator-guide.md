@@ -207,6 +207,31 @@ overwrites an existing override.conf).
 
 Edit the `REMOTE` variable in `deploy/deploy.sh` to target a different host.
 
+### Build Permissions
+
+The `build_site` and `preview_build` tools run Hugo as the MCP service user.
+Before invoking Hugo, the server performs a preflight write-check on the directories
+it needs. If the check fails you will receive a `build_precondition_failed` error
+with an `operator_hint` field explaining exactly what to add.
+
+Required writable paths for each tool:
+
+| Tool | Paths that must be writable |
+|------|----------------------------|
+| `build_site` | `site_root` (site root), `{hugo_root}/resources` |
+| `preview_build` | `{hugo_root}/resources` (render-to-memory; no writes to `public/`) |
+| `generate_featured_image` | `{site_root}/images/featured` |
+
+Add the missing paths to `ReadWritePaths` in the systemd override and reload:
+
+```bash
+sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
+```
+
+Do **not** add a directory to `ReadOnlyPaths` if it already appears in
+`ReadWritePaths` — `ReadOnlyPaths` takes precedence and will silently undo the
+write permission.
+
 ### Configuration File
 
 Place the configuration file at the path referenced by `MCP_HUGO_SERVER_CONFIG`:

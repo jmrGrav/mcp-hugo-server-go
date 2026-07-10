@@ -43,21 +43,22 @@ type contentEnvelopeData struct {
 	Category string    `json:"category,omitempty"`
 	Language string    `json:"language,omitempty"`
 
-	Status           string       `json:"status,omitempty"`
-	Score            int          `json:"score,omitempty"`
-	PublishedPages   int          `json:"published_pages,omitempty"`
-	SourcePages      int          `json:"source_pages,omitempty"`
-	DraftPages       int          `json:"draft_pages,omitempty"`
-	Tags             int          `json:"tags,omitempty"`
-	Categories       int          `json:"categories,omitempty"`
-	MissingTitles    int          `json:"missing_titles,omitempty"`
-	MissingDates     int          `json:"missing_dates,omitempty"`
-	ValidationErrors int          `json:"validation_errors,omitempty"`
-	Sections         []sectionDTO `json:"sections,omitempty"`
-	Languages        []string     `json:"languages,omitempty"`
-	Summary          string       `json:"summary,omitempty"`
-	RecentPages      []pageDTO    `json:"recent_pages,omitempty"`
-	Notes            []string     `json:"notes,omitempty"`
+	Status                  string       `json:"status,omitempty"`
+	Score                   int          `json:"score,omitempty"`
+	PublishedPages          int          `json:"published_pages,omitempty"`
+	SourcePages             int          `json:"source_pages,omitempty"`
+	DraftPages              int          `json:"draft_pages,omitempty"`
+	Tags                    int          `json:"tags,omitempty"`
+	Categories              int          `json:"categories,omitempty"`
+	MissingTitles           int          `json:"missing_titles,omitempty"`
+	MissingDates            int          `json:"missing_dates,omitempty"`
+	ValidationErrors        int          `json:"validation_errors,omitempty"`
+	TaxonomyInconsistencies []string     `json:"taxonomy_inconsistencies,omitempty"`
+	Sections                []sectionDTO `json:"sections,omitempty"`
+	Languages               []string     `json:"languages,omitempty"`
+	Summary                 string       `json:"summary,omitempty"`
+	RecentPages             []pageDTO    `json:"recent_pages,omitempty"`
+	Notes                   []string     `json:"notes,omitempty"`
 }
 
 type contentEnvelope struct {
@@ -153,6 +154,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	if s == nil {
 		return
 	}
+	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 
 	RegisterDiffPage(s, idx, srcIdx, cfg)
 
@@ -164,7 +166,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
 				return nil, contentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
 			}
-			filtered := filterContentPages(idx.Sitemap(), in)
+			filtered := filterContentPages(idx.Sitemap(), in, aliases)
 			total := len(filtered)
 			limit := clampLimit(in.Limit, 20, 100)
 			offset := in.Offset
@@ -178,7 +180,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Version:     toolResultVersion,
 				GeneratedAt: now,
 				Data: contentEnvelopeData{
-					Pages:    toPageDTOs(pages),
+					Pages:    toPageDTOs(pages, aliases),
 					Total:    total,
 					Limit:    limit,
 					Offset:   offset,
@@ -207,12 +209,14 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if len(recent) > 5 {
 				recent = recent[:5]
 			}
-			tagCount := len(idx.AllTags())
-			catCount := len(idx.AllCategories())
+			rawTags := idx.AllTags()
+			rawCats := idx.AllCategories()
 			if srcIdx != nil {
-				tagCount = len(srcIdx.AllTags())
-				catCount = len(srcIdx.AllCategories())
+				rawTags = srcIdx.AllTags()
+				rawCats = srcIdx.AllCategories()
 			}
+			tagCount := len(taxonomy.ApplyAliases(rawTags, aliases))
+			catCount := len(taxonomy.ApplyAliases(rawCats, aliases))
 			summary := fmt.Sprintf("%d published pages across %d sections, %d tags, and %d categories.",
 				len(contentPages), len(sections), tagCount, catCount)
 			now := time.Now().UTC().Format(time.RFC3339)
@@ -226,7 +230,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					Languages:   languages,
 					Tags:        tagCount,
 					Categories:  catCount,
-					RecentPages: toPageDTOs(recent),
+					RecentPages: toPageDTOs(recent, aliases),
 					Notes: []string{
 						"Top-level sections are derived from page slugs.",
 						"Posts are detected from the /posts/ path prefix.",
@@ -237,28 +241,29 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts and validation signals. Use this before publishing or reviewing content. Requires content.read.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. Use this before publishing or reviewing content. Requires content.read.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
-			health := buildSiteHealth(idx, srcIdx)
+			health := buildSiteHealth(idx, srcIdx, aliases)
 			now := time.Now().UTC().Format(time.RFC3339)
 			return nil, contentEnvelope{
 				Success:     true,
 				Version:     toolResultVersion,
 				GeneratedAt: now,
 				Data: contentEnvelopeData{
-					Status:           health.Status,
-					Score:            health.Score,
-					PublishedPages:   health.PublishedPages,
-					SourcePages:      health.SourcePages,
-					DraftPages:       health.DraftPages,
-					Tags:             health.Tags,
-					Categories:       health.Categories,
-					MissingTitles:    health.MissingTitles,
-					MissingDates:     health.MissingDates,
-					ValidationErrors: health.ValidationErrors,
+					Status:                  health.Status,
+					Score:                   health.Score,
+					PublishedPages:          health.PublishedPages,
+					SourcePages:             health.SourcePages,
+					DraftPages:              health.DraftPages,
+					Tags:                    health.Tags,
+					Categories:              health.Categories,
+					MissingTitles:           health.MissingTitles,
+					MissingDates:            health.MissingDates,
+					ValidationErrors:        health.ValidationErrors,
+					TaxonomyInconsistencies: health.TaxonomyInconsistencies,
 				},
 				Warnings: []string{},
 				Errors:   []string{},
@@ -271,7 +276,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
 			pages := sourcePagesForValidation(srcIdx, in.Slug)
-			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit), nil
+			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
 		})
 
 	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Requires content.read.",
@@ -280,7 +285,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
 			pages := srcIdx.ListPages(0, 0)
-			return nil, validatePagesWithIssues(pages, 0, 0), nil
+			return nil, validatePagesWithIssues(pages, 0, 0, aliases), nil
 		})
 
 	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. Returns a limited sample of missing internal targets and requires content.read.",
@@ -311,14 +316,14 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		})
 }
 
-func filterContentPages(pages []site.Page, in searchContentInput) []site.Page {
+func filterContentPages(pages []site.Page, in searchContentInput, aliases map[string]string) []site.Page {
 	out := make([]site.Page, 0, len(pages))
 	classifier := site.NewClassifierFromPages(pages)
 	for _, p := range pages {
 		if !classifier.IsContent(p) {
 			continue
 		}
-		if !matchContentFilters(p, in, classifier) {
+		if !matchContentFilters(p, in, classifier, aliases) {
 			continue
 		}
 		out = append(out, p)
@@ -327,15 +332,15 @@ func filterContentPages(pages []site.Page, in searchContentInput) []site.Page {
 	return out
 }
 
-func matchContentFilters(p site.Page, in searchContentInput, classifier *site.ContentClassifier) bool {
+func matchContentFilters(p site.Page, in searchContentInput, classifier *site.ContentClassifier, aliases map[string]string) bool {
 	query := strings.TrimSpace(in.Query)
 	if query != "" && scoreContentPage(p, query) == 0 {
 		return false
 	}
-	if in.Tag != "" && !taxonomy.MatchesSlug(p.Tags, taxonomy.Slug(in.Tag)) {
+	if in.Tag != "" && !taxonomy.MatchesSlugWithAliases(p.Tags, taxonomy.Slug(in.Tag), aliases) {
 		return false
 	}
-	if in.Category != "" && !taxonomy.MatchesSlug(p.Categories, taxonomy.Slug(in.Category)) {
+	if in.Category != "" && !taxonomy.MatchesSlugWithAliases(p.Categories, taxonomy.Slug(in.Category), aliases) {
 		return false
 	}
 	if in.Language != "" && !strings.EqualFold(p.Lang, in.Language) {
@@ -572,7 +577,7 @@ func sliceBrokenLinks(issues []brokenLinkDTO, offset, limit int) []brokenLinkDTO
 	return out
 }
 
-func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) validateOutput {
+func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, aliases map[string]string) validateOutput {
 	total := len(pages)
 	if offset < 0 {
 		offset = 0
@@ -584,7 +589,7 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int) val
 	allResults := make([]frontMatterIssueDTO, 0, len(pages))
 	invalid := 0
 	for _, p := range pages {
-		issues := validateFrontMatterPage(p)
+		issues := validateFrontMatterPage(p, aliases)
 		if len(issues) > 0 {
 			invalid++
 		}
@@ -625,7 +630,7 @@ func effectiveSort(in searchContentInput) string {
 	return canonicalSort(in.Sort)
 }
 
-func validateFrontMatterPage(p hugosite.SourcePage) []string {
+func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) []string {
 	var issues []string
 	if strings.TrimSpace(p.Title) == "" {
 		issues = append(issues, "missing title")
@@ -639,6 +644,20 @@ func validateFrontMatterPage(p hugosite.SourcePage) []string {
 		}
 		if _, ok := p.FrontmatterRaw["date"]; !ok {
 			issues = append(issues, "front matter missing date field")
+		}
+	}
+	if len(aliases) > 0 {
+		for _, raw := range p.Tags {
+			s := taxonomy.Slug(raw)
+			if canonical, ok := aliases[s]; ok {
+				issues = append(issues, fmt.Sprintf("tag %q is an alias for %q; consider using the canonical form", raw, canonical))
+			}
+		}
+		for _, raw := range p.Categories {
+			s := taxonomy.Slug(raw)
+			if canonical, ok := aliases[s]; ok {
+				issues = append(issues, fmt.Sprintf("category %q is an alias for %q; consider using the canonical form", raw, canonical))
+			}
 		}
 	}
 	return issues
@@ -658,7 +677,7 @@ func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) []hugosite
 	return []hugosite.SourcePage{}
 }
 
-func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex) contentEnvelopeData {
+func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) contentEnvelopeData {
 	health := contentEnvelopeData{
 		Status: "healthy",
 	}
@@ -676,7 +695,7 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex) contentEnvel
 			if p.Draft {
 				health.DraftPages++
 			}
-			issues := validateFrontMatterPage(p)
+			issues := validateFrontMatterPage(p, aliases)
 			if len(issues) > 0 {
 				health.ValidationErrors++
 				for _, issue := range issues {
@@ -689,6 +708,7 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex) contentEnvel
 				}
 			}
 		}
+		health.TaxonomyInconsistencies = detectTaxonomyInconsistencies(srcIdx, aliases)
 	}
 	penalty := (health.ValidationErrors * 10) + (health.MissingTitles * 5) + (health.MissingDates * 5)
 	score := 100 - penalty
@@ -705,6 +725,44 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex) contentEnvel
 		health.Status = "critical"
 	}
 	return health
+}
+
+// detectTaxonomyInconsistencies finds slug pairs that look like duplicates or
+// transliterations and flags alias-key terms that should use their canonical form.
+func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[string]string) []string {
+	if srcIdx == nil {
+		return nil
+	}
+	var out []string
+
+	// Report alias mismatches: terms in content that should use the canonical form.
+	tagSlugs := make([]string, 0)
+	for _, raw := range srcIdx.AllTags() {
+		s := taxonomy.Slug(raw)
+		if canonical, ok := aliases[s]; ok {
+			out = append(out, fmt.Sprintf("tag %q is an alias for %q; use the canonical form", raw, canonical))
+		}
+		tagSlugs = append(tagSlugs, s)
+	}
+	catSlugs := make([]string, 0)
+	for _, raw := range srcIdx.AllCategories() {
+		s := taxonomy.Slug(raw)
+		if canonical, ok := aliases[s]; ok {
+			out = append(out, fmt.Sprintf("category %q is an alias for %q; use the canonical form", raw, canonical))
+		}
+		catSlugs = append(catSlugs, s)
+	}
+
+	// Report similar slug pairs (possible duplicates / cross-language variants).
+	const maxDist, minLen = 2, 5
+	for _, pair := range taxonomy.FindSimilarPairs(tagSlugs, maxDist, minLen, aliases) {
+		out = append(out, fmt.Sprintf("tags %q and %q may be duplicates (edit distance ≤ %d)", pair[0], pair[1], maxDist))
+	}
+	for _, pair := range taxonomy.FindSimilarPairs(catSlugs, maxDist, minLen, aliases) {
+		out = append(out, fmt.Sprintf("categories %q and %q may be duplicates (edit distance ≤ %d)", pair[0], pair[1], maxDist))
+	}
+
+	return out
 }
 
 func countSections(pages []site.Page) []sectionDTO {
@@ -761,15 +819,9 @@ func uniqueLanguages(pages []site.Page) []string {
 	return out
 }
 
-func toPageDTO(p site.Page) pageDTO {
-	tags := p.Tags
-	if tags == nil {
-		tags = []string{}
-	}
-	cats := p.Categories
-	if cats == nil {
-		cats = []string{}
-	}
+func toPageDTO(p site.Page, aliases map[string]string) pageDTO {
+	tags := taxonomy.ApplyAliases(nullsafeStrings(p.Tags), aliases)
+	cats := taxonomy.ApplyAliases(nullsafeStrings(p.Categories), aliases)
 	return pageDTO{
 		Slug:          p.Slug,
 		Title:         p.Title,
@@ -784,10 +836,10 @@ func toPageDTO(p site.Page) pageDTO {
 	}
 }
 
-func toPageDTOs(pages []site.Page) []pageDTO {
+func toPageDTOs(pages []site.Page, aliases map[string]string) []pageDTO {
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		out[i] = toPageDTO(p)
+		out[i] = toPageDTO(p, aliases)
 	}
 	return out
 }

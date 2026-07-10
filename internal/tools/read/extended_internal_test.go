@@ -32,15 +32,15 @@ func TestContentHelperFunctions(t *testing.T) {
 		t.Fatalf("effectiveSort(query) = %q", got)
 	}
 
-	filtered := filterContentPages(pages, searchContentInput{Query: "go", Type: "post", Order: "desc"})
+	filtered := filterContentPages(pages, searchContentInput{Query: "go", Type: "post", Order: "desc"}, nil)
 	if len(filtered) != 1 || filtered[0].Slug != "/posts/a/" {
 		t.Fatalf("filterContentPages() = %#v", filtered)
 	}
 	classifier := site.NewClassifierFromPages(pages)
-	if !matchContentFilters(pages[0], searchContentInput{Tag: "go", Category: "docs", Language: "en", Type: "posts"}, classifier) {
+	if !matchContentFilters(pages[0], searchContentInput{Tag: "go", Category: "docs", Language: "en", Type: "posts"}, classifier, nil) {
 		t.Fatal("matchContentFilters() should match expected page")
 	}
-	if matchContentFilters(pages[2], searchContentInput{Type: "posts"}, classifier) {
+	if matchContentFilters(pages[2], searchContentInput{Type: "posts"}, classifier, nil) {
 		t.Fatal("matchContentFilters() should reject non-post for posts filter")
 	}
 
@@ -62,11 +62,11 @@ func TestContentHelperFunctions(t *testing.T) {
 		t.Fatalf("sliceContentPages(offset overflow) = %#v", got)
 	}
 
-	dto := toPageDTO(pages[0])
+	dto := toPageDTO(pages[0], nil)
 	if dto.Slug != pages[0].Slug || dto.Title != "Alpha" {
 		t.Fatalf("toPageDTO() = %#v", dto)
 	}
-	if got := toPageDTOs(pages); len(got) != 3 || got[1].Slug != "/posts/b/" {
+	if got := toPageDTOs(pages, nil); len(got) != 3 || got[1].Slug != "/posts/b/" {
 		t.Fatalf("toPageDTOs() = %#v", got)
 	}
 	if got := countSections(pages); len(got) == 0 || got[0].Name == "" {
@@ -106,15 +106,15 @@ func TestValidationHelpers(t *testing.T) {
 	if got := sourcePagesForValidation(src, ""); len(got) != 2 {
 		t.Fatalf("sourcePagesForValidation(all) = %#v", got)
 	}
-	issues := validateFrontMatterPage(hugosite.SourcePage{Slug: "/broken/", FrontmatterRaw: map[string]any{}})
+	issues := validateFrontMatterPage(hugosite.SourcePage{Slug: "/broken/", FrontmatterRaw: map[string]any{}}, nil)
 	if len(issues) < 2 {
 		t.Fatalf("validateFrontMatterPage() = %#v", issues)
 	}
-	out := validatePagesWithIssues(src.ListPages(0, 0), 0, 1)
+	out := validatePagesWithIssues(src.ListPages(0, 0), 0, 1, nil)
 	if !out.Success || out.Data.PagesChecked != 2 || len(out.Data.Pages) != 1 {
 		t.Fatalf("validatePagesWithIssues() = %#v", out)
 	}
-	health := buildSiteHealth(&site.Index{}, src)
+	health := buildSiteHealth(&site.Index{}, src, nil)
 	if health.SourcePages != 2 || health.DraftPages != 1 {
 		t.Fatalf("buildSiteHealth() = %#v", health)
 	}

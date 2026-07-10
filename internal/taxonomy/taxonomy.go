@@ -182,3 +182,152 @@ func titleWord(word string) string {
 	runes[0] = unicode.ToUpper(runes[0])
 	return string(runes)
 }
+
+// ResolveAlias returns the canonical slug for slug using the operator-defined alias
+// map. If slug is not a key in aliases, it is returned unchanged. aliases maps
+// non-canonical slugs to canonical ones (e.g. "sécurité" → "security").
+func ResolveAlias(slug string, aliases map[string]string) string {
+	if canonical, ok := aliases[slug]; ok {
+		return canonical
+	}
+	return slug
+}
+
+// NormalizeAliasMap returns a new map with both keys and values run through Slug,
+// making operator config robust to casing, whitespace, and underscores.
+func NormalizeAliasMap(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return raw
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		ks := Slug(k)
+		vs := Slug(v)
+		if ks != "" && vs != "" && ks != vs {
+			out[ks] = vs
+		}
+	}
+	return out
+}
+
+// ApplyAliases replaces each raw term whose slug is an alias key with the canonical
+// slug, then deduplicates. Terms not in the alias map are returned as-is.
+// Use this when building tag/category lists for tool responses.
+func ApplyAliases(rawValues []string, aliases map[string]string) []string {
+	if len(aliases) == 0 {
+		return rawValues
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(rawValues))
+	for _, raw := range rawValues {
+		v := strings.TrimSpace(raw)
+		if v == "" {
+			continue
+		}
+		s := Slug(v)
+		if canonical, ok := aliases[s]; ok {
+			if !seen[canonical] {
+				seen[canonical] = true
+				out = append(out, canonical)
+			}
+		} else {
+			if !seen[s] {
+				seen[s] = true
+				out = append(out, v)
+			}
+		}
+	}
+	return out
+}
+
+// MatchesSlugWithAliases reports whether any value in rawValues has a slug equal
+// to targetSlug, or an alias that resolves to targetSlug.
+func MatchesSlugWithAliases(rawValues []string, targetSlug string, aliases map[string]string) bool {
+	for _, raw := range rawValues {
+		s := Slug(raw)
+		if s == targetSlug {
+			return true
+		}
+		if len(aliases) > 0 {
+			if canonical, ok := aliases[s]; ok && canonical == targetSlug {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// FindSimilarPairs returns pairs of slugs whose Levenshtein distance is in
+// [1, maxDist] and whose length is at least minLen. Pairs where one slug is
+// already an alias of the other are excluded. The returned pairs are sorted
+// lexicographically within each pair.
+func FindSimilarPairs(slugs []string, maxDist, minLen int, aliases map[string]string) [][2]string {
+	var out [][2]string
+	for i := 0; i < len(slugs); i++ {
+		if len([]rune(slugs[i])) < minLen {
+			continue
+		}
+		for j := i + 1; j < len(slugs); j++ {
+			if len([]rune(slugs[j])) < minLen {
+				continue
+			}
+			a, b := slugs[i], slugs[j]
+			// Skip pairs already connected via the alias map.
+			if ResolveAlias(a, aliases) == b || ResolveAlias(b, aliases) == a {
+				continue
+			}
+			if d := levenshtein(a, b); d >= 1 && d <= maxDist {
+				if a > b {
+					a, b = b, a
+				}
+				out = append(out, [2]string{a, b})
+			}
+		}
+	}
+	return out
+}
+
+// levenshtein computes the Levenshtein edit distance between a and b (rune-aware).
+func levenshtein(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	m, n := len(ra), len(rb)
+	if m == 0 {
+		return n
+	}
+	if n == 0 {
+		return m
+	}
+	prev := make([]int, n+1)
+	curr := make([]int, n+1)
+	for j := 0; j <= n; j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= m; i++ {
+		curr[0] = i
+		for j := 1; j <= n; j++ {
+			cost := 1
+			if ra[i-1] == rb[j-1] {
+				cost = 0
+			}
+			del := prev[j] + 1
+			ins := curr[j-1] + 1
+			sub := prev[j-1] + cost
+			curr[j] = min3(del, ins, sub)
+		}
+		prev, curr = curr, prev
+	}
+	return prev[n]
+}
+
+func min3(a, b, c int) int {
+	if a < b {
+		if a < c {
+			return a
+		}
+		return c
+	}
+	if b < c {
+		return b
+	}
+	return c
+}

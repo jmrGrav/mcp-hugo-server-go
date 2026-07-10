@@ -131,6 +131,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		srcIdx = sources[0]
 	}
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
+	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published Hugo pages with pagination. Returns page metadata only and does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
@@ -149,7 +150,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if len(slice) > limit {
 				slice = slice[:limit]
 			}
-			return nil, listPagesOutput{Pages: toPageDTOsWithSource(slice, srcIdx)}, nil
+			return nil, listPagesOutput{Pages: toPageDTOsEnriched(slice, srcIdx, aliases)}, nil
 		})
 
 	addReadOnlyTool(s, "get_page", "Read page",
@@ -185,7 +186,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			limit := clampLimit(in.Limit, 50, 50)
 			pages := idx.Search(in.Query, limit)
-			return nil, searchPagesOutput{Pages: toPageDTOsWithSource(pages, srcIdx)}, nil
+			return nil, searchPagesOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases)}, nil
 		})
 
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
@@ -195,7 +196,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			limit := clampLimit(in.Limit, 10, 50)
 			pages := idx.RecentPosts(limit)
-			return nil, getRecentPostsOutput{Pages: toPageDTOsWithSource(pages, srcIdx)}, nil
+			return nil, getRecentPostsOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases)}, nil
 		})
 
 	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
@@ -210,6 +211,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if tags == nil {
 				tags = []string{}
 			}
+			tags = taxonomy.ApplyAliases(tags, aliases)
 			return nil, listTagsOutput{Tags: tags}, nil
 		})
 
@@ -225,6 +227,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if cats == nil {
 				cats = []string{}
 			}
+			cats = taxonomy.ApplyAliases(cats, aliases)
 			return nil, listCategoriesOutput{Categories: cats}, nil
 		})
 
@@ -328,11 +331,9 @@ func toPageDTO(p site.Page) pageDTO {
 	}
 }
 
-// toPageDTOsWithSource maps pages to DTOs and fills in categories from the
-// source index when the HTML index has none. Hugo does not emit categories in
-// standard meta tags (article:category / keywords), so the HTML-only index
-// always returns empty categories for per-page DTOs.
-func toPageDTOsWithSource(pages []site.Page, srcIdx *hugosite.SourceIndex) []pageDTO {
+// toPageDTOsEnriched builds page DTOs with source-index category enrichment and
+// alias folding applied. Both are optional: srcIdx may be nil, aliases may be empty.
+func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string) []pageDTO {
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
 		dto := toPageDTO(p)
@@ -341,6 +342,10 @@ func toPageDTOsWithSource(pages []site.Page, srcIdx *hugosite.SourceIndex) []pag
 			if src, ok := srcIdx.GetBySlug(srcSlug); ok && len(src.Categories) > 0 {
 				dto.Categories = src.Categories
 			}
+		}
+		if len(aliases) > 0 {
+			dto.Tags = taxonomy.ApplyAliases(dto.Tags, aliases)
+			dto.Categories = taxonomy.ApplyAliases(dto.Categories, aliases)
 		}
 		out[i] = dto
 	}

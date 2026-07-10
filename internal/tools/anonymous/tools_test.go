@@ -53,8 +53,13 @@ func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 
 func newTestClientWithSourceIndex(t *testing.T, idx *site.Index, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
 	t.Helper()
+	return newTestClientWithCfg(t, idx, config.Default(), srcIdx)
+}
+
+func newTestClientWithCfg(t *testing.T, idx *site.Index, cfg config.Config, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
+	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	anonymous.Register(s, idx, config.Default(), srcIdx)
+	anonymous.Register(s, idx, cfg, srcIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -420,6 +425,55 @@ func TestListPagesPrefersSourceCategories(t *testing.T) {
 	}
 	if cats[0] != "go" || cats[1] != "infrastructure" {
 		t.Fatalf("list_pages: categories = %v, want [go infrastructure]", cats)
+	}
+}
+
+func TestTaxonomyAliasesNormalizeListTagsAndListPages(t *testing.T) {
+	// End-to-end test: with taxonomy_aliases={sécurité:security}, list_tags must
+	// return the canonical "security" slug and not the alias "sécurité".
+	contentRoot := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	write("posts/a/index.md", "---\ntitle: A\ntags: [sécurité, docker]\n---\nBody A\n")
+	write("posts/b/index.md", "---\ntitle: B\ntags: [security]\n---\nBody B\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.TaxonomyAliases = map[string]string{"sécurité": "security"}
+
+	session, done := newTestClientWithCfg(t, &site.Index{}, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "list_tags", map[string]any{})
+	if res.IsError {
+		t.Fatalf("list_tags error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	tags, ok := m["tags"].([]any)
+	if !ok {
+		t.Fatalf("list_tags: tags is %T", m["tags"])
+	}
+	tagSet := make(map[string]bool, len(tags))
+	for _, v := range tags {
+		tagSet[v.(string)] = true
+	}
+	if tagSet["sécurité"] {
+		t.Error("list_tags: alias 'sécurité' must be folded into canonical 'security', but it appeared in the result")
+	}
+	if !tagSet["security"] {
+		t.Errorf("list_tags: canonical 'security' must be present, got %v", tags)
 	}
 }
 
