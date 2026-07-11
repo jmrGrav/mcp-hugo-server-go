@@ -17,6 +17,11 @@ import (
 
 func newTestServer(t *testing.T, contentRoot string) (*mcp.ClientSession, func()) {
 	t.Helper()
+	return newTestServerWithSiteRoot(t, contentRoot, "")
+}
+
+func newTestServerWithSiteRoot(t *testing.T, contentRoot, siteRoot string) (*mcp.ClientSession, func()) {
+	t.Helper()
 	pg, err := security.New(contentRoot, true)
 	if err != nil {
 		t.Fatalf("security.New: %v", err)
@@ -27,6 +32,7 @@ func newTestServer(t *testing.T, contentRoot string) (*mcp.ClientSession, func()
 	}
 	cfg := config.Default()
 	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = siteRoot
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg)
@@ -307,5 +313,91 @@ func TestDeletePageRemovesWholeDirectory(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(contentRoot, "extra-files")); !os.IsNotExist(err) {
 		t.Error("expected directory with extra files to be fully removed")
+	}
+}
+
+// TestUpdatePageMultilingualFile ensures update_page works when the page only
+// has index.fr.md (no index.md) — the real-world case for bilingual sites.
+func TestUpdatePageMultilingualFile(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	// Write an index.fr.md directly (no index.md counterpart).
+	pageDir := filepath.Join(contentRoot, "posts", "csp-nonce")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	frFile := filepath.Join(pageDir, "index.fr.md")
+	original := "---\ntitle: Titre original\ndate: \"2026-04-15T00:00:00Z\"\n---\nContenu original."
+	if err := os.WriteFile(frFile, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":  "posts/csp-nonce",
+		"title": "Nouveau titre",
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page failed on multilingual page: %s", raw)
+	}
+
+	// The fr file must be updated; no index.md should have been created.
+	data, err := os.ReadFile(frFile)
+	if err != nil {
+		t.Fatalf("index.fr.md not found: %v", err)
+	}
+	if !strings.Contains(string(data), "Nouveau titre") {
+		t.Errorf("index.fr.md not updated, got: %s", data)
+	}
+	if _, err := os.Stat(filepath.Join(pageDir, "index.md")); !os.IsNotExist(err) {
+		t.Error("update_page must not create index.md when only index.fr.md exists")
+	}
+}
+
+// TestDeletePageCleansPublicDir verifies that delete_page also removes the
+// rendered output directory from public/ so no zombie page survives.
+func TestDeletePageCleansPublicDir(t *testing.T) {
+	contentRoot := t.TempDir()
+	siteRoot := t.TempDir()
+
+	session, done := newTestServerWithSiteRoot(t, contentRoot, siteRoot)
+	defer done()
+
+	// Create source page.
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/zombie-test",
+		"title":      "Zombie Test",
+		"body":       "body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	// Simulate a prior Hugo build by creating the public output directory.
+	publicPageDir := filepath.Join(siteRoot, "posts", "zombie-test")
+	if err := os.MkdirAll(publicPageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll public dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicPageDir, "index.html"), []byte("<html></html>"), 0o644); err != nil {
+		t.Fatalf("WriteFile public html: %v", err)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/zombie-test"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page failed: %s", raw)
+	}
+
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "zombie-test")); !os.IsNotExist(err) {
+		t.Error("source directory must be removed")
+	}
+	if _, err := os.Stat(publicPageDir); !os.IsNotExist(err) {
+		t.Error("public directory must be removed by delete_page to prevent zombie")
 	}
 }

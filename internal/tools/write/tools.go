@@ -190,16 +190,19 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, fmt.Errorf("not_found: page not found")
 		}
 
-		dir, err := pg.SafeJoin(in.Slug)
-		if err != nil {
+		if _, err := pg.SafeJoin(in.Slug); err != nil {
 			slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
-		filePath := filepath.Join(dir, "index.md")
+		filePath := existing.FilePath
+		if filePath == "" {
+			slog.Error("update_page: no file path in index", "slug", in.Slug)
+			return nil, updatePageOutput{}, fmt.Errorf("read_error: no file path recorded for page; re-index required")
+		}
 
 		raw, err := os.ReadFile(filePath)
 		if err != nil {
-			slog.Error("update_page: read failed", "slug", in.Slug, "error", err)
+			slog.Error("update_page: read failed", "slug", in.Slug, "path", filePath, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("read_error: failed to read page")
 		}
 		content, err := applyPageUpdates(string(raw), in.Title, in.Body)
@@ -276,6 +279,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, fmt.Errorf("delete_error: failed to delete page")
 		}
 		idx.Delete(in.Slug)
+		if cfg.SiteRoot != "" {
+			publicPath := filepath.Join(cfg.SiteRoot, strings.Trim(in.Slug, "/"))
+			if rmErr := os.RemoveAll(publicPath); rmErr != nil {
+				slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
+			}
+		}
 
 		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
 		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
