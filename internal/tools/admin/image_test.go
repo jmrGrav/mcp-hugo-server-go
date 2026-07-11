@@ -165,11 +165,11 @@ func TestGenerateFeaturedImage_Timeout(t *testing.T) {
 	}
 }
 
-func TestGenerateFeaturedImageAbsentWhenUnconfigured(t *testing.T) {
+func TestGenerateFeaturedImageAlwaysRegistered(t *testing.T) {
 	cfg := config.Default()
 	cfg.SiteRoot = t.TempDir()
 	cfg.HugoRoot = t.TempDir()
-	// cfg.ImageGenURL left empty → tool must not be registered
+	// No image_gen_url — tool must still be registered (uses local renderer).
 
 	session, done := newTestServer(t, cfg)
 	defer done()
@@ -181,8 +181,41 @@ func TestGenerateFeaturedImageAbsentWhenUnconfigured(t *testing.T) {
 	}
 	for _, tool := range result.Tools {
 		if tool.Name == "generate_featured_image" {
-			t.Errorf("generate_featured_image should not be listed when image_gen_url is empty, got description: %q", tool.Description)
+			return
 		}
+	}
+	t.Fatal("generate_featured_image not found in tools list — tool must always be registered")
+}
+
+func TestGenerateFeaturedImageLocalRender(t *testing.T) {
+	siteRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	// No image_gen_url → must use local renderer.
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+		"slug":  "my-post",
+		"title": "Hello World from Local Renderer",
+		"tags":  []string{"go", "hugo"},
+		"style": "tech",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+
+	expectedPath := filepath.Join(siteRoot, "images", "featured", "my-post-featured.jpg")
+	info, statErr := os.Stat(expectedPath)
+	if statErr != nil {
+		t.Fatalf("expected file not found at %s: %v", expectedPath, statErr)
+	}
+	if info.Size() < 1000 {
+		t.Fatalf("rendered JPEG suspiciously small: %d bytes", info.Size())
 	}
 }
 

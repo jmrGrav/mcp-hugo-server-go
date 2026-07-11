@@ -21,13 +21,19 @@ import (
 )
 
 var validSlug = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_/-]*$`)
+var validAccent = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // maxImageBytes caps the response body from the image generation API (10 MiB).
 const maxImageBytes = 10 << 20
 
 type generateFeaturedImageInput struct {
-	Slug   string `json:"slug"`
-	Prompt string `json:"prompt"`
+	Slug     string   `json:"slug"`
+	Title    string   `json:"title,omitempty"`
+	Subtitle string   `json:"subtitle,omitempty"`
+	Tags     []string `json:"tags,omitempty"`
+	Accent   string   `json:"accent,omitempty"`
+	Style    string   `json:"style,omitempty"`
+	Prompt   string   `json:"prompt,omitempty"`
 }
 
 type generateFeaturedImageOutput struct {
@@ -72,18 +78,17 @@ func Defs() []tools.ToolDef {
 }
 
 func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
-	if cfg.ImageGenURL == "" {
-		return
-	}
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "generate_featured_image",
-		Title:       "Generate featured image",
-		Description: "Generate a featured image for a page using the configured image generation API and save it to {SiteRoot}/images/featured/{slug}.jpg.",
+		Name:  "generate_featured_image",
+		Title: "Generate featured image",
+		Description: "Generate a featured image for a page and save it to {SiteRoot}/images/featured/{slug}-featured.jpg. " +
+			"Uses local Go rendering (1200×675 JPEG, gradient background, title, tags). " +
+			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo).",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   fileutil.BoolPtr(true),
+			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
 		if in.Slug == "" {
@@ -92,8 +97,36 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		if !validSlug.MatchString(in.Slug) {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: slug contains invalid characters")
 		}
-		if in.Prompt == "" {
-			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: prompt must not be empty")
+
+		// External API mode: when image_gen_url is configured and prompt is provided.
+		if cfg.ImageGenURL != "" && in.Prompt != "" {
+			return generateViaAPI(ctx, cfg, in)
+		}
+
+		// Local rendering mode.
+		if in.Title == "" {
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: title must not be empty")
+		}
+		style := strings.TrimSpace(in.Style)
+		if style == "" {
+			style = "tech"
+		}
+		if style != "tech" && style != "geo" {
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: style must be 'tech' or 'geo'")
+		}
+		accent := strings.TrimSpace(in.Accent)
+		if accent != "" && !validAccent.MatchString(accent) {
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: accent must be a 6-digit hex colour like #7aa2f7")
+		}
+		if accent == "" {
+			if style == "geo" {
+				accent = "#bb9af7"
+			} else {
+				accent = "#7aa2f7"
+			}
+		}
+		if len(in.Tags) > 6 {
+			in.Tags = in.Tags[:6]
 		}
 
 		pg, err := security.New(cfg.SiteRoot, false)
@@ -102,7 +135,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 		}
 
-		relPath := filepath.Join("images", "featured", in.Slug+".jpg")
+		relPath := filepath.Join("images", "featured", in.Slug+"-featured.jpg")
 		destPath, err := pg.SafeJoin(relPath)
 		if err != nil {
 			slog.Warn("generate_featured_image: path validation failed", "slug", in.Slug, "error", err)
@@ -113,18 +146,41 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, err
 		}
 
-		imgBytes, err := fetchImage(ctx, cfg.ImageGenURL, cfg.ImageGenKey, in.Prompt)
-		if err != nil {
-			return nil, generateFeaturedImageOutput{}, err
-		}
-
-		if err := fileutil.AtomicWriteBytes(destPath, imgBytes); err != nil {
-			slog.Error("generate_featured_image: write failed", "slug", in.Slug, "error", err)
+		if err := renderFeaturedImage(destPath, style, in.Title, in.Subtitle, in.Tags, accent); err != nil {
+			slog.Error("generate_featured_image: render failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 		}
 
 		return nil, generateFeaturedImageOutput{Path: destPath}, nil
 	})
+}
+
+func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
+	pg, err := security.New(cfg.SiteRoot, false)
+	if err != nil {
+		return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
+	}
+
+	relPath := filepath.Join("images", "featured", in.Slug+".jpg")
+	destPath, err := pg.SafeJoin(relPath)
+	if err != nil {
+		return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
+	}
+	if err := ensureImageTargetWritable(destPath); err != nil {
+		return nil, generateFeaturedImageOutput{}, err
+	}
+
+	imgBytes, err := fetchImage(ctx, cfg.ImageGenURL, cfg.ImageGenKey, in.Prompt)
+	if err != nil {
+		return nil, generateFeaturedImageOutput{}, err
+	}
+
+	if err := fileutil.AtomicWriteBytes(destPath, imgBytes); err != nil {
+		slog.Error("generate_featured_image: write failed", "slug", in.Slug, "error", err)
+		return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
+	}
+
+	return nil, generateFeaturedImageOutput{Path: destPath}, nil
 }
 
 func imageWriteError(destPath string) error {
