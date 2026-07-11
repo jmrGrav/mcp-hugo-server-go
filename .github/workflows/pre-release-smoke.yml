@@ -11,13 +11,11 @@ on:
 
 permissions:
   contents: read
-  deployments: write
 
 jobs:
   production-smoke:
     name: Live smoke test
     runs-on: ubuntu-latest
-    environment: production
     steps:
       - uses: actions/checkout@v5
         with:
