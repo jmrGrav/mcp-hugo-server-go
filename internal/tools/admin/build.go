@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -59,8 +60,16 @@ const buildDocsURL = "docs/operator-guide.md#build-permissions"
 
 // checkBuildWritable verifies that the directories Hugo must write to are
 // accessible before invoking the build. Returns a structured JSON error on
-// the first unwritable path found.
+// the first problematic path found.
+//
+// Two checks per directory:
+//  1. os.CreateTemp — confirms write permission (ReadWritePaths configured)
+//  2. directory uid == euid — Hugo calls chtimes on pre-existing files it
+//     copies into the output directory; POSIX requires ownership (not just
+//     write) for non-NULL timestamps. A dir owned by a different user means
+//     its existing files will trigger EPERM on chtimes.
 func checkBuildWritable(paths ...string) error {
+	euid := os.Geteuid()
 	for _, dir := range paths {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return buildPreflightError(dir)
@@ -69,9 +78,18 @@ func checkBuildWritable(paths ...string) error {
 		if err != nil {
 			return buildPreflightError(dir)
 		}
-		name := f.Name()
 		_ = f.Close()
-		_ = os.Remove(name)
+		_ = os.Remove(f.Name())
+		// Check ownership: chtimes on pre-existing files requires the process
+		// to own them. If the directory itself belongs to a different uid,
+		// its pre-existing files are almost certainly owned by that uid too.
+		fi, statErr := os.Stat(dir)
+		if statErr != nil {
+			return buildPreflightError(dir)
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != euid {
+			return buildPreflightChownError(dir)
+		}
 	}
 	return nil
 }
@@ -83,6 +101,20 @@ func buildPreflightError(dir string) error {
 		Path:         dir,
 		OperatorHint: "Add this path to ReadWritePaths in the systemd service override and reload: sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go",
 		Suggestion:   "Check that the MCP service user owns or has write access to this directory, and that it is listed in ReadWritePaths in the systemd service.",
+		DocsURL:      buildDocsURL,
+		Retryable:    false,
+	}
+	b, _ := json.Marshal(payload)
+	return fmt.Errorf("build_precondition_failed: %s", b)
+}
+
+func buildPreflightChownError(dir string) error {
+	payload := buildPreflightPayload{
+		Error:        "build_precondition_failed",
+		ErrorClass:   "permission_denied",
+		Path:         dir,
+		OperatorHint: "Run: sudo chown -R $(systemctl show mcp-hugo-server-go -p User --value) " + dir + " && sudo systemctl restart mcp-hugo-server-go",
+		Suggestion:   "The MCP service user can write to this directory but does not own it. Hugo requires ownership to set file timestamps (chtimes). Change ownership to the service user.",
 		DocsURL:      buildDocsURL,
 		Retryable:    false,
 	}
