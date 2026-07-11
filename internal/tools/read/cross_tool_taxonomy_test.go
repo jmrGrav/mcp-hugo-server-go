@@ -375,6 +375,73 @@ func TestComputeRelatedSlugMatching(t *testing.T) {
 	}
 }
 
+// TestExportAgentContextCategoryRoundTrip verifies that a category present in
+// the source frontmatter can be used as a filter in export_agent_context.
+// This is the regression test for #196: the HTML index has empty categories for
+// many pages; the source index fallback must supply them.
+func TestExportAgentContextCategoryRoundTrip(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	// "tutorials" is set only in source frontmatter of /posts/hello/,
+	// not in the HTML meta tags — ideal regression target for the source fallback.
+	res := callTool(t, session, "export_agent_context", map[string]any{
+		"category": "tutorials",
+		"limit":    10,
+	})
+	if res.IsError {
+		t.Fatalf("export_agent_context(category=tutorials) returned error")
+	}
+	m := decodeContent(t, res)
+	export, _ := m["export"].(map[string]any)
+	pages, _ := export["pages"].([]any)
+	if len(pages) == 0 {
+		t.Fatal("export_agent_context(category=tutorials) returned 0 pages; source index fallback broken")
+	}
+
+	var found bool
+	for _, p := range pages {
+		pm, _ := p.(map[string]any)
+		fm, _ := pm["frontmatter"].(map[string]any)
+		if fm["slug"] == "/posts/hello/" {
+			found = true
+			// Verify categories are present in the returned frontmatter.
+			cats, _ := fm["categories"].([]any)
+			if len(cats) == 0 {
+				t.Error("frontmatter.categories is empty for /posts/hello/; source enrichment broken")
+			}
+		}
+	}
+	if !found {
+		t.Error("export_agent_context(category=tutorials) did not return /posts/hello/")
+	}
+
+	// Cross-tool consistency: search_content with the same category filter must
+	// also return the page (verifies all category-aware tools use the same data).
+	res2 := callTool(t, session, "search_content", map[string]any{
+		"category": "tutorials",
+		"limit":    10,
+	})
+	if res2.IsError {
+		t.Fatalf("search_content(category=tutorials) returned error")
+	}
+	m2 := decodeContent(t, res2)
+	data, _ := m2["data"].(map[string]any)
+	pages2, _ := data["pages"].([]any)
+	var found2 bool
+	for _, p := range pages2 {
+		pm, _ := p.(map[string]any)
+		if pm["slug"] == "/posts/hello/" {
+			found2 = true
+			break
+		}
+	}
+	if !found2 {
+		t.Error("search_content(category=tutorials) did not return /posts/hello/; cross-tool inconsistency")
+	}
+}
+
 func stringSliceEqual(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
