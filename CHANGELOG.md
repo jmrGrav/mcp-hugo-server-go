@@ -4,6 +4,32 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [v1.3.6] - 2026-07-11
+
+### Added
+- `get_sitemap` now accepts `exclude_taxonomies: true` to omit Hugo-generated tag, category,
+  and author listing pages, returning only content pages (#208).
+- `generate_featured_image` uses local Go renderer by default (1200×675 JPEG, Unsplash photo
+  background selected by title hash, dark gradient overlay). External API mode is optional.
+  Output path corrected to `{hugo_root}/static/images/{slug}-featured.jpg` (#195).
+- Operator guide: new "Known Pitfalls" section covering `generate_featured_image` write errors
+  (`static/images` must be in `ReadWritePaths`) and stale index after `build_site` (#212).
+
+### Fixed
+- `update_page` now works on multilingual pages (`index.fr.md`, `index.en.md`). Previously it
+  always resolved to `index.md` and failed with `read_error` on any bilingual bundle. Fixed by
+  using `FilePath` from the source index, which is set to the actual discovered file path (#205).
+- `delete_page` no longer leaves zombie pages in `public/` after a Hugo build. Previously,
+  deleting a page removed the source but left the rendered `public/{slug}/` directory, which
+  survived subsequent `build_site` calls because Hugo does not clean by default. Fixed by
+  removing `cfg.SiteRoot/{slug}` atomically with the content dir (#213).
+- `content/posts/csp-nonce/index.fr.md`: `aliases:` block was duplicated outside the YAML
+  frontmatter, rendering as visible HTML text. Fixed on the live VM.
+- `validate_front_matter` now returns `pages_checked: 80` (was 0 for valid published slugs) (#206).
+- Taxonomy duplicate `postmortem`/`Post-mortems` resolved — list_categories no longer includes
+  the stale `post-mortems` alias (#202).
+- Broken Grav links in `migration-grav-hugo` article fixed (FR + EN) (#204).
+
 ## [v1.3.5] - 2026-07-10
 
 ### Added

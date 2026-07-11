@@ -62,8 +62,9 @@ type pageDetailDTO struct {
 }
 
 type getSitemapInput struct {
-	Limit  int `json:"limit,omitempty"`
-	Offset int `json:"offset,omitempty"`
+	Limit              int  `json:"limit,omitempty"`
+	Offset             int  `json:"offset,omitempty"`
+	ExcludeTaxonomies  bool `json:"exclude_taxonomies,omitempty"`
 }
 
 type sitemapEntryDTO struct {
@@ -231,12 +232,23 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			return nil, listCategoriesOutput{Categories: cats}, nil
 		})
 
-	addReadOnlyTool(s, "get_sitemap", "Read sitemap", "Return the published sitemap with URL and publication date. Useful for site-wide discovery without authentication.",
+	addReadOnlyTool(s, "get_sitemap", "Read sitemap",
+		"Return the published sitemap with URL and publication date. Useful for site-wide discovery without authentication. "+
+			"Pass exclude_taxonomies=true to omit Hugo-generated tag and category listing pages, keeping only content pages.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getSitemapInput) (*mcp.CallToolResult, getSitemapOutput, error) {
 			if idx == nil {
 				return nil, getSitemapOutput{}, fmt.Errorf("index not initialized")
 			}
 			all := idx.Sitemap()
+			if in.ExcludeTaxonomies {
+				filtered := all[:0]
+				for _, p := range all {
+					if !isTaxonomyURL(p.URL) {
+						filtered = append(filtered, p)
+					}
+				}
+				all = filtered
+			}
 			limit := clampLimit(in.Limit, 200, 200)
 			offset := in.Offset
 			if offset < 0 {
@@ -407,6 +419,20 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		Date:          src.Date,
 		HTML:          src.Body,
 	}
+}
+
+// isTaxonomyURL returns true if the URL belongs to a Hugo taxonomy listing page
+// (e.g. /tags/hugo/, /categories/infrastructure/, /tags/, /categories/).
+// It matches the default Hugo taxonomy URL structure; custom taxonomies may need
+// to be excluded manually.
+func isTaxonomyURL(url string) bool {
+	taxPrefixes := []string{"/tags/", "/categories/", "/authors/"}
+	for _, prefix := range taxPrefixes {
+		if strings.HasPrefix(url, prefix) || url == strings.TrimSuffix(prefix, "/") {
+			return true
+		}
+	}
+	return false
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).
