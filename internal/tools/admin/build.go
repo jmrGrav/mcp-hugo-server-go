@@ -60,6 +60,12 @@ const buildDocsURL = "docs/operator-guide.md#build-permissions"
 // checkBuildWritable verifies that the directories Hugo must write to are
 // accessible before invoking the build. Returns a structured JSON error on
 // the first unwritable path found.
+//
+// Two checks per directory:
+//  1. os.CreateTemp — confirms write permission
+//  2. os.Chtimes on that file — confirms timestamp ownership (required for
+//     Hugo's static-file copy; fails with EPERM if the directory is
+//     group-writable but owned by a different user)
 func checkBuildWritable(paths ...string) error {
 	for _, dir := range paths {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -71,6 +77,12 @@ func checkBuildWritable(paths ...string) error {
 		}
 		name := f.Name()
 		_ = f.Close()
+		// Probe chtimes: Hugo sets timestamps on copied static files.
+		// This requires ownership, not just write permission.
+		if chErr := os.Chtimes(name, time.Now(), time.Now()); chErr != nil {
+			_ = os.Remove(name)
+			return buildPreflightChownError(dir)
+		}
 		_ = os.Remove(name)
 	}
 	return nil
@@ -83,6 +95,20 @@ func buildPreflightError(dir string) error {
 		Path:         dir,
 		OperatorHint: "Add this path to ReadWritePaths in the systemd service override and reload: sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go",
 		Suggestion:   "Check that the MCP service user owns or has write access to this directory, and that it is listed in ReadWritePaths in the systemd service.",
+		DocsURL:      buildDocsURL,
+		Retryable:    false,
+	}
+	b, _ := json.Marshal(payload)
+	return fmt.Errorf("build_precondition_failed: %s", b)
+}
+
+func buildPreflightChownError(dir string) error {
+	payload := buildPreflightPayload{
+		Error:        "build_precondition_failed",
+		ErrorClass:   "permission_denied",
+		Path:         dir,
+		OperatorHint: "Run: sudo chown -R $(systemctl show mcp-hugo-server-go -p User --value) " + dir + " && sudo systemctl restart mcp-hugo-server-go",
+		Suggestion:   "The MCP service user can write to this directory but does not own it. Hugo requires ownership to set file timestamps (chtimes). Change ownership to the service user.",
 		DocsURL:      buildDocsURL,
 		Retryable:    false,
 	}
