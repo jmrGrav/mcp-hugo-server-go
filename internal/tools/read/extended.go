@@ -166,7 +166,20 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
 				return nil, contentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
 			}
-			filtered := filterContentPages(idx.Sitemap(), in, aliases)
+			sitemap := idx.Sitemap()
+			if srcIdx != nil && in.Category != "" {
+				enriched := make([]site.Page, len(sitemap))
+				copy(enriched, sitemap)
+				for i, pg := range enriched {
+					if len(pg.Categories) == 0 {
+						if src, ok := srcIdx.GetBySlug(strings.Trim(pg.Slug, "/")); ok {
+							enriched[i].Categories = src.Categories
+						}
+					}
+				}
+				sitemap = enriched
+			}
+			filtered := filterContentPages(sitemap, in, aliases)
 			total := len(filtered)
 			limit := clampLimit(in.Limit, 20, 100)
 			offset := in.Offset
