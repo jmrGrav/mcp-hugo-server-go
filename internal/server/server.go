@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -13,7 +14,9 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/googleindex"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/indexnow"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/observability"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
@@ -135,6 +138,16 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	admin.Register(siteAdminServer, cfg,
 		func() error { return idx.Reload(cfg) },
 		func() error { return cloudflare.PurgeAll(cfg.Cloudflare) },
+		func() error {
+			urls := sitemapPageURLs(idx)
+			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
+				slog.Warn("build_site: indexnow submit failed", "error", err)
+			}
+			if err := googleindex.Submit(cfg.GoogleIndex, urls, googleindex.TypeUpdated); err != nil {
+				slog.Warn("build_site: google index submit failed", "error", err)
+			}
+			return nil
+		},
 	)
 
 	opts := &mcp.StreamableHTTPOptions{
@@ -442,4 +455,26 @@ func (s *Server) Run(ctx context.Context) error {
 		_ = s.store.Close()
 	}
 	return nil
+}
+
+// sitemapPageURLs returns all non-taxonomy page URLs from the site index.
+func sitemapPageURLs(idx *site.Index) []string {
+	pages := idx.Sitemap()
+	urls := make([]string, 0, len(pages))
+	for _, p := range pages {
+		if p.URL == "" {
+			continue
+		}
+		skip := false
+		for _, pfx := range []string{"/tags/", "/categories/", "/authors/", "/search/"} {
+			if strings.Contains(p.URL, pfx) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			urls = append(urls, p.URL)
+		}
+	}
+	return urls
 }

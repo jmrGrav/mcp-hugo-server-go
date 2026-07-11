@@ -34,6 +34,7 @@ type Config struct {
 	SecurityContact     string            `yaml:"security_contact"`
 	Cloudflare          CloudflareConfig  `yaml:"cloudflare"`
 	IndexNow            IndexNowConfig    `yaml:"indexnow"`
+	GoogleIndex         GoogleIndexConfig `yaml:"google_indexing"`
 	OAuth               OAuthConfig       `yaml:"oauth"`
 	RateLimit           RateLimitConfig   `yaml:"rate_limit"`
 }
@@ -52,9 +53,24 @@ func (c CloudflareConfig) Enabled() bool {
 
 // IndexNowConfig holds the IndexNow API key and optional submission endpoint.
 type IndexNowConfig struct {
-	Key      string `yaml:"key"`
-	Endpoint string `yaml:"endpoint"` // defaults to https://api.indexnow.org/IndexNow
+	Key         string `yaml:"key"`
+	KeyLocation string `yaml:"key_location"` // full URL to the key verification file
+	Host        string `yaml:"host"`
+	Endpoint    string `yaml:"endpoint"` // defaults to https://api.indexnow.org/indexnow
 }
+
+func (c IndexNowConfig) Enabled() bool { return c.Key != "" }
+
+// GoogleIndexConfig holds credentials for the Google Indexing API v3.
+// ServiceAccountPath must point to a service account JSON file on the host.
+// Never commit the JSON to version control.
+type GoogleIndexConfig struct {
+	ServiceAccountPath string `yaml:"service_account_path"`
+	DailyQuotaLimit    int    `yaml:"daily_quota_limit"` // default 180
+	QuotaStatePath     string `yaml:"quota_state_path"`  // default /var/lib/mcp-hugo-server-go/google-index-quota.json
+}
+
+func (c GoogleIndexConfig) Enabled() bool { return c.ServiceAccountPath != "" }
 
 type RateLimitConfig struct {
 	AnonymousPerMin    int `yaml:"anonymous_per_min"`
