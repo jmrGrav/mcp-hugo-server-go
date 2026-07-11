@@ -18,6 +18,11 @@ All notable changes to this project are documented here.
   restart (#212).
 - `site.Index.Reload(cfg)` method with `sync.RWMutex` — atomic pointer swap of all index fields;
   read methods protected with `RLock` to eliminate data races during concurrent reload.
+- Post-build webhooks: Cloudflare cache purge (full zone), IndexNow batch submission, and Google
+  Indexing API `URL_UPDATED` notifications fire automatically after every successful `build_site`.
+  All three are opt-in via host config only; credentials never committed to git. Taxonomy and
+  search URLs are filtered before submission. Google plugin includes a daily quota guard (default
+  180/day) with JSON state persistence (#216, #223).
 
 ## [v1.3.6] - 2026-07-11
 
