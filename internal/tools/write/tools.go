@@ -165,26 +165,19 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
+		now := time.Now().UTC().Format(time.RFC3339)
 		idx.Upsert(hugosite.SourcePage{
 			Slug:           in.Slug,
 			FilePath:       filePath,
 			Title:          in.Title,
+			Date:           now,
 			Tags:           in.Tags,
 			Categories:     in.Categories,
 			Body:           in.Body,
-			FrontmatterRaw: map[string]any{"title": in.Title},
+			FrontmatterRaw: map[string]any{"title": in.Title, "date": now, "draft": false},
 		})
-		if siteIdx != nil {
-			siteIdx.UpsertPage(site.Page{
-				Slug:       "/" + strings.Trim(in.Slug, "/") + "/",
-				Title:      in.Title,
-				Tags:       in.Tags,
-				Categories: in.Categories,
-				URL:        strings.TrimRight(cfg.SiteURL, "/") + "/" + strings.Trim(in.Slug, "/") + "/",
-				Date:       time.Now().UTC().Format(time.RFC3339),
-				Lang:       cfg.DefaultLanguage,
-			})
-		}
+		// Do NOT insert into the public site index — the page is source-only until
+		// Hugo builds it. UpsertPage here would break allow_source_fallback detection.
 
 		return nil, createPageOutput{Slug: in.Slug, Path: filePath}, nil
 	})
