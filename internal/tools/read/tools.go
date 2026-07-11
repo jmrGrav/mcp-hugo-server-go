@@ -119,6 +119,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		srcIdx = sources[0]
 	}
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
+	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 
 	addReadOnlyTool(s, "get_full_page_markdown", "Read page Markdown",
 		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. Input: indexed slug only.",
@@ -207,11 +208,19 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			tagSlug := taxonomy.Slug(in.Tag)
 			catSlug := taxonomy.Slug(in.Category)
 			for _, pg := range all {
-				if in.Tag != "" && !taxonomy.MatchesSlug(pg.Tags, tagSlug) {
+				if in.Tag != "" && !taxonomy.MatchesSlugWithAliases(pg.Tags, tagSlug, aliases) {
 					continue
 				}
-				if in.Category != "" && !taxonomy.MatchesSlug(pg.Categories, catSlug) {
-					continue
+				if in.Category != "" {
+					pgCats := pg.Categories
+					if len(pgCats) == 0 && srcIdx != nil {
+						if src, ok := srcIdx.GetBySlug(strings.Trim(pg.Slug, "/")); ok {
+							pgCats = src.Categories
+						}
+					}
+					if !taxonomy.MatchesSlugWithAliases(pgCats, catSlug, aliases) {
+						continue
+					}
 				}
 				filtered = append(filtered, pg)
 			}

@@ -12,6 +12,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -59,14 +60,16 @@ const buildDocsURL = "docs/operator-guide.md#build-permissions"
 
 // checkBuildWritable verifies that the directories Hugo must write to are
 // accessible before invoking the build. Returns a structured JSON error on
-// the first unwritable path found.
+// the first problematic path found.
 //
 // Two checks per directory:
-//  1. os.CreateTemp — confirms write permission
-//  2. os.Chtimes on that file — confirms timestamp ownership (required for
-//     Hugo's static-file copy; fails with EPERM if the directory is
-//     group-writable but owned by a different user)
+//  1. os.CreateTemp — confirms write permission (ReadWritePaths configured)
+//  2. directory uid == euid — Hugo calls chtimes on pre-existing files it
+//     copies into the output directory; POSIX requires ownership (not just
+//     write) for non-NULL timestamps. A dir owned by a different user means
+//     its existing files will trigger EPERM on chtimes.
 func checkBuildWritable(paths ...string) error {
+	euid := os.Geteuid()
 	for _, dir := range paths {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return buildPreflightError(dir)
@@ -75,15 +78,18 @@ func checkBuildWritable(paths ...string) error {
 		if err != nil {
 			return buildPreflightError(dir)
 		}
-		name := f.Name()
 		_ = f.Close()
-		// Probe chtimes: Hugo sets timestamps on copied static files.
-		// This requires ownership, not just write permission.
-		if chErr := os.Chtimes(name, time.Now(), time.Now()); chErr != nil {
-			_ = os.Remove(name)
+		_ = os.Remove(f.Name())
+		// Check ownership: chtimes on pre-existing files requires the process
+		// to own them. If the directory itself belongs to a different uid,
+		// its pre-existing files are almost certainly owned by that uid too.
+		fi, statErr := os.Stat(dir)
+		if statErr != nil {
+			return buildPreflightError(dir)
+		}
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != euid {
 			return buildPreflightChownError(dir)
 		}
-		_ = os.Remove(name)
 	}
 	return nil
 }
