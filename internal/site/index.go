@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -23,12 +24,31 @@ type entry struct {
 }
 
 type Index struct {
+	mu                sync.RWMutex
 	entries           []entry
 	bySlug            map[string]int
 	tags              []string
 	categories        []string
 	info              map[string]string
 	contentClassifier *ContentClassifier
+}
+
+// Reload rebuilds the index from disk, atomically replacing all in-memory
+// state. Safe to call concurrently with read methods (uses RWMutex).
+func (idx *Index) Reload(cfg config.Config) error {
+	fresh, err := NewIndex(cfg)
+	if err != nil {
+		return err
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	idx.entries = fresh.entries
+	idx.bySlug = fresh.bySlug
+	idx.tags = fresh.tags
+	idx.categories = fresh.categories
+	idx.info = fresh.info
+	idx.contentClassifier = fresh.contentClassifier
+	return nil
 }
 
 func NewIndex(cfg config.Config) (*Index, error) {
@@ -171,6 +191,8 @@ func (idx *Index) GetBySlug(slug string) (*Page, bool) {
 	if idx == nil || slug == "" {
 		return nil, false
 	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	norm := normalizeSlug(slug)
 	pos, ok := idx.bySlug[norm]
 	if !ok {
@@ -184,7 +206,9 @@ func (idx *Index) Search(query string, limit int) []Page {
 	if idx == nil {
 		return nil
 	}
-	pages := idx.ContentPages()
+	idx.mu.RLock()
+	pages := idx.contentPagesLocked()
+	idx.mu.RUnlock()
 	if limit <= 0 || limit > len(pages) {
 		limit = len(pages)
 	}
@@ -223,6 +247,7 @@ func (idx *Index) RecentPosts(n int) []Page {
 	if idx == nil {
 		return nil
 	}
+	idx.mu.RLock()
 	classifier := idx.classifier()
 	var posts []Page
 	for _, e := range idx.entries {
@@ -230,6 +255,7 @@ func (idx *Index) RecentPosts(n int) []Page {
 			posts = append(posts, e.page)
 		}
 	}
+	idx.mu.RUnlock()
 	if n > 0 && len(posts) > n {
 		posts = posts[:n]
 	}
@@ -240,6 +266,8 @@ func (idx *Index) AllTags() []string {
 	if idx == nil {
 		return nil
 	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	return idx.tags
 }
 
@@ -247,6 +275,8 @@ func (idx *Index) AllCategories() []string {
 	if idx == nil {
 		return nil
 	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	return idx.categories
 }
 
@@ -254,6 +284,8 @@ func (idx *Index) Sitemap() []Page {
 	if idx == nil {
 		return nil
 	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	out := make([]Page, len(idx.entries))
 	for i, e := range idx.entries {
 		out[i] = e.page
@@ -265,7 +297,9 @@ func (idx *Index) GetFeed(limit int) []Page {
 	if idx == nil {
 		return nil
 	}
-	out := idx.ContentPages()
+	idx.mu.RLock()
+	out := idx.contentPagesLocked()
+	idx.mu.RUnlock()
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}
@@ -276,6 +310,8 @@ func (idx *Index) SiteInfo() map[string]string {
 	if idx == nil {
 		return map[string]string{}
 	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	return idx.info
 }
 

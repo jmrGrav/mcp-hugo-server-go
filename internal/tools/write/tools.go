@@ -35,9 +35,14 @@ type createPageOutput struct {
 }
 
 type updatePageInput struct {
-	Slug  string `json:"slug"`
-	Title string `json:"title,omitempty"`
-	Body  string `json:"body,omitempty"`
+	Slug        string   `json:"slug"`
+	Lang        string   `json:"lang,omitempty"`
+	Title       string   `json:"title,omitempty"`
+	Body        string   `json:"body,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Categories  []string `json:"categories,omitempty"`
+	Draft       *bool    `json:"draft,omitempty"`
+	Description string   `json:"description,omitempty"`
 }
 
 type updatePageOutput struct {
@@ -153,9 +158,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "update_page",
-		Title:       "Update page",
-		Description: "Update an existing Hugo content page while preserving existing front matter fields. Use this to revise title or body content.",
+		Name:  "update_page",
+		Title: "Update page",
+		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
+			"Use title/body to revise content. Use tags/categories/draft/description to update front matter fields. " +
+			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
+			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs.",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
@@ -190,14 +198,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, fmt.Errorf("not_found: page not found")
 		}
 
-		if _, err := pg.SafeJoin(in.Slug); err != nil {
+		dir, err := pg.SafeJoin(in.Slug)
+		if err != nil {
 			slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
-		filePath := existing.FilePath
-		if filePath == "" {
-			slog.Error("update_page: no file path in index", "slug", in.Slug)
-			return nil, updatePageOutput{}, fmt.Errorf("read_error: no file path recorded for page; re-index required")
+
+		filePath, langErr := resolveUpdateFilePath(dir, in.Slug, in.Lang)
+		if langErr != nil {
+			return nil, updatePageOutput{}, langErr
 		}
 
 		raw, err := os.ReadFile(filePath)
@@ -205,7 +214,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Error("update_page: read failed", "slug", in.Slug, "path", filePath, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("read_error: failed to read page")
 		}
-		content, err := applyPageUpdates(string(raw), in.Title, in.Body)
+		opts := pageUpdateOpts{
+			Tags:        in.Tags,
+			Categories:  in.Categories,
+			Draft:       in.Draft,
+			Description: in.Description,
+		}
+		content, err := applyPageUpdates(string(raw), in.Title, in.Body, opts)
 		if err != nil {
 			slog.Error("update_page: frontmatter update failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("parse_error: failed to update frontmatter")
@@ -224,6 +239,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		if in.Body != "" {
 			updated.Body = in.Body
+		}
+		if in.Tags != nil {
+			updated.Tags = in.Tags
+		}
+		if in.Categories != nil {
+			updated.Categories = in.Categories
 		}
 		idx.Upsert(updated)
 
@@ -344,10 +365,17 @@ func buildFrontmatterFromMap(fm map[string]any, body string) string {
 	return sb.String()
 }
 
-// applyPageUpdates applies title and/or body changes to an existing page file
-// using the yaml.v3 Node API to preserve field ordering, comments, and YAML
-// style in the frontmatter (issue #111).
-func applyPageUpdates(fileContent, newTitle, newBody string) (string, error) {
+type pageUpdateOpts struct {
+	Tags        []string
+	Categories  []string
+	Draft       *bool
+	Description string
+}
+
+// applyPageUpdates applies title, body, and optional front matter field changes
+// to an existing page file using the yaml.v3 Node API to preserve field
+// ordering, comments, and YAML style (issue #111).
+func applyPageUpdates(fileContent, newTitle, newBody string, opts pageUpdateOpts) (string, error) {
 	if !strings.HasPrefix(fileContent, "---\n") {
 		return "", fmt.Errorf("no YAML frontmatter delimiter")
 	}
@@ -359,13 +387,31 @@ func applyPageUpdates(fileContent, newTitle, newBody string) (string, error) {
 	yamlPart := rest[:end]
 	bodyPart := rest[end+4:] // everything after the closing ---
 
-	if newTitle != "" {
+	needsYAML := newTitle != "" || opts.Tags != nil || opts.Categories != nil ||
+		opts.Draft != nil || opts.Description != ""
+
+	if needsYAML {
 		var doc yaml.Node
 		if err := yaml.Unmarshal([]byte(yamlPart), &doc); err != nil {
 			return "", fmt.Errorf("YAML parse: %w", err)
 		}
 		if len(doc.Content) > 0 {
-			setYAMLKey(doc.Content[0], "title", newTitle)
+			mapping := doc.Content[0]
+			if newTitle != "" {
+				setYAMLKey(mapping, "title", newTitle)
+			}
+			if opts.Tags != nil {
+				setYAMLSeq(mapping, "tags", opts.Tags)
+			}
+			if opts.Categories != nil {
+				setYAMLSeq(mapping, "categories", opts.Categories)
+			}
+			if opts.Draft != nil {
+				setYAMLBool(mapping, "draft", *opts.Draft)
+			}
+			if opts.Description != "" {
+				setYAMLKey(mapping, "description", opts.Description)
+			}
 		}
 		out, err := yaml.Marshal(doc.Content[0])
 		if err != nil {
@@ -394,6 +440,111 @@ func setYAMLKey(mapping *yaml.Node, key, value string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
 	)
+}
+
+// setYAMLSeq sets a sequence (list) value in a YAML mapping node in-place,
+// appending a new key-sequence pair when key is absent.
+func setYAMLSeq(mapping *yaml.Node, key string, values []string) {
+	seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+	for _, v := range values {
+		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: v})
+	}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1] = seq
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		seq,
+	)
+}
+
+// setYAMLBool sets a boolean value in a YAML mapping node in-place,
+// appending a new key-value pair when key is absent.
+func setYAMLBool(mapping *yaml.Node, key string, value bool) {
+	v := "false"
+	if value {
+		v = "true"
+	}
+	node := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: v}
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content[i+1] = node
+			return
+		}
+	}
+	mapping.Content = append(mapping.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
+		node,
+	)
+}
+
+// resolveUpdateFilePath discovers the correct index file to update for a given
+// content bundle directory. Returns ambiguous_language error when multiple
+// language files exist and no lang is specified.
+func resolveUpdateFilePath(dir, slug, lang string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		slog.Error("update_page: cannot read bundle dir", "slug", slug, "dir", dir, "error", err)
+		return "", fmt.Errorf("read_error: failed to read content directory for slug %q", slug)
+	}
+
+	var files []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == "index.md" {
+			files = append(files, filepath.Join(dir, name))
+			continue
+		}
+		if strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md") {
+			mid := strings.TrimSuffix(strings.TrimPrefix(name, "index."), ".md")
+			if len(mid) >= 2 && len(mid) <= 8 && !strings.Contains(mid, ".") {
+				files = append(files, filepath.Join(dir, name))
+			}
+		}
+	}
+
+	if len(files) == 0 {
+		return "", fmt.Errorf("not_found: no index file found for slug %q", slug)
+	}
+
+	if lang != "" {
+		target := filepath.Join(dir, "index."+lang+".md")
+		for _, f := range files {
+			if f == target {
+				return f, nil
+			}
+		}
+		return "", fmt.Errorf("not_found: no index.%s.md for slug %q; available: %s",
+			lang, slug, strings.Join(bundleLangs(files, dir), ", "))
+	}
+
+	if len(files) == 1 {
+		return files[0], nil
+	}
+
+	return "", fmt.Errorf("ambiguous_language: page %q has multiple language files; specify lang (available: %s)",
+		slug, strings.Join(bundleLangs(files, dir), ", "))
+}
+
+// bundleLangs extracts language codes from a list of index file paths.
+func bundleLangs(files []string, dir string) []string {
+	langs := make([]string, 0, len(files))
+	for _, f := range files {
+		base := filepath.Base(f)
+		if base == "index.md" {
+			langs = append(langs, "default")
+		} else {
+			lang := strings.TrimSuffix(strings.TrimPrefix(base, "index."), ".md")
+			langs = append(langs, lang)
+		}
+	}
+	return langs
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).

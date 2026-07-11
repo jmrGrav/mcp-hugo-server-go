@@ -50,11 +50,13 @@ type imageWriteErrorPayload struct {
 }
 
 // Register wires all admin tools (site.admin scope).
-func Register(s *mcp.Server, cfg config.Config) {
+// siteReload is an optional callback called after a successful build_site to
+// refresh the in-memory site index (resolves #212).
+func Register(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
 	if s == nil {
 		return
 	}
-	RegisterBuild(s, cfg)
+	RegisterBuild(s, cfg, siteReload...)
 	RegisterPreviewBuild(s, cfg)
 	RegisterHooks(s, cfg)
 	registerGenerateFeaturedImage(s, cfg)
@@ -62,8 +64,8 @@ func Register(s *mcp.Server, cfg config.Config) {
 }
 
 // RegisterSiteAdmin is an alias for Register kept for compatibility.
-func RegisterSiteAdmin(s *mcp.Server, cfg config.Config) {
-	Register(s, cfg)
+func RegisterSiteAdmin(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
+	Register(s, cfg, siteReload...)
 }
 
 // Defs returns tool definitions for all admin tools (used to build the global registry).

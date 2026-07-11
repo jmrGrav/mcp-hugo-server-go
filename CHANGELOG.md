@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [v1.3.7-pre1] - 2026-07-11
+
+### Added
+- `update_page` now accepts `lang` parameter to target a specific language file on bilingual pages
+  (e.g. `lang: "fr"` targets `index.fr.md`). Omitting `lang` on a page with multiple language files
+  now returns an explicit `ambiguous_language` error listing available languages instead of silently
+  editing the wrong file (#215).
+- `update_page` now accepts `tags`, `categories`, `draft`, and `description` fields, enabling
+  front matter updates without touching raw Markdown (#214).
+- `build_site` now reloads the in-memory site index after a successful build so that `get_sitemap`,
+  `get_broken_links`, and `search_pages` immediately reflect the rebuilt output without a server
+  restart (#212).
+- `site.Index.Reload(cfg)` method with `sync.RWMutex` — atomic pointer swap of all index fields;
+  read methods protected with `RLock` to eliminate data races during concurrent reload.
+
 ## [v1.3.6] - 2026-07-11
 
 ### Added

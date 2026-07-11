@@ -131,7 +131,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	if writeEnabled {
 		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg)
 	}
-	admin.Register(siteAdminServer, cfg)
+	admin.Register(siteAdminServer, cfg, func() error {
+		return idx.Reload(cfg)
+	})
 
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,

@@ -125,10 +125,8 @@ func (idx *Index) classifier() *ContentClassifier {
 	return NewClassifier(idx)
 }
 
-func (idx *Index) ContentPages() []Page {
-	if idx == nil {
-		return nil
-	}
+// contentPagesLocked builds the content page list. Callers must hold idx.mu.RLock.
+func (idx *Index) contentPagesLocked() []Page {
 	classifier := idx.classifier()
 	out := make([]Page, 0, len(idx.entries))
 	for _, e := range idx.entries {
@@ -137,6 +135,15 @@ func (idx *Index) ContentPages() []Page {
 		}
 	}
 	return out
+}
+
+func (idx *Index) ContentPages() []Page {
+	if idx == nil {
+		return nil
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.contentPagesLocked()
 }
 
 func slugParts(slug string) []string {

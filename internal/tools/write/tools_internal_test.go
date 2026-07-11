@@ -83,7 +83,7 @@ func TestRegisterNilServer(t *testing.T) {
 func TestApplyPageUpdatesPreservesOrder(t *testing.T) {
 	input := "---\ntitle: Old Title\ndate: 2026-01-01T00:00:00Z\ntags:\n  - go\n---\n\nOriginal body."
 
-	got, err := applyPageUpdates(input, "New Title", "")
+	got, err := applyPageUpdates(input, "New Title", "", pageUpdateOpts{})
 	if err != nil {
 		t.Fatalf("applyPageUpdates error: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestApplyPageUpdatesPreservesOrder(t *testing.T) {
 
 func TestApplyPageUpdatesBody(t *testing.T) {
 	input := "---\ntitle: Page\n---\n\nOld body."
-	got, err := applyPageUpdates(input, "", "New body.")
+	got, err := applyPageUpdates(input, "", "New body.", pageUpdateOpts{})
 	if err != nil {
 		t.Fatalf("applyPageUpdates error: %v", err)
 	}
@@ -112,4 +112,128 @@ func TestApplyPageUpdatesBody(t *testing.T) {
 	if strings.Contains(got, "Old body.") {
 		t.Errorf("old body still present: %s", got)
 	}
+}
+
+func TestApplyPageUpdatesExtendedFields(t *testing.T) {
+	input := "---\ntitle: Page\ndate: 2026-01-01T00:00:00Z\ntags:\n  - old\ncategories:\n  - OldCat\ndraft: false\n---\n\nBody."
+
+	draft := true
+	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{
+		Tags:        []string{"go", "hugo"},
+		Categories:  []string{"Infrastructure"},
+		Draft:       &draft,
+		Description: "A test page.",
+	})
+	if err != nil {
+		t.Fatalf("applyPageUpdates error: %v", err)
+	}
+	if !strings.Contains(got, "- go") || !strings.Contains(got, "- hugo") {
+		t.Errorf("tags not updated: %s", got)
+	}
+	if strings.Contains(got, "- old") {
+		t.Errorf("old tag still present: %s", got)
+	}
+	if !strings.Contains(got, "- Infrastructure") {
+		t.Errorf("category not updated: %s", got)
+	}
+	if !strings.Contains(got, "OldCat") == strings.Contains(got, "OldCat") { // always passes
+	}
+	if strings.Contains(got, "- OldCat") {
+		t.Errorf("old category still present: %s", got)
+	}
+	if !strings.Contains(got, "draft: true") {
+		t.Errorf("draft not set to true: %s", got)
+	}
+	if !strings.Contains(got, "description: A test page.") {
+		t.Errorf("description not added: %s", got)
+	}
+	if !strings.Contains(got, "Body.") {
+		t.Errorf("body changed unexpectedly: %s", got)
+	}
+}
+
+func TestApplyPageUpdatesNewDescription(t *testing.T) {
+	input := "---\ntitle: Page\ntags: []\n---\n\nBody."
+	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{Description: "New desc."})
+	if err != nil {
+		t.Fatalf("applyPageUpdates error: %v", err)
+	}
+	if !strings.Contains(got, "description: New desc.") {
+		t.Errorf("description not appended: %s", got)
+	}
+}
+
+func TestResolveUpdateFilePath(t *testing.T) {
+	dir := t.TempDir()
+	writeFile := func(name string) {
+		f, _ := os.Create(filepath.Join(dir, name))
+		f.Close()
+	}
+
+	t.Run("single index.md", func(t *testing.T) {
+		d := t.TempDir()
+		os.Create(filepath.Join(d, "index.md"))
+		got, err := resolveUpdateFilePath(d, "posts/test", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filepath.Base(got) != "index.md" {
+			t.Errorf("want index.md, got %s", filepath.Base(got))
+		}
+	})
+
+	t.Run("single lang file with no lang param", func(t *testing.T) {
+		d := t.TempDir()
+		os.Create(filepath.Join(d, "index.fr.md"))
+		got, err := resolveUpdateFilePath(d, "posts/test", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filepath.Base(got) != "index.fr.md" {
+			t.Errorf("want index.fr.md, got %s", filepath.Base(got))
+		}
+	})
+
+	t.Run("ambiguous: two lang files, no lang param", func(t *testing.T) {
+		d := t.TempDir()
+		os.Create(filepath.Join(d, "index.fr.md"))
+		os.Create(filepath.Join(d, "index.en.md"))
+		_, err := resolveUpdateFilePath(d, "posts/test", "")
+		if err == nil || !strings.Contains(err.Error(), "ambiguous_language") {
+			t.Errorf("want ambiguous_language error, got %v", err)
+		}
+	})
+
+	t.Run("lang param selects correct file", func(t *testing.T) {
+		d := t.TempDir()
+		os.Create(filepath.Join(d, "index.fr.md"))
+		os.Create(filepath.Join(d, "index.en.md"))
+		got, err := resolveUpdateFilePath(d, "posts/test", "fr")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if filepath.Base(got) != "index.fr.md" {
+			t.Errorf("want index.fr.md, got %s", filepath.Base(got))
+		}
+	})
+
+	t.Run("lang param not found", func(t *testing.T) {
+		d := t.TempDir()
+		os.Create(filepath.Join(d, "index.fr.md"))
+		_, err := resolveUpdateFilePath(d, "posts/test", "de")
+		if err == nil || !strings.Contains(err.Error(), "not_found") {
+			t.Errorf("want not_found error, got %v", err)
+		}
+	})
+
+	t.Run("no files", func(t *testing.T) {
+		d := t.TempDir()
+		_, err := resolveUpdateFilePath(d, "posts/test", "")
+		if err == nil || !strings.Contains(err.Error(), "not_found") {
+			t.Errorf("want not_found error, got %v", err)
+		}
+	})
+
+	_ = dir
+	_ = writeFile
 }

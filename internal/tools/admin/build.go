@@ -215,7 +215,7 @@ func classifyBuildFailure(ctx context.Context, summary string) string {
 	}
 }
 
-func RegisterBuild(s *mcp.Server, cfg config.Config) {
+func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
 	if s == nil {
 		return
 	}
@@ -326,6 +326,13 @@ func RegisterBuild(s *mcp.Server, cfg config.Config) {
 			"duration_ms", durationMs,
 			"exit_code", exitCode,
 		)
+		if len(siteReload) > 0 && siteReload[0] != nil {
+			if err := siteReload[0](); err != nil {
+				slog.Warn("build_site: site index reload failed", "error", err)
+			} else {
+				slog.Info("build_site: site index reloaded")
+			}
+		}
 		return nil, buildSiteOutput{Status: "ok", DurationMs: durationMs}, nil
 	})
 }
