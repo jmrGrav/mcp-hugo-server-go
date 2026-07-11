@@ -61,9 +61,10 @@ func TestGenerateFeaturedImage_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	siteRoot := t.TempDir()
+	hugoRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = siteRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = hugoRoot
 	cfg.ImageGenURL = srv.URL
 	cfg.ImageGenKey = "test-key"
 
@@ -81,7 +82,7 @@ func TestGenerateFeaturedImage_Success(t *testing.T) {
 		t.Fatalf("tool returned error: %s", resultText(res))
 	}
 
-	expectedPath := filepath.Join(siteRoot, "images", "featured", "my-post.jpg")
+	expectedPath := filepath.Join(hugoRoot, "static", "images", "my-post-featured.jpg")
 	if _, statErr := os.Stat(expectedPath); statErr != nil {
 		t.Fatalf("expected file not found at %s: %v", expectedPath, statErr)
 	}
@@ -106,9 +107,9 @@ func TestGenerateFeaturedImage_MIMEReject(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	siteRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = siteRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
 	cfg.ImageGenURL = srv.URL
 
 	session, done := newTestServer(t, cfg)
@@ -188,10 +189,12 @@ func TestGenerateFeaturedImageAlwaysRegistered(t *testing.T) {
 }
 
 func TestGenerateFeaturedImageLocalRender(t *testing.T) {
-	siteRoot := t.TempDir()
+	hugoRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = siteRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = hugoRoot
 	// No image_gen_url → must use local renderer.
+	// No background photos in tempdir → falls back to gradient.
 
 	session, done := newTestServer(t, cfg)
 	defer done()
@@ -209,7 +212,7 @@ func TestGenerateFeaturedImageLocalRender(t *testing.T) {
 		t.Fatalf("tool returned error: %s", resultText(res))
 	}
 
-	expectedPath := filepath.Join(siteRoot, "images", "featured", "my-post-featured.jpg")
+	expectedPath := filepath.Join(hugoRoot, "static", "images", "my-post-featured.jpg")
 	info, statErr := os.Stat(expectedPath)
 	if statErr != nil {
 		t.Fatalf("expected file not found at %s: %v", expectedPath, statErr)
@@ -226,15 +229,16 @@ func TestGenerateFeaturedImageWriteErrorIsActionable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	siteRoot := filepath.Join(t.TempDir(), "readonly")
-	if err := os.MkdirAll(siteRoot, 0o555); err != nil {
+	// Images now go to {HugoRoot}/static/images/ — make hugoRoot read-only to trigger write error.
+	hugoRoot := filepath.Join(t.TempDir(), "readonly")
+	if err := os.MkdirAll(hugoRoot, 0o555); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	defer func() { _ = os.Chmod(siteRoot, 0o755) }()
+	defer func() { _ = os.Chmod(hugoRoot, 0o755) }()
 
 	cfg := config.Default()
-	cfg.SiteRoot = siteRoot
-	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = hugoRoot
 	cfg.ImageGenURL = srv.URL
 
 	session, done := newTestServer(t, cfg)

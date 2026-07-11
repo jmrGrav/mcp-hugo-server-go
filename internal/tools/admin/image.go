@@ -81,8 +81,8 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "generate_featured_image",
 		Title: "Generate featured image",
-		Description: "Generate a featured image for a page and save it to {SiteRoot}/images/featured/{slug}-featured.jpg. " +
-			"Uses local Go rendering (1200×675 JPEG, gradient background, title, tags). " +
+		Description: "Generate a featured image for a page and save it to {HugoRoot}/static/images/{slug}-featured.jpg. " +
+			"Uses local Go rendering (1200×675 JPEG, Unsplash photo background selected by title hash, dark gradient overlay, title, tags). " +
 			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo).",
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
@@ -104,6 +104,9 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		}
 
 		// Local rendering mode.
+		if cfg.HugoRoot == "" {
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
+		}
 		if in.Title == "" {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: title must not be empty")
 		}
@@ -129,13 +132,13 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			in.Tags = in.Tags[:6]
 		}
 
-		pg, err := security.New(cfg.SiteRoot, false)
+		pg, err := security.New(cfg.HugoRoot, false)
 		if err != nil {
 			slog.Error("generate_featured_image: could not initialize path guard", "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 		}
 
-		relPath := filepath.Join("images", "featured", in.Slug+"-featured.jpg")
+		relPath := filepath.Join("static", "images", in.Slug+"-featured.jpg")
 		destPath, err := pg.SafeJoin(relPath)
 		if err != nil {
 			slog.Warn("generate_featured_image: path validation failed", "slug", in.Slug, "error", err)
@@ -146,7 +149,8 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, err
 		}
 
-		if err := renderFeaturedImage(destPath, style, in.Title, in.Subtitle, in.Tags, accent); err != nil {
+		bgDir := filepath.Join(cfg.HugoRoot, "static", "images", "featured-backgrounds")
+		if err := renderFeaturedImage(bgDir, destPath, style, in.Title, in.Subtitle, in.Tags, accent); err != nil {
 			slog.Error("generate_featured_image: render failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 		}
@@ -156,12 +160,15 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 }
 
 func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
-	pg, err := security.New(cfg.SiteRoot, false)
+	if cfg.HugoRoot == "" {
+		return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
+	}
+	pg, err := security.New(cfg.HugoRoot, false)
 	if err != nil {
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 	}
 
-	relPath := filepath.Join("images", "featured", in.Slug+".jpg")
+	relPath := filepath.Join("static", "images", in.Slug+"-featured.jpg")
 	destPath, err := pg.SafeJoin(relPath)
 	if err != nil {
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
@@ -188,7 +195,7 @@ func imageWriteError(destPath string) error {
 		Error:           "write_error",
 		TargetDirectory: filepath.Dir(destPath),
 		TargetPath:      destPath,
-		OperatorHint:    "Ensure site_root is writable by the MCP service user and included in systemd ReadWritePaths before using generate_featured_image.",
+		OperatorHint:    "Ensure hugo_root/static/images is writable by the MCP service user and hugo_root is included in systemd ReadWritePaths before using generate_featured_image.",
 		Retryable:       false,
 		Docs:            "docs/operator-guide.md#image-generation-configuration",
 	}
