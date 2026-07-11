@@ -32,8 +32,28 @@ type Config struct {
 	PostBuildHooks      []string          `yaml:"post_build_hooks"`
 	TaxonomyAliases     map[string]string `yaml:"taxonomy_aliases"`
 	SecurityContact     string            `yaml:"security_contact"`
+	Cloudflare          CloudflareConfig  `yaml:"cloudflare"`
+	IndexNow            IndexNowConfig    `yaml:"indexnow"`
 	OAuth               OAuthConfig       `yaml:"oauth"`
 	RateLimit           RateLimitConfig   `yaml:"rate_limit"`
+}
+
+// CloudflareConfig holds credentials for Cloudflare cache purge. Zero value
+// disables all purge calls (no-op). Never commit api_token to version control —
+// set it only in the server config file on the host.
+type CloudflareConfig struct {
+	ZoneID   string `yaml:"zone_id"`
+	APIToken string `yaml:"api_token"`
+}
+
+func (c CloudflareConfig) Enabled() bool {
+	return c.ZoneID != "" && c.APIToken != ""
+}
+
+// IndexNowConfig holds the IndexNow API key and optional submission endpoint.
+type IndexNowConfig struct {
+	Key      string `yaml:"key"`
+	Endpoint string `yaml:"endpoint"` // defaults to https://api.indexnow.org/IndexNow
 }
 
 type RateLimitConfig struct {

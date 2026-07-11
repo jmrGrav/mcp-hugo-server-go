@@ -326,11 +326,12 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			"duration_ms", durationMs,
 			"exit_code", exitCode,
 		)
-		if len(siteReload) > 0 && siteReload[0] != nil {
-			if err := siteReload[0](); err != nil {
-				slog.Warn("build_site: site index reload failed", "error", err)
-			} else {
-				slog.Info("build_site: site index reloaded")
+		for i, fn := range siteReload {
+			if fn == nil {
+				continue
+			}
+			if err := fn(); err != nil {
+				slog.Warn("build_site: post-build callback failed", "callback_index", i, "error", err)
 			}
 		}
 		return nil, buildSiteOutput{Status: "ok", DurationMs: durationMs}, nil

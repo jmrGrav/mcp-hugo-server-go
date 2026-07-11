@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -312,6 +313,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if err := appendAuditLog(auditLog, entry); err != nil {
 			slog.Error("delete_page: audit log write failed", "slug", in.Slug, "error", err)
 			return nil, deletePageOutput{}, fmt.Errorf("audit_error: failed to write audit log")
+		}
+
+		if cfg.Cloudflare.Enabled() {
+			pageURL := strings.TrimRight(cfg.SiteURL, "/") + "/" + strings.Trim(in.Slug, "/") + "/"
+			if err := cloudflare.PurgeURLs(cfg.Cloudflare, []string{pageURL}); err != nil {
+				slog.Warn("delete_page: cloudflare purge failed", "slug", in.Slug, "error", err)
+			}
 		}
 
 		return nil, deletePageOutput(in), nil

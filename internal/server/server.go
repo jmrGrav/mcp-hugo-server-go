@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
@@ -131,9 +132,10 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	if writeEnabled {
 		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg)
 	}
-	admin.Register(siteAdminServer, cfg, func() error {
-		return idx.Reload(cfg)
-	})
+	admin.Register(siteAdminServer, cfg,
+		func() error { return idx.Reload(cfg) },
+		func() error { return cloudflare.PurgeAll(cfg.Cloudflare) },
+	)
 
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,

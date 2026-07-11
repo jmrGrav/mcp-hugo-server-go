@@ -62,9 +62,9 @@ type pageDetailDTO struct {
 }
 
 type getSitemapInput struct {
-	Limit              int  `json:"limit,omitempty"`
-	Offset             int  `json:"offset,omitempty"`
-	ExcludeTaxonomies  bool `json:"exclude_taxonomies,omitempty"`
+	Limit             int  `json:"limit,omitempty"`
+	Offset            int  `json:"offset,omitempty"`
+	ExcludeTaxonomies bool `json:"exclude_taxonomies,omitempty"`
 }
 
 type sitemapEntryDTO struct {
