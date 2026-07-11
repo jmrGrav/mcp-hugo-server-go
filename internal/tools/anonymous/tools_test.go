@@ -194,14 +194,52 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
 	defer done()
 
-	res := callTool(t, session, "get_page", map[string]any{"slug": "/drafts/fresh/"})
+	// Without allow_source_fallback the source-only page must not be accessible.
+	resDefault := callTool(t, session, "get_page", map[string]any{"slug": "/drafts/fresh/"})
+	if !resDefault.IsError {
+		t.Fatal("get_page source-only without allow_source_fallback should return error")
+	}
+	raw, _ := json.Marshal(resDefault.Content)
+	if !strings.Contains(string(raw), "content_not_found") {
+		t.Fatalf("get_page source-only default error missing 'content_not_found': %s", raw)
+	}
+
+	// With allow_source_fallback the source-only non-draft page is returned.
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/drafts/fresh/", "allow_source_fallback": true})
 	if res.IsError {
-		t.Fatalf("get_page source-only returned error: %v", res.Content)
+		t.Fatalf("get_page source-only with allow_source_fallback returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	page := m["page"].(map[string]any)
 	if page["title"] != "Fresh" || page["html"] != "Fresh body" {
 		t.Fatalf("get_page source-only page = %#v", page)
+	}
+}
+
+func TestGetPageDraftBlockedEvenWithSourceFallback(t *testing.T) {
+	contentRoot := t.TempDir()
+	full := filepath.Join(contentRoot, "drafts", "wip", "index.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(full, []byte("---\ntitle: WIP\ndraft: true\n---\nSecret body\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &site.Index{}
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/drafts/wip/", "allow_source_fallback": true})
+	if !res.IsError {
+		t.Fatal("get_page draft with allow_source_fallback should still return error")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "content_not_found") {
+		t.Fatalf("get_page draft error missing 'content_not_found': %s", raw)
 	}
 }
 
@@ -603,8 +641,15 @@ func TestGetPageContentOnly(t *testing.T) {
 	if slug, _ := page["slug"].(string); slug == "" {
 		t.Fatal("get_page content_only: slug must be non-empty (metadata present)")
 	}
-	if html, _ := page["html"].(string); html != "" {
-		t.Fatalf("get_page content_only: html must be empty, got %q", html)
+	html, _ := page["html"].(string)
+	if html == "" {
+		t.Fatal("get_page content_only: html must be non-empty (article content expected)")
+	}
+	// content_only must not carry full page chrome — no <nav>, <header>, <footer>.
+	for _, tag := range []string{"<nav", "<header", "<footer"} {
+		if strings.Contains(html, tag) {
+			t.Fatalf("get_page content_only: html contains theme chrome tag %q: %s", tag, html)
+		}
 	}
 }
 

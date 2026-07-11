@@ -16,6 +16,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
@@ -28,11 +29,14 @@ type createPageInput struct {
 	Body       string   `json:"body"`
 	Tags       []string `json:"tags"`
 	Categories []string `json:"categories"`
+	DryRun     bool     `json:"dry_run,omitempty"`
 }
 
 type createPageOutput struct {
-	Slug string `json:"slug"`
-	Path string `json:"path"`
+	Slug    string `json:"slug"`
+	Path    string `json:"path,omitempty"`
+	DryRun  bool   `json:"dry_run,omitempty"`
+	Content string `json:"content,omitempty"`
 }
 
 type updatePageInput struct {
@@ -44,10 +48,13 @@ type updatePageInput struct {
 	Categories  []string `json:"categories,omitempty"`
 	Draft       *bool    `json:"draft,omitempty"`
 	Description string   `json:"description,omitempty"`
+	DryRun      bool     `json:"dry_run,omitempty"`
 }
 
 type updatePageOutput struct {
-	Slug string `json:"slug"`
+	Slug   string `json:"slug"`
+	DryRun bool   `json:"dry_run,omitempty"`
+	Diff   string `json:"diff,omitempty"`
 }
 
 type deletePageInput struct {
@@ -85,7 +92,11 @@ func deleteCallerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string)
 	return l
 }
 
-func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config) {
+func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteIdxs ...*site.Index) {
+	var siteIdx *site.Index
+	if len(siteIdxs) > 0 {
+		siteIdx = siteIdxs[0]
+	}
 	if s == nil {
 		return
 	}
@@ -123,6 +134,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		filePath := filepath.Join(dir, "index.md")
 		content := buildFrontmatter(in.Title, in.Tags, in.Categories, in.Body)
 
+		// Round-trip guard: verify the generated content parses correctly.
+		if err := validateFrontmatterRoundTrip(content); err != nil {
+			return nil, createPageOutput{}, fmt.Errorf("validation_error: %w", err)
+		}
+
+		if in.DryRun {
+			return nil, createPageOutput{Slug: in.Slug, DryRun: true, Content: content}, nil
+		}
+
 		const lockWait = 10 * time.Second
 		deadline := time.Now().Add(lockWait)
 		for {
@@ -154,6 +174,17 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Body:           in.Body,
 			FrontmatterRaw: map[string]any{"title": in.Title},
 		})
+		if siteIdx != nil {
+			siteIdx.UpsertPage(site.Page{
+				Slug:       "/" + strings.Trim(in.Slug, "/") + "/",
+				Title:      in.Title,
+				Tags:       in.Tags,
+				Categories: in.Categories,
+				URL:        strings.TrimRight(cfg.SiteURL, "/") + "/" + strings.Trim(in.Slug, "/") + "/",
+				Date:       time.Now().UTC().Format(time.RFC3339),
+				Lang:       cfg.DefaultLanguage,
+			})
+		}
 
 		return nil, createPageOutput{Slug: in.Slug, Path: filePath}, nil
 	})
@@ -226,6 +257,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Error("update_page: frontmatter update failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("parse_error: failed to update frontmatter")
 		}
+		// Round-trip guard: reject content with malformed/duplicated frontmatter.
+		if err := validateFrontmatterRoundTrip(content); err != nil {
+			slog.Error("update_page: round-trip guard failed", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, fmt.Errorf("validation_error: %w", err)
+		}
+		if in.DryRun {
+			diff := simpleDiff(in.Slug+"/index.md", string(raw), content)
+			return nil, updatePageOutput{Slug: in.Slug, DryRun: true, Diff: diff}, nil
+		}
 		if err := fileutil.AtomicWrite(filePath, content); err != nil {
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("write_error: failed to write page")
@@ -248,6 +288,21 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			updated.Categories = in.Categories
 		}
 		idx.Upsert(updated)
+		if siteIdx != nil {
+			if pub, ok := siteIdx.GetBySlug(in.Slug); ok {
+				pubUpdated := *pub
+				if in.Title != "" {
+					pubUpdated.Title = in.Title
+				}
+				if in.Tags != nil {
+					pubUpdated.Tags = in.Tags
+				}
+				if in.Categories != nil {
+					pubUpdated.Categories = in.Categories
+				}
+				siteIdx.UpsertPage(pubUpdated)
+			}
+		}
 
 		return nil, updatePageOutput{Slug: in.Slug}, nil
 	})
@@ -301,6 +356,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, fmt.Errorf("delete_error: failed to delete page")
 		}
 		idx.Delete(in.Slug)
+		if siteIdx != nil {
+			siteIdx.RemoveBySlug(in.Slug)
+		}
 		if cfg.SiteRoot != "" {
 			publicPath := filepath.Join(cfg.SiteRoot, strings.Trim(in.Slug, "/"))
 			if rmErr := os.RemoveAll(publicPath); rmErr != nil {
@@ -562,6 +620,150 @@ func Defs() []tools.ToolDef {
 		{Name: "update_page", RequiredScope: "content.write"},
 		{Name: "delete_page", RequiredScope: "content.write"},
 	}
+}
+
+// validateFrontmatterRoundTrip parses content's frontmatter block to confirm
+// it can be re-parsed cleanly. A body that begins with a second YAML frontmatter
+// block (duplicated-frontmatter corruption signature) is rejected.
+func validateFrontmatterRoundTrip(content string) error {
+	if !strings.HasPrefix(content, "---\n") {
+		return fmt.Errorf("missing YAML frontmatter delimiter")
+	}
+	rest := content[4:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return fmt.Errorf("unterminated YAML frontmatter")
+	}
+	var fm any
+	if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
+		return fmt.Errorf("frontmatter YAML invalid after update: %w", err)
+	}
+	body := strings.TrimSpace(rest[end+4:])
+	// Detect duplicated frontmatter: body starts with "---\n" and contains a
+	// closing "---" within the first 30 lines. A bare thematic break ("---"
+	// immediately followed by non-YAML content) is not rejected.
+	if strings.HasPrefix(body, "---\n") {
+		inner := body[4:]
+		innerEnd := strings.Index(inner, "\n---")
+		if innerEnd >= 0 {
+			lines := strings.Count(inner[:innerEnd], "\n")
+			if lines <= 30 {
+				return fmt.Errorf("body contains a second frontmatter block — frontmatter appears to be duplicated")
+			}
+		}
+	}
+	return nil
+}
+
+// simpleDiff produces a unified diff between old and new, labelled with path.
+// Returns an empty string when the contents are identical.
+func simpleDiff(path, old, new string) string {
+	if old == new {
+		return ""
+	}
+	oldLines := strings.Split(old, "\n")
+	newLines := strings.Split(new, "\n")
+	m, n := len(oldLines), len(newLines)
+	if m > 500 || n > 500 {
+		return fmt.Sprintf("--- a/%s\n+++ b/%s\n# content changed (%d → %d lines)\n", path, path, m, n)
+	}
+	// Wagner-Fischer LCS
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
+	}
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if oldLines[i-1] == newLines[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else if dp[i-1][j] >= dp[i][j-1] {
+				dp[i][j] = dp[i-1][j]
+			} else {
+				dp[i][j] = dp[i][j-1]
+			}
+		}
+	}
+	type edit struct {
+		kind rune
+		text string
+	}
+	edits := make([]edit, 0, m+n)
+	i, j := m, n
+	for i > 0 || j > 0 {
+		switch {
+		case i > 0 && j > 0 && oldLines[i-1] == newLines[j-1]:
+			edits = append(edits, edit{' ', oldLines[i-1]})
+			i--
+			j--
+		case j > 0 && (i == 0 || dp[i][j-1] >= dp[i-1][j]):
+			edits = append(edits, edit{'+', newLines[j-1]})
+			j--
+		default:
+			edits = append(edits, edit{'-', oldLines[i-1]})
+			i--
+		}
+	}
+	// Reverse
+	for l, r := 0, len(edits)-1; l < r; l, r = l+1, r-1 {
+		edits[l], edits[r] = edits[r], edits[l]
+	}
+	// Locate changed regions and expand with context
+	const ctx = 3
+	type hunk struct{ s, e int }
+	var hunks []hunk
+	inChange := false
+	cs := 0
+	for k, ed := range edits {
+		if ed.kind != ' ' {
+			if !inChange {
+				cs = k
+				inChange = true
+			}
+		} else if inChange {
+			hunks = append(hunks, hunk{max(0, cs-ctx), min(len(edits)-1, k+ctx-1)})
+			inChange = false
+		}
+	}
+	if inChange {
+		hunks = append(hunks, hunk{max(0, cs-ctx), len(edits) - 1})
+	}
+	// Merge overlapping hunks
+	merged := hunks[:0]
+	for _, h := range hunks {
+		if len(merged) > 0 && h.s <= merged[len(merged)-1].e+1 {
+			if h.e > merged[len(merged)-1].e {
+				merged[len(merged)-1].e = h.e
+			}
+		} else {
+			merged = append(merged, h)
+		}
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "--- a/%s\n+++ b/%s\n", path, path)
+	for _, h := range merged {
+		oldStart, newStart, oldCount, newCount := 1, 1, 0, 0
+		for k := 0; k < h.s; k++ {
+			if edits[k].kind != '+' {
+				oldStart++
+			}
+			if edits[k].kind != '-' {
+				newStart++
+			}
+		}
+		for k := h.s; k <= h.e; k++ {
+			if edits[k].kind != '+' {
+				oldCount++
+			}
+			if edits[k].kind != '-' {
+				newCount++
+			}
+		}
+		fmt.Fprintf(&sb, "@@ -%d,%d +%d,%d @@\n", oldStart, oldCount, newStart, newCount)
+		for k := h.s; k <= h.e; k++ {
+			fmt.Fprintf(&sb, "%c%s\n", edits[k].kind, edits[k].text)
+		}
+	}
+	return sb.String()
 }
 
 func appendAuditLog(path, entry string) error {

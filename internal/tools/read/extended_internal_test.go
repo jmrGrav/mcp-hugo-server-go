@@ -100,11 +100,14 @@ func TestValidationHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSourceIndex() error = %v", err)
 	}
-	if got := sourcePagesForValidation(src, "posts/a"); len(got) != 1 {
-		t.Fatalf("sourcePagesForValidation(slug) = %#v", got)
+	if got, err := sourcePagesForValidation(src, "posts/a"); err != nil || len(got) != 1 {
+		t.Fatalf("sourcePagesForValidation(slug) = %#v err=%v", got, err)
 	}
-	if got := sourcePagesForValidation(src, ""); len(got) != 2 {
-		t.Fatalf("sourcePagesForValidation(all) = %#v", got)
+	if got, err := sourcePagesForValidation(src, ""); err != nil || len(got) != 2 {
+		t.Fatalf("sourcePagesForValidation(all) = %#v err=%v", got, err)
+	}
+	if _, err := sourcePagesForValidation(src, "does-not-exist"); err == nil {
+		t.Fatal("sourcePagesForValidation(missing): expected error, got nil")
 	}
 	issues := validateFrontMatterPage(hugosite.SourcePage{Slug: "/broken/", FrontmatterRaw: map[string]any{}}, nil)
 	if len(issues) < 2 {

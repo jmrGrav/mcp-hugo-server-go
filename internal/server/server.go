@@ -123,7 +123,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 		read.RegisterWithSourceIndex(writeServer, idx, srcIdx, cfg)
 	}
 	if writeEnabled {
-		toolswrite.Register(writeServer, pg, srcIdx, cfg)
+		toolswrite.Register(writeServer, pg, srcIdx, cfg, idx)
 	}
 
 	siteAdminServer := mcp.NewServer(impl, nil)
@@ -133,7 +133,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 		read.RegisterWithSourceIndex(siteAdminServer, idx, srcIdx, cfg)
 	}
 	if writeEnabled {
-		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg)
+		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg, idx)
 	}
 	admin.Register(siteAdminServer, cfg,
 		func() error { return idx.Reload(cfg) },

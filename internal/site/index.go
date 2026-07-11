@@ -31,6 +31,7 @@ type Index struct {
 	categories        []string
 	info              map[string]string
 	contentClassifier *ContentClassifier
+	blCache           backlinkCache
 }
 
 // Reload rebuilds the index from disk, atomically replacing all in-memory
@@ -41,14 +42,67 @@ func (idx *Index) Reload(cfg config.Config) error {
 		return err
 	}
 	idx.mu.Lock()
-	defer idx.mu.Unlock()
 	idx.entries = fresh.entries
 	idx.bySlug = fresh.bySlug
 	idx.tags = fresh.tags
 	idx.categories = fresh.categories
 	idx.info = fresh.info
 	idx.contentClassifier = fresh.contentClassifier
+	idx.mu.Unlock()
+	idx.blCache.invalidate()
 	return nil
+}
+
+// RemoveBySlug removes the entry for slug from the public index immediately.
+// Call this after delete_page to prevent stale sitemap results before the next build.
+func (idx *Index) RemoveBySlug(slug string) {
+	if idx == nil {
+		return
+	}
+	idx.mu.Lock()
+	norm := normalizeSlug(slug)
+	pos, ok := idx.bySlug[norm]
+	if ok {
+		idx.entries = append(idx.entries[:pos], idx.entries[pos+1:]...)
+		delete(idx.bySlug, norm)
+		for i := pos; i < len(idx.entries); i++ {
+			idx.bySlug[idx.entries[i].page.Slug] = i
+		}
+	}
+	idx.mu.Unlock()
+	if ok {
+		idx.blCache.invalidate()
+	}
+}
+
+// UpsertPage inserts or replaces a page entry in the public index.
+// Use this to stake a placeholder for newly created pages (before build).
+func (idx *Index) UpsertPage(p Page) {
+	if idx == nil {
+		return
+	}
+	norm := normalizeSlug(p.Slug)
+	p.Slug = norm
+	idx.mu.Lock()
+	if pos, ok := idx.bySlug[norm]; ok {
+		idx.entries[pos].page = p
+	} else {
+		idx.bySlug[norm] = len(idx.entries)
+		idx.entries = append(idx.entries, entry{page: p})
+	}
+	idx.mu.Unlock()
+	idx.blCache.invalidate()
+}
+
+// GetBacklinks returns pages that contain an internal link to targetSlug.
+// The reverse-link map is built lazily on first call and invalidated on Reload/RemoveBySlug/UpsertPage.
+func (idx *Index) GetBacklinks(targetSlug string) []BacklinkEntry {
+	if idx == nil {
+		return nil
+	}
+	m := idx.blCache.getOrBuild(idx)
+	norm := normalizeSlug(targetSlug)
+	return m[norm]
 }
 
 func NewIndex(cfg config.Config) (*Index, error) {

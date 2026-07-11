@@ -19,8 +19,9 @@ type listPagesInput struct {
 }
 
 type getPageInput struct {
-	Slug        string `json:"slug"`
-	ContentOnly bool   `json:"content_only,omitempty"`
+	Slug                string `json:"slug"`
+	ContentOnly         bool   `json:"content_only,omitempty"`
+	AllowSourceFallback bool   `json:"allow_source_fallback,omitempty"`
 }
 
 type searchPagesInput struct {
@@ -155,8 +156,12 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_page", "Read page",
-		"Read a published Hugo page by slug. Returns metadata, rendered HTML, and a short summary. "+
-			"Pass content_only=true to clear the html field (returns html as empty string) for lightweight metadata queries. "+
+		"Read a Hugo page by slug. Returns metadata, rendered HTML, and a short summary. "+
+			"By default only published pages are returned. "+
+			"Pass allow_source_fallback=true to also return source-index entries for pages not yet built "+
+			"(e.g. immediately after create_page, before the next Hugo build); draft pages are always excluded. "+
+			"Pass content_only=true to strip navigation, header, and footer from the rendered HTML of published pages "+
+			"(has no effect on source-only results, which carry raw Markdown rather than rendered HTML). "+
 			"For the raw Markdown source, use get_full_page_markdown (requires content.read). "+
 			"Does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
@@ -170,8 +175,19 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if !ok {
 				return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
+			if resolved.Public == nil {
+				// Source-only: require explicit opt-in; drafts are always blocked.
+				if !in.AllowSourceFallback {
+					return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+				}
+				if resolved.Source != nil && resolved.Source.Draft {
+					return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+				}
+			}
 			dto := toResolvedPageDetailDTO(resolved)
-			if in.ContentOnly {
+			if in.ContentOnly && resolved.Public != nil {
+				dto.HTML = site.ExtractArticleHTML(dto.HTML)
+			} else if in.ContentOnly {
 				dto.HTML = ""
 			}
 			return nil, getPageOutput{Page: dto}, nil

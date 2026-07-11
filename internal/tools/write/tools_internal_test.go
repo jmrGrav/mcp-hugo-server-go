@@ -74,6 +74,21 @@ func TestWriteHelperBranches(t *testing.T) {
 	if err := appendAuditLog(blocker, "entry\n"); err == nil {
 		t.Fatal("appendAuditLog() should fail when target path is a directory")
 	}
+
+	// validateFrontmatterRoundTrip: thematic-break body must not be rejected
+	okContent := "---\ntitle: Test\n---\n---\n\nSome content after a horizontal rule.\n"
+	if err := validateFrontmatterRoundTrip(okContent); err != nil {
+		t.Fatalf("validateFrontmatterRoundTrip(thematic-break body) = %v", err)
+	}
+	// duplicated frontmatter block must be caught
+	dupContent := "---\ntitle: Test\n---\n---\ntitle: Test\ndate: 2026-07-01\n---\nReal body\n"
+	if err := validateFrontmatterRoundTrip(dupContent); err == nil {
+		t.Fatal("validateFrontmatterRoundTrip(duplicated frontmatter) should return error")
+	}
+	// valid content passes
+	if err := validateFrontmatterRoundTrip("---\ntitle: T\n---\nBody\n"); err != nil {
+		t.Fatalf("validateFrontmatterRoundTrip(valid) = %v", err)
+	}
 }
 
 func TestRegisterNilServer(t *testing.T) {

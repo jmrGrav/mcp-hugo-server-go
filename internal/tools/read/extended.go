@@ -54,6 +54,7 @@ type contentEnvelopeData struct {
 	MissingDates            int          `json:"missing_dates,omitempty"`
 	ValidationErrors        int          `json:"validation_errors,omitempty"`
 	TaxonomyInconsistencies []string     `json:"taxonomy_inconsistencies,omitempty"`
+	OrphanPages             []string     `json:"orphan_pages,omitempty"`
 	Sections                []sectionDTO `json:"sections,omitempty"`
 	Languages               []string     `json:"languages,omitempty"`
 	Summary                 string       `json:"summary,omitempty"`
@@ -146,6 +147,31 @@ type brokenLinkOutput struct {
 	Data        brokenLinkData `json:"data"`
 	Warnings    []string       `json:"warnings"`
 	Errors      []string       `json:"errors"`
+}
+
+type getBacklinksInput struct {
+	Slug string `json:"slug"`
+}
+
+type backlinkDTO struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+}
+
+type getBacklinksData struct {
+	Slug      string        `json:"slug"`
+	Count     int           `json:"count"`
+	Backlinks []backlinkDTO `json:"backlinks"`
+}
+
+type getBacklinksOutput struct {
+	Success     bool             `json:"success"`
+	Version     string           `json:"version"`
+	GeneratedAt string           `json:"generated_at"`
+	Data        getBacklinksData `json:"data"`
+	Warnings    []string         `json:"warnings"`
+	Errors      []string         `json:"errors"`
 }
 
 // RegisterWithSourceIndex wires additional read-only tools that benefit from the
@@ -288,7 +314,10 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if srcIdx == nil {
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
-			pages := sourcePagesForValidation(srcIdx, in.Slug)
+			pages, err := sourcePagesForValidation(srcIdx, in.Slug)
+			if err != nil {
+				return nil, validateOutput{}, err
+			}
 			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
 		})
 
@@ -322,6 +351,45 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					Limit:       limit,
 					Offset:      offset,
 					Links:       sliceBrokenLinks(issues, offset, limit),
+				},
+				Warnings: []string{},
+				Errors:   []string{},
+			}, nil
+		})
+
+	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). Requires content.read.",
+		func(_ context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
+			if idx == nil {
+				return nil, getBacklinksOutput{}, fmt.Errorf("index not initialized")
+			}
+			if strings.TrimSpace(in.Slug) == "" {
+				return nil, getBacklinksOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
+			}
+			// Resolve slug to normalise it (same logic as get_page)
+			resolver := site.NewPageResolver(idx, srcIdx, cfg)
+			resolved, ok := resolver.Resolve(in.Slug)
+			if !ok {
+				return nil, getBacklinksOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+			}
+			var targetSlug string
+			if resolved.Public != nil {
+				targetSlug = resolved.Public.Slug
+			} else if resolved.Source != nil {
+				targetSlug = "/" + strings.Trim(resolved.Source.Slug, "/") + "/"
+			}
+			entries := idx.GetBacklinks(targetSlug)
+			dtos := make([]backlinkDTO, len(entries))
+			for i, e := range entries {
+				dtos[i] = backlinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL}
+			}
+			return nil, getBacklinksOutput{
+				Success:     true,
+				Version:     toolResultVersion,
+				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+				Data: getBacklinksData{
+					Slug:      targetSlug,
+					Count:     len(dtos),
+					Backlinks: dtos,
 				},
 				Warnings: []string{},
 				Errors:   []string{},
@@ -676,18 +744,18 @@ func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) [
 	return issues
 }
 
-func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) []hugosite.SourcePage {
+func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) ([]hugosite.SourcePage, error) {
 	if idx == nil {
-		return nil
+		return nil, nil
 	}
-	slug = strings.TrimSpace(slug)
+	slug = strings.Trim(strings.TrimSpace(slug), "/")
 	if slug == "" {
-		return idx.ListPages(0, 0)
+		return idx.ListPages(0, 0), nil
 	}
 	if p, ok := idx.GetBySlug(slug); ok {
-		return []hugosite.SourcePage{*p}
+		return []hugosite.SourcePage{*p}, nil
 	}
-	return []hugosite.SourcePage{}
+	return nil, fmt.Errorf("content_not_found: no source page matched slug %q", slug)
 }
 
 func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) contentEnvelopeData {
@@ -695,9 +763,20 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[
 		Status: "healthy",
 	}
 	if idx != nil {
-		health.PublishedPages = len(idx.ContentPages())
+		contentPages := idx.ContentPages()
+		health.PublishedPages = len(contentPages)
 		health.Tags = len(idx.AllTags())
 		health.Categories = len(idx.AllCategories())
+		// Detect orphans: article pages with zero incoming internal links.
+		classifier := site.NewClassifier(idx)
+		for _, p := range contentPages {
+			if !classifier.IsArticle(p) {
+				continue
+			}
+			if len(idx.GetBacklinks(p.Slug)) == 0 {
+				health.OrphanPages = append(health.OrphanPages, p.Slug)
+			}
+		}
 	}
 	if srcIdx != nil {
 		pages := srcIdx.ListPages(0, 0)

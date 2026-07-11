@@ -1,11 +1,65 @@
 package site
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
 	"golang.org/x/net/html"
 )
+
+// ExtractArticleHTML extracts the content of the first <article> element in
+// rawHTML, then falls back to <main>, then strips nav/header/footer from body.
+// Input is the body-level HTML already extracted from a full page.
+func ExtractArticleHTML(rawHTML string) string {
+	doc, err := html.Parse(strings.NewReader(rawHTML))
+	if err != nil {
+		return rawHTML
+	}
+	if article := findElement(doc, "article"); article != nil {
+		return renderChildrenHTML(article)
+	}
+	if main := findElement(doc, "main"); main != nil {
+		return renderChildrenHTML(main)
+	}
+	body := findElement(doc, "body")
+	if body == nil {
+		return rawHTML
+	}
+	removeDescendants(body, "script", "style", "nav", "header", "footer")
+	return renderChildrenHTML(body)
+}
+
+func renderChildrenHTML(n *html.Node) string {
+	if n == nil {
+		return ""
+	}
+	var buf bytes.Buffer
+	for c := n.FirstChild; c != nil; c = c.NextSibling {
+		_ = html.Render(&buf, c)
+	}
+	return strings.TrimSpace(buf.String())
+}
+
+func removeDescendants(n *html.Node, tags ...string) {
+	tagSet := make(map[string]bool, len(tags))
+	for _, t := range tags {
+		tagSet[t] = true
+	}
+	var prune func(*html.Node)
+	prune = func(cur *html.Node) {
+		for c := cur.FirstChild; c != nil; {
+			next := c.NextSibling
+			if c.Type == html.ElementNode && tagSet[c.Data] {
+				cur.RemoveChild(c)
+			} else {
+				prune(c)
+			}
+			c = next
+		}
+	}
+	prune(n)
+}
 
 func ExtractMarkdown(rawHTML string) string {
 	doc, err := html.Parse(strings.NewReader(rawHTML))
