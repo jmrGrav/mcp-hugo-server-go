@@ -60,41 +60,33 @@ Configuration is stored in YAML format. The following table lists all available 
 
 ### Featured image generation
 
-`generate_featured_image` calls an external HTTP API to produce AI-generated images for pages.
-Two config keys control it:
+`generate_featured_image` is always registered. It renders a 1200×675 JPEG using a local
+Go renderer: an Unsplash photo background selected deterministically by title hash,
+composited with a dark gradient overlay, accent bar, title, and tag chips. No external
+service is required by default.
 
-| Key | Description |
-|-----|-------------|
+The generated image is saved to **`{hugo_root}/static/images/{slug}-featured.jpg`**.
+Because `static/` is served directly by Hugo, the file is available immediately after the
+next build without a separate copy step.
+
+Background photos are read from `{hugo_root}/static/images/featured-backgrounds/` (six
+1200×675 JPEGs bundled with the repository). If that directory is empty or missing the
+renderer falls back to a solid gradient.
+
+**External API mode** (optional): when both `image_gen_url` and a `prompt` argument are
+provided, the tool POSTs the prompt to that URL and saves the returned `image/*` body
+instead of running the local renderer.
+
+| Config key | Description |
+|------------|-------------|
 | `image_gen_url` | POST endpoint that accepts a plain-text prompt body and returns an `image/*` response |
 | `image_gen_key` | Optional Bearer token sent in the `Authorization` header |
 
-The tool is always listed in `tools/list`. When `image_gen_url` is not set, the description
-includes `(not configured: set image_gen_url in config)` and calls return a structured
-configuration error:
+The generated image is saved to `{hugo_root}/static/images/{slug}-featured.jpg`. If the
+tool returns `write_error`, verify:
 
-```json
-{
-  "error": "config_error",
-  "missing_setting": "image_gen_url",
-  "operator_hint": "Set image_gen_url to an HTTPS image generation endpoint, or leave this feature disabled and skip generate_featured_image.",
-  "retryable": false,
-  "docs": "docs/operator-guide.md#image-generation-configuration"
-}
-```
-
-**Minimal config example:**
-
-```yaml
-image_gen_url: https://api.example.com/generate-image
-image_gen_key: sk-...  # optional
-```
-
-The generated image is saved to `{site_root}/images/featured/{slug}.jpg` and must be
-committed/deployed separately. If the tool returns `write_error`, verify both:
-
-- Unix ownership/mode on `{site_root}/images` or its parent directories.
-- systemd `ReadWritePaths` includes `{site_root}` (or at minimum the relevant
-  `public/` subtree) for the MCP service.
+- Unix ownership/mode on `{hugo_root}/static/images` allows writes by the MCP service user.
+- systemd `ReadWritePaths` includes `{hugo_root}/static/images` (see Pitfall below).
 
 ### Build Configuration
 
@@ -220,7 +212,7 @@ Required writable paths for each tool:
 |------|----------------------------|
 | `build_site` | `site_root` (site root), `{hugo_root}/resources` |
 | `preview_build` | `{hugo_root}/resources` (render-to-memory; no writes to `public/`) |
-| `generate_featured_image` | `{site_root}/images/featured` |
+| `generate_featured_image` | `{hugo_root}/static/images` |
 
 Add the missing paths to `ReadWritePaths` in the systemd override and reload:
 
@@ -231,6 +223,49 @@ sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
 Do **not** add a directory to `ReadOnlyPaths` if it already appears in
 `ReadWritePaths` — `ReadOnlyPaths` takes precedence and will silently undo the
 write permission.
+
+### Known Pitfalls
+
+#### `generate_featured_image` returns `write_error` after first deploy
+
+The service unit's `ReadWritePaths` list usually covers `content/`, `resources/`, and
+`public/`, but **`static/images/` is a separate tree that must be declared explicitly**.
+The tool saves generated images there; without the entry, `ProtectSystem=strict` makes
+the path read-only and every call fails.
+
+Create a drop-in override for the unit:
+
+```bash
+sudo mkdir -p /etc/systemd/system/mcp-hugo-server-go.service.d/
+sudo tee /etc/systemd/system/mcp-hugo-server-go.service.d/readwrite-static-images.conf <<'EOF'
+[Service]
+ReadWritePaths=/path/to/hugo-site/static/images
+EOF
+sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
+```
+
+Also verify that `{hugo_root}/static/images` is writable at the Unix level by the
+service user (mode `0775` with the service user in the owning group, or `0755` with
+the service user as owner).
+
+Note: when `hugo_root` and `site_root` point to the same directory (single-root
+deployments), you may already have `ReadWritePaths` covering the parent — but if they
+differ, `static/images` under `hugo_root` is a distinct path that needs its own entry.
+
+#### `get_broken_links` (and other index tools) return stale results after `build_site`
+
+The site index is built once at startup by walking the public HTML directory. A
+`build_site` call regenerates those files on disk, but the in-memory index is **not
+refreshed automatically** until issue #212 is resolved.
+
+Workaround: restart the service after every Hugo build to force a fresh index scan.
+
+```bash
+sudo systemctl restart mcp-hugo-server-go
+```
+
+Until #212 ships, any `get_broken_links`, `search_content`, or page-count result
+obtained immediately after `build_site` reflects the index from the previous build.
 
 ### Configuration File
 
