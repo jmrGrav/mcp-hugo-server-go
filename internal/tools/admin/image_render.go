@@ -2,8 +2,8 @@ package admin
 
 import (
 	"bytes"
-	"crypto/sha1"
-	"encoding/hex"
+	"crypto/md5"
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
@@ -11,6 +11,7 @@ import (
 	"image/jpeg"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/image/font"
@@ -18,22 +19,33 @@ import (
 	"golang.org/x/image/math/fixed"
 )
 
-// renderFeaturedImage generates a 1200×675 JPEG to path using local Go rendering.
-// No external API is required.
-func renderFeaturedImage(path, style, title, subtitle string, tags []string, accent string) error {
+// backgroundFiles lists the Unsplash photo filenames stored in featured-backgrounds/.
+// Order is fixed so md5(title)%6 selects consistently across runs.
+var backgroundFiles = []string{
+	"0c180e9a.jpg",
+	"6727bbee.jpg",
+	"89a0578e.jpg",
+	"a42e9bc5.jpg",
+	"cc51402b.jpg",
+	"dbce31ce.jpg",
+}
+
+// renderFeaturedImage generates a 1200×675 JPEG to path using a background photo
+// from bgDir composited with a dark gradient overlay, title, and tags.
+// Falls back to a solid gradient if no background photos are found.
+func renderFeaturedImage(bgDir, path, style, title, subtitle string, tags []string, accent string) error {
 	const (
 		width  = 1200
 		height = 675
 	)
-	bg1, bg2 := featuredImagePalette(style, title)
-	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		ratio := float64(y) / float64(height-1)
-		row := blendColor(bg1, bg2, ratio)
-		for x := 0; x < width; x++ {
-			canvas.SetRGBA(x, y, row)
-		}
+
+	canvas, err := loadPhotoBackground(bgDir, title, width, height)
+	if err != nil {
+		// Fallback: solid gradient background
+		canvas = gradientBackground(style, title, width, height)
 	}
+
+	drawDarkOverlay(canvas, width, height)
 
 	accentRGBA := mustHexColor(accent)
 	drawFillRect(canvas, 0, 0, 8, height, accentRGBA)
@@ -41,7 +53,7 @@ func renderFeaturedImage(path, style, title, subtitle string, tags []string, acc
 	drawCircle(canvas, 72, 54, 16, withAlpha(accentRGBA, 45))
 	drawCircle(canvas, 72, 54, 5, accentRGBA)
 
-	drawImgText(canvas, 96, 60, "mcp-hugo-server-go", accentRGBA)
+	drawImgText(canvas, 96, 60, "arleo.eu", accentRGBA)
 	drawTitle(canvas, 60, 438, title, accentRGBA)
 	if subtitle != "" {
 		drawWrappedText(canvas, 60, 500, subtitle, color.RGBA{235, 235, 235, 255}, 980)
@@ -62,8 +74,64 @@ func renderFeaturedImage(path, style, title, subtitle string, tags []string, acc
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
+// selectBackground picks one of the 6 background filenames deterministically from title.
+func selectBackground(title string) string {
+	h := md5.Sum([]byte(title))
+	n := binary.BigEndian.Uint64(h[:8])
+	return backgroundFiles[n%uint64(len(backgroundFiles))]
+}
+
+// loadPhotoBackground opens the selected background JPEG and copies it onto a 1200×675 canvas.
+// Backgrounds must be exactly width×height pixels; any other size falls back to gradient.
+func loadPhotoBackground(bgDir, title string, width, height int) (*image.RGBA, error) {
+	name := selectBackground(title)
+	bgPath := filepath.Join(bgDir, name)
+	f, err := os.Open(bgPath)
+	if err != nil {
+		return nil, fmt.Errorf("open background %s: %w", bgPath, err)
+	}
+	defer f.Close()
+	img, err := jpeg.Decode(f)
+	if err != nil {
+		return nil, fmt.Errorf("decode background %s: %w", bgPath, err)
+	}
+	b := img.Bounds()
+	if b.Dx() != width || b.Dy() != height {
+		return nil, fmt.Errorf("background %s is %dx%d, want %dx%d", name, b.Dx(), b.Dy(), width, height)
+	}
+	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+	draw.Draw(canvas, canvas.Bounds(), img, image.Point{}, draw.Src)
+	return canvas, nil
+}
+
+// drawDarkOverlay composites a semi-transparent dark gradient over the photo
+// to ensure title and tag text remain legible.
+func drawDarkOverlay(img *image.RGBA, width, height int) {
+	for y := 0; y < height; y++ {
+		ratio := float64(y) / float64(height-1)
+		// alpha goes from ~140 at top to ~195 at bottom
+		alpha := uint8(math.Round(140 + ratio*55))
+		stripe := image.Rect(0, y, width, y+1)
+		draw.Draw(img, stripe, image.NewUniform(color.RGBA{0, 0, 0, alpha}), image.Point{}, draw.Over)
+	}
+}
+
+// gradientBackground returns a solid gradient canvas as a fallback when no photo backgrounds are available.
+func gradientBackground(style, title string, width, height int) *image.RGBA {
+	bg1, bg2 := featuredImagePalette(style, title)
+	canvas := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		ratio := float64(y) / float64(height-1)
+		row := blendColor(bg1, bg2, ratio)
+		for x := 0; x < width; x++ {
+			canvas.SetRGBA(x, y, row)
+		}
+	}
+	return canvas
+}
+
 func featuredImagePalette(style, title string) (color.RGBA, color.RGBA) {
-	sum := sha1.Sum([]byte(style + "::" + title))
+	h := md5.Sum([]byte(style + "::" + title))
 	base := colorFromHex(map[string]string{
 		"geo":  "#2a2254",
 		"tech": "#14243f",
@@ -83,9 +151,9 @@ func featuredImagePalette(style, title string) (color.RGBA, color.RGBA) {
 		}
 	}
 	variant := color.RGBA{
-		R: shift(base.R, int(sum[0]%24)-12),
-		G: shift(base.G, int(sum[1]%18)-9),
-		B: shift(base.B, int(sum[2]%20)-10),
+		R: shift(base.R, int(h[0]%24)-12),
+		G: shift(base.G, int(h[1]%18)-9),
+		B: shift(base.B, int(h[2]%20)-10),
 		A: 255,
 	}
 	return base, variant
@@ -231,10 +299,38 @@ func hexToRGB(s string) ([3]byte, error) {
 	if len(s) != 6 {
 		return out, fmt.Errorf("invalid hex color")
 	}
-	b, err := hex.DecodeString(s)
-	if err != nil || len(b) != 3 {
-		return out, fmt.Errorf("invalid hex color")
+	b := make([]byte, 3)
+	for i := 0; i < 3; i++ {
+		n, err := parseHexByte(s[i*2 : i*2+2])
+		if err != nil {
+			return out, fmt.Errorf("invalid hex color")
+		}
+		b[i] = n
 	}
 	copy(out[:], b)
 	return out, nil
+}
+
+func parseHexByte(s string) (byte, error) {
+	if len(s) != 2 {
+		return 0, fmt.Errorf("bad byte")
+	}
+	hi, ok1 := hexVal(s[0])
+	lo, ok2 := hexVal(s[1])
+	if !ok1 || !ok2 {
+		return 0, fmt.Errorf("bad byte")
+	}
+	return hi<<4 | lo, nil
+}
+
+func hexVal(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
 }
