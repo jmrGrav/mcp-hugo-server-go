@@ -4,25 +4,53 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
-## [v1.3.7-pre1] - 2026-07-11
+## [v1.3.7] - 2026-07-11
 
 ### Added
-- `update_page` now accepts `lang` parameter to target a specific language file on bilingual pages
-  (e.g. `lang: "fr"` targets `index.fr.md`). Omitting `lang` on a page with multiple language files
-  now returns an explicit `ambiguous_language` error listing available languages instead of silently
-  editing the wrong file (#215).
-- `update_page` now accepts `tags`, `categories`, `draft`, and `description` fields, enabling
+- **`get_backlinks`** (`content.read`) — new read tool that returns all pages linking to a given
+  slug, built from a lazy reverse-link cache (`backlinkCache`) invalidated on every write mutation.
+  Orphan pages (zero incoming links) are also surfaced in `get_site_health` (#217).
+- **`get_page`**: new `allow_source_fallback` parameter (bool, default `false`) — opt-in to return
+  source-index content for pages not yet built by Hugo (e.g. immediately after `create_page`).
+  Draft pages are always excluded regardless of this flag. Default behaviour (published-only) is
+  unchanged and the API contract is now explicit (#223).
+- **`get_page`**: new `content_only` parameter (bool) — strips navigation, header, and footer from
+  the rendered HTML of published pages, returning article-only HTML extracted from `<article>` /
+  `<main>` (#209).
+- **`update_page` / `create_page`**: new `dry_run` parameter (bool) — returns a unified diff
+  preview without writing to disk. Uses in-process Wagner-Fischer LCS; no git dependency (#218).
+- **`update_page`** now accepts `lang` parameter to target a specific language file on bilingual
+  pages (e.g. `lang: "fr"` targets `index.fr.md`). Omitting `lang` on a page with multiple
+  language files returns an explicit `ambiguous_language` error (#215).
+- **`update_page`** now accepts `tags`, `categories`, `draft`, and `description` fields, enabling
   front matter updates without touching raw Markdown (#214).
-- `build_site` now reloads the in-memory site index after a successful build so that `get_sitemap`,
-  `get_broken_links`, and `search_pages` immediately reflect the rebuilt output without a server
-  restart (#212).
-- `site.Index.Reload(cfg)` method with `sync.RWMutex` — atomic pointer swap of all index fields;
-  read methods protected with `RLock` to eliminate data races during concurrent reload.
+- **`build_site`** now reloads the in-memory site index after a successful build so that
+  `get_sitemap`, `get_broken_links`, and `search_pages` immediately reflect the rebuilt output
+  without a server restart (#212).
+- `site.Index.Reload(cfg)` with `sync.RWMutex` — atomic pointer swap of all index fields; read
+  methods protected with `RLock` to eliminate data races during concurrent reload.
 - Post-build webhooks: Cloudflare cache purge (full zone), IndexNow batch submission, and Google
   Indexing API `URL_UPDATED` notifications fire automatically after every successful `build_site`.
   All three are opt-in via host config only; credentials never committed to git. Taxonomy and
   search URLs are filtered before submission. Google plugin includes a daily quota guard (default
-  180/day) with JSON state persistence (#216, #223).
+  180/day) with JSON state persistence (#216).
+- CI: `TestTotalToolCount` asserts that `Defs()` sum across all packages equals the expected
+  constant (30 tools) (#203).
+
+### Fixed
+- **`validate_front_matter`** returned silent success (`pages_checked: 0`) when a slug was
+  provided but did not match any source page. Now returns `content_not_found` (#222).
+- **`validate_front_matter`** false positive "missing date" immediately after `create_page` — the
+  in-memory source-index entry now carries the correct `date` populated at creation time.
+- **Public site index stale** after `update_page` / `delete_page` between Hugo builds.
+  `update_page` now refreshes metadata in the public index when the entry already exists;
+  `delete_page` removes it via `RemoveBySlug`; `create_page` no longer injects a premature stub
+  (page is source-only until Hugo builds it) (#219).
+- **`diff_page`** always returned an empty diff when git was unavailable in production. Fixed by
+  falling back to in-process unified diff (#207).
+- **`validateFrontmatterRoundTrip`** false positive: a Markdown thematic break (`---`) at the
+  top of a body was incorrectly rejected as duplicated frontmatter. Now only triggers when a full
+  YAML block (opening + closing `---` within 30 lines) is detected.
 
 ## [v1.3.6] - 2026-07-11
 
