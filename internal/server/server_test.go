@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -400,6 +401,17 @@ func oauthHashForTest(token string) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
+func withDefaultLogger(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() {
+		slog.SetDefault(prev)
+	})
+	return &buf
+}
+
 func TestUnauthenticatedMCPReturns401WithWWWAuthenticate(t *testing.T) {
 	// When OAuth is enabled every unauthenticated /mcp request must return 401
 	// so that OAuth clients (Claude.ai, ChatGPT) discover the authorization
@@ -422,6 +434,63 @@ func TestUnauthenticatedMCPReturns401WithWWWAuthenticate(t *testing.T) {
 	}
 	if !strings.Contains(wwwAuth, "resource_metadata=") {
 		t.Fatalf("WWW-Authenticate missing resource_metadata: %q", wwwAuth)
+	}
+}
+
+func TestInSessionMissingBearerEmitsStructuredLog(t *testing.T) {
+	srv := mustOAuthServer(t)
+	logBuf := withDefaultLogger(t)
+
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", "session-123")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d want 401", rec.Code)
+	}
+	raw := logBuf.String()
+	if !strings.Contains(raw, `"msg":"mcp: auth rejected"`) {
+		t.Fatalf("missing auth rejection log: %s", raw)
+	}
+	if !strings.Contains(raw, `"reason":"missing_bearer"`) {
+		t.Fatalf("missing rejection reason in log: %s", raw)
+	}
+	if !strings.Contains(raw, `"has_session":true`) {
+		t.Fatalf("missing has_session=true in log: %s", raw)
+	}
+}
+
+func TestInSessionInvalidBearerEmitsStructuredLog(t *testing.T) {
+	srv := mustOAuthServer(t)
+	logBuf := withDefaultLogger(t)
+
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", "session-123")
+	req.Header.Set("Authorization", "Bearer definitely-invalid")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d want 401", rec.Code)
+	}
+	raw := logBuf.String()
+	if !strings.Contains(raw, `"msg":"mcp: auth rejected"`) {
+		t.Fatalf("missing auth rejection log: %s", raw)
+	}
+	if !strings.Contains(raw, `"reason":"invalid_token"`) {
+		t.Fatalf("missing invalid_token reason in log: %s", raw)
+	}
+	if !strings.Contains(raw, `"has_session":true`) {
+		t.Fatalf("missing has_session=true in log: %s", raw)
 	}
 }
 

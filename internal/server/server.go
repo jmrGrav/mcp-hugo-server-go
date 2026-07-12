@@ -64,6 +64,20 @@ func buildRegistry() *tools.Registry {
 	return reg
 }
 
+func logMCPAuthRejection(r *http.Request, reason string) {
+	if r == nil {
+		return
+	}
+	slog.Warn(
+		"mcp: auth rejected",
+		"reason", reason,
+		"method", r.Method,
+		"path", r.URL.Path,
+		"has_session", strings.TrimSpace(r.Header.Get("Mcp-Session-Id")) != "",
+		"remote_addr", r.RemoteAddr,
+	)
+}
+
 // openStore creates the OAuth token store from the config.
 // Access tokens are persisted via the chosen backend. All other OAuth state
 // (clients, auth codes, agent registrations) is intentionally in-Service
@@ -397,6 +411,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 					issuer, issuer+"/.well-known/oauth-protected-resource")
 				auth := strings.TrimSpace(r.Header.Get("Authorization"))
 				if auth == "" {
+					logMCPAuthRejection(r, "missing_bearer")
 					// No token: challenge so OAuth clients (Claude.ai, ChatGPT) discover
 					// the auth server and start the PKCE flow. Without this 401 they see
 					// 200 + anonymous tools and never learn auth is available (RFC 6750 §3.1).
@@ -406,6 +421,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 					return
 				}
 				if !strings.HasPrefix(auth, "Bearer ") {
+					logMCPAuthRejection(r, "invalid_bearer_format")
 					w.Header().Set("WWW-Authenticate", wwwAuth)
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
@@ -413,6 +429,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 				token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
 				scope, legacy, ok := oauthSvc.ValidateBearerDetails(token)
 				if !ok {
+					logMCPAuthRejection(r, "invalid_token")
 					w.Header().Set("WWW-Authenticate", wwwAuth+`, error="invalid_token"`)
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
