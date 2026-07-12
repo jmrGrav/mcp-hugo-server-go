@@ -174,6 +174,40 @@ type getBacklinksOutput struct {
 	Errors      []string         `json:"errors"`
 }
 
+type suggestInternalLinksInput struct {
+	Slug       string   `json:"slug,omitempty"`
+	Tags       []string `json:"tags,omitempty"`
+	Categories []string `json:"categories,omitempty"`
+	Body       string   `json:"body,omitempty"`
+	Limit      int      `json:"limit,omitempty"`
+}
+
+type linkSuggestionDTO struct {
+	Slug             string   `json:"slug"`
+	Title            string   `json:"title"`
+	URL              string   `json:"url"`
+	AnchorText       string   `json:"anchor_text"`
+	SharedTags       []string `json:"shared_tags,omitempty"`
+	SharedCategories []string `json:"shared_categories,omitempty"`
+	Score            int      `json:"score"`
+	BodyMention      bool     `json:"body_mention,omitempty"`
+}
+
+type suggestInternalLinksData struct {
+	Slug        string              `json:"slug,omitempty"`
+	Total       int                 `json:"total"`
+	Suggestions []linkSuggestionDTO `json:"suggestions"`
+}
+
+type suggestInternalLinksOutput struct {
+	Success     bool                     `json:"success"`
+	Version     string                   `json:"version"`
+	GeneratedAt string                   `json:"generated_at"`
+	Data        suggestInternalLinksData `json:"data"`
+	Warnings    []string                 `json:"warnings"`
+	Errors      []string                 `json:"errors"`
+}
+
 // RegisterWithSourceIndex wires additional read-only tools that benefit from the
 // source index. Existing tools remain registered via Register.
 func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
@@ -184,7 +218,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 
 	RegisterDiffPage(s, idx, srcIdx, cfg)
 
-	addReadOnlyTool(s, "search_content", "Search content", "Search Hugo content with filters for type, tag, category, language, pagination, and sort order. Returns page metadata only. Requires content.read.",
+	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. Requires content.read. For a simple unauthenticated keyword search use search_pages.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -321,7 +355,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
 		})
 
-	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Requires content.read.",
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_front_matter with no slug filter. Requires content.read.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, validateOutput, error) {
 			if srcIdx == nil {
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
@@ -395,6 +429,148 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Errors:   []string{},
 			}, nil
 		})
+
+	addReadOnlyTool(s, "suggest_internal_links", "Suggest internal links",
+		"Recommend existing published pages to link from a draft or existing page, based on shared tags and categories. "+
+			"Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. "+
+			"Optionally include body to detect pages whose titles already appear in the text (body_mention: true). "+
+			"Returns ranked suggestions with anchor_text and shared taxonomy context. Requires content.read.",
+		func(_ context.Context, _ *mcp.CallToolRequest, in suggestInternalLinksInput) (*mcp.CallToolResult, suggestInternalLinksOutput, error) {
+			if idx == nil {
+				return nil, suggestInternalLinksOutput{}, fmt.Errorf("index not initialized")
+			}
+			limit := clampLimit(in.Limit, 10, 20)
+
+			// Build the reference taxonomy: start from provided tags/categories, then merge in the
+			// indexed page's taxonomy when a slug is given.
+			refTags := make([]string, 0)
+			refCats := make([]string, 0)
+			refTags = append(refTags, in.Tags...)
+			refCats = append(refCats, in.Categories...)
+
+			var resolvedSlug string
+			warnings := []string{}
+
+			if strings.TrimSpace(in.Slug) != "" {
+				resolver := site.NewPageResolver(idx, srcIdx, cfg)
+				resolved, ok := resolver.Resolve(in.Slug)
+				if !ok {
+					warnings = append(warnings, fmt.Sprintf("slug %q not found in index; using only provided tags/categories", in.Slug))
+				} else {
+					if resolved.Public != nil {
+						resolvedSlug = resolved.Public.Slug
+						refTags = append(refTags, resolved.Public.Tags...)
+						refCats = append(refCats, resolved.Public.Categories...)
+					} else if resolved.Source != nil {
+						resolvedSlug = "/" + strings.Trim(resolved.Source.Slug, "/") + "/"
+						// Merge source-page taxonomy so draft-slug callers get suggestions (W1).
+						refTags = append(refTags, resolved.Source.Tags...)
+						refCats = append(refCats, resolved.Source.Categories...)
+					}
+				}
+			}
+
+			if len(refTags) == 0 && len(refCats) == 0 {
+				return nil, suggestInternalLinksOutput{}, fmt.Errorf("invalid_params: provide at least one of slug, tags, or categories")
+			}
+
+			suggestions := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, limit)
+			return nil, suggestInternalLinksOutput{
+				Success:     true,
+				Version:     toolResultVersion,
+				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+				Data: suggestInternalLinksData{
+					Slug:        resolvedSlug,
+					Total:       len(suggestions),
+					Suggestions: suggestions,
+				},
+				Warnings: warnings,
+				Errors:   []string{},
+			}, nil
+		})
+}
+
+// containsPhrase reports whether phrase appears in text with word-boundary
+// delimiters on both sides. Both text and phrase must already be lowercased.
+func containsPhrase(text, phrase string) bool {
+	for {
+		i := strings.Index(text, phrase)
+		if i < 0 {
+			return false
+		}
+		before := i == 0 || !isWordRune(rune(text[i-1]))
+		after := i+len(phrase) >= len(text) || !isWordRune(rune(text[i+len(phrase)]))
+		if before && after {
+			return true
+		}
+		text = text[i+1:]
+	}
+}
+
+func isWordRune(r rune) bool {
+	return r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+}
+
+func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats []string, body string, limit int) []linkSuggestionDTO {
+	type scored struct {
+		dto  linkSuggestionDTO
+		date string
+	}
+	bodyLower := strings.ToLower(body)
+	classifier := site.NewClassifierFromPages(idx.Sitemap())
+	var candidates []scored
+	for _, pg := range idx.Sitemap() {
+		// Skip taxonomy list pages, home page, and the source page itself (N1).
+		if !classifier.IsContent(pg) {
+			continue
+		}
+		if pg.Slug == excludeSlug {
+			continue
+		}
+		sharedTagTerms := taxonomy.SharedTerms(pg.Tags, refTags)
+		sharedCatTerms := taxonomy.SharedTerms(pg.Categories, refCats)
+		score := len(sharedTagTerms)*2 + len(sharedCatTerms)
+		if score == 0 {
+			continue
+		}
+		// E1/W2: guard empty title; use phrase-boundary check to avoid false positives
+		// (e.g. title "Go" matching "go to the store").
+		titleLower := strings.ToLower(strings.TrimSpace(pg.Title))
+		mention := bodyLower != "" && titleLower != "" && containsPhrase(bodyLower, titleLower)
+		candidates = append(candidates, scored{
+			date: pg.Date,
+			dto: linkSuggestionDTO{
+				Slug:             pg.Slug,
+				Title:            pg.Title,
+				URL:              pg.URL,
+				AnchorText:       pg.Title,
+				SharedTags:       taxonomy.Slugs(sharedTagTerms),
+				SharedCategories: taxonomy.Slugs(sharedCatTerms),
+				Score:            score,
+				BodyMention:      mention,
+			},
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		// Priority: body mention → score → recency (W3).
+		mi, mj := candidates[i].dto.BodyMention, candidates[j].dto.BodyMention
+		if mi != mj {
+			return mi
+		}
+		si, sj := candidates[i].dto.Score, candidates[j].dto.Score
+		if si != sj {
+			return si > sj
+		}
+		return candidates[i].date > candidates[j].date
+	})
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	out := make([]linkSuggestionDTO, len(candidates))
+	for i, c := range candidates {
+		out[i] = c.dto
+	}
+	return out
 }
 
 func filterContentPages(pages []site.Page, in searchContentInput, aliases map[string]string) []site.Page {

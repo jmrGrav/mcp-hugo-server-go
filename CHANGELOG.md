@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Added
+- **`suggest_internal_links`** (`content.read`) — new tool that recommends existing published pages
+  to link from a draft or page, ranked by shared tags/categories. Accepts `slug` (merges that
+  page's taxonomy, including source-only drafts), `tags`, `categories`, and optional `body` (detects
+  title mentions using phrase-boundary matching to avoid false positives). Returns structured
+  envelope with `anchor_text`, `shared_tags`, `shared_categories`, `score`, and `body_mention`
+  (#220).
+- **`docs/mcp-contract.md`** — explicit MCP contract document covering both response envelope
+  shapes (flat and structured), error model with `snake_case_prefix:` codes, pagination, naming
+  conventions, versioning, and per-tool inventory table (#224, #210).
+- **`docs/agent-tool-matrix.md`** — agent-first tool-selection matrix: scenario→tool quick
+  reference, common workflow sequences (create/edit/delete/validate/link), a decision tree, and a
+  disambiguation table for commonly confused tool pairs (#225, #227).
+
+### Changed
+- `list_pages` description: clarifies it returns content pages only (not taxonomy list pages) and
+  cross-references `get_sitemap` for the full URL inventory.
+- `search_pages` description: cross-references `search_content` for filtered/paginated search.
+- `get_sitemap` description: clarifies it includes taxonomy pages by default; cross-references
+  `list_pages` for content-only browsing.
+- `search_content` description: cross-references `search_pages` for unauthenticated keyword search.
+- `validate_site` description: notes equivalence to `validate_front_matter` with no slug filter.
+
 ## [v1.3.7] - 2026-07-11
 
 ### Added

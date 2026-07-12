@@ -134,7 +134,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	}
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
-	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published Hugo pages with pagination. Returns page metadata only and does not require authentication.",
+	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published content pages (articles and pages, not taxonomy list pages) with pagination. Returns slug, title, summary, tags, categories, date, URL. Does not require authentication. For the full URL inventory including taxonomy pages use get_sitemap.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
 				return nil, listPagesOutput{}, fmt.Errorf("index not initialized")
@@ -193,7 +193,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			return nil, getPageOutput{Page: dto}, nil
 		})
 
-	addReadOnlyTool(s, "search_pages", "Search content", "Search the published index by title, summary, tags, categories, and URL. Use this for simple keyword lookup without authentication.",
+	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. For filtered search with type, language, sort, pagination, or to search source-only content use search_content (requires content.read).",
 		func(_ context.Context, _ *mcp.CallToolRequest, in searchPagesInput) (*mcp.CallToolResult, searchPagesOutput, error) {
 			if idx == nil {
 				return nil, searchPagesOutput{}, fmt.Errorf("index not initialized")
@@ -249,8 +249,8 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_sitemap", "Read sitemap",
-		"Return the published sitemap with URL and publication date. Useful for site-wide discovery without authentication. "+
-			"Pass exclude_taxonomies=true to omit Hugo-generated tag and category listing pages, keeping only content pages.",
+		"Return the full published URL inventory (slug, URL, date) including taxonomy list pages (/tags/…, /categories/…). No authentication required. "+
+			"Pass exclude_taxonomies=true to restrict to content pages only. For content-page browsing with titles and summaries use list_pages.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getSitemapInput) (*mcp.CallToolResult, getSitemapOutput, error) {
 			if idx == nil {
 				return nil, getSitemapOutput{}, fmt.Errorf("index not initialized")
