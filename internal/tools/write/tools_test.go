@@ -402,6 +402,54 @@ func TestDeletePageCleansPublicDir(t *testing.T) {
 	}
 }
 
+// TestDeletePagePublicCleanupWarning verifies that when the public output
+// directory cannot be removed (e.g. parent dir is read-only), delete_page
+// still succeeds but surfaces a warning in the response (#239).
+func TestDeletePagePublicCleanupWarning(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("chmod tricks don't apply as root")
+	}
+	contentRoot := t.TempDir()
+	siteRoot := t.TempDir()
+
+	session, done := newTestServerWithSiteRoot(t, contentRoot, siteRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/read-only-zombie", "title": "RO Zombie",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	// Create the public output dir then make its parent read-only so RemoveAll fails.
+	publicPageDir := filepath.Join(siteRoot, "posts", "read-only-zombie")
+	if err := os.MkdirAll(publicPageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	postsDir := filepath.Join(siteRoot, "posts")
+	if err := os.Chmod(postsDir, 0o555); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(postsDir, 0o755) })
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/read-only-zombie"})
+
+	// Must restore before any further assertions so t.TempDir cleanup can proceed.
+	_ = os.Chmod(postsDir, 0o755)
+
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page must not hard-fail on public cleanup error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "warning") {
+		t.Errorf("expected a warning in response when public cleanup fails, got: %s", raw)
+	}
+}
+
 func TestCreatePageDryRun(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, done := newTestServer(t, contentRoot)

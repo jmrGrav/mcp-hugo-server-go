@@ -26,6 +26,7 @@ type buildSiteInput struct{}
 type buildSiteOutput struct {
 	Status     string `json:"status"`
 	DurationMs int64  `json:"duration_ms"`
+	Warning    string `json:"warning,omitempty"`
 }
 
 // buildErrorPayload is the structured JSON returned on Hugo failure.
@@ -259,6 +260,15 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 		args := buildCommandArgs(cacheDir, false)
 		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		// Kill the whole process group on timeout/cancellation so that shell
+		// wrappers and any children spawned by hugo are also terminated (#240/#243).
+		cmd.Cancel = func() error {
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+			return nil
+		}
 		var stderrBuf bytes.Buffer
 		var stdoutBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
@@ -316,6 +326,37 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			return nil, buildSiteOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
 		}
 
+		// Run post-build callbacks within a bounded deadline (#241). Optional
+		// side-effect callbacks (CDN purge, search indexing) swallow their errors
+		// at the call site in server.go; any error here means a required step
+		// (index reload, DB sync) failed. Surface as partial_success so callers
+		// know the build succeeded but read state may be stale (#238/#244).
+		const callbackTimeout = 30 * time.Second
+		cbCtx, cbCancel := context.WithTimeout(context.Background(), callbackTimeout)
+		defer cbCancel()
+		var cbWarning string
+		for i, fn := range siteReload {
+			if fn == nil {
+				continue
+			}
+			done := make(chan error, 1)
+			go func(f func() error) { done <- f() }(fn)
+			select {
+			case cbErr := <-done:
+				if cbErr != nil {
+					cbWarning = fmt.Sprintf("post-build callback %d failed: %v", i, cbErr)
+					slog.Warn("build_site: post-build callback failed", "callback_index", i, "error", cbErr)
+				}
+			case <-cbCtx.Done():
+				cbWarning = fmt.Sprintf("post-build callback %d timed out after %s", i, callbackTimeout)
+				slog.Warn("build_site: post-build callback timed out", "callback_index", i, "timeout", callbackTimeout)
+			}
+		}
+
+		status := "ok"
+		if cbWarning != "" {
+			status = "partial_success"
+		}
 		slog.Info("build_site completed",
 			"build_id", runID,
 			"tool", "build_site",
@@ -325,15 +366,8 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			"cache_dir", cacheDir,
 			"duration_ms", durationMs,
 			"exit_code", exitCode,
+			"status", status,
 		)
-		for i, fn := range siteReload {
-			if fn == nil {
-				continue
-			}
-			if err := fn(); err != nil {
-				slog.Warn("build_site: post-build callback failed", "callback_index", i, "error", err)
-			}
-		}
-		return nil, buildSiteOutput{Status: "ok", DurationMs: durationMs}, nil
+		return nil, buildSiteOutput{Status: status, DurationMs: durationMs, Warning: cbWarning}, nil
 	})
 }

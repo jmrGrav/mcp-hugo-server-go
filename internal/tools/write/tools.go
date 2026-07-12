@@ -63,7 +63,8 @@ type deletePageInput struct {
 }
 
 type deletePageOutput struct {
-	Slug string `json:"slug"`
+	Slug    string `json:"slug"`
+	Warning string `json:"warning,omitempty"`
 }
 
 var reservedSlugs = map[string]bool{
@@ -372,14 +373,27 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if siteIdx != nil {
 			siteIdx.RemoveBySlug(in.Slug)
 		}
+		var deleteWarning string
 		if siteDB != nil {
 			if err := siteDB.DeletePage(in.Slug); err != nil {
+				// Source and in-memory indexes are already gone; surface the DB
+				// staleness explicitly so callers know get_broken_links may be
+				// stale until the next build (#242).
+				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", err)
 				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", err)
 			}
 		}
 		if cfg.SiteRoot != "" {
 			publicPath := filepath.Join(cfg.SiteRoot, strings.Trim(in.Slug, "/"))
 			if rmErr := os.RemoveAll(publicPath); rmErr != nil {
+				// Source is already gone; surface the zombie so the caller knows
+				// the public output is still live (#239).
+				msg := fmt.Sprintf("source deleted but public output cleanup failed: %v", rmErr)
+				if deleteWarning != "" {
+					deleteWarning += "; " + msg
+				} else {
+					deleteWarning = msg
+				}
 				slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
 			}
 		}
@@ -399,7 +413,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
-		return nil, deletePageOutput(in), nil
+		return nil, deletePageOutput{Slug: in.Slug, Warning: deleteWarning}, nil
 	})
 }
 

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -76,6 +77,14 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		args := buildCommandArgs(cacheDir, true)
 		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		// Kill the whole process group on timeout/cancellation (#240/#243).
+		cmd.Cancel = func() error {
+			if cmd.Process != nil {
+				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			}
+			return nil
+		}
 		var stderrBuf bytes.Buffer
 		var stdoutBuf bytes.Buffer
 		cmd.Stderr = &stderrBuf
