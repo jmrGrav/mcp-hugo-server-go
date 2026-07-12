@@ -46,6 +46,9 @@ func Open(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("db: open %q: %w", path, err)
 	}
+	// Single connection so PRAGMA foreign_keys=ON holds for every statement.
+	// journal_mode=WAL is file-level and survives pool rotation; foreign_keys is not.
+	sqlDB.SetMaxOpenConns(1)
 	if _, err := sqlDB.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: pragmas: %w", err)
@@ -297,6 +300,16 @@ func (d *DB) SnapshotHealth(payload string) error {
 	return err
 }
 
+// SnapshotSiteHealth queries current DB state and writes a health snapshot.
+// Called by the build_site callback after PostBuildSync completes.
+func (d *DB) SnapshotSiteHealth() error {
+	var totalPages, brokenLinks int
+	_ = d.db.QueryRow("SELECT COUNT(*) FROM pages WHERE published=1 AND draft=0").Scan(&totalPages)
+	_ = d.db.QueryRow("SELECT COUNT(*) FROM links WHERE status='broken'").Scan(&brokenLinks)
+	payload := fmt.Sprintf(`{"total_pages":%d,"broken_links":%d}`, totalPages, brokenLinks)
+	return d.SnapshotHealth(payload)
+}
+
 // StartupSync performs a hash-gated full reindex from the in-memory indexes.
 // Pages already in the DB with matching content hashes are skipped.
 // Stale DB entries (no longer in either index) are deleted.
@@ -521,9 +534,10 @@ func extractAttr(attrs, name string) string {
 
 func hashPublicPage(p site.Page) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s|%s",
+	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%s|%s|%s",
 		p.Title, p.Summary, p.Date, p.Lang, p.URL,
 		strings.Join(p.Tags, ","), strings.Join(p.Categories, ","),
+		p.RawHTML,
 	)
 	return hex.EncodeToString(h.Sum(nil))[:16]
 }
