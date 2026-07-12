@@ -589,3 +589,145 @@ func TestUpdatePageDryRun(t *testing.T) {
 		t.Errorf("update_page dry_run must not write to disk; file = %q", data)
 	}
 }
+
+// TestCreatePageAtomicWriteCheckedRejectsSymlink verifies that create_page
+// fails (and does not write outside content_root) when the target slug
+// directory is a symlink pointing outside — protecting the T2/T3 write window
+// addressed by AtomicWriteChecked (#233).
+func TestCreatePageAtomicWriteCheckedRejectsSymlink(t *testing.T) {
+	contentRoot := t.TempDir()
+	target := t.TempDir()
+
+	// Pre-create the slug dir as a symlink to a dir outside contentRoot.
+	symlinkDir := filepath.Join(contentRoot, "escape-post")
+	if err := os.Symlink(target, symlinkDir); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":  "escape-post",
+		"title": "Escape Post",
+	})
+	if !res.IsError {
+		t.Fatal("expected error when slug dir is a symlink, got success")
+	}
+	// No file must be written to the symlink target.
+	if _, err := os.Stat(filepath.Join(target, "index.md")); !os.IsNotExist(err) {
+		t.Error("index.md was written to symlink target — content root escape not prevented")
+	}
+}
+
+// TestUpdatePageAtomicWriteCheckedRejectsSymlink verifies that update_page
+// fails and does not write outside content_root when the slug directory is
+// a symlink (#233).
+func TestUpdatePageAtomicWriteCheckedRejectsSymlink(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	// Create a real page first so it appears in the source index.
+	realDir := filepath.Join(contentRoot, "symlink-me")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	original := "---\ntitle: Original\ndate: \"2026-01-01T00:00:00Z\"\n---\nBody."
+	if err := os.WriteFile(filepath.Join(realDir, "index.md"), []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// Confirm update succeeds before swapping.
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":  "symlink-me",
+		"title": "Updated",
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page setup failed: %s", raw)
+	}
+
+	// Replace the real dir with a symlink pointing outside contentRoot.
+	target := t.TempDir()
+	if err := os.RemoveAll(realDir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if err := os.Symlink(target, realDir); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":  "symlink-me",
+		"title": "Should Not Write",
+	})
+	if !res.IsError {
+		t.Fatal("expected error when slug dir swapped to symlink, got success")
+	}
+	// No file must be written to the symlink target.
+	if _, err := os.Stat(filepath.Join(target, "index.md")); !os.IsNotExist(err) {
+		t.Error("index.md was written to symlink target — content root escape not prevented")
+	}
+}
+
+// TestDeletePageAuditLogErrorSurfacedAsWarning verifies that when the audit log
+// cannot be written (e.g. it exists as a directory), delete_page still succeeds
+// and surfaces the failure in the response Warning field rather than returning
+// an error (#235).
+func TestDeletePageAuditLogErrorSurfacedAsWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	siteRoot := t.TempDir()
+
+	session, done := newTestServerWithSiteRoot(t, contentRoot, siteRoot)
+	defer done()
+
+	// Create a page to delete.
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "audit-test-page",
+		"title":      "Audit Test",
+		"body":       "body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+
+	// Simulate a public output directory to verify it is cleaned up too.
+	publicDir := filepath.Join(siteRoot, "audit-test-page")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll public dir: %v", err)
+	}
+
+	// Create .mcp-audit.log as a directory to make it unusable as a file.
+	auditLogPath := filepath.Join(contentRoot, ".mcp-audit.log")
+	if err := os.MkdirAll(auditLogPath, 0o755); err != nil {
+		t.Fatalf("MkdirAll audit log dir: %v", err)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "audit-test-page"})
+
+	// Must NOT return an error — deletion is committed.
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page must not fail when audit log write fails: %s", raw)
+	}
+
+	// Source directory must be gone.
+	if _, err := os.Stat(filepath.Join(contentRoot, "audit-test-page")); !os.IsNotExist(err) {
+		t.Error("source directory must be removed")
+	}
+
+	// Public directory must be gone.
+	if _, err := os.Stat(publicDir); !os.IsNotExist(err) {
+		t.Error("public directory must be removed")
+	}
+
+	// Response must contain a warning mentioning audit_error.
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "audit_error") {
+		t.Errorf("expected 'audit_error' in response warning, got: %s", raw)
+	}
+}

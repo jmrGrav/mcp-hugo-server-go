@@ -311,3 +311,122 @@ func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
 		t.Fatalf("error text %q does not contain 'invalid_params'", text)
 	}
 }
+
+// TestGenerateFeaturedImage_SymlinkedImagesDir_APIMode verifies that
+// generate_featured_image (API mode) fails closed when static/images is
+// symlinked to a directory outside hugo_root. Uses RejectSymlinks=false to
+// confirm the fix forces detection regardless of the operator config setting
+// (#234).
+func TestGenerateFeaturedImage_SymlinkedImagesDir_APIMode(t *testing.T) {
+	fakeBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(fakeBytes)
+	}))
+	defer srv.Close()
+
+	hugoRoot := t.TempDir()
+	outside := t.TempDir()
+
+	// Create static/ but make static/images a symlink to outside.
+	staticDir := filepath.Join(hugoRoot, "static")
+	if err := os.MkdirAll(staticDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll static: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(staticDir, "images")); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.ImageGenURL = srv.URL
+	cfg.RejectSymlinks = false // deliberately off to prove the fix forces detection
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+		"slug":   "my-post",
+		"prompt": "test prompt",
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error when static/images is a symlink, got success")
+	}
+	// Verify no file escaped to the outside directory.
+	if _, statErr := os.Stat(filepath.Join(outside, "my-post-featured.jpg")); !os.IsNotExist(statErr) {
+		t.Error("image was written to symlink target — hugo_root escape not prevented")
+	}
+}
+
+// TestGenerateFeaturedImage_SymlinkedImagesDir_LocalRender verifies that
+// generate_featured_image (local render mode) fails closed when static/images
+// is symlinked outside hugo_root, even when RejectSymlinks=false (#234).
+func TestGenerateFeaturedImage_SymlinkedImagesDir_LocalRender(t *testing.T) {
+	hugoRoot := t.TempDir()
+	outside := t.TempDir()
+
+	staticDir := filepath.Join(hugoRoot, "static")
+	if err := os.MkdirAll(staticDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll static: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(staticDir, "images")); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.RejectSymlinks = false // deliberately off to prove the fix forces detection
+	// No ImageGenURL → local render path.
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+		"slug":  "my-post",
+		"title": "My Post",
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error when static/images is a symlink (local render), got success")
+	}
+	// Verify no file escaped to the outside directory.
+	if _, statErr := os.Stat(filepath.Join(outside, "my-post-featured.jpg")); !os.IsNotExist(statErr) {
+		t.Error("image was written to symlink target — hugo_root escape not prevented")
+	}
+}
+
+// TestGenerateFeaturedImage_NormalPath_StillSucceeds verifies that the
+// symlink-detection fix does not break the normal (non-symlinked) path (#234).
+func TestGenerateFeaturedImage_NormalPath_StillSucceeds(t *testing.T) {
+	hugoRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.RejectSymlinks = false // prove fix works regardless of config
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+		"slug":  "normal-post",
+		"title": "Normal Post",
+	})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("normal path must succeed after fix; got error: %s", resultText(res))
+	}
+
+	expectedPath := filepath.Join(hugoRoot, "static", "images", "normal-post-featured.jpg")
+	if _, statErr := os.Stat(expectedPath); statErr != nil {
+		t.Fatalf("expected file at %s: %v", expectedPath, statErr)
+	}
+}
