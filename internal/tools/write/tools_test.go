@@ -406,9 +406,9 @@ func TestUpdatePageDryRunMultilingualPath(t *testing.T) {
 	defer done()
 
 	res := callTool(t, session, "update_page", map[string]any{
-		"slug":     "posts/csp-nonce",
-		"title":    "Nouveau titre",
-		"dry_run":  true,
+		"slug":    "posts/csp-nonce",
+		"title":   "Nouveau titre",
+		"dry_run": true,
 	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
