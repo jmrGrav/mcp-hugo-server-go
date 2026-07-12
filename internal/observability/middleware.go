@@ -1,9 +1,12 @@
 package observability
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type responseWriter struct {
@@ -29,4 +32,81 @@ func RequestMiddleware(next http.Handler, log *slog.Logger) http.Handler {
 			"remote_addr", r.RemoteAddr,
 		)
 	})
+}
+
+// NewToolCallMiddleware returns an MCP server middleware that emits one structured
+// log line per tools/call invocation. Fields emitted:
+//
+//   - tool_name    — the MCP tool name (e.g. "get_page"); unknown client-supplied
+//     names are recorded as "unknown" to prevent cardinality explosion (E3).
+//   - scope        — the OAuth scope this server tier serves (server-controlled, E1).
+//   - duration_ms  — wall-clock latency in milliseconds.
+//   - result_class — "success", "tool_error", or "protocol_error".
+//   - response_bytes — approximate byte size of the result payload (estimated from
+//     content text lengths, not a second JSON marshal, W1).
+//
+// knownTools is the set of registered tool names; any other name from the wire is
+// replaced with "unknown" to cap Prometheus series cardinality (E3).
+// scope is the fixed OAuth scope for this server instance (e.g. "content.read").
+// No request arguments, page content, or OAuth tokens are logged.
+func NewToolCallMiddleware(log *slog.Logger, m *Metrics, scope string, knownTools map[string]bool) mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			if method != "tools/call" {
+				return next(ctx, method, req)
+			}
+
+			toolName := "unknown"
+			if p, ok := req.GetParams().(*mcp.CallToolParamsRaw); ok && p != nil {
+				if knownTools[p.Name] {
+					toolName = p.Name
+				}
+			}
+
+			start := time.Now()
+			result, err := next(ctx, method, req)
+			durationMs := time.Since(start).Milliseconds()
+
+			resultClass := classifyToolResult(result, err)
+			responseBytes := estimateResultBytes(result)
+
+			log.Info("tool_call",
+				"tool_name", toolName,
+				"scope", scope,
+				"duration_ms", durationMs,
+				"result_class", resultClass,
+				"response_bytes", responseBytes,
+			)
+			if m != nil {
+				m.RecordToolCall(toolName, scope, resultClass, durationMs)
+			}
+			return result, err
+		}
+	}
+}
+
+func classifyToolResult(result mcp.Result, err error) string {
+	if err != nil {
+		return "protocol_error"
+	}
+	if r, ok := result.(*mcp.CallToolResult); ok && r != nil && r.IsError {
+		return "tool_error"
+	}
+	return "success"
+}
+
+// estimateResultBytes approximates the wire size of a CallToolResult from
+// its text content lengths — avoids a second full JSON marshal (W1).
+func estimateResultBytes(result mcp.Result) int {
+	r, ok := result.(*mcp.CallToolResult)
+	if !ok || r == nil {
+		return 0
+	}
+	n := 0
+	for _, c := range r.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			n += len(tc.Text)
+		}
+	}
+	return n
 }
