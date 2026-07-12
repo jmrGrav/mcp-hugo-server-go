@@ -162,6 +162,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Debug("create_page: lock_released")
 		}()
 
+		if err := pg.RevalidateForWrite(filePath); err != nil {
+			slog.Warn("create_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
+			return nil, createPageOutput{}, fmt.Errorf("security_error: symlink detected in write path")
+		}
 		if err := fileutil.AtomicWrite(filePath, content); err != nil {
 			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, fmt.Errorf("write_error: failed to write page")
@@ -265,6 +269,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if in.DryRun {
 			diff := simpleDiff(in.Slug+"/index.md", string(raw), content)
 			return nil, updatePageOutput{Slug: in.Slug, DryRun: true, Diff: diff}, nil
+		}
+		if err := pg.RevalidateForWrite(filePath); err != nil {
+			slog.Warn("update_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, fmt.Errorf("security_error: symlink detected in write path")
 		}
 		if err := fileutil.AtomicWrite(filePath, content); err != nil {
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
@@ -379,8 +387,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
 		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
 		if err := appendAuditLog(auditLog, entry); err != nil {
-			slog.Error("delete_page: audit log write failed", "slug", in.Slug, "error", err)
-			return nil, deletePageOutput{}, fmt.Errorf("audit_error: failed to write audit log")
+			// Deletion already committed — log the failure but don't report an error to
+			// the caller, as retrying would be a no-op and could cause confusion.
+			slog.Warn("delete_page: audit log write failed (delete already committed)", "slug", in.Slug, "error", err)
 		}
 
 		if cfg.Cloudflare.Enabled() {

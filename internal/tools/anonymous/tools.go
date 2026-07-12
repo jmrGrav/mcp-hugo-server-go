@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -176,12 +177,17 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
 			if resolved.Public == nil {
-				// Source-only: require explicit opt-in; drafts are always blocked.
+				// Source-only: require explicit opt-in; drafts, future, and expired pages are blocked.
 				if !in.AllowSourceFallback {
 					return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 				}
-				if resolved.Source != nil && resolved.Source.Draft {
-					return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+				if s := resolved.Source; s != nil {
+					now := time.Now().UTC()
+					if s.Draft ||
+						(!s.PublishDate.IsZero() && now.Before(s.PublishDate)) ||
+						(!s.ExpiryDate.IsZero() && now.After(s.ExpiryDate)) {
+						return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+					}
 				}
 			}
 			dto := toResolvedPageDetailDTO(resolved)
