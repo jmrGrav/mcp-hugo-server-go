@@ -10,6 +10,10 @@ BASE_URL="${MCP_BASE_URL:-https://mcp.arleo.eu}"
 ACCESS_TOKEN="${MCP_ACCESS_TOKEN:-}"
 SMOKE_DELAY="${MCP_SMOKE_DELAY:-6}"
 BURST_COUNT="${MCP_SMOKE_BURST_COUNT:-10}"
+SESSION_CALLS="${MCP_SMOKE_SESSION_CALLS:-0}"
+SESSION_TOOL="${MCP_SMOKE_SESSION_TOOL:-get_site_information}"
+SESSION_ARGS="${MCP_SMOKE_SESSION_ARGS:-{}}"
+SESSION_DELAY="${MCP_SMOKE_SESSION_DELAY:-$SMOKE_DELAY}"
 ENABLE_WRITES="${MCP_SMOKE_ENABLE_WRITES:-0}"
 WRITE_SLUG="${MCP_SMOKE_WRITE_SLUG:-codex-mcp-live-audit-$(date -u +%Y%m%d-%H%M%S)}"
 
@@ -66,6 +70,7 @@ write_curl_config() {
 HTTP_STATUS=""
 RETRY_AFTER=""
 CONTENT_TYPE=""
+WWW_AUTHENTICATE=""
 BODY_FILE=""
 MCP_SESSION_ID="${MCP_SESSION_ID:-}"
 
@@ -85,6 +90,7 @@ post_mcp() {
   # tolower($1) is POSIX awk; avoids gawk-only BEGIN{IGNORECASE=1}
   RETRY_AFTER="$(awk 'tolower($1) == "retry-after:" {gsub(/\r/,""); print $2}' "$headers" | tail -1)"
   CONTENT_TYPE="$(awk 'tolower($1) == "content-type:" {line=$0; gsub(/\r/,"",line); sub(/^[^:]*:[[:space:]]*/,"",line); print line}' "$headers" | tail -1)"
+  WWW_AUTHENTICATE="$(awk 'tolower($1) == "www-authenticate:" {line=$0; gsub(/\r/,"",line); sub(/^[^:]*:[[:space:]]*/,"",line); print line}' "$headers" | tail -1)"
   local session
   session="$(awk 'tolower($1) == "mcp-session-id:" {gsub(/\r/,""); print $2}' "$headers" | tail -1)"
   if [[ -n "$session" ]]; then
@@ -111,7 +117,7 @@ classify_response() {
         [[ "$expect_success" == "0" ]] && return 0
         return 1
       fi
-      printf 'AUTH_FAIL %s http=%s content_type=%s\n' "$label" "$HTTP_STATUS" "$CONTENT_TYPE"
+      printf 'AUTH_FAIL %s http=%s content_type=%s www_auth=%s\n' "$label" "$HTTP_STATUS" "$CONTENT_TYPE" "${WWW_AUTHENTICATE:-none}"
       [[ "$expect_success" == "0" ]] && return 0
       return 1
       ;;
@@ -221,6 +227,8 @@ echo "  MCP_BASE_URL=$BASE_URL"
 echo "  MCP_ACCESS_TOKEN=<redacted>"
 echo "  MCP_SMOKE_ENABLE_WRITES=$ENABLE_WRITES"
 echo "  MCP_SMOKE_DELAY=$SMOKE_DELAY"
+echo "  MCP_SMOKE_SESSION_CALLS=$SESSION_CALLS"
+echo "  MCP_SMOKE_SESSION_DELAY=$SESSION_DELAY"
 
 printf '%s' '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"mcp-live-smoke","version":"1.0.0"}}}' > "$TMPDIR/initialize.json"
 post_mcp "$TMPDIR/initialize.json"
@@ -260,6 +268,16 @@ if [[ "${MCP_SMOKE_BURST:-0}" == "1" ]]; then
   echo "Burst probe: $BURST_COUNT calls without pacing"
   for i in $(seq 1 "$BURST_COUNT"); do
     call_tool "burst_get_site_information_$i" "get_site_information" "{}" || fail "burst failed at call $i"
+  done
+fi
+
+if [[ "$SESSION_CALLS" -gt 0 ]]; then
+  echo "Session continuity probe: $SESSION_CALLS repeated $SESSION_TOOL calls in one MCP session"
+  for i in $(seq 1 "$SESSION_CALLS"); do
+    call_tool "session_${SESSION_TOOL}_$i" "$SESSION_TOOL" "$SESSION_ARGS" || fail "session continuity failed at call $i for $SESSION_TOOL"
+    if [[ "$i" -lt "$SESSION_CALLS" ]]; then
+      sleep "$SESSION_DELAY"
+    fi
   done
 fi
 
