@@ -511,6 +511,89 @@ func TestListPagesPrefersSourceCategories(t *testing.T) {
 	}
 }
 
+// TestListPagesEnrichesNonDefaultLangCategories reproduces the production bug where
+// non-default-language pages (e.g. /en/posts/foo/) had empty categories because the
+// source-index lookup used the slug with the language prefix ("en/posts/foo") but the
+// source index stores slugs without it ("posts/foo").
+func TestListPagesEnrichesNonDefaultLangCategories(t *testing.T) {
+	// Build a public HTML index with an English page at /en/posts/hello/
+	// (no article:category tag — Hugo never emits one).
+	htmlDir := t.TempDir()
+	htmlPage := filepath.Join(htmlDir, "en", "posts", "hello")
+	if err := os.MkdirAll(htmlPage, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	htmlFile := filepath.Join(htmlPage, "index.html")
+	const html = `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/en/posts/hello/">
+<meta property="og:title" content="Hello">
+<meta property="article:tag" content="Hugo">
+</head><body><article>Body</article></body></html>`
+	if err := os.WriteFile(htmlFile, []byte(html), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	// Source index: same page stored at posts/hello/index.en.md (no lang prefix).
+	contentRoot := t.TempDir()
+	src := filepath.Join(contentRoot, "posts", "hello", "index.en.md")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(src, []byte("---\ntitle: Hello\ncategories: [tutorials, go]\n---\nBody\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "list_pages", map[string]any{"limit": 10})
+	if res.IsError {
+		t.Fatalf("list_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	pages, _ := m["pages"].([]any)
+
+	var found map[string]any
+	for _, p := range pages {
+		pm, _ := p.(map[string]any)
+		if pm["slug"] == "/en/posts/hello/" {
+			found = pm
+			break
+		}
+	}
+	if found == nil {
+		slugs := make([]string, 0, len(pages))
+		for _, p := range pages {
+			pm, _ := p.(map[string]any)
+			slugs = append(slugs, pm["slug"].(string))
+		}
+		t.Fatalf("list_pages: /en/posts/hello/ not found; got %v", slugs)
+	}
+	cats, _ := found["categories"].([]any)
+	if len(cats) == 0 {
+		t.Fatal("list_pages: EN page categories empty — expected [tutorials go] from source frontmatter")
+	}
+	if cats[0] != "tutorials" {
+		t.Fatalf("list_pages: EN page categories[0] = %v, want tutorials", cats[0])
+	}
+}
+
 func TestTaxonomyAliasesNormalizeListTagsAndListPages(t *testing.T) {
 	// End-to-end test: with taxonomy_aliases={sécurité:security}, list_tags must
 	// return the canonical "security" slug and not the alias "sécurité".
