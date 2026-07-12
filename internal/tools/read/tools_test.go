@@ -190,6 +190,27 @@ func TestGetPageFrontmatter(t *testing.T) {
 	}
 }
 
+func TestGetPageFrontmatterExposesStableMetadataContract(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	fm, ok := m["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_frontmatter frontmatter type = %T", m["frontmatter"])
+	}
+	for _, key := range []string{"slug", "lang", "url", "title", "reading_time_minutes", "tag_terms", "category_terms"} {
+		if _, ok := fm[key]; !ok {
+			t.Fatalf("get_page_frontmatter missing %q in frontmatter: %#v", key, fm)
+		}
+	}
+}
+
 func TestGetRelatedContent(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
