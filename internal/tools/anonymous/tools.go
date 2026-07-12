@@ -162,7 +162,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"Pass allow_source_fallback=true to also return source-index entries for pages not yet built "+
 			"(e.g. immediately after create_page, before the next Hugo build); draft pages are always excluded. "+
 			"Pass content_only=true to strip navigation, header, and footer from the rendered HTML of published pages "+
-			"(has no effect on source-only results, which carry raw Markdown rather than rendered HTML). "+
+			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; if `content_only=true` is also set, the `html` field is returned empty for source-only fallback results). "+
 			"For the raw Markdown source, use get_full_page_markdown (requires content.read). "+
 			"Does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
