@@ -59,12 +59,22 @@ type updatePageOutput struct {
 }
 
 type deletePageInput struct {
-	Slug string `json:"slug"`
+	Slug   string `json:"slug"`
+	DryRun bool   `json:"dry_run,omitempty"`
+}
+
+type deletePageBacklinkDTO struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
 }
 
 type deletePageOutput struct {
-	Slug    string `json:"slug"`
-	Warning string `json:"warning,omitempty"`
+	Slug      string                  `json:"slug"`
+	DryRun    bool                    `json:"dry_run,omitempty"`
+	Content   string                  `json:"content,omitempty"`
+	Backlinks []deletePageBacklinkDTO `json:"backlinks"`
+	Warning   string                  `json:"warning,omitempty"`
 }
 
 var reservedSlugs = map[string]bool{
@@ -119,6 +129,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in createPageInput) (*mcp.CallToolResult, createPageOutput, error) {
+		in.Slug = strings.Trim(in.Slug, "/")
 		if in.Slug == "" {
 			return nil, createPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -212,6 +223,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
+		in.Slug = strings.Trim(in.Slug, "/")
 		if in.Slug == "" {
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -337,10 +349,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(true),
-			IdempotentHint:  true,
+			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
+		in.Slug = strings.Trim(in.Slug, "/")
 		if in.Slug == "" {
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -349,6 +362,32 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if err != nil {
 			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
+		}
+
+		// Return not_found when the source directory does not exist (#266).
+		// Check this before the rate limiter to avoid burning the budget on client errors.
+		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+			return nil, deletePageOutput{}, fmt.Errorf("not_found: page not found for slug %q", in.Slug)
+		}
+
+		// dry_run: return page content + backlinks that would break, without touching disk (#267).
+		if in.DryRun {
+			content := ""
+			if filePath, fpErr := resolveUpdateFilePath(dir, in.Slug, ""); fpErr == nil {
+				if raw, readErr := os.ReadFile(filePath); readErr == nil {
+					content = string(raw)
+				}
+			}
+			var backlinks []deletePageBacklinkDTO
+			if siteIdx != nil {
+				for _, e := range siteIdx.GetBacklinks(in.Slug) {
+					backlinks = append(backlinks, deletePageBacklinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL})
+				}
+			}
+			if backlinks == nil {
+				backlinks = []deletePageBacklinkDTO{}
+			}
+			return nil, deletePageOutput{Slug: in.Slug, DryRun: true, Content: content, Backlinks: backlinks}, nil
 		}
 
 		callerKey := deleteCallerKey(ctx)
@@ -393,7 +432,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 		if cfg.SiteRoot != "" {
-			publicPath := filepath.Join(cfg.SiteRoot, strings.Trim(in.Slug, "/"))
+			publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
 			if rmErr := os.RemoveAll(publicPath); rmErr != nil {
 				// Source is already gone; surface the zombie so the caller knows
 				// the public output is still live (#239).
@@ -422,7 +461,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		if cfg.Cloudflare.Enabled() {
-			pageURL := strings.TrimRight(cfg.SiteURL, "/") + "/" + strings.Trim(in.Slug, "/") + "/"
+			pageURL := strings.TrimRight(cfg.SiteURL, "/") + "/" + in.Slug + "/"
 			if err := cloudflare.PurgeURLs(cfg.Cloudflare, []string{pageURL}); err != nil {
 				slog.Warn("delete_page: cloudflare purge failed", "slug", in.Slug, "error", err)
 			}

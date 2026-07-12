@@ -3,6 +3,7 @@ package write_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -37,6 +39,64 @@ func newTestServerWithSiteRoot(t *testing.T, contentRoot, siteRoot string) (*mcp
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg, nil)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, func() { _ = session.Close() }
+}
+
+func newTestServerWithSourceIdx(t *testing.T, contentRoot string) (*mcp.ClientSession, *hugosite.SourceIndex, func()) {
+	t.Helper()
+	pg, err := security.New(contentRoot, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+	idx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex: %v", err)
+	}
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	write.Register(s, pg, idx, cfg, nil)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, idx, func() { _ = session.Close() }
+}
+
+func newTestServerWithSiteIdx(t *testing.T, contentRoot string, siteIdx *site.Index) (*mcp.ClientSession, func()) {
+	t.Helper()
+	pg, err := security.New(contentRoot, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+	idx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex: %v", err)
+	}
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	write.Register(s, pg, idx, cfg, nil, siteIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -87,6 +147,19 @@ func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[st
 		t.Fatalf("CallTool(%q) error = %v", name, err)
 	}
 	return res
+}
+
+func decodeWriteContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal structured content: %v", err)
+	}
+	return m
 }
 
 func TestCreatePage(t *testing.T) {
@@ -166,15 +239,27 @@ func TestDeletePageRateLimit(t *testing.T) {
 	session, done := newTestServer(t, contentRoot)
 	defer done()
 
+	// Create 6 pages. Delete the first 5 (each succeeds). The 6th delete targets
+	// a page that still exists but must be blocked by the rate limiter.
+	for i := 0; i < 6; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("rate-post-%d", i), "title": "Rate Post",
+			"body": "body", "tags": []any{}, "categories": []any{},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d failed: %s", i, raw)
+		}
+	}
 	for i := 0; i < 5; i++ {
-		res := callTool(t, session, "delete_page", map[string]any{"slug": "my-post"})
+		res := callTool(t, session, "delete_page", map[string]any{"slug": fmt.Sprintf("rate-post-%d", i)})
 		if res.IsError {
 			raw, _ := json.Marshal(res.Content)
 			t.Fatalf("delete %d expected success, got error: %s", i+1, raw)
 		}
 	}
 
-	res := callTool(t, session, "delete_page", map[string]any{"slug": "my-post"})
+	res := callTool(t, session, "delete_page", map[string]any{"slug": "rate-post-5"})
 	if !res.IsError {
 		t.Fatal("expected rate_limit_exceeded on 6th delete, got success")
 	}
@@ -466,6 +551,264 @@ func TestDeletePageCleansPublicDir(t *testing.T) {
 	}
 	if _, err := os.Stat(publicPageDir); !os.IsNotExist(err) {
 		t.Error("public directory must be removed by delete_page to prevent zombie")
+	}
+}
+
+// TestCreatePageSlugNormalization verifies that create_page strips leading and
+// trailing slashes from the slug so agents that pass /posts/foo/ and posts/foo
+// both reach the same content directory (#265).
+func TestCreatePageSlugNormalization(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "/posts/normalized/", "title": "Normalized", "body": "body",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page with leading/trailing slashes failed: %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "normalized", "index.md")); err != nil {
+		t.Errorf("expected file at posts/normalized/index.md after slug normalization: %v", err)
+	}
+}
+
+// TestUpdatePageSlugNormalization verifies that update_page accepts a slug with
+// leading and trailing slashes and resolves to the same page (#265).
+func TestUpdatePageSlugNormalization(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/update-me", "title": "Update Me", "body": "original",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug": "/posts/update-me/", "title": "Updated",
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page with leading/trailing slashes failed: %s", raw)
+	}
+}
+
+// TestDeletePageSlugNormalization verifies that delete_page accepts a slug with
+// leading and trailing slashes and removes the correct directory (#265).
+func TestDeletePageSlugNormalization(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/slash-test", "title": "Slash Test", "body": "body",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "/posts/slash-test/"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page with leading/trailing slashes failed: %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "slash-test")); !os.IsNotExist(err) {
+		t.Error("expected page directory to be removed after slug-normalized delete")
+	}
+}
+
+// TestDeletePageNotFoundOnDoubleDeletion verifies that a second delete on an
+// already-deleted slug returns not_found instead of silent success (#266).
+func TestDeletePageNotFoundOnDoubleDeletion(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/double-delete", "title": "Double Delete", "body": "body",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/double-delete"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/double-delete"})
+	if !res.IsError {
+		t.Fatal("second delete_page should return not_found, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "not_found") {
+		t.Errorf("expected not_found error on double deletion, got: %s", raw)
+	}
+}
+
+// TestDeletePageDryRun verifies that delete_page with dry_run=true returns the
+// page content and an empty backlinks list without removing the file (#267).
+func TestDeletePageDryRun(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/dry-run-me", "title": "Dry Run", "body": "preview body",
+		"tags": []any{"go"}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/dry-run-me", "dry_run": true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page dry_run failed: %s", raw)
+	}
+
+	m := decodeWriteContent(t, res)
+	if m["dry_run"] != true {
+		t.Errorf("expected dry_run=true in response, got %v", m["dry_run"])
+	}
+	content, _ := m["content"].(string)
+	if !strings.Contains(content, "Dry Run") {
+		t.Errorf("dry_run content should contain page frontmatter, got: %q", content)
+	}
+	if _, ok := m["backlinks"]; !ok {
+		t.Error("dry_run response must include backlinks key")
+	}
+
+	// File must not have been removed.
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "dry-run-me", "index.md")); err != nil {
+		t.Errorf("dry_run must not delete the file: %v", err)
+	}
+}
+
+// TestDeletePageDryRunNotFound verifies that dry_run on a non-existent slug
+// returns not_found (#267).
+func TestDeletePageDryRunNotFound(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/does-not-exist", "dry_run": true,
+	})
+	if !res.IsError {
+		t.Fatal("delete_page dry_run on non-existent slug should return not_found")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "not_found") {
+		t.Errorf("expected not_found, got: %s", raw)
+	}
+}
+
+// TestDeletePageSlugNormalizationSourceIndex verifies that delete_page with a
+// slash-wrapped slug correctly removes the source-index entry. Without the
+// strings.Trim fix, idx.Delete("/posts/x/") would miss the key "posts/x" that
+// create_page stored, leaving a stale index entry (#265).
+func TestDeletePageSlugNormalizationSourceIndex(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, srcIdx, done := newTestServerWithSourceIdx(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/norm-idx-test", "title": "Norm Idx", "body": "body",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	if _, ok := srcIdx.GetBySlug("posts/norm-idx-test"); !ok {
+		t.Fatal("source index should contain page after create_page")
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "/posts/norm-idx-test/"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page with slashed slug failed: %s", raw)
+	}
+
+	if _, ok := srcIdx.GetBySlug("posts/norm-idx-test"); ok {
+		t.Error("source index must not retain entry after delete_page with slashed slug")
+	}
+}
+
+// TestDeletePageDryRunWithBacklinks verifies that dry_run returns actual
+// backlinks when a site.Index is wired in (#267).
+func TestDeletePageDryRunWithBacklinks(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	// Build a minimal site.Index: target page + a page that links to it.
+	// Both pages must be in the index: buildReverseMap only stores a backlink
+	// if the target page is found via GetBySlug AND classified as content.
+	cfg := config.Default()
+	siteIdx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex: %v", err)
+	}
+	siteIdx.UpsertPage(site.Page{
+		Slug:    "/posts/dry-run-bl/",
+		Title:   "BL Target",
+		URL:     "https://example.test/posts/dry-run-bl/",
+		RawHTML: `<article><p>no outgoing links</p></article>`,
+	})
+	siteIdx.UpsertPage(site.Page{
+		Slug:    "/posts/linker/",
+		Title:   "Linker Page",
+		URL:     "https://example.test/posts/linker/",
+		RawHTML: `<article><a href="/posts/dry-run-bl/">go to target</a></article>`,
+	})
+
+	session, done := newTestServerWithSiteIdx(t, contentRoot, siteIdx)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/dry-run-bl", "title": "BL Target", "body": "body",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/dry-run-bl", "dry_run": true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page dry_run failed: %s", raw)
+	}
+
+	m := decodeWriteContent(t, res)
+	bls, ok := m["backlinks"].([]any)
+	if !ok {
+		t.Fatalf("dry_run response must include backlinks array, got %T: %v", m["backlinks"], m["backlinks"])
+	}
+	if len(bls) != 1 {
+		t.Fatalf("expected 1 backlink, got %d: %v", len(bls), bls)
+	}
+	bl, _ := bls[0].(map[string]any)
+	if bl["slug"] != "/posts/linker/" {
+		t.Errorf("backlink slug = %q, want /posts/linker/", bl["slug"])
 	}
 }
 
