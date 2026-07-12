@@ -3,6 +3,7 @@ package admin_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -396,6 +397,168 @@ func TestBuildSitePermissionDeniedErrorIncludesSuggestion(t *testing.T) {
 	}
 	if v, _ := out["docs_url"].(string); v == "" {
 		t.Error("docs_url field is missing or empty for permission_denied error")
+	}
+}
+
+// TestBuildSiteCallbackTimeout verifies that a slow post-build callback does
+// not block build_site indefinitely, the response is partial_success with a
+// warning naming the first timed-out callback, and subsequent callbacks are
+// not started (preventing goroutine leaks and misleading warning messages) (#241).
+func TestBuildSiteCallbackTimeout(t *testing.T) {
+	dir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	var secondCalled bool
+	// First callback: blocks indefinitely.
+	slowCallback := func() error {
+		time.Sleep(10 * time.Minute)
+		return nil
+	}
+	// Second callback: must NOT be called after the first times out.
+	sentinelCallback := func() error {
+		secondCalled = true
+		return nil
+	}
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterBuild(s, cfg, slowCallback, sentinelCallback)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	// The call must return in under 35s (callback timeout is 30s).
+	doneCh := make(chan struct{})
+	var res *mcp.CallToolResult
+	var callErr error
+	go func() {
+		res, callErr = session.CallTool(ctx, &mcp.CallToolParams{Name: "build_site", Arguments: map[string]any{}})
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+	case <-time.After(35 * time.Second):
+		t.Fatal("build_site blocked past callback timeout — #241 regression")
+	}
+
+	if callErr != nil {
+		t.Fatalf("unexpected transport error: %v", callErr)
+	}
+	if res.IsError {
+		t.Fatalf("build_site must not be an error when only callbacks time out: %s", resultText(res))
+	}
+	text := resultText(res)
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("response not JSON: %v — %q", err, text)
+	}
+	if out["status"] != "partial_success" {
+		t.Errorf("status: want partial_success, got %v", out["status"])
+	}
+	warning, _ := out["warning"].(string)
+	if warning == "" {
+		t.Error("expected non-empty warning when callback times out")
+	}
+	// Warning must identify callback 0, not a later index (which would indicate
+	// the loop continued past the timeout and overwrote the first warning).
+	if !strings.Contains(warning, "callback 0") {
+		t.Errorf("warning %q must identify callback 0 (first to time out)", warning)
+	}
+	if secondCalled {
+		t.Error("sentinel callback must not be invoked after the deadline fires — loop must break on cbCtx.Done()")
+	}
+}
+
+// TestBuildSiteCallbackFailurePartialSuccess verifies that a failing callback
+// produces partial_success with a warning rather than a hard error (#238/#244).
+func TestBuildSiteCallbackFailurePartialSuccess(t *testing.T) {
+	dir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	errCallback := func() error { return fmt.Errorf("index reload: connection refused") }
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterBuild(s, cfg, errCallback)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	res, callErr := session.CallTool(ctx, &mcp.CallToolParams{Name: "build_site", Arguments: map[string]any{}})
+	if callErr != nil {
+		t.Fatalf("unexpected transport error: %v", callErr)
+	}
+	if res.IsError {
+		t.Fatalf("build_site must not be a hard error when only a callback fails: %s", resultText(res))
+	}
+	text := resultText(res)
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("response not JSON: %v — %q", err, text)
+	}
+	if out["status"] != "partial_success" {
+		t.Errorf("status: want partial_success, got %v", out["status"])
+	}
+	if warning, _ := out["warning"].(string); !strings.Contains(warning, "connection refused") {
+		t.Errorf("warning %q should contain callback error detail", warning)
+	}
+}
+
+// TestBuildSiteProcessGroupKilled verifies that on timeout, child processes
+// spawned by a shell-wrapper "hugo" are also killed (#240).
+func TestBuildSiteProcessGroupKilled(t *testing.T) {
+	// The mock hugo script spawns a long-running child and then sleeps itself.
+	// Without process-group kill, the child would survive cancellation.
+	dir := writeMockHugo(t, "#!/bin/sh\nsleep 30 &\nsleep 30\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.BuildTimeoutSeconds = 1
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	start := time.Now()
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected timeout error, got success")
+	}
+	// Without pgid kill, elapsed would be ~30s (child lives on and keeps stdout
+	// open, blocking cmd.Wait). With pgid kill it should be close to 1s timeout.
+	if elapsed > 5*time.Second {
+		t.Errorf("build_site took %v — child process not killed with process group (#240 regression)", elapsed)
 	}
 }
 

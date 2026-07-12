@@ -177,7 +177,12 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 			}
 			return nil
 		},
-		func() error { return cloudflare.PurgeAll(cfg.Cloudflare) },
+		func() error {
+			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
+				slog.Warn("build_site: cloudflare purge failed", "error", err)
+			}
+			return nil
+		},
 		func() error {
 			urls := sitemapPageURLs(idx)
 			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
