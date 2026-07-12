@@ -134,7 +134,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			in.Tags = in.Tags[:6]
 		}
 
-		pg, err := security.New(cfg.HugoRoot, false)
+		pg, err := security.New(cfg.HugoRoot, cfg.RejectSymlinks)
 		if err != nil {
 			slog.Error("generate_featured_image: could not initialize path guard", "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
@@ -152,6 +152,10 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		}
 
 		bgDir := filepath.Join(cfg.HugoRoot, "static", "images", "featured-backgrounds")
+		if err := pg.RevalidateForWrite(destPath); err != nil {
+			slog.Warn("generate_featured_image: symlink-swap detected before write", "slug", in.Slug, "error", err)
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("security_error: symlink detected in image write path")
+		}
 		if err := renderFeaturedImage(bgDir, destPath, style, in.Title, in.Subtitle, in.Tags, accent); err != nil {
 			slog.Error("generate_featured_image: render failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
@@ -165,7 +169,7 @@ func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedI
 	if cfg.HugoRoot == "" {
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 	}
-	pg, err := security.New(cfg.HugoRoot, false)
+	pg, err := security.New(cfg.HugoRoot, cfg.RejectSymlinks)
 	if err != nil {
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 	}
@@ -184,6 +188,10 @@ func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedI
 		return nil, generateFeaturedImageOutput{}, err
 	}
 
+	if err := pg.RevalidateForWrite(destPath); err != nil {
+		slog.Warn("generate_featured_image: symlink-swap detected before write (api path)", "slug", in.Slug, "error", err)
+		return nil, generateFeaturedImageOutput{}, fmt.Errorf("security_error: symlink detected in image write path")
+	}
 	if err := fileutil.AtomicWriteBytes(destPath, imgBytes); err != nil {
 		slog.Error("generate_featured_image: write failed", "slug", in.Slug, "error", err)
 		return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)

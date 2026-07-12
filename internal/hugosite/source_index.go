@@ -28,6 +28,8 @@ type SourcePage struct {
 	Title          string
 	Date           string
 	Draft          bool
+	PublishDate    time.Time // zero means no restriction
+	ExpiryDate     time.Time // zero means no restriction
 	Tags           []string
 	Categories     []string
 	Body           string
@@ -77,6 +79,8 @@ func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
 			Title:          stringVal(fm["title"]),
 			Date:           stringVal(fm["date"]),
 			Draft:          boolVal(fm["draft"]),
+			PublishDate:    timeVal(fm["publishDate"]),
+			ExpiryDate:     timeVal(fm["expiryDate"]),
 			Tags:           stringSlice(fm["tags"]),
 			Categories:     stringSlice(fm["categories"]),
 			Body:           body,
@@ -259,6 +263,23 @@ func boolVal(v any) bool {
 		return b
 	}
 	return false
+}
+
+func timeVal(v any) time.Time {
+	switch x := v.(type) {
+	case time.Time:
+		return x
+	case string:
+		if x == "" {
+			return time.Time{}
+		}
+		for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+			if t, err := time.Parse(layout, x); err == nil {
+				return t
+			}
+		}
+	}
+	return time.Time{}
 }
 
 func stringSlice(v any) []string {
