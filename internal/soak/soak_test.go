@@ -415,21 +415,21 @@ func (h *soakHarness) checkPublicInvariantErr() error {
 	hugosite.ContentMu.RLock()
 	defer hugosite.ContentMu.RUnlock()
 
+	// Source can be ahead of public between builds (create_page updates source
+	// but not public; only build_site promotes source→public). Assert public ⊆ source
+	// only: every publicly visible slug must exist in source (zombie-page check).
 	srcSlugs := h.sourceIdx.AllSlugs()
-	want := make([]string, 0, len(srcSlugs))
+	srcSet := make(map[string]struct{}, len(srcSlugs))
 	for _, slug := range srcSlugs {
-		want = append(want, site.NormalizeSlug(slug))
+		srcSet[site.NormalizeSlug(slug)] = struct{}{}
 	}
-	slices.Sort(want)
 
 	gotPages := h.siteIdx.Sitemap()
-	got := make([]string, 0, len(gotPages))
 	for _, p := range gotPages {
-		got = append(got, p.Slug)
-	}
-	slices.Sort(got)
-	if !slices.Equal(got, want) {
-		return fmt.Errorf("public slug mismatch got=%v want=%v", got, want)
+		if _, ok := srcSet[p.Slug]; !ok {
+			return fmt.Errorf("public slug %q has no source entry (zombie page): public=%v",
+				p.Slug, gotPages)
+		}
 	}
 	return nil
 }
