@@ -51,7 +51,7 @@ func (r *PageResolver) Resolve(rawSlug string) (ResolvedPage, bool) {
 }
 
 func (r *PageResolver) resolveSource(sourceSlug string) (*hugosite.SourcePage, bool) {
-	for _, candidate := range sourceSlugCandidates(sourceSlug) {
+	for _, candidate := range SourceSlugCandidates(sourceSlug) {
 		if p, ok := r.srcIdx.GetBySlug(candidate); ok {
 			return p, true
 		}
@@ -59,7 +59,7 @@ func (r *PageResolver) resolveSource(sourceSlug string) (*hugosite.SourcePage, b
 	return nil, false
 }
 
-func sourceSlugCandidates(sourceSlug string) []string {
+func SourceSlugCandidates(sourceSlug string) []string {
 	sourceSlug = strings.Trim(sourceSlug, "/")
 	if sourceSlug == "" {
 		return nil

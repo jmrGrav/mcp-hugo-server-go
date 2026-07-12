@@ -3,6 +3,7 @@ package read_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -46,6 +47,25 @@ func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	srcIdx := mustTestSourceIndex(t)
+	read.Register(s, idx, config.Default(), srcIdx)
+	read.RegisterWithSourceIndex(s, idx, srcIdx, config.Default())
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, func() { _ = session.Close() }
+}
+
+func newTestClientWithSourceIndex(t *testing.T, idx *site.Index, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
+	t.Helper()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	read.Register(s, idx, config.Default(), srcIdx)
 	read.RegisterWithSourceIndex(s, idx, srcIdx, config.Default())
 
@@ -481,10 +501,7 @@ func TestExplainSiteStructureUsesSourceIndexCategories(t *testing.T) {
 	}
 }
 
-func TestExplainSiteStructureRecentPagesSourceEnrichment(t *testing.T) {
-	// The public HTML for posts/hello has no category metadata, but the source
-	// markdown has categories: [tutorials]. After the #258 fix, recent_pages
-	// must carry source-enriched categories, not an empty slice.
+func TestExplainSiteStructureRecentPagesUseSourceCategories(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
 	defer done()
@@ -498,30 +515,249 @@ func TestExplainSiteStructureRecentPagesSourceEnrichment(t *testing.T) {
 	if !ok {
 		t.Fatalf("explain_site_structure data type = %T", m["data"])
 	}
-	recentRaw, ok := data["recent_pages"].([]any)
-	if !ok || len(recentRaw) == 0 {
-		t.Fatalf("explain_site_structure recent_pages: got %T (len=%d)", data["recent_pages"], len(recentRaw))
+	recentPages, ok := data["recent_pages"].([]any)
+	if !ok {
+		t.Fatalf("recent_pages type = %T", data["recent_pages"])
 	}
-
-	var found bool
-	for _, entry := range recentRaw {
-		page, ok := entry.(map[string]any)
+	for _, raw := range recentPages {
+		page, ok := raw.(map[string]any)
 		if !ok {
-			continue
+			t.Fatalf("recent page type = %T", raw)
 		}
-		slug, _ := page["slug"].(string)
-		if !strings.Contains(slug, "hello") {
+		if page["slug"] != "/posts/hello/" {
 			continue
 		}
 		cats, ok := page["categories"].([]any)
-		if !ok || len(cats) == 0 {
-			t.Fatalf("recent_pages entry slug=%q has empty categories; expected source-enriched [tutorials]", slug)
+		if !ok {
+			t.Fatalf("categories type = %T", page["categories"])
 		}
-		found = true
-		break
+		if len(cats) != 1 || cats[0] != "tutorials" {
+			t.Fatalf("recent page categories = %#v, want [tutorials]", cats)
+		}
+		terms, ok := page["category_terms"].([]any)
+		if !ok {
+			t.Fatalf("category_terms type = %T", page["category_terms"])
+		}
+		if len(terms) != 1 {
+			t.Fatalf("category_terms = %#v, want one normalized term", terms)
+		}
+		term := terms[0].(map[string]any)
+		if term["slug"] != "tutorials" || term["label"] != "Tutorials" || term["source"] != "tutorials" {
+			t.Fatalf("category_terms[0] = %#v, want tutorials normalized term", term)
+		}
+		return
 	}
-	if !found {
-		t.Fatal("recent_pages: no entry with slug containing 'hello' found in fixture")
+	t.Fatal("recent_pages does not include /posts/hello/ test fixture")
+}
+
+func TestExplainSiteStructureRecentPagesUseSourceCategoriesForLanguagePrefixedSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "hello")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.md"), []byte("---\ntitle: Hello\ntags:\n  - Hugo\ncategories:\n  - tutorials\n---\nBody\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	siteRoot := t.TempDir()
+	publicDir := filepath.Join(siteRoot, "en", "posts", "hello")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll publicDir: %v", err)
+	}
+	publicHTML := `<!doctype html>
+<html lang="en">
+<head>
+  <title>Hello</title>
+  <meta name="description" content="Rendered summary">
+  <link rel="canonical" href="https://example.test/en/posts/hello/">
+</head>
+<body><article>Hello</article></body>
+</html>`
+	if err := os.WriteFile(filepath.Join(publicDir, "index.html"), []byte(publicHTML), 0o644); err != nil {
+		t.Fatalf("WriteFile public HTML: %v", err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	if res.IsError {
+		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("explain_site_structure data type = %T", m["data"])
+	}
+	recentPages, ok := data["recent_pages"].([]any)
+	if !ok || len(recentPages) != 1 {
+		t.Fatalf("recent_pages = %#v, want one page", data["recent_pages"])
+	}
+	page := recentPages[0].(map[string]any)
+	cats, ok := page["categories"].([]any)
+	if !ok {
+		t.Fatalf("categories type = %T", page["categories"])
+	}
+	if len(cats) != 1 || cats[0] != "tutorials" {
+		t.Fatalf("language-prefixed recent page categories = %#v, want [tutorials]", cats)
+	}
+}
+
+func TestExplainSiteStructureRecentPagesPreferSourceCategoriesOverStalePublicCategories(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "hello")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.md"), []byte("---\ntitle: Hello\ncategories:\n  - tutorials\n---\nBody\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	siteRoot := t.TempDir()
+	publicDir := filepath.Join(siteRoot, "posts", "hello")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll publicDir: %v", err)
+	}
+	publicHTML := `<!doctype html>
+<html lang="en">
+<head>
+  <title>Hello</title>
+  <meta name="description" content="Rendered summary">
+  <meta name="keywords" content="LegacyCat">
+  <link rel="canonical" href="https://example.test/posts/hello/">
+</head>
+<body><article>Hello</article></body>
+</html>`
+	if err := os.WriteFile(filepath.Join(publicDir, "index.html"), []byte(publicHTML), 0o644); err != nil {
+		t.Fatalf("WriteFile public HTML: %v", err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	if res.IsError {
+		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("explain_site_structure data type = %T", m["data"])
+	}
+	recentPages, ok := data["recent_pages"].([]any)
+	if !ok || len(recentPages) != 1 {
+		t.Fatalf("recent_pages = %#v, want one page", data["recent_pages"])
+	}
+	page := recentPages[0].(map[string]any)
+	cats, ok := page["categories"].([]any)
+	if !ok {
+		t.Fatalf("categories type = %T", page["categories"])
+	}
+	if len(cats) != 1 || cats[0] != "tutorials" {
+		t.Fatalf("stale public categories should be overridden by source categories, got %#v", cats)
+	}
+}
+
+func TestExplainSiteStructureRecentPagesPreferEmptySourceCategoriesOverStalePublicCategories(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "hello")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.md"), []byte("---\ntitle: Hello\n---\nBody\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	siteRoot := t.TempDir()
+	publicDir := filepath.Join(siteRoot, "posts", "hello")
+	if err := os.MkdirAll(publicDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll publicDir: %v", err)
+	}
+	publicHTML := `<!doctype html>
+<html lang="en">
+<head>
+  <title>Hello</title>
+  <meta name="description" content="Rendered summary">
+  <meta name="keywords" content="LegacyCat">
+  <link rel="canonical" href="https://example.test/posts/hello/">
+</head>
+<body><article>Hello</article></body>
+</html>`
+	if err := os.WriteFile(filepath.Join(publicDir, "index.html"), []byte(publicHTML), 0o644); err != nil {
+		t.Fatalf("WriteFile public HTML: %v", err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	if res.IsError {
+		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("explain_site_structure data type = %T", m["data"])
+	}
+	recentPages, ok := data["recent_pages"].([]any)
+	if !ok || len(recentPages) != 1 {
+		t.Fatalf("recent_pages = %#v, want one page", data["recent_pages"])
+	}
+	page := recentPages[0].(map[string]any)
+	cats, ok := page["categories"].([]any)
+	if !ok {
+		t.Fatalf("categories type = %T", page["categories"])
+	}
+	if len(cats) != 0 {
+		t.Fatalf("empty source categories should override stale public categories, got %#v", cats)
 	}
 }
 
