@@ -25,6 +25,8 @@ This document reflects the current MCP registry. Tool IDs are stable; titles and
 - `explain_site_structure` - Explain site structure
 - `get_site_health` - Get site health
 - `get_broken_links` - Get broken links
+- `get_backlinks` - Get backlinks
+- `suggest_internal_links` - Suggest internal links
 - `diff_page` - Diff page
 - `validate_front_matter` - Validate front matter
 - `validate_site` - Validate site

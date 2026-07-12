@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 )
@@ -186,6 +187,81 @@ func TestDiffHelperBranches(t *testing.T) {
 
 	if out, err := gitBytes(context.Background(), root, "--version"); err != nil || !strings.Contains(string(out), "git version") {
 		t.Fatalf("gitBytes() = %q, %v", out, err)
+	}
+}
+
+func TestScoreLinkSuggestions(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.SiteURL = "https://example.test"
+
+	emptyIdx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	// Empty index returns empty slice
+	if got := scoreLinkSuggestions(emptyIdx, "", []string{"go"}, nil, "", 5); len(got) != 0 {
+		t.Fatalf("scoreLinkSuggestions(empty index) = %v", got)
+	}
+
+	realIdx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	pages := []site.Page{
+		{Slug: "/posts/a/", Title: "Alpha", Tags: []string{"go", "hugo"}, Categories: []string{"docs"}, URL: "https://example.test/posts/a/"},
+		{Slug: "/posts/b/", Title: "Beta", Tags: []string{"go"}, Categories: []string{"ops"}, URL: "https://example.test/posts/b/"},
+		{Slug: "/posts/c/", Title: "Gamma", Tags: []string{"rust"}, Categories: []string{"ops"}, URL: "https://example.test/posts/c/"},
+	}
+	for _, pg := range pages {
+		realIdx.UpsertPage(pg)
+	}
+
+	// refTags=["go"] matches A (score 2) and B (score 2); C has no overlap
+	got := scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "", 10)
+	if len(got) != 2 {
+		t.Fatalf("want 2 suggestions, got %d: %v", len(got), got)
+	}
+
+	// excluding /posts/a/ should return only B
+	got = scoreLinkSuggestions(realIdx, "/posts/a/", []string{"go"}, nil, "", 10)
+	if len(got) != 1 || got[0].Slug != "/posts/b/" {
+		t.Fatalf("exclude slug: want [/posts/b/], got %v", got)
+	}
+
+	// body mention bumps to top (W2: phrase-boundary, not substring)
+	got = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "check out Alpha for more", 10)
+	if len(got) == 0 || !got[0].BodyMention || got[0].Slug != "/posts/a/" {
+		t.Fatalf("body_mention: want /posts/a/ first, got %v", got)
+	}
+
+	// W2: "Beta" must NOT match "Alphabeta" (substring but not word-boundary)
+	got = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "Alphabeta context", 10)
+	for _, s := range got {
+		if s.Slug == "/posts/b/" && s.BodyMention {
+			t.Fatal("body_mention false positive: 'Beta' should not match inside 'Alphabeta'")
+		}
+	}
+
+	// E1: empty-title page must not produce false body_mention
+	emptyTitleIdx, _ := site.NewIndex(cfg)
+	emptyTitleIdx.UpsertPage(site.Page{Slug: "/posts/notitle/", Title: "", Tags: []string{"go"}, URL: "https://example.test/posts/notitle/"})
+	got = scoreLinkSuggestions(emptyTitleIdx, "", []string{"go"}, nil, "anything goes here", 10)
+	for _, s := range got {
+		if s.BodyMention {
+			t.Fatalf("E1: empty-title page must not have body_mention=true, got %#v", s)
+		}
+	}
+
+	// limit respected
+	got = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "", 1)
+	if len(got) != 1 {
+		t.Fatalf("limit=1: want 1, got %d", len(got))
+	}
+
+	// anchor_text is the page title
+	if got[0].AnchorText == "" {
+		t.Fatal("anchor_text should not be empty")
 	}
 }
 
