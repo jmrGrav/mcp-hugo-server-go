@@ -35,7 +35,7 @@ func newTestServerWithSiteRoot(t *testing.T, contentRoot, siteRoot string) (*mcp
 	cfg.SiteRoot = siteRoot
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	write.Register(s, pg, idx, cfg)
+	write.Register(s, pg, idx, cfg, nil)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

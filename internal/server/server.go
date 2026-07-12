@@ -14,6 +14,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/googleindex"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/indexnow"
@@ -41,6 +42,7 @@ type Server struct {
 	store         storage.Store
 	oauthSvc      *oauth.Service
 	resetIPCounts func()
+	siteDB        *db.DB
 }
 
 // buildRegistry returns a registry populated from every known tool package.
@@ -106,6 +108,21 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 		}
 	}
 
+	// Open the SQLite derived index when db_path is configured.
+	// When nil (db_path unset) all tools fall back to existing in-memory behaviour.
+	var siteDB *db.DB
+	if cfg.DBPath != "" {
+		var err error
+		siteDB, err = db.Open(cfg.DBPath)
+		if err != nil {
+			return nil, fmt.Errorf("server: sqlite index: %w", err)
+		}
+		// Hash-gated startup reindex — skips unchanged pages.
+		if err := siteDB.StartupSync(idx, srcIdx); err != nil {
+			slog.Warn("server: startup db sync incomplete", "error", err)
+		}
+	}
+
 	// Build the known-tools set from the registry so the middleware can bucket
 	// any unrecognised client-supplied name as "unknown" (caps Prometheus cardinality).
 	knownTools := make(map[string]bool, len(reg.All()))
@@ -122,7 +139,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	anonymous.Register(readServer, idx, cfg, srcIdx)
 	read.Register(readServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
-		read.RegisterWithSourceIndex(readServer, idx, srcIdx, cfg)
+		read.RegisterWithSourceIndex(readServer, idx, srcIdx, cfg, siteDB)
 	}
 
 	writeServer := mcp.NewServer(impl, nil)
@@ -130,10 +147,10 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	anonymous.Register(writeServer, idx, cfg, srcIdx)
 	read.Register(writeServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
-		read.RegisterWithSourceIndex(writeServer, idx, srcIdx, cfg)
+		read.RegisterWithSourceIndex(writeServer, idx, srcIdx, cfg, siteDB)
 	}
 	if writeEnabled {
-		toolswrite.Register(writeServer, pg, srcIdx, cfg, idx)
+		toolswrite.Register(writeServer, pg, srcIdx, cfg, siteDB, idx)
 	}
 
 	siteAdminServer := mcp.NewServer(impl, nil)
@@ -141,13 +158,22 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	anonymous.Register(siteAdminServer, idx, cfg, srcIdx)
 	read.Register(siteAdminServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
-		read.RegisterWithSourceIndex(siteAdminServer, idx, srcIdx, cfg)
+		read.RegisterWithSourceIndex(siteAdminServer, idx, srcIdx, cfg, siteDB)
 	}
 	if writeEnabled {
-		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg, idx)
+		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg, siteDB, idx)
 	}
 	admin.Register(siteAdminServer, cfg,
 		func() error { return idx.Reload(cfg) },
+		func() error {
+			// Reindex the SQLite derived index after a successful build.
+			if siteDB != nil {
+				if err := siteDB.PostBuildSync(idx); err != nil {
+					slog.Warn("build_site: db reindex failed", "error", err)
+				}
+			}
+			return nil
+		},
 		func() error { return cloudflare.PurgeAll(cfg.Cloudflare) },
 		func() error {
 			urls := sitemapPageURLs(idx)
@@ -391,6 +417,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 		store:         tokenStore,
 		oauthSvc:      oauthSvc,
 		resetIPCounts: resetIP,
+		siteDB:        siteDB,
 	}, nil
 }
 
@@ -464,6 +491,9 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	if s.store != nil {
 		_ = s.store.Close()
+	}
+	if s.siteDB != nil {
+		_ = s.siteDB.Close()
 	}
 	return nil
 }
