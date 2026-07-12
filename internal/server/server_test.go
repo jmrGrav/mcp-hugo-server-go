@@ -401,6 +401,9 @@ func oauthHashForTest(token string) string {
 	return fmt.Sprintf("%x", sum[:])
 }
 
+// withDefaultLogger replaces the global slog default for the duration of one
+// test. Do NOT use in tests that call t.Parallel() — the global mutation is
+// not goroutine-safe across parallel test cases.
 func withDefaultLogger(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
