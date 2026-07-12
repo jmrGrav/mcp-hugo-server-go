@@ -500,23 +500,24 @@ func applyPageUpdates(fileContent, newTitle, newBody string, opts pageUpdateOpts
 		if err := yaml.Unmarshal([]byte(yamlPart), &doc); err != nil {
 			return "", fmt.Errorf("YAML parse: %w", err)
 		}
-		if len(doc.Content) > 0 {
-			mapping := doc.Content[0]
-			if newTitle != "" {
-				setYAMLKey(mapping, "title", newTitle)
-			}
-			if opts.Tags != nil {
-				setYAMLSeq(mapping, "tags", opts.Tags)
-			}
-			if opts.Categories != nil {
-				setYAMLSeq(mapping, "categories", opts.Categories)
-			}
-			if opts.Draft != nil {
-				setYAMLBool(mapping, "draft", *opts.Draft)
-			}
-			if opts.Description != "" {
-				setYAMLKey(mapping, "description", opts.Description)
-			}
+		if len(doc.Content) == 0 || doc.Content[0] == nil || doc.Content[0].Kind != yaml.MappingNode {
+			return "", fmt.Errorf("YAML parse: frontmatter root must be a mapping")
+		}
+		mapping := doc.Content[0]
+		if newTitle != "" {
+			setYAMLKey(mapping, "title", newTitle)
+		}
+		if opts.Tags != nil {
+			setYAMLSeq(mapping, "tags", opts.Tags)
+		}
+		if opts.Categories != nil {
+			setYAMLSeq(mapping, "categories", opts.Categories)
+		}
+		if opts.Draft != nil {
+			setYAMLBool(mapping, "draft", *opts.Draft)
+		}
+		if opts.Description != "" {
+			setYAMLKey(mapping, "description", opts.Description)
 		}
 		out, err := yaml.Marshal(doc.Content[0])
 		if err != nil {

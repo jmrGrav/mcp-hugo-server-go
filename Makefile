@@ -1,4 +1,4 @@
-.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release
+.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
@@ -29,6 +29,14 @@ fmt:
 
 vuln:
 	govulncheck ./...
+
+fuzz-smoke:
+	go test ./internal/security -run=^$$ -fuzz=FuzzPathGuardSafeJoin -fuzztime=3s
+	go test ./internal/hugosite -run=^$$ -fuzz=FuzzSlugFromRel -fuzztime=3s
+	go test ./internal/taxonomy -run=^$$ -fuzz=FuzzTaxonomyNormalization -fuzztime=3s
+	go test ./internal/taxonomy -run=^$$ -fuzz=FuzzNormalizeAliasMap -fuzztime=3s
+	go test ./internal/tools/write -run=^$$ -fuzz=FuzzApplyPageUpdatesRoundTrip -fuzztime=3s
+	go test ./internal/tools/write -run=^$$ -fuzz=FuzzValidateFrontmatterRoundTrip -fuzztime=3s
 
 check: fmt vet lint test
 
