@@ -229,7 +229,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   fileutil.BoolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
 		if cfg.HugoRoot == "" {
