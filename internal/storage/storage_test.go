@@ -33,6 +33,92 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 	}
 }
 
+func TestRefreshTokenLifecycleAllStores(t *testing.T) {
+	t.Parallel()
+
+	future := time.Now().Add(time.Hour)
+	expired := time.Now().Add(-time.Hour)
+
+	tests := []struct {
+		name  string
+		open  func(t *testing.T) Store
+		close func(Store) error
+	}{
+		{
+			name: "memory",
+			open: func(t *testing.T) Store { return NewMemory() },
+			close: func(s Store) error {
+				return s.Close()
+			},
+		},
+		{
+			name: "json",
+			open: func(t *testing.T) Store {
+				s, err := NewJSON(filepath.Join(t.TempDir(), "tokens.json"))
+				if err != nil {
+					t.Fatalf("NewJSON() error = %v", err)
+				}
+				return s
+			},
+			close: func(s Store) error { return s.Close() },
+		},
+		{
+			name: "sqlite",
+			open: func(t *testing.T) Store {
+				s, err := NewSQLite(filepath.Join(t.TempDir(), "tokens.sqlite"))
+				if err != nil {
+					t.Fatalf("NewSQLite() error = %v", err)
+				}
+				return s
+			},
+			close: func(s Store) error { return s.Close() },
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := tc.open(t)
+			if err := s.AddRefreshToken("rtok1", "client-a", "content.read", future); err != nil {
+				t.Fatalf("AddRefreshToken() error = %v", err)
+			}
+			if scope, ok := s.ValidateRefreshToken("rtok1", "client-a"); !ok || scope != "content.read" {
+				t.Fatalf("ValidateRefreshToken() = %q, %v", scope, ok)
+			}
+			if _, ok := s.ValidateRefreshToken("rtok1", "client-b"); ok {
+				t.Fatal("refresh token should be bound to its client_id")
+			}
+			scope, ok, err := s.ExchangeRefreshToken("rtok1", "client-a", "rtok1-next", "atok1-next", future, future)
+			if err != nil {
+				t.Fatalf("ExchangeRefreshToken() error = %v", err)
+			}
+			if !ok || scope != "content.read" {
+				t.Fatalf("ExchangeRefreshToken() = %q, %v", scope, ok)
+			}
+			if _, ok := s.ValidateRefreshToken("rtok1", "client-a"); ok {
+				t.Fatal("old refresh token should be invalid after exchange")
+			}
+			if scope, ok := s.ValidateRefreshToken("rtok1-next", "client-a"); !ok || scope != "content.read" {
+				t.Fatalf("ValidateRefreshToken(next) = %q, %v", scope, ok)
+			}
+			if scope, ok := s.ValidateAccessToken("atok1-next"); !ok || scope != "content.read" {
+				t.Fatalf("ValidateAccessToken(next) = %q, %v", scope, ok)
+			}
+			if err := s.AddRefreshToken("rtok2", "client-a", "content.write", expired); err != nil {
+				t.Fatalf("AddRefreshToken(expired) error = %v", err)
+			}
+			if err := s.PurgeExpiredTokens(); err != nil {
+				t.Fatalf("PurgeExpiredTokens() error = %v", err)
+			}
+			if _, ok := s.ValidateRefreshToken("rtok2", "client-a"); ok {
+				t.Fatal("expired refresh token should have been purged")
+			}
+			if err := tc.close(s); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestJSONStoreLifecycle(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.json")
 	s, err := NewJSON(path)
@@ -45,6 +131,9 @@ func TestJSONStoreLifecycle(t *testing.T) {
 	}
 	if err := s.AddAccessToken("tok2", "site.admin", time.Now().Add(-time.Hour)); err != nil {
 		t.Fatalf("AddAccessToken(expired) error = %v", err)
+	}
+	if err := s.AddRefreshToken("rtok1", "client-a", "site.admin", future); err != nil {
+		t.Fatalf("AddRefreshToken() error = %v", err)
 	}
 	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "site.admin" {
 		t.Fatalf("ValidateAccessToken() = %q, %v", scope, ok)
@@ -62,6 +151,31 @@ func TestJSONStoreLifecycle(t *testing.T) {
 	}
 	if scope, ok := s2.ValidateAccessToken("tok1"); !ok || scope != "site.admin" {
 		t.Fatalf("ValidateAccessToken(reopen) = %q, %v", scope, ok)
+	}
+	if scope, ok := s2.ValidateRefreshToken("rtok1", "client-a"); !ok || scope != "site.admin" {
+		t.Fatalf("ValidateRefreshToken(reopen) = %q, %v", scope, ok)
+	}
+}
+
+func TestJSONStoreLoadsLegacyFlatFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	legacy := map[string]jsonEntry{
+		"tok1": {Scope: "content.read", ExpiresAt: time.Now().Add(time.Hour).Unix()},
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	s, err := NewJSON(path)
+	if err != nil {
+		t.Fatalf("NewJSON() error = %v", err)
+	}
+	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "content.read" {
+		t.Fatalf("ValidateAccessToken(legacy) = %q, %v", scope, ok)
 	}
 }
 
@@ -92,6 +206,38 @@ func TestJSONStoreSaveError(t *testing.T) {
 	}
 }
 
+func TestJSONStoreExchangeRefreshTokenSaveErrorKeepsOldTokenValid(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tokens.json")
+	sAny, err := NewJSON(path)
+	if err != nil {
+		t.Fatalf("NewJSON() error = %v", err)
+	}
+	s := sAny.(*jsonStore)
+	future := time.Now().Add(time.Hour)
+	if err := s.AddRefreshToken("rtok1", "client-a", "content.read", future); err != nil {
+		t.Fatalf("AddRefreshToken() error = %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	defer func() { _ = os.Chmod(dir, 0o755) }()
+
+	if _, _, err := s.ExchangeRefreshToken("rtok1", "client-a", "rtok2", "atok2", future, future); err == nil {
+		t.Fatal("expected ExchangeRefreshToken() to fail when save cannot write")
+	}
+	if scope, ok := s.ValidateRefreshToken("rtok1", "client-a"); !ok || scope != "content.read" {
+		t.Fatalf("ValidateRefreshToken(old) = %q, %v", scope, ok)
+	}
+	if _, ok := s.ValidateRefreshToken("rtok2", "client-a"); ok {
+		t.Fatal("new refresh token should not be visible after failed exchange")
+	}
+	if _, ok := s.ValidateAccessToken("atok2"); ok {
+		t.Fatal("new access token should not be visible after failed exchange")
+	}
+}
+
 func TestSQLiteStoreLifecycle(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tokens.sqlite")
 	s, err := NewSQLite(path)
@@ -103,8 +249,14 @@ func TestSQLiteStoreLifecycle(t *testing.T) {
 	if err := s.AddAccessToken("tok1", "site.admin", future); err != nil {
 		t.Fatalf("AddAccessToken() error = %v", err)
 	}
+	if err := s.AddRefreshToken("rtok1", "client-a", "site.admin", future); err != nil {
+		t.Fatalf("AddRefreshToken() error = %v", err)
+	}
 	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "site.admin" {
 		t.Fatalf("ValidateAccessToken() = %q, %v", scope, ok)
+	}
+	if scope, ok := s.ValidateRefreshToken("rtok1", "client-a"); !ok || scope != "site.admin" {
+		t.Fatalf("ValidateRefreshToken() = %q, %v", scope, ok)
 	}
 	if err := s.PurgeExpiredTokens(); err != nil {
 		t.Fatalf("PurgeExpiredTokens() error = %v", err)

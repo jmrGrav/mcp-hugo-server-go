@@ -22,7 +22,7 @@ Tested against `https://mcp.arleo.eu` (v1.3.0). Each client is tested for: disco
 - **OAuth:** Authorization Code + PKCE flow completes; admin-scope token obtained
 - **v1.1.0 issue:** `tools/list` called before auth was cached; admin token still showed 9 anonymous tools
 - **v1.2.0 fix:** `Cache-Control: no-store` + `Vary: Authorization` added; re-test required to confirm
-- **Transport:** Stateful Streamable HTTP (`POST /mcp`); sessions have 1-hour idle timeout
+- **Transport:** Stateful Streamable HTTP (`POST /mcp`); sessions have 24-hour idle timeout
 - **Status:** ✅ functional — v1.3.0 re-validated with stateful HTTP transport. Admin token correctly shows expanded tool set.
 
 ### ChatGPT

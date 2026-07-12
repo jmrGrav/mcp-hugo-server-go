@@ -29,7 +29,7 @@ token with `content.read` scope for read-only access. OAuth 2.0 unlocks richer t
       "body": {
         "client_name": "<your-agent-name>",
         "redirect_uris": ["<your-redirect-uri>"],
-        "grant_types": ["authorization_code"],
+        "grant_types": ["authorization_code", "refresh_token"],
         "response_types": ["code"],
         "token_endpoint_auth_method": "none"
       },
@@ -59,7 +59,18 @@ token with `content.read` scope for read-only access. OAuth 2.0 unlocks richer t
         "client_id": "<client_id>",
         "code_verifier": "<pkce-verifier>"
       },
-      "returns": ["access_token", "token_type", "expires_in"]
+      "returns": ["access_token", "token_type", "expires_in", "refresh_token", "refresh_expires_in"]
+    },
+    "step_3b_refresh": {
+      "method": "POST",
+      "url": "https://mcp.arleo.eu/token",
+      "content_type": "application/x-www-form-urlencoded",
+      "body": {
+        "grant_type": "refresh_token",
+        "refresh_token": "<refresh-token>",
+        "client_id": "<client_id>"
+      },
+      "returns": ["access_token", "token_type", "expires_in", "refresh_token", "refresh_expires_in"]
     },
     "step_4_use": {
       "method": "POST",

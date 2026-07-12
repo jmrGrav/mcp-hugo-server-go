@@ -135,7 +135,7 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	if err := json.Unmarshal(got["grant_types_supported"], &grantTypes); err != nil {
 		t.Fatalf("grant_types_supported: %v", err)
 	}
-	wantGrants := []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"}
+	wantGrants := []string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"}
 	for _, g := range wantGrants {
 		found := false
 		for _, ag := range grantTypes {

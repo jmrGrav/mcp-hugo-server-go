@@ -77,10 +77,12 @@ type RegistrationResponse struct {
 }
 
 type TokenResponse struct {
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in,omitempty"`
-	Scope       string `json:"scope,omitempty"`
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresIn        int    `json:"expires_in,omitempty"`
+	RefreshToken     string `json:"refresh_token,omitempty"`
+	RefreshExpiresIn int    `json:"refresh_expires_in,omitempty"`
+	Scope            string `json:"scope,omitempty"`
 }
 
 func NewService(cfg config.OAuthConfig, store storage.Store) *Service {
@@ -89,6 +91,9 @@ func NewService(cfg config.OAuthConfig, store storage.Store) *Service {
 	}
 	if cfg.AccessTokenTTLSeconds <= 0 {
 		cfg.AccessTokenTTLSeconds = 3600
+	}
+	if cfg.RefreshTokenTTLSeconds <= 0 {
+		cfg.RefreshTokenTTLSeconds = 30 * 24 * 3600
 	}
 	if len(cfg.TrustedAuthorizeCIDRs) == 0 {
 		cfg.TrustedAuthorizeCIDRs = []string{"127.0.0.1/32", "::1/128"}
@@ -260,7 +265,7 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		ClientID:                      id,
 		ClientIDIssuedAt:              time.Now().Unix(),
 		RedirectURIs:                  append([]string(nil), req.RedirectURIs...),
-		GrantTypes:                    []string{"authorization_code"},
+		GrantTypes:                    []string{"authorization_code", "refresh_token"},
 		ResponseTypes:                 []string{"code"},
 		TokenEndpointAuthMethod:       "none",
 		CodeChallengeMethodsSupported: []string{"S256"},
@@ -408,9 +413,15 @@ func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, s
 }
 
 func (s *Service) exchangeToken(grantType, clientID, clientSecret, redirectURI, code, codeVerifier string) (*TokenResponse, error) {
-	if grantType != "authorization_code" {
+	switch grantType {
+	case "authorization_code":
+		return s.exchangeAuthorizationCode(clientID, clientSecret, redirectURI, code, codeVerifier)
+	default:
 		return nil, fmt.Errorf("unsupported_grant_type")
 	}
+}
+
+func (s *Service) exchangeAuthorizationCode(clientID, clientSecret, redirectURI, code, codeVerifier string) (*TokenResponse, error) {
 	c, ok := s.lookupClient(clientID)
 	if !ok {
 		return nil, fmt.Errorf("invalid_client")
@@ -438,17 +449,65 @@ func (s *Service) exchangeToken(grantType, clientID, clientSecret, redirectURI, 
 	if data.CodeChallenge != "" && !ValidatePKCE(data.CodeChallenge, codeVerifier) {
 		return nil, fmt.Errorf("invalid_grant: pkce verification failed")
 	}
-	token := randomString(32)
-	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	scope := CanonicalScope(data.Scope)
-	if err := s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(ttl)); err != nil {
-		return nil, fmt.Errorf("server_error: store token: %w", err)
+	return s.issueBearerPair(clientID, CanonicalScope(data.Scope))
+}
+
+func (s *Service) exchangeRefreshToken(clientID, clientSecret, refreshToken string) (*TokenResponse, error) {
+	c, ok := s.lookupClient(clientID)
+	if !ok {
+		return nil, fmt.Errorf("invalid_client")
+	}
+	if c.SecretHash != "" {
+		if clientSecret == "" || subtle.ConstantTimeCompare([]byte(HashToken(clientSecret)), []byte(c.SecretHash)) != 1 {
+			return nil, fmt.Errorf("invalid_client")
+		}
+	}
+	accessToken := randomString(32)
+	refreshTokenNext := randomString(32)
+	accessExpiry := time.Now().Add(time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second)
+	refreshExpiry := time.Now().Add(time.Duration(s.cfg.RefreshTokenTTLSeconds) * time.Second)
+	scope, ok, err := s.store.ExchangeRefreshToken(
+		HashToken(refreshToken),
+		clientID,
+		HashToken(refreshTokenNext),
+		HashToken(accessToken),
+		accessExpiry,
+		refreshExpiry,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: exchange refresh token: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("invalid_grant: invalid or expired refresh token")
 	}
 	return &TokenResponse{
-		AccessToken: token,
-		TokenType:   "Bearer",
-		ExpiresIn:   s.cfg.AccessTokenTTLSeconds,
-		Scope:       scope,
+		AccessToken:      accessToken,
+		TokenType:        "Bearer",
+		ExpiresIn:        s.cfg.AccessTokenTTLSeconds,
+		RefreshToken:     refreshTokenNext,
+		RefreshExpiresIn: s.cfg.RefreshTokenTTLSeconds,
+		Scope:            CanonicalScope(scope),
+	}, nil
+}
+
+func (s *Service) issueBearerPair(clientID, scope string) (*TokenResponse, error) {
+	token := randomString(32)
+	accessTTL := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
+	if err := s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(accessTTL)); err != nil {
+		return nil, fmt.Errorf("server_error: store token: %w", err)
+	}
+	refreshToken := randomString(32)
+	refreshTTL := time.Duration(s.cfg.RefreshTokenTTLSeconds) * time.Second
+	if err := s.store.AddRefreshToken(HashToken(refreshToken), clientID, scope, time.Now().Add(refreshTTL)); err != nil {
+		return nil, fmt.Errorf("server_error: store refresh token: %w", err)
+	}
+	return &TokenResponse{
+		AccessToken:      token,
+		TokenType:        "Bearer",
+		ExpiresIn:        s.cfg.AccessTokenTTLSeconds,
+		RefreshToken:     refreshToken,
+		RefreshExpiresIn: s.cfg.RefreshTokenTTLSeconds,
+		Scope:            scope,
 	}, nil
 }
 
@@ -550,14 +609,22 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientID, clientSecret := tokenClientCredentials(r)
-	resp, err := s.exchangeToken(
-		grantType,
-		clientID,
-		clientSecret,
-		r.FormValue("redirect_uri"),
-		r.FormValue("code"),
-		r.FormValue("code_verifier"),
+	var (
+		resp *TokenResponse
+		err  error
 	)
+	if grantType == "refresh_token" {
+		resp, err = s.exchangeRefreshToken(clientID, clientSecret, r.FormValue("refresh_token"))
+	} else {
+		resp, err = s.exchangeToken(
+			grantType,
+			clientID,
+			clientSecret,
+			r.FormValue("redirect_uri"),
+			r.FormValue("code"),
+			r.FormValue("code_verifier"),
+		)
+	}
 	if err != nil {
 		writeOAuthError(w, oauthTokenErrorCode(err), oauthTokenErrorStatus(err))
 		return

@@ -8,6 +8,9 @@ import (
 type Store interface {
 	AddAccessToken(token, scope string, expiresAt time.Time) error
 	ValidateAccessToken(token string) (scope string, ok bool)
+	AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error
+	ValidateRefreshToken(token, clientID string) (scope string, ok bool)
+	ExchangeRefreshToken(oldToken, clientID, newRefreshToken, newAccessToken string, accessExpiresAt, refreshExpiresAt time.Time) (scope string, ok bool, err error)
 	PurgeExpiredTokens() error
 	Close() error
 }
@@ -17,13 +20,23 @@ type memoryEntry struct {
 	expiresAt time.Time
 }
 
+type memoryRefreshEntry struct {
+	clientID  string
+	scope     string
+	expiresAt time.Time
+}
+
 type memoryStore struct {
-	mu     sync.RWMutex
-	tokens map[string]memoryEntry
+	mu            sync.RWMutex
+	tokens        map[string]memoryEntry
+	refreshTokens map[string]memoryRefreshEntry
 }
 
 func NewMemory() Store {
-	return &memoryStore{tokens: make(map[string]memoryEntry)}
+	return &memoryStore{
+		tokens:        make(map[string]memoryEntry),
+		refreshTokens: make(map[string]memoryRefreshEntry),
+	}
 }
 
 func (m *memoryStore) AddAccessToken(token, scope string, expiresAt time.Time) error {
@@ -43,6 +56,44 @@ func (m *memoryStore) ValidateAccessToken(token string) (string, bool) {
 	return e.scope, true
 }
 
+func (m *memoryStore) AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.refreshTokens[token] = memoryRefreshEntry{
+		clientID:  clientID,
+		scope:     scope,
+		expiresAt: expiresAt,
+	}
+	return nil
+}
+
+func (m *memoryStore) ValidateRefreshToken(token, clientID string) (string, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	e, ok := m.refreshTokens[token]
+	if !ok || e.clientID != clientID || !time.Now().Before(e.expiresAt) {
+		return "", false
+	}
+	return e.scope, true
+}
+
+func (m *memoryStore) ExchangeRefreshToken(oldToken, clientID, newRefreshToken, newAccessToken string, accessExpiresAt, refreshExpiresAt time.Time) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	e, ok := m.refreshTokens[oldToken]
+	if !ok || e.clientID != clientID || !time.Now().Before(e.expiresAt) {
+		return "", false, nil
+	}
+	delete(m.refreshTokens, oldToken)
+	m.tokens[newAccessToken] = memoryEntry{scope: e.scope, expiresAt: accessExpiresAt}
+	m.refreshTokens[newRefreshToken] = memoryRefreshEntry{
+		clientID:  clientID,
+		scope:     e.scope,
+		expiresAt: refreshExpiresAt,
+	}
+	return e.scope, true, nil
+}
+
 func (m *memoryStore) PurgeExpiredTokens() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -50,6 +101,11 @@ func (m *memoryStore) PurgeExpiredTokens() error {
 	for k, e := range m.tokens {
 		if !now.Before(e.expiresAt) {
 			delete(m.tokens, k)
+		}
+	}
+	for k, e := range m.refreshTokens {
+		if !now.Before(e.expiresAt) {
+			delete(m.refreshTokens, k)
 		}
 	}
 	return nil

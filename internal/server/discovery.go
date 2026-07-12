@@ -76,7 +76,7 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 		TokenEndpoint:                     issuer + "/token",
 		RegistrationEndpoint:              registrationEndpoint,
 		ResponseTypesSupported:            []string{"code"},
-		GrantTypesSupported:               []string{"authorization_code", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
+		GrantTypesSupported:               []string{"authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:jwt-bearer", "urn:workos:agent-auth:grant-type:claim"},
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: tokenEndpointAuthMethods(cfg),
 		ScopesSupported:                   tools.KnownScopes,

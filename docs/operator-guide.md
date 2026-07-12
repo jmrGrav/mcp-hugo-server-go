@@ -125,6 +125,7 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 | `oauth.trusted_authorize_cidrs` | array of strings | (empty) | CIDR blocks allowed to call `/authorize` without authentication. |
 | `oauth.auth_code_ttl_seconds` | int | (default) | Lifetime of authorization codes. |
 | `oauth.access_token_ttl_seconds` | int | (default) | Lifetime of access tokens. |
+| `oauth.refresh_token_ttl_seconds` | int | (default) | Lifetime of refresh tokens used for silent token renewal. |
 | `oauth.storage_backend` | string | `memory` | Token persistence backend: `memory` (ephemeral), `json` (file-based), or `sqlite` (database). |
 | `oauth.storage_path` | string | (empty) | Path to token storage file (required for `json` or `sqlite` backends). |
 
@@ -314,6 +315,7 @@ oauth:
   trusted_authorize_cidrs: []
   auth_code_ttl_seconds: 600
   access_token_ttl_seconds: 3600
+  refresh_token_ttl_seconds: 2592000
   storage_backend: memory
   storage_path: ""
 ```
