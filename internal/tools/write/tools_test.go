@@ -401,3 +401,71 @@ func TestDeletePageCleansPublicDir(t *testing.T) {
 		t.Error("public directory must be removed by delete_page to prevent zombie")
 	}
 }
+
+func TestCreatePageDryRun(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "dry-post",
+		"title":      "Dry Post",
+		"body":       "Preview only.",
+		"tags":       []any{},
+		"categories": []any{},
+		"dry_run":    true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page dry_run returned error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "dry_run") && !strings.Contains(string(raw), "Dry Post") {
+		t.Fatalf("create_page dry_run missing content preview: %s", raw)
+	}
+	// File must NOT exist on disk
+	if _, err := os.Stat(filepath.Join(contentRoot, "dry-post", "index.md")); !os.IsNotExist(err) {
+		t.Error("create_page dry_run must not write file to disk")
+	}
+}
+
+func TestUpdatePageDryRun(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// Create a real page first
+	if r := callTool(t, session, "create_page", map[string]any{
+		"slug":       "update-dry",
+		"title":      "Original Title",
+		"body":       "Original body.",
+		"tags":       []any{},
+		"categories": []any{},
+	}); r.IsError {
+		raw, _ := json.Marshal(r.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":    "update-dry",
+		"title":   "New Title",
+		"dry_run": true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page dry_run returned error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	// Diff should show the title change
+	if !strings.Contains(string(raw), "New Title") {
+		t.Fatalf("update_page dry_run diff missing new title: %s", raw)
+	}
+	// On-disk file must still have the original title
+	data, err := os.ReadFile(filepath.Join(contentRoot, "update-dry", "index.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(data), "Original Title") {
+		t.Errorf("update_page dry_run must not write to disk; file = %q", data)
+	}
+}

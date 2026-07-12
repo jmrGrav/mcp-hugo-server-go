@@ -188,3 +188,38 @@ func TestDiffHelperBranches(t *testing.T) {
 		t.Fatalf("gitBytes() = %q, %v", out, err)
 	}
 }
+
+func TestDetectTaxonomyInconsistencies(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/a/index.md", "---\ntitle: A\ntags: [golang]\ncategories: [docs]\n---\n")
+	write("posts/b/index.md", "---\ntitle: B\ntags: [go]\ncategories: [docs]\n---\n")
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	// nil index returns nil
+	if got := detectTaxonomyInconsistencies(nil, nil); got != nil {
+		t.Fatalf("detectTaxonomyInconsistencies(nil) = %v", got)
+	}
+	// alias map: "golang" is an alias for "go"
+	aliases := map[string]string{"golang": "go"}
+	issues := detectTaxonomyInconsistencies(src, aliases)
+	found := false
+	for _, iss := range issues {
+		if strings.Contains(iss, "golang") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("detectTaxonomyInconsistencies() did not flag alias 'golang': %v", issues)
+	}
+}

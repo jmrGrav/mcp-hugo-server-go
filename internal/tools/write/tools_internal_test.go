@@ -55,6 +55,34 @@ func TestWriteHelpers(t *testing.T) {
 	}
 }
 
+func TestSimpleDiff(t *testing.T) {
+	// Identical content → empty diff
+	if got := simpleDiff("f.md", "a\nb\n", "a\nb\n"); got != "" {
+		t.Fatalf("simpleDiff(identical) = %q", got)
+	}
+	// Single-line change contains + and - markers
+	got := simpleDiff("f.md", "hello\nworld\n", "hello\nearth\n")
+	if !strings.Contains(got, "-world") || !strings.Contains(got, "+earth") {
+		t.Fatalf("simpleDiff(change) = %q", got)
+	}
+	// Addition
+	got = simpleDiff("f.md", "a\n", "a\nb\n")
+	if !strings.Contains(got, "+b") {
+		t.Fatalf("simpleDiff(addition) = %q", got)
+	}
+	// Deletion
+	got = simpleDiff("f.md", "a\nb\n", "a\n")
+	if !strings.Contains(got, "-b") {
+		t.Fatalf("simpleDiff(deletion) = %q", got)
+	}
+	// Large-file fallback (>500 lines each)
+	big := strings.Repeat("line\n", 501)
+	got = simpleDiff("big.md", big, big+"extra\n")
+	if !strings.Contains(got, "content changed") {
+		t.Fatalf("simpleDiff(large) = %q", got)
+	}
+}
+
 func TestWriteHelperBranches(t *testing.T) {
 	fm := buildFrontmatter("Title", nil, nil, "")
 	if !strings.Contains(fm, "tags: []") || !strings.Contains(fm, "categories: []") {
