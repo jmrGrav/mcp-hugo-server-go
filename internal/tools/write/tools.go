@@ -12,6 +12,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
@@ -92,7 +93,7 @@ func deleteCallerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string)
 	return l
 }
 
-func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteIdxs ...*site.Index) {
+func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) {
 	var siteIdx *site.Index
 	if len(siteIdxs) > 0 {
 		siteIdx = siteIdxs[0]
@@ -166,7 +167,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, createPageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
-		idx.Upsert(hugosite.SourcePage{
+		created := hugosite.SourcePage{
 			Slug:           in.Slug,
 			FilePath:       filePath,
 			Title:          in.Title,
@@ -175,9 +176,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Categories:     in.Categories,
 			Body:           in.Body,
 			FrontmatterRaw: map[string]any{"title": in.Title, "date": now, "draft": false},
-		})
+		}
+		idx.Upsert(created)
 		// Do NOT insert into the public site index — the page is source-only until
 		// Hugo builds it. UpsertPage here would break allow_source_fallback detection.
+		if siteDB != nil {
+			if err := siteDB.SyncSourcePage(created); err != nil {
+				slog.Warn("create_page: db sync failed", "slug", in.Slug, "error", err)
+			}
+		}
 
 		return nil, createPageOutput{Slug: in.Slug, Path: filePath}, nil
 	})
@@ -296,6 +303,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				siteIdx.UpsertPage(pubUpdated)
 			}
 		}
+		if siteDB != nil {
+			if err := siteDB.SyncSourcePage(updated); err != nil {
+				slog.Warn("update_page: db sync failed", "slug", in.Slug, "error", err)
+			}
+		}
 
 		return nil, updatePageOutput{Slug: in.Slug}, nil
 	})
@@ -351,6 +363,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		idx.Delete(in.Slug)
 		if siteIdx != nil {
 			siteIdx.RemoveBySlug(in.Slug)
+		}
+		if siteDB != nil {
+			if err := siteDB.DeletePage(in.Slug); err != nil {
+				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", err)
+			}
 		}
 		if cfg.SiteRoot != "" {
 			publicPath := filepath.Join(cfg.SiteRoot, strings.Trim(in.Slug, "/"))

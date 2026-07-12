@@ -120,7 +120,7 @@ func TestWriteHelperBranches(t *testing.T) {
 }
 
 func TestRegisterNilServer(t *testing.T) {
-	Register(nil, nil, nil, config.Default())
+	Register(nil, nil, nil, config.Default(), nil)
 }
 
 func TestApplyPageUpdatesPreservesOrder(t *testing.T) {

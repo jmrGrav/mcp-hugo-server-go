@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Added
+- **SQLite-backed derived index** (#221): optional persistent index controlled by `db_path` in
+  config (falls back to existing in-memory behaviour when unset). Phase 1: core `pages`, `page_tags`,
+  `page_categories`, and `links` tables with write-triggered invalidation (`create_page`,
+  `update_page`, `delete_page` sync to DB in-process after file write). Phase 2: FTS5 virtual table
+  (`page_fts`) makes `search_content` use ranked full-text search with `<<highlighted>>` snippets
+  instead of a linear keyword scan. Phase 3: `site_health_snapshots` table for history (written by
+  `build_site` post-build callback). Startup reindex is hash-gated — unchanged pages are skipped.
+  `build_site` triggers incremental reindex of the public index after each successful Hugo build.
+  DB is always re-derivable from scratch by deleting the file.
 - **MCP tool-call observability** (#226): `NewToolCallMiddleware` wired as receiving middleware on
   all four MCP servers (anonymous, content.read, content.write, site.admin). Emits one structured
   log line per `tools/call` with `tool_name`, `scope`, `duration_ms`, `result_class`

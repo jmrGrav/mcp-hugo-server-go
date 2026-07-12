@@ -32,6 +32,7 @@ type Config struct {
 	PostBuildHooks      []string          `yaml:"post_build_hooks"`
 	TaxonomyAliases     map[string]string `yaml:"taxonomy_aliases"`
 	SecurityContact     string            `yaml:"security_contact"`
+	DBPath              string            `yaml:"db_path"`
 	Cloudflare          CloudflareConfig  `yaml:"cloudflare"`
 	IndexNow            IndexNowConfig    `yaml:"indexnow"`
 	GoogleIndex         GoogleIndexConfig `yaml:"google_indexing"`

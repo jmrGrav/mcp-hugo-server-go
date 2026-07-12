@@ -747,6 +747,9 @@ func canonicalDir(root string) (string, error) {
 	return abs, nil
 }
 
+// NormalizeSlug normalizes a URL path to a canonical slug with leading and trailing slashes.
+func NormalizeSlug(raw string) string { return normalizeSlug(raw) }
+
 func isHiddenPath(rel string) bool {
 	if rel == "" {
 		return false

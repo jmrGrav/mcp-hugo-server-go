@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
@@ -99,6 +100,7 @@ type pageDTO struct {
 	Date          string              `json:"date"`
 	URL           string              `json:"url"`
 	Lang          string              `json:"lang"`
+	Snippet       string              `json:"snippet,omitempty"`
 }
 
 type validateOutputData struct {
@@ -210,15 +212,19 @@ type suggestInternalLinksOutput struct {
 
 // RegisterWithSourceIndex wires additional read-only tools that benefit from the
 // source index. Existing tools remain registered via Register.
-func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
+func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, dbs ...*db.DB) {
 	if s == nil {
 		return
+	}
+	var siteDB *db.DB
+	if len(dbs) > 0 {
+		siteDB = dbs[0]
 	}
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 
 	RegisterDiffPage(s, idx, srcIdx, cfg)
 
-	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. Requires content.read. For a simple unauthenticated keyword search use search_pages.",
+	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Requires content.read. For a simple unauthenticated keyword search use search_pages.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -226,6 +232,61 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
 				return nil, contentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
 			}
+
+			// FTS5 path: use SQLite full-text search for ranked, snippet-annotated results.
+			q := strings.TrimSpace(in.Query)
+			if siteDB != nil && q != "" {
+				ftsResults, err := siteDB.Search(q, 1000)
+				if err == nil && len(ftsResults) > 0 {
+					snippetMap := make(map[string]string, len(ftsResults))
+					classifier := site.NewClassifierFromPages(idx.Sitemap())
+					var ranked []site.Page
+					inNoQuery := in
+					inNoQuery.Query = "" // non-query filters applied below; FTS handles text matching
+					for _, r := range ftsResults {
+						p, found := idx.GetBySlug(r.Slug)
+						if !found || !classifier.IsContent(*p) {
+							continue
+						}
+						if !matchContentFilters(*p, inNoQuery, classifier, aliases) {
+							continue
+						}
+						ranked = append(ranked, *p)
+						snippetMap[r.Slug] = r.Snippet
+					}
+					total := len(ranked)
+					limit := clampLimit(in.Limit, 20, 100)
+					offset := in.Offset
+					if offset < 0 {
+						offset = 0
+					}
+					pages := sliceContentPages(ranked, offset, limit)
+					now := time.Now().UTC().Format(time.RFC3339)
+					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap)
+					return nil, contentEnvelope{
+						Success:     true,
+						Version:     toolResultVersion,
+						GeneratedAt: now,
+						Data: contentEnvelopeData{
+							Pages:    dtos,
+							Total:    total,
+							Limit:    limit,
+							Offset:   offset,
+							Sort:     "relevance",
+							Order:    "desc",
+							Query:    q,
+							Type:     strings.TrimSpace(in.Type),
+							Tag:      strings.TrimSpace(in.Tag),
+							Category: strings.TrimSpace(in.Category),
+							Language: strings.TrimSpace(in.Language),
+						},
+						Warnings: []string{},
+						Errors:   []string{},
+					}, nil
+				}
+			}
+
+			// In-memory fallback path (db_path unset or FTS returned no results).
 			sitemap := idx.Sitemap()
 			if srcIdx != nil && in.Category != "" {
 				enriched := make([]site.Page, len(sitemap))
@@ -364,17 +425,49 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssues(pages, 0, 0, aliases), nil
 		})
 
-	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. Returns a limited sample of missing internal targets and requires content.read.",
+	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets and requires content.read.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in brokenLinkInput) (*mcp.CallToolResult, brokenLinkOutput, error) {
 			if idx == nil {
 				return nil, brokenLinkOutput{}, fmt.Errorf("index not initialized")
 			}
-			issues := collectBrokenLinks(idx)
 			limit := clampLimit(in.Limit, 25, 100)
 			offset := in.Offset
 			if offset < 0 {
 				offset = 0
 			}
+
+			// DB path: read pre-computed broken links from the links table.
+			if siteDB != nil {
+				dbLinks, err := siteDB.GetBrokenLinks()
+				if err == nil {
+					issues := make([]brokenLinkDTO, 0, len(dbLinks))
+					for _, r := range dbLinks {
+						issues = append(issues, brokenLinkDTO{
+							PageSlug: r.SourceSlug,
+							Link:     r.Target,
+							Target:   r.Target,
+							Reason:   "missing target page",
+						})
+					}
+					return nil, brokenLinkOutput{
+						Success:     true,
+						Version:     toolResultVersion,
+						GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+						Data: brokenLinkData{
+							TotalPages:  len(idx.Sitemap()),
+							BrokenLinks: len(issues),
+							Limit:       limit,
+							Offset:      offset,
+							Links:       sliceBrokenLinks(issues, offset, limit),
+						},
+						Warnings: []string{},
+						Errors:   []string{},
+					}, nil
+				}
+			}
+
+			// In-memory fallback: re-scan HTML on each call.
+			issues := collectBrokenLinks(idx)
 			return nil, brokenLinkOutput{
 				Success:     true,
 				Version:     toolResultVersion,
@@ -1108,6 +1201,16 @@ func toPageDTOs(pages []site.Page, aliases map[string]string) []pageDTO {
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
 		out[i] = toPageDTO(p, aliases)
+	}
+	return out
+}
+
+func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string) []pageDTO {
+	out := make([]pageDTO, len(pages))
+	for i, p := range pages {
+		dto := toPageDTO(p, aliases)
+		dto.Snippet = snippets[p.Slug]
+		out[i] = dto
 	}
 	return out
 }
