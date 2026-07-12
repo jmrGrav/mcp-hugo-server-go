@@ -214,6 +214,25 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	if page["title"] != "Fresh" || page["html"] != "Fresh body" {
 		t.Fatalf("get_page source-only page = %#v", page)
 	}
+	if page["lang"] != "" {
+		t.Fatalf("get_page source-only lang = %#v, want empty string", page["lang"])
+	}
+	if page["url"] != "" {
+		t.Fatalf("get_page source-only url = %#v, want empty string", page["url"])
+	}
+
+	resContentOnly := callTool(t, session, "get_page", map[string]any{
+		"slug":                  "/drafts/fresh/",
+		"allow_source_fallback": true,
+		"content_only":          true,
+	})
+	if resContentOnly.IsError {
+		t.Fatalf("get_page source-only with content_only returned error: %v", resContentOnly.Content)
+	}
+	contentOnlyPage := decodeContent(t, resContentOnly)["page"].(map[string]any)
+	if contentOnlyPage["html"] != "" {
+		t.Fatalf("get_page source-only with content_only html = %#v, want empty string", contentOnlyPage["html"])
+	}
 }
 
 func TestGetPageDraftBlockedEvenWithSourceFallback(t *testing.T) {
@@ -834,6 +853,34 @@ func TestReadOnlyAnnotations(t *testing.T) {
 			t.Fatalf("tool %q: OpenWorldHint should be false", name)
 		}
 	}
+}
+
+func TestGetPageDescriptionDocumentsSourceFallbackContract(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	for i := range tools.Tools {
+		tool := tools.Tools[i]
+		if tool.Name != "get_page" {
+			continue
+		}
+		for _, want := range []string{
+			"raw Markdown rather than rendered HTML",
+			"`lang` and `url` are empty",
+			"`content_only=true` is also set, the `html` field is returned empty for source-only fallback results",
+		} {
+			if !strings.Contains(tool.Description, want) {
+				t.Fatalf("get_page description missing %q:\n%s", want, tool.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("get_page tool not found")
 }
 
 func assertObjectSchema(t *testing.T, tool *mcp.Tool, field string) {
