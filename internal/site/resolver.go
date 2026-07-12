@@ -51,7 +51,7 @@ func (r *PageResolver) Resolve(rawSlug string) (ResolvedPage, bool) {
 }
 
 func (r *PageResolver) resolveSource(sourceSlug string) (*hugosite.SourcePage, bool) {
-	for _, candidate := range sourceSlugCandidates(sourceSlug) {
+	for _, candidate := range SourceSlugCandidates(sourceSlug) {
 		if p, ok := r.srcIdx.GetBySlug(candidate); ok {
 			return p, true
 		}
@@ -59,7 +59,12 @@ func (r *PageResolver) resolveSource(sourceSlug string) (*hugosite.SourcePage, b
 	return nil, false
 }
 
-func sourceSlugCandidates(sourceSlug string) []string {
+// SourceSlugCandidates returns the slug lookup keys to try against the source
+// index for a given public-page slug, in priority order. It always returns the
+// bare slug first; if the slug carries a language prefix (e.g. "en/posts/foo"),
+// the prefix-stripped form ("posts/foo") is appended as a fallback. Returns nil
+// for an empty input. Callers must break on the first match.
+func SourceSlugCandidates(sourceSlug string) []string {
 	sourceSlug = strings.Trim(sourceSlug, "/")
 	if sourceSlug == "" {
 		return nil

@@ -369,13 +369,22 @@ func toPageDTO(p site.Page) pageDTO {
 
 // toPageDTOsEnriched builds page DTOs with source-index category enrichment and
 // alias folding applied. Both are optional: srcIdx may be nil, aliases may be empty.
+// The source index is authoritative for categories; language-prefixed slugs
+// (e.g. /en/posts/foo/) are resolved via site.SourceSlugCandidates.
 func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string) []pageDTO {
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
 		dto := toPageDTO(p)
-		if srcIdx != nil && len(dto.Categories) == 0 {
-			if src := sourcePageFor(p, srcIdx); src != nil && len(src.Categories) > 0 {
-				dto.Categories = src.Categories
+		if srcIdx != nil {
+			for _, candidate := range site.SourceSlugCandidates(p.Slug) {
+				if src, ok := srcIdx.GetBySlug(candidate); ok {
+					cats := src.Categories
+					if cats == nil {
+						cats = []string{}
+					}
+					dto.Categories = cats
+					break
+				}
 			}
 		}
 		if len(aliases) > 0 {
@@ -385,26 +394,6 @@ func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases
 		out[i] = dto
 	}
 	return out
-}
-
-// sourcePageFor finds the source-index entry for a public page, handling the
-// language-prefix case: Hugo places non-default language pages under /lang/
-// (e.g. /en/posts/foo/) while the source index stores them without the prefix
-// (posts/foo). We first try the direct slug, then strip the language prefix.
-func sourcePageFor(p site.Page, srcIdx *hugosite.SourceIndex) *hugosite.SourcePage {
-	slug := strings.Trim(p.Slug, "/")
-	if src, ok := srcIdx.GetBySlug(slug); ok {
-		return src
-	}
-	// Non-default language page: strip the lang prefix and retry.
-	if p.Lang != "" {
-		if rest, found := strings.CutPrefix(slug, p.Lang+"/"); found {
-			if src, ok := srcIdx.GetBySlug(rest); ok {
-				return src
-			}
-		}
-	}
-	return nil
 }
 
 func toPageDetailDTO(p site.Page) pageDetailDTO {

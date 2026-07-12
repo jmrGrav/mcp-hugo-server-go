@@ -1205,40 +1205,29 @@ func toPageDTOs(pages []site.Page, aliases map[string]string) []pageDTO {
 	return out
 }
 
-// toPageDTOsEnriched falls back to source-index categories when the public
-// index entry has no category metadata (e.g. between builds).
+// toPageDTOsEnriched enriches public-index pages with source-frontmatter
+// categories. The source index is authoritative: when a match is found its
+// categories replace whatever the HTML index carries (which may be stale or
+// empty — Hugo never emits article:category meta tags).
+// Language-prefixed slugs (e.g. /en/posts/foo/) are handled via
+// site.SourceSlugCandidates, which tries the bare slug then strips the lang
+// prefix to match the source-index key (posts/foo).
 func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string) []pageDTO {
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
 		dto := toPageDTO(p, aliases)
-		if srcIdx != nil && len(dto.Categories) == 0 {
-			if src := sourcePageFor(p, srcIdx); src != nil && len(src.Categories) > 0 {
-				dto.Categories = taxonomy.ApplyAliases(src.Categories, aliases)
-				dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
+		if srcIdx != nil {
+			for _, candidate := range site.SourceSlugCandidates(p.Slug) {
+				if src, ok := srcIdx.GetBySlug(candidate); ok {
+					dto.Categories = taxonomy.ApplyAliases(nullsafeStrings(src.Categories), aliases)
+					dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
+					break
+				}
 			}
 		}
 		out[i] = dto
 	}
 	return out
-}
-
-// sourcePageFor finds the source-index entry for a public page, handling the
-// language-prefix case: Hugo places non-default language pages under /lang/
-// (e.g. /en/posts/foo/) while the source index stores them without the prefix
-// (posts/foo). We first try the direct slug, then strip the language prefix.
-func sourcePageFor(p site.Page, srcIdx *hugosite.SourceIndex) *hugosite.SourcePage {
-	slug := strings.Trim(p.Slug, "/")
-	if src, ok := srcIdx.GetBySlug(slug); ok {
-		return src
-	}
-	if p.Lang != "" {
-		if rest, found := strings.CutPrefix(slug, p.Lang+"/"); found {
-			if src, ok := srcIdx.GetBySlug(rest); ok {
-				return src
-			}
-		}
-	}
-	return nil
 }
 
 func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string) []pageDTO {
