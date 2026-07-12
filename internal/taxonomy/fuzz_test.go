@@ -46,22 +46,24 @@ func FuzzTaxonomyNormalization(f *testing.F) {
 }
 
 func FuzzNormalizeAliasMap(f *testing.F) {
-	f.Add("Sécurité", "Security")
-	f.Add("postmortem", "post-mortems")
-	f.Add("loop", "loop")
-	f.Add("", "security")
+	// Two key-value pairs to exercise multi-entry collision and merge behavior.
+	f.Add("Sécurité", "Security", "postmortem", "post-mortems")
+	f.Add("loop", "loop", "", "security")
+	f.Add("GO", "go", "Go", "golang")
+	f.Add("a", "b", "a", "c") // same key, different values
 
-	f.Fuzz(func(t *testing.T, k, v string) {
-		got := taxonomy.NormalizeAliasMap(map[string]string{k: v})
+	f.Fuzz(func(t *testing.T, k1, v1, k2, v2 string) {
+		input := map[string]string{k1: v1, k2: v2}
+		got := taxonomy.NormalizeAliasMap(input)
 		for nk, nv := range got {
 			if nk == "" || nv == "" {
-				t.Fatalf("NormalizeAliasMap produced empty key/value: %v", got)
+				t.Fatalf("NormalizeAliasMap produced empty key/value: %v from %v", got, input)
 			}
 			if nk != taxonomy.Slug(nk) || nv != taxonomy.Slug(nv) {
-				t.Fatalf("NormalizeAliasMap produced non-canonical entry: %v", got)
+				t.Fatalf("NormalizeAliasMap produced non-canonical entry: %v from %v", got, input)
 			}
 			if nk == nv {
-				t.Fatalf("NormalizeAliasMap kept self-alias: %v", got)
+				t.Fatalf("NormalizeAliasMap kept self-alias: %v from %v", got, input)
 			}
 		}
 	})

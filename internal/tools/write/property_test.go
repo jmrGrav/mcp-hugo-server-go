@@ -45,7 +45,6 @@ func runWriteScenarioProperty(t *testing.T, seeds int) {
 	t.Helper()
 
 	for seed := 0; seed < seeds; seed++ {
-		seed := seed
 		t.Run(fmt.Sprintf("seed_%02d", seed), func(t *testing.T) {
 			contentRoot := t.TempDir()
 			session, idx, done := newPropertyTestServer(t, contentRoot)
@@ -64,6 +63,46 @@ func runWriteScenarioProperty(t *testing.T, seeds int) {
 			}
 		})
 	}
+}
+
+// TestWriteErrorPaths verifies that the tools return errors for invalid
+// operations: empty/reserved slug, update/delete on missing slug.
+// Note: create_page on an existing slug is intentionally an upsert (not an error).
+func TestWriteErrorPaths(t *testing.T) {
+	t.Parallel()
+
+	contentRoot := t.TempDir()
+	session, _, done := newPropertyTestServer(t, contentRoot)
+	defer done()
+
+	mustError := func(t *testing.T, res *mcp.CallToolResult, desc string) {
+		t.Helper()
+		if !res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("%s: expected error, got success: %s", desc, raw)
+		}
+	}
+
+	// Empty slug must fail.
+	mustError(t, callTool(t, session, "create_page", map[string]any{
+		"slug": "", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
+	}), "create_page with empty slug")
+
+	// Reserved slug must fail.
+	mustError(t, callTool(t, session, "create_page", map[string]any{
+		"slug": "_index", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
+	}), "create_page with reserved slug _index")
+
+	// update on missing slug must fail (not_found).
+	mustError(t, callTool(t, session, "update_page", map[string]any{
+		"slug": "err/missing", "title": "No Such Page", "body": "body",
+	}), "update_page on missing slug")
+
+	// delete_page is idempotent (os.RemoveAll on missing dir succeeds);
+	// verify empty slug still errors.
+	mustError(t, callTool(t, session, "delete_page", map[string]any{
+		"slug": "",
+	}), "delete_page with empty slug")
 }
 
 func newPropertyTestServer(t *testing.T, contentRoot string) (*mcp.ClientSession, *hugosite.SourceIndex, func()) {
@@ -240,8 +279,11 @@ func assertScenarioState(t *testing.T, liveIdx *hugosite.SourceIndex, contentRoo
 			t.Fatalf("ReadFile(%q) error = %v\ntrace=%s", path, err, formatTrace(trace))
 		}
 		raw := string(data)
-		if !strings.Contains(raw, want.Title) || !strings.Contains(raw, want.Body) {
-			t.Fatalf("file content mismatch for %q\ntrace=%s", slug, formatTrace(trace))
+		if !strings.Contains(raw, "title: "+want.Title+"\n") {
+			t.Fatalf("file missing title YAML field for %q: want %q\nraw=%q\ntrace=%s", slug, want.Title, raw, formatTrace(trace))
+		}
+		if !strings.Contains(raw, want.Body) {
+			t.Fatalf("file missing body for %q: want %q\nraw=%q\ntrace=%s", slug, want.Body, raw, formatTrace(trace))
 		}
 	}
 
