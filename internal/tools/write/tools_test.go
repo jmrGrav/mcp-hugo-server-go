@@ -387,6 +387,49 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 	}
 }
 
+func TestUpdatePageDryRunUsesResolvedMultilingualPath(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	pageDir := filepath.Join(contentRoot, "posts", "csp-nonce")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	frFile := filepath.Join(pageDir, "index.fr.md")
+	original := "---\ntitle: Titre original\ndate: \"2026-04-15T00:00:00Z\"\n---\nContenu original."
+	if err := os.WriteFile(frFile, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":    "posts/csp-nonce",
+		"lang":    "fr",
+		"title":   "Nouveau titre",
+		"dry_run": true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page dry_run failed on multilingual page: %s", raw)
+	}
+
+	payload, ok := res.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("StructuredContent type = %T, want map[string]any", res.StructuredContent)
+	}
+	diff, _ := payload["diff"].(string)
+	if !strings.Contains(diff, "a/posts/csp-nonce/index.fr.md") {
+		t.Fatalf("dry-run diff missing real source path in old header: %q", diff)
+	}
+	if !strings.Contains(diff, "b/posts/csp-nonce/index.fr.md") {
+		t.Fatalf("dry-run diff missing real source path in new header: %q", diff)
+	}
+	if strings.Contains(diff, "a/posts/csp-nonce/index.md") || strings.Contains(diff, "b/posts/csp-nonce/index.md") {
+		t.Fatalf("dry-run diff still advertises index.md instead of resolved multilingual file: %q", diff)
+	}
+}
+
 // TestDeletePageCleansPublicDir verifies that delete_page also removes the
 // rendered output directory from public/ so no zombie page survives.
 func TestDeletePageCleansPublicDir(t *testing.T) {

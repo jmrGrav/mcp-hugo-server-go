@@ -268,7 +268,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, fmt.Errorf("validation_error: %w", err)
 		}
 		if in.DryRun {
-			diff := simpleDiff(in.Slug+"/index.md", string(raw), content)
+			diffPath := filepath.ToSlash(strings.TrimPrefix(filePath, dir+string(os.PathSeparator)))
+			if diffPath == "" || diffPath == filepath.Base(filePath) {
+				diffPath = filepath.Base(filePath)
+			}
+			diff := simpleDiff(filepath.ToSlash(filepath.Join(in.Slug, diffPath)), string(raw), content)
 			return nil, updatePageOutput{Slug: in.Slug, DryRun: true, Diff: diff}, nil
 		}
 		if err := pg.RevalidateForWrite(filePath); err != nil {
