@@ -2,6 +2,63 @@
 
 All notable changes to this project are documented here.
 
+## [v1.3.9] - 2026-07-13
+
+### Added
+- **OAuth refresh-token renewal** (#270, PR #283): `HandleToken` now dispatches on `grant_type`;
+  `exchangeRefreshToken` validates client authorization against a new `GrantTypes` field on the
+  `client` struct (RFC 6749 §10.4). The hollow `exchangeToken` stub is removed. DCR-registered
+  clients receive `["authorization_code","refresh_token"]`; static-registry clients (no `GrantTypes`
+  field) are treated as supporting all standard grants for backwards compatibility.
+- **`delete_page` dry-run** (#267, PR #284): `delete_page` now accepts `dry_run: true` and returns
+  the page content and backlink list without deleting, matching the contract of `create_page` and
+  `update_page`. The `backlinks` field is typed `*[]backlink` so an empty backlink list serialises as
+  `[]` (not omitted) while the field is absent on non-dry-run responses.
+
+### Changed
+- **`get_page` source-index fallback contract documented** (#268, PR #286): `SourceSlugCandidates`
+  now carries an explicit contract comment (priority order, language-prefix stripping, callers must
+  break on first match). The `get_page` tool description spells out that `html`, `lang`, and `url`
+  fields come from the public index and may be absent for drafts or source-only pages.
+
+### Fixed
+- **Slug normalisation across write tools** (#265, PR #284): `create_page`, `update_page`, and
+  `delete_page` all strip leading/trailing slashes from the input slug via a shared
+  `normalizeInputSlug` helper, so agents that pass `/posts/foo/` and `posts/foo` reach the same
+  content directory and source-index entry.
+- **`delete_page` silent success on missing slug** (#266, PR #284): previously returned an empty
+  success when the target was already absent; now returns a structured `not_found` error.
+- **Categories/tags empty for non-default-language pages** (#264, PR #280): `list_pages`,
+  `get_recent_posts`, and `explain_site_structure` now enrich pages whose public path carries a
+  language prefix by stripping the prefix before the source-index lookup.
+- **`explain_site_structure` recent pages bypassed source enrichment** (#258, PR #281): recent-pages
+  path in `explain_site_structure` now goes through the same source-index category/tag enrichment
+  used by `list_pages`.
+- **MCP session lifecycle observability** (#259, PRs #269 #282): structured log lines emitted on
+  session connect and disconnect; `withDefaultLogger` test helper carries a `t.Parallel()` safety
+  warning; SSE flush hygiene improved to avoid buffered-writer stalls.
+- **`update_page` dry-run diff label** (#257, PR #262): `update_page` dry-run header no longer
+  hard-codes `index.md`; the resolved multilingual path is used instead.
+- **Explicit `InputSchema`/`OutputSchema` on all tools** (#253, PR #261): all MCP tools now declare
+  both schemas explicitly so static scanners (mcpscan.dev) can inspect them.
+
+### Tests
+- **Property-based invariant tests** (#250, PR #254): replayable property checks for
+  create/update/delete write coherence; public ⊆ source invariant verified on each mutation.
+- **Fuzz smoke** (#251, PR #255): targeted fuzz corpora for path safety, taxonomy slugs, and
+  front-matter parsing.
+- **Local soak harness** (#249, PR #256): long-running mutation and build stability harness
+  exercisable locally without CI.
+- **Core benchmarks and invariant matrix** (#252, PR #260): `BenchmarkCreatePage`,
+  `BenchmarkUpdatePage`, `BenchmarkDeletePage`, plus a reference table of expected invariants.
+
+### Refactored
+- **Write-tool test helpers consolidated** (PR #285): five near-identical `newTestServer*` functions
+  replaced by a single `newTestServer(t, root, ...testServerOpts)` accepting optional
+  `SiteRoot/SiteDB/SiteIdx` overrides and returning the source index for post-call inspection.
+- **`normalizeInputSlug` extracted** (PR #285): the repeated `strings.Trim(slug, "/")` expression
+  now lives in one named helper with a clear contract comment.
+
 ## [v1.3.8] - 2026-07-12
 
 ### Added
