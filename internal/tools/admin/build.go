@@ -18,6 +18,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -222,9 +223,11 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "build_site",
-		Title:       "Build website",
-		Description: "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active.",
+		Name:         "build_site",
+		Title:        "Build website",
+		Description:  "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active.",
+		InputSchema:  tools.MustSchema[buildSiteInput](),
+		OutputSchema: tools.MustSchema[buildSiteOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
