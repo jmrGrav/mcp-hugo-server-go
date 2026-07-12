@@ -70,11 +70,11 @@ type deletePageBacklinkDTO struct {
 }
 
 type deletePageOutput struct {
-	Slug      string                  `json:"slug"`
-	DryRun    bool                    `json:"dry_run,omitempty"`
-	Content   string                  `json:"content,omitempty"`
-	Backlinks []deletePageBacklinkDTO `json:"backlinks"`
-	Warning   string                  `json:"warning,omitempty"`
+	Slug      string                   `json:"slug"`
+	DryRun    bool                     `json:"dry_run,omitempty"`
+	Content   string                   `json:"content,omitempty"`
+	Backlinks *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
+	Warning   string                   `json:"warning,omitempty"`
 }
 
 var reservedSlugs = map[string]bool{
@@ -378,16 +378,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 					content = string(raw)
 				}
 			}
-			var backlinks []deletePageBacklinkDTO
+			bls := []deletePageBacklinkDTO{}
 			if siteIdx != nil {
 				for _, e := range siteIdx.GetBacklinks(in.Slug) {
-					backlinks = append(backlinks, deletePageBacklinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL})
+					bls = append(bls, deletePageBacklinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL})
 				}
 			}
-			if backlinks == nil {
-				backlinks = []deletePageBacklinkDTO{}
-			}
-			return nil, deletePageOutput{Slug: in.Slug, DryRun: true, Content: content, Backlinks: backlinks}, nil
+			return nil, deletePageOutput{Slug: in.Slug, DryRun: true, Content: content, Backlinks: &bls}, nil
 		}
 
 		callerKey := deleteCallerKey(ctx)
