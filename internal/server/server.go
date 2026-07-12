@@ -106,10 +106,19 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 		}
 	}
 
+	// Build the known-tools set from the registry so the middleware can bucket
+	// any unrecognised client-supplied name as "unknown" (caps Prometheus cardinality).
+	knownTools := make(map[string]bool, len(reg.All()))
+	for _, d := range reg.All() {
+		knownTools[d.Name] = true
+	}
+
 	anonServer := mcp.NewServer(impl, nil)
+	anonServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "", knownTools))
 	anonymous.Register(anonServer, idx, cfg, srcIdx)
 
 	readServer := mcp.NewServer(impl, nil)
+	readServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.read", knownTools))
 	anonymous.Register(readServer, idx, cfg, srcIdx)
 	read.Register(readServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
@@ -117,6 +126,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	}
 
 	writeServer := mcp.NewServer(impl, nil)
+	writeServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.write", knownTools))
 	anonymous.Register(writeServer, idx, cfg, srcIdx)
 	read.Register(writeServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
@@ -127,6 +137,7 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	}
 
 	siteAdminServer := mcp.NewServer(impl, nil)
+	siteAdminServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "site.admin", knownTools))
 	anonymous.Register(siteAdminServer, idx, cfg, srcIdx)
 	read.Register(siteAdminServer, idx, cfg, srcIdx)
 	if srcIdx != nil {

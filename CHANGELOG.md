@@ -5,6 +5,12 @@ All notable changes to this project are documented here.
 ## [Unreleased]
 
 ### Added
+- **MCP tool-call observability** (#226): `NewToolCallMiddleware` wired as receiving middleware on
+  all four MCP servers (anonymous, content.read, content.write, site.admin). Emits one structured
+  log line per `tools/call` with `tool_name`, `scope`, `duration_ms`, `result_class`
+  (`success`/`tool_error`/`protocol_error`), and `response_bytes`. Prometheus counters added to
+  `/metrics`: `mcp_tool_calls_total{tool,scope,result}` and `mcp_tool_call_duration_ms_total{tool,scope}`.
+  No request arguments, page content, or tokens are logged.
 - **`suggest_internal_links`** (`content.read`) — new tool that recommends existing published pages
   to link from a draft or page, ranked by shared tags/categories. Accepts `slug` (merges that
   page's taxonomy, including source-only drafts), `tags`, `categories`, and optional `body` (detects
