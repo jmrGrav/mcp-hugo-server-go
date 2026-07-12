@@ -171,6 +171,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 				if err := siteDB.PostBuildSync(idx); err != nil {
 					slog.Warn("build_site: db reindex failed", "error", err)
 				}
+				if err := siteDB.SnapshotSiteHealth(); err != nil {
+					slog.Warn("build_site: db health snapshot failed", "error", err)
+				}
 			}
 			return nil
 		},
