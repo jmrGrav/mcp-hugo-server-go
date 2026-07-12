@@ -206,6 +206,17 @@ func TestApplyPageUpdatesNewDescription(t *testing.T) {
 	}
 }
 
+func TestApplyPageUpdatesRejectsNonMappingFrontmatter(t *testing.T) {
+	input := "---\n- item\n---\n\nBody."
+	_, err := applyPageUpdates(input, "Title", "", pageUpdateOpts{})
+	if err == nil {
+		t.Fatal("applyPageUpdates() should reject non-mapping frontmatter")
+	}
+	if !strings.Contains(err.Error(), "frontmatter root must be a mapping") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestResolveUpdateFilePath(t *testing.T) {
 	dir := t.TempDir()
 	writeFile := func(name string) {
