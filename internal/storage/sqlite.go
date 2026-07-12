@@ -37,6 +37,17 @@ func NewSQLite(path string) (Store, error) {
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
 	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS refresh_tokens (
+			token TEXT PRIMARY KEY,
+			client_id TEXT NOT NULL,
+			scope TEXT NOT NULL,
+			expires_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("create refresh_tokens schema: %w", err)
+	}
+	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS oauth_clients (
 			client_id TEXT PRIMARY KEY,
 			secret_hash TEXT NOT NULL DEFAULT '',
@@ -105,8 +116,71 @@ func (s *sqliteStore) ValidateAccessToken(token string) (string, bool) {
 	return scope, true
 }
 
+func (s *sqliteStore) AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO refresh_tokens (token, client_id, scope, expires_at) VALUES (?, ?, ?, ?)`,
+		token, clientID, scope, expiresAt.Unix(),
+	)
+	return err
+}
+
+func (s *sqliteStore) ValidateRefreshToken(token, clientID string) (string, bool) {
+	var scope string
+	err := s.db.QueryRow(
+		`SELECT scope FROM refresh_tokens WHERE token = ? AND client_id = ? AND expires_at > ?`,
+		token, clientID, time.Now().Unix(),
+	).Scan(&scope)
+	if err != nil {
+		return "", false
+	}
+	return scope, true
+}
+
+func (s *sqliteStore) ExchangeRefreshToken(oldToken, clientID, newRefreshToken, newAccessToken string, accessExpiresAt, refreshExpiresAt time.Time) (string, bool, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var scope string
+	err = tx.QueryRow(
+		`SELECT scope FROM refresh_tokens WHERE token = ? AND client_id = ? AND expires_at > ?`,
+		oldToken, clientID, time.Now().Unix(),
+	).Scan(&scope)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(`DELETE FROM refresh_tokens WHERE token = ?`, oldToken); err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(
+		`INSERT OR REPLACE INTO access_tokens (token, scope, expires_at) VALUES (?, ?, ?)`,
+		newAccessToken, scope, accessExpiresAt.Unix(),
+	); err != nil {
+		return "", false, err
+	}
+	if _, err := tx.Exec(
+		`INSERT OR REPLACE INTO refresh_tokens (token, client_id, scope, expires_at) VALUES (?, ?, ?, ?)`,
+		newRefreshToken, clientID, scope, refreshExpiresAt.Unix(),
+	); err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+	return scope, true, nil
+}
+
 func (s *sqliteStore) PurgeExpiredTokens() error {
 	_, err := s.db.Exec(`DELETE FROM access_tokens WHERE expires_at <= ?`, time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`DELETE FROM refresh_tokens WHERE expires_at <= ?`, time.Now().Unix())
 	return err
 }
 

@@ -88,17 +88,18 @@ type RateLimitConfig struct {
 // auth codes, agent registrations) is intentionally ephemeral and resets on
 // restart. See issue #26 for the rationale.
 type OAuthConfig struct {
-	Enabled               bool     `yaml:"enabled"`
-	Issuer                string   `yaml:"issuer"`
-	Resource              string   `yaml:"resource"`
-	DynamicClientEnabled  bool     `yaml:"dynamic_client_registration"`
-	ClientRegistryPath    string   `yaml:"client_registry_path"`
-	RequirePKCE           bool     `yaml:"require_pkce"`
-	TrustedAuthorizeCIDRs []string `yaml:"trusted_authorize_cidrs"`
-	AuthCodeTTLSeconds    int      `yaml:"auth_code_ttl_seconds"`
-	AccessTokenTTLSeconds int      `yaml:"access_token_ttl_seconds"`
-	StorageBackend        string   `yaml:"storage_backend"`
-	StoragePath           string   `yaml:"storage_path"`
+	Enabled                bool     `yaml:"enabled"`
+	Issuer                 string   `yaml:"issuer"`
+	Resource               string   `yaml:"resource"`
+	DynamicClientEnabled   bool     `yaml:"dynamic_client_registration"`
+	ClientRegistryPath     string   `yaml:"client_registry_path"`
+	RequirePKCE            bool     `yaml:"require_pkce"`
+	TrustedAuthorizeCIDRs  []string `yaml:"trusted_authorize_cidrs"`
+	AuthCodeTTLSeconds     int      `yaml:"auth_code_ttl_seconds"`
+	AccessTokenTTLSeconds  int      `yaml:"access_token_ttl_seconds"`
+	RefreshTokenTTLSeconds int      `yaml:"refresh_token_ttl_seconds"`
+	StorageBackend         string   `yaml:"storage_backend"`
+	StoragePath            string   `yaml:"storage_path"`
 }
 
 func Default() Config {

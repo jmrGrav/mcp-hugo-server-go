@@ -11,6 +11,7 @@ Items marked **(live)** were verified against the production server with `script
 | Authorization Code grant | ✅ | `/authorize` → `/token` |
 | PKCE extension (RFC 7636) required | ✅ | `RequirePKCE=true` default since v1.2.0 |
 | Token endpoint authentication | ✅ | `client_secret_basic`, `client_secret_post`, `none` |
+| Refresh Token grant | ✅ | `/token` accepts `grant_type=refresh_token` and returns a fresh bearer pair |
 | `invalid_request`, `invalid_client`, `invalid_grant` error codes | ✅ | All returned correctly |
 | Short-lived authorization codes | ✅ | Configurable TTL, purged on expiry |
 | `redirect_uri` validation | ✅ | Exact match enforced |
@@ -45,7 +46,7 @@ Items marked **(live)** were verified against the production server with `script
 | `registration_endpoint` | ✅ **(live)** | Always present when OAuth is enabled (v1.2.0 fix, issue #117) |
 | `scopes_supported` | ✅ **(live)** | `["content.read","content.write","site.admin"]`; legacy `system.admin` normalizes to `site.admin` |
 | `response_types_supported` | ✅ **(live)** | `["code"]` |
-| `grant_types_supported` | ✅ **(live)** | Includes `authorization_code` and agent assertion grants |
+| `grant_types_supported` | ✅ | Includes `authorization_code`, `refresh_token`, and agent assertion grants on the current branch; re-verify live after deployment |
 | `code_challenge_methods_supported` | ✅ **(live)** | `["S256"]` |
 
 ## RFC 7591 — Dynamic Client Registration
@@ -105,7 +106,6 @@ Items marked **(live)** were verified against the production server with `script
 
 ## Deferred / Out of Scope
 
-- Refresh tokens (stateless server; tokens expire and agents re-authenticate)
 - Token introspection (RFC 7662) — not implemented
 - Token revocation (RFC 7009) — not implemented
 - Pushed Authorization Requests (RFC 9126) — not implemented

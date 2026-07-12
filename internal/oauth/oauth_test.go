@@ -279,9 +279,10 @@ func TestPKCEFlow(t *testing.T) {
 		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
 	}
 	var tokenResp struct {
-		AccessToken string `json:"access_token"`
-		TokenType   string `json:"token_type"`
-		Scope       string `json:"scope"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
 	}
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("token: decode: %v", err)
@@ -291,6 +292,182 @@ func TestPKCEFlow(t *testing.T) {
 	}
 	if tokenResp.TokenType != "Bearer" {
 		t.Fatalf("token: token_type = %q want Bearer", tokenResp.TokenType)
+	}
+	if tokenResp.RefreshToken == "" {
+		t.Fatal("token: empty refresh_token")
+	}
+}
+
+func TestRefreshTokenGrant(t *testing.T) {
+	svc, _ := newTestService(t)
+	clientID := registerClient(t, svc, []string{"https://client.test/callback"})
+
+	verifier := "test-verifier-test-verifier-test-verifier-test"
+	challenge := oauth.CodeChallengeS256(verifier)
+
+	authURL := "/authorize?" + url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://client.test/callback"},
+		"state":                 {"state-refresh"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	location, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("authorize: parse location: %v", err)
+	}
+	code := location.Query().Get("code")
+	if code == "" {
+		t.Fatal("authorize: missing code in redirect")
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {clientID},
+		"code":          {code},
+		"redirect_uri":  {"https://client.test/callback"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("token: decode: %v", err)
+	}
+	if tokenResp.RefreshToken == "" {
+		t.Fatal("token: empty refresh_token")
+	}
+
+	refreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {clientID},
+		"refresh_token": {tokenResp.RefreshToken},
+	}
+	refreshReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(refreshForm.Encode()))
+	refreshReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	refreshRec := httptest.NewRecorder()
+	svc.HandleToken(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusOK {
+		t.Fatalf("refresh token: status = %d body = %q", refreshRec.Code, refreshRec.Body.String())
+	}
+	var refreshResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
+	}
+	if err := json.Unmarshal(refreshRec.Body.Bytes(), &refreshResp); err != nil {
+		t.Fatalf("refresh token: decode: %v", err)
+	}
+	if refreshResp.AccessToken == "" {
+		t.Fatal("refresh token: empty access_token")
+	}
+	if refreshResp.RefreshToken == "" {
+		t.Fatal("refresh token: empty refresh_token in response")
+	}
+	if refreshResp.Scope != tokenResp.Scope {
+		t.Fatalf("refresh token: scope = %q want %q", refreshResp.Scope, tokenResp.Scope)
+	}
+	if refreshResp.AccessToken == tokenResp.AccessToken {
+		t.Fatal("refresh token: access_token should rotate")
+	}
+
+	reuseReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(refreshForm.Encode()))
+	reuseReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	reuseRec := httptest.NewRecorder()
+	svc.HandleToken(reuseRec, reuseReq)
+	if reuseRec.Code != http.StatusBadRequest {
+		t.Fatalf("refresh token reuse: status = %d body = %q", reuseRec.Code, reuseRec.Body.String())
+	}
+	if !strings.Contains(reuseRec.Body.String(), "invalid_grant") {
+		t.Fatalf("refresh token reuse body = %q", reuseRec.Body.String())
+	}
+}
+
+func TestRefreshTokenGrantRejectsWrongClient(t *testing.T) {
+	svc, _ := newTestService(t)
+	clientA := registerClient(t, svc, []string{"https://client-a.test/callback"})
+	clientB := registerClient(t, svc, []string{"https://client-b.test/callback"})
+
+	verifier := "refresh-client-bound-refresh-client-bound-refresh"
+	challenge := oauth.CodeChallengeS256(verifier)
+	authURL := "/authorize?" + url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientA},
+		"redirect_uri":          {"https://client-a.test/callback"},
+		"state":                 {"state-refresh-client"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	location, _ := url.Parse(authRec.Header().Get("Location"))
+	code := location.Query().Get("code")
+	if code == "" {
+		t.Fatal("authorize: missing code in redirect")
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {clientA},
+		"code":          {code},
+		"redirect_uri":  {"https://client-a.test/callback"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("token: decode: %v", err)
+	}
+	if tokenResp.RefreshToken == "" {
+		t.Fatal("token: expected refresh_token in response")
+	}
+
+	refreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {clientB},
+		"refresh_token": {tokenResp.RefreshToken},
+	}
+	refreshReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(refreshForm.Encode()))
+	refreshReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	refreshRec := httptest.NewRecorder()
+	svc.HandleToken(refreshRec, refreshReq)
+	if refreshRec.Code != http.StatusBadRequest && refreshRec.Code != http.StatusUnauthorized {
+		t.Fatalf("refresh token wrong client: status = %d body = %q", refreshRec.Code, refreshRec.Body.String())
+	}
+	if !strings.Contains(refreshRec.Body.String(), "invalid_grant") && !strings.Contains(refreshRec.Body.String(), "invalid_client") {
+		t.Fatalf("refresh token wrong client body = %q", refreshRec.Body.String())
 	}
 }
 
