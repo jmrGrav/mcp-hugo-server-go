@@ -101,10 +101,31 @@ func TestToolCallMiddleware(t *testing.T) {
 		t.Fatalf("expected tool_error class: %s", buf.String())
 	}
 
+	// E1: scope is logged, not derived from context.
+	if !strings.Contains(logLine, `"content.read"`) {
+		t.Fatalf("scope not present in log: %s", logLine)
+	}
+
+	// E3: unknown tool names are bucketed as "unknown".
+	buf.Reset()
+	unknownParams := &mcp.CallToolParamsRaw{Name: "evil_tool_xyz"}
+	unknownReq := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{Params: unknownParams}
+	_, _ = wrapped(context.Background(), "tools/call", unknownReq)
+	unknownLog := buf.String()
+	if !strings.Contains(unknownLog, `"unknown"`) {
+		t.Fatalf("unregistered tool not bucketed as unknown: %s", unknownLog)
+	}
+	if strings.Contains(unknownLog, "evil_tool_xyz") {
+		t.Fatalf("raw unregistered tool name leaked into log: %s", unknownLog)
+	}
+
 	// Prometheus counters updated.
 	prom := m.RenderPrometheus()
 	if !strings.Contains(prom, "mcp_tool_calls_total") {
 		t.Fatalf("prometheus not updated: %s", prom)
+	}
+	if !strings.Contains(prom, `tool="unknown"`) {
+		t.Fatalf("unknown tool not recorded in prometheus: %s", prom)
 	}
 }
 
