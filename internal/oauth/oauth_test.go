@@ -421,8 +421,14 @@ func TestRefreshTokenGrantRejectsWrongClient(t *testing.T) {
 	authReq.RemoteAddr = "127.0.0.1:9999"
 	authRec := httptest.NewRecorder()
 	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
 	location, _ := url.Parse(authRec.Header().Get("Location"))
 	code := location.Query().Get("code")
+	if code == "" {
+		t.Fatal("authorize: missing code in redirect")
+	}
 
 	tokenForm := url.Values{
 		"grant_type":    {"authorization_code"},
@@ -435,10 +441,18 @@ func TestRefreshTokenGrantRejectsWrongClient(t *testing.T) {
 	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	tokenRec := httptest.NewRecorder()
 	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
 	var tokenResp struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	_ = json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp)
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("token: decode: %v", err)
+	}
+	if tokenResp.RefreshToken == "" {
+		t.Fatal("token: expected refresh_token in response")
+	}
 
 	refreshForm := url.Values{
 		"grant_type":    {"refresh_token"},

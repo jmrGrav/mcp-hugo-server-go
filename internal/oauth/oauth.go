@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,7 @@ type oauthClientPersister interface {
 
 type client struct {
 	RedirectURIs []string
+	GrantTypes   []string
 	SecretHash   string
 	Scope        string
 	Enabled      bool
@@ -259,7 +261,12 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 	id := randomString(24)
 	scope := s.resolveRegistrationScope(req.RedirectURIs)
 	s.mu.Lock()
-	s.clients[id] = client{RedirectURIs: append([]string(nil), req.RedirectURIs...), Scope: scope, Enabled: true}
+	s.clients[id] = client{
+		RedirectURIs: append([]string(nil), req.RedirectURIs...),
+		GrantTypes:   []string{"authorization_code", "refresh_token"},
+		Scope:        scope,
+		Enabled:      true,
+	}
 	s.mu.Unlock()
 	return &RegistrationResponse{
 		ClientID:                      id,
@@ -412,15 +419,6 @@ func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, s
 	return code, nil
 }
 
-func (s *Service) exchangeToken(grantType, clientID, clientSecret, redirectURI, code, codeVerifier string) (*TokenResponse, error) {
-	switch grantType {
-	case "authorization_code":
-		return s.exchangeAuthorizationCode(clientID, clientSecret, redirectURI, code, codeVerifier)
-	default:
-		return nil, fmt.Errorf("unsupported_grant_type")
-	}
-}
-
 func (s *Service) exchangeAuthorizationCode(clientID, clientSecret, redirectURI, code, codeVerifier string) (*TokenResponse, error) {
 	c, ok := s.lookupClient(clientID)
 	if !ok {
@@ -461,6 +459,11 @@ func (s *Service) exchangeRefreshToken(clientID, clientSecret, refreshToken stri
 		if clientSecret == "" || subtle.ConstantTimeCompare([]byte(HashToken(clientSecret)), []byte(c.SecretHash)) != 1 {
 			return nil, fmt.Errorf("invalid_client")
 		}
+	}
+	// GrantTypes is empty only for static-registry clients loaded before this
+	// field was introduced; treat them as supporting all standard grants.
+	if len(c.GrantTypes) > 0 && !slices.Contains(c.GrantTypes, "refresh_token") {
+		return nil, fmt.Errorf("unauthorized_client")
 	}
 	accessToken := randomString(32)
 	refreshTokenNext := randomString(32)
@@ -613,17 +616,15 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		resp *TokenResponse
 		err  error
 	)
-	if grantType == "refresh_token" {
+	switch grantType {
+	case "refresh_token":
 		resp, err = s.exchangeRefreshToken(clientID, clientSecret, r.FormValue("refresh_token"))
-	} else {
-		resp, err = s.exchangeToken(
-			grantType,
-			clientID,
-			clientSecret,
-			r.FormValue("redirect_uri"),
-			r.FormValue("code"),
-			r.FormValue("code_verifier"),
-		)
+	case "authorization_code":
+		resp, err = s.exchangeAuthorizationCode(clientID, clientSecret,
+			r.FormValue("redirect_uri"), r.FormValue("code"), r.FormValue("code_verifier"))
+	default:
+		writeOAuthError(w, "unsupported_grant_type", http.StatusBadRequest)
+		return
 	}
 	if err != nil {
 		writeOAuthError(w, oauthTokenErrorCode(err), oauthTokenErrorStatus(err))
