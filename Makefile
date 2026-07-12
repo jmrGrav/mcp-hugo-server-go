@@ -1,4 +1,4 @@
-.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local
+.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
@@ -57,6 +57,13 @@ check-readme-release:
 	go run ./cmd/check-readme-release
 
 check-release: check-changelog check-readme-release check-agent-ready smoke-agent-interop
+
+bench-core:
+	go test ./internal/site -run '^$$' -bench 'BenchmarkIndex(Search|GetBySlug|Sitemap|GetFeed)' -benchmem
+	go test ./internal/tools/anonymous -run '^$$' -bench 'Benchmark(ListPages|GetPage)' -benchmem
+	go test ./internal/tools/read -run '^$$' -bench 'BenchmarkSearchContent' -benchmem
+	go test ./internal/db -run '^$$' -bench 'Benchmark(SyncSourcePage|StartupSync|Search)' -benchmem
+	go test ./internal/tools/admin -run '^$$' -bench 'BenchmarkBuildOutputSummary' -benchmem
 
 clean:
 	rm -f $(BIN) coverage.out

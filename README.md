@@ -141,6 +141,7 @@ The POST to `/agent/identity/verify` requires operator authentication via the `A
 
 - [Operator guide](docs/operator-guide.md)
 - [AgentReady 100% HowTo](docs/agent-ready-howto.md)
+- [Invariant matrix](docs/invariant-matrix.md)
 - [Release checklist](docs/release-checklist.md)
 - [Staging runbook](docs/staging-runbook.md)
 - [Tool inventory](docs/tools.md)
