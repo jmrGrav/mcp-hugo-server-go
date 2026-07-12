@@ -50,17 +50,19 @@ type pageDTO struct {
 }
 
 type pageDetailDTO struct {
-	Slug          string                  `json:"slug"`
-	Title         string                  `json:"title"`
-	Summary       string                  `json:"summary"`
-	Tags          []string                `json:"tags"`
-	Categories    []string                `json:"categories"`
-	TagTerms      []taxonomy.TaxonomyTerm `json:"tag_terms,omitempty"`
-	CategoryTerms []taxonomy.TaxonomyTerm `json:"category_terms,omitempty"`
-	Date          string                  `json:"date"`
-	URL           string                  `json:"url"`
-	Lang          string                  `json:"lang"`
-	HTML          string                  `json:"html"`
+	Slug               string                  `json:"slug"`
+	Title              string                  `json:"title"`
+	Summary            string                  `json:"summary"`
+	Tags               []string                `json:"tags"`
+	Categories         []string                `json:"categories"`
+	TagTerms           []taxonomy.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms      []taxonomy.TaxonomyTerm `json:"category_terms,omitempty"`
+	Date               string                  `json:"date"`
+	URL                string                  `json:"url"`
+	Lang               string                  `json:"lang"`
+	ResolvedLang       string                  `json:"resolved_lang"`
+	ResolvedSourcePath string                  `json:"resolved_source_path"`
+	HTML               string                  `json:"html"`
 }
 
 type getSitemapInput struct {
@@ -427,7 +429,12 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 			page.Tags = resolved.Source.Tags
 			page.Categories = resolved.Source.Categories
 		}
-		return toPageDetailDTO(page)
+		dto := toPageDetailDTO(page)
+		if resolved.Source != nil {
+			dto.ResolvedLang = resolved.Source.Lang
+			dto.ResolvedSourcePath = resolved.SourcePath
+		}
+		return dto
 	}
 	src := resolved.Source
 	if src == nil {
@@ -442,14 +449,16 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		cats = []string{}
 	}
 	return pageDetailDTO{
-		Slug:          "/" + src.Slug + "/",
-		Title:         src.Title,
-		Tags:          tags,
-		Categories:    cats,
-		TagTerms:      taxonomy.Normalize(tags),
-		CategoryTerms: taxonomy.Normalize(cats),
-		Date:          src.Date,
-		HTML:          src.Body,
+		Slug:               "/" + src.Slug + "/",
+		Title:              src.Title,
+		Tags:               tags,
+		Categories:         cats,
+		TagTerms:           taxonomy.Normalize(tags),
+		CategoryTerms:      taxonomy.Normalize(cats),
+		Date:               src.Date,
+		ResolvedLang:       src.Lang,
+		ResolvedSourcePath: resolved.SourcePath,
+		HTML:               src.Body,
 	}
 }
 
