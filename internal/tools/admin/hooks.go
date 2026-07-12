@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -32,9 +33,11 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "run_post_build_hooks",
-		Title:       "Run post-build hooks",
-		Description: "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Only configured URLs are contacted.",
+		Name:         "run_post_build_hooks",
+		Title:        "Run post-build hooks",
+		Description:  "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Only configured URLs are contacted.",
+		InputSchema:  tools.MustSchema[runPostBuildHooksInput](),
+		OutputSchema: tools.MustSchema[runPostBuildHooksOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),

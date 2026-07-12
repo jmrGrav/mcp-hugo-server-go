@@ -15,6 +15,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -31,9 +32,11 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "preview_build",
-		Title:       "Preview build",
-		Description: "Run a non-destructive Hugo preview build with render-to-memory semantics. Use this to validate the site without writing build artifacts.",
+		Name:         "preview_build",
+		Title:        "Preview build",
+		Description:  "Run a non-destructive Hugo preview build with render-to-memory semantics. Use this to validate the site without writing build artifacts.",
+		InputSchema:  tools.MustSchema[previewBuildInput](),
+		OutputSchema: tools.MustSchema[previewBuildOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),

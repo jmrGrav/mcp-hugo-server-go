@@ -412,6 +412,8 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing tool %q", name)
 		}
+		assertObjectSchema(t, tool, "inputSchema")
+		assertObjectSchema(t, tool, "outputSchema")
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
 			t.Fatalf("tool %q: ReadOnlyHint not set", name)
 		}
@@ -424,6 +426,29 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
 			t.Fatalf("tool %q: OpenWorldHint should be false", name)
 		}
+	}
+}
+
+func assertObjectSchema(t *testing.T, tool *mcp.Tool, field string) {
+	t.Helper()
+	var schema any
+	switch field {
+	case "inputSchema":
+		schema = tool.InputSchema
+	case "outputSchema":
+		schema = tool.OutputSchema
+	default:
+		t.Fatalf("unknown schema field %q", field)
+	}
+	if schema == nil {
+		t.Fatalf("tool %q: %s is nil", tool.Name, field)
+	}
+	m, ok := schema.(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: %s type = %T, want map[string]any", tool.Name, field, schema)
+	}
+	if m["type"] != "object" {
+		t.Fatalf("tool %q: %s.type = %v, want object", tool.Name, field, m["type"])
 	}
 }
 

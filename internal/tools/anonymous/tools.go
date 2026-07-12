@@ -320,9 +320,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out]) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        name,
-		Title:       title,
-		Description: description,
+		Name:         name,
+		Title:        title,
+		Description:  description,
+		InputSchema:  tools.MustSchema[In](),
+		OutputSchema: tools.MustSchema[Out](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    true,
 			DestructiveHint: boolPtr(false),

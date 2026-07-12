@@ -86,6 +86,8 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		Description: "Generate a featured image for a page and save it to {HugoRoot}/static/images/{slug}-featured.jpg. " +
 			"Uses local Go rendering (1200×675 JPEG, Unsplash photo background selected by title hash, dark gradient overlay, title, tags). " +
 			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo).",
+		InputSchema:  tools.MustSchema[generateFeaturedImageInput](),
+		OutputSchema: tools.MustSchema[generateFeaturedImageOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),

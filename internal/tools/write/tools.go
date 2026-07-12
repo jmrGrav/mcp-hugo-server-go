@@ -107,9 +107,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	deleteLimiters := make(map[string]*rate.Limiter)
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "create_page",
-		Title:       "Publish page",
-		Description: "Create a new Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page.",
+		Name:         "create_page",
+		Title:        "Publish page",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page.",
+		InputSchema:  tools.MustSchema[createPageInput](),
+		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
@@ -201,6 +203,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			"Use title/body to revise content. Use tags/categories/draft/description to update front matter fields. " +
 			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs.",
+		InputSchema:  tools.MustSchema[updatePageInput](),
+		OutputSchema: tools.MustSchema[updatePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
@@ -325,9 +329,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "delete_page",
-		Title:       "Delete page",
-		Description: "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute.",
+		Name:         "delete_page",
+		Title:        "Delete page",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute.",
+		InputSchema:  tools.MustSchema[deletePageInput](),
+		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(true),
