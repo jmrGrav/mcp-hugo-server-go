@@ -102,6 +102,14 @@ type ScopeExtension func(scopeName string, s *mcp.Server)
 
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
 	impl := &mcp.Implementation{Name: Name, Version: Version}
+	// Explicitly declare capabilities so static scanners (mcpscan.dev) can
+	// inspect them. The SDK merges these with auto-detected tool/resource caps.
+	serverOpts := &mcp.ServerOptions{
+		Capabilities: &mcp.ServerCapabilities{
+			Logging: &mcp.LoggingCapabilities{},
+			Tools:   &mcp.ToolCapabilities{ListChanged: true},
+		},
+	}
 	logger := observability.NewLogger()
 	metrics := observability.NewMetrics()
 
@@ -145,14 +153,14 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		knownTools[d.Name] = true
 	}
 
-	anonServer := mcp.NewServer(impl, nil)
+	anonServer := mcp.NewServer(impl, serverOpts)
 	anonServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "", knownTools))
 	anonymous.Register(anonServer, idx, cfg, srcIdx)
 	for _, ext := range extensions {
 		ext("", anonServer)
 	}
 
-	readServer := mcp.NewServer(impl, nil)
+	readServer := mcp.NewServer(impl, serverOpts)
 	readServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.read", knownTools))
 	anonymous.Register(readServer, idx, cfg, srcIdx)
 	read.Register(readServer, idx, cfg, srcIdx)
@@ -163,7 +171,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		ext("content.read", readServer)
 	}
 
-	writeServer := mcp.NewServer(impl, nil)
+	writeServer := mcp.NewServer(impl, serverOpts)
 	writeServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.write", knownTools))
 	anonymous.Register(writeServer, idx, cfg, srcIdx)
 	read.Register(writeServer, idx, cfg, srcIdx)
@@ -177,7 +185,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		ext("content.write", writeServer)
 	}
 
-	siteAdminServer := mcp.NewServer(impl, nil)
+	siteAdminServer := mcp.NewServer(impl, serverOpts)
 	siteAdminServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "site.admin", knownTools))
 	anonymous.Register(siteAdminServer, idx, cfg, srcIdx)
 	read.Register(siteAdminServer, idx, cfg, srcIdx)
