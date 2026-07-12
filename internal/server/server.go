@@ -232,11 +232,21 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,
-		SessionTimeout:             time.Hour,
+		// Keep sessions alive for 24 h so long-running agent conversations
+		// don't lose tool availability mid-session.
+		SessionTimeout: 24 * time.Hour,
+		// MemoryEventStore lets clients resume an SSE stream with Last-Event-ID
+		// after a transient network drop without creating a new session.
+		EventStore: mcp.NewMemoryEventStore(nil),
+		// Forward SDK warnings (SSE write errors, stream close failures) to the
+		// application logger so session drops are visible in journald.
+		Logger: slog.Default(),
 	}
 	streaming := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		scope, _ := r.Context().Value(oauth.CtxScope).(string)
-		switch tools.ScopeRank(scope) {
+		rank := tools.ScopeRank(scope)
+		slog.Info("mcp: session created", "scope", scope, "rank", rank, "remote_addr", r.RemoteAddr)
+		switch rank {
 		case 3:
 			return siteAdminServer
 		case 2:
@@ -519,9 +529,13 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           s.handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		// WriteTimeout must be 0 for SSE GET streams: a non-zero value causes
+		// Go's HTTP server to close any response that takes longer than the
+		// deadline, which terminates long-lived SSE connections. Nginx provides
+		// the upstream timeout backstop (proxy_read_timeout 1h).
+		WriteTimeout:   0,
+		IdleTimeout:    120 * time.Second,
+		MaxHeaderBytes: 1 << 20,
 	}
 	go func() {
 		<-ctx.Done()
