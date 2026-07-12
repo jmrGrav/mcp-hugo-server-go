@@ -387,6 +387,43 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 	}
 }
 
+// TestUpdatePageDryRunMultilingualPath verifies that the dry_run diff header
+// names the resolved file (index.fr.md) not the hardcoded fallback (index.md).
+// Regression for issue #257.
+func TestUpdatePageDryRunMultilingualPath(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	pageDir := filepath.Join(contentRoot, "posts", "csp-nonce")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"),
+		[]byte("---\ntitle: Titre\ndate: \"2026-01-01T00:00:00Z\"\n---\nCorps."), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	session, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":     "posts/csp-nonce",
+		"title":    "Nouveau titre",
+		"dry_run":  true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page dry_run failed: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	body := string(raw)
+	if !strings.Contains(body, "index.fr.md") {
+		t.Errorf("dry_run diff header must reference index.fr.md, got: %s", body)
+	}
+	if strings.Contains(body, "posts/csp-nonce/index.md\"") {
+		t.Errorf("dry_run diff header must not hardcode index.md for multilingual pages, got: %s", body)
+	}
+}
+
 // TestDeletePageCleansPublicDir verifies that delete_page also removes the
 // rendered output directory from public/ so no zombie page survives.
 func TestDeletePageCleansPublicDir(t *testing.T) {

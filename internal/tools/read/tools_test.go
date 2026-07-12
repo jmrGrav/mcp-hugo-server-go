@@ -456,6 +456,50 @@ func TestExplainSiteStructureUsesSourceIndexCategories(t *testing.T) {
 	}
 }
 
+func TestExplainSiteStructureRecentPagesSourceEnrichment(t *testing.T) {
+	// The public HTML for posts/hello has no category metadata, but the source
+	// markdown has categories: [tutorials]. After the #258 fix, recent_pages
+	// must carry source-enriched categories, not an empty slice.
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	if res.IsError {
+		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("explain_site_structure data type = %T", m["data"])
+	}
+	recentRaw, ok := data["recent_pages"].([]any)
+	if !ok || len(recentRaw) == 0 {
+		t.Fatalf("explain_site_structure recent_pages: got %T (len=%d)", data["recent_pages"], len(recentRaw))
+	}
+
+	var found bool
+	for _, entry := range recentRaw {
+		page, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		slug, _ := page["slug"].(string)
+		if !strings.Contains(slug, "hello") {
+			continue
+		}
+		cats, ok := page["categories"].([]any)
+		if !ok || len(cats) == 0 {
+			t.Fatalf("recent_pages entry slug=%q has empty categories; expected source-enriched [tutorials]", slug)
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Fatal("recent_pages: no entry with slug containing 'hello' found in fixture")
+	}
+}
+
 func TestBuildAgentContextRelatedPagesMatchSitemap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

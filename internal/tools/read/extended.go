@@ -364,7 +364,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					Languages:   languages,
 					Tags:        tagCount,
 					Categories:  catCount,
-					RecentPages: toPageDTOs(recent, aliases),
+					RecentPages: toPageDTOsEnriched(recent, srcIdx, aliases),
 					Notes: []string{
 						"Top-level sections are derived from page slugs.",
 						"Posts are detected from the /posts/ path prefix.",
@@ -1201,6 +1201,23 @@ func toPageDTOs(pages []site.Page, aliases map[string]string) []pageDTO {
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
 		out[i] = toPageDTO(p, aliases)
+	}
+	return out
+}
+
+// toPageDTOsEnriched falls back to source-index categories when the public
+// index entry has no category metadata (e.g. between builds).
+func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string) []pageDTO {
+	out := make([]pageDTO, len(pages))
+	for i, p := range pages {
+		dto := toPageDTO(p, aliases)
+		if srcIdx != nil && len(dto.Categories) == 0 {
+			if src, ok := srcIdx.GetBySlug(strings.Trim(p.Slug, "/")); ok && len(src.Categories) > 0 {
+				dto.Categories = taxonomy.ApplyAliases(src.Categories, aliases)
+				dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
+			}
+		}
+		out[i] = dto
 	}
 	return out
 }

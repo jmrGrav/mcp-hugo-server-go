@@ -268,7 +268,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, fmt.Errorf("validation_error: %w", err)
 		}
 		if in.DryRun {
-			diff := simpleDiff(in.Slug+"/index.md", string(raw), content)
+			// Use the resolved filename (e.g. index.fr.md) so the diff header
+			// matches the file that a real write would touch.
+			diffLabel := in.Slug + "/" + filepath.Base(filePath)
+			diff := simpleDiff(diffLabel, string(raw), content)
 			return nil, updatePageOutput{Slug: in.Slug, DryRun: true, Diff: diff}, nil
 		}
 		if err := pg.RevalidateForWrite(filePath); err != nil {
