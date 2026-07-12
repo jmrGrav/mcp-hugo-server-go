@@ -1212,7 +1212,7 @@ func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases
 	for i, p := range pages {
 		dto := toPageDTO(p, aliases)
 		if srcIdx != nil && len(dto.Categories) == 0 {
-			if src, ok := srcIdx.GetBySlug(strings.Trim(p.Slug, "/")); ok && len(src.Categories) > 0 {
+			if src := sourcePageFor(p, srcIdx); src != nil && len(src.Categories) > 0 {
 				dto.Categories = taxonomy.ApplyAliases(src.Categories, aliases)
 				dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
 			}
@@ -1220,6 +1220,25 @@ func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases
 		out[i] = dto
 	}
 	return out
+}
+
+// sourcePageFor finds the source-index entry for a public page, handling the
+// language-prefix case: Hugo places non-default language pages under /lang/
+// (e.g. /en/posts/foo/) while the source index stores them without the prefix
+// (posts/foo). We first try the direct slug, then strip the language prefix.
+func sourcePageFor(p site.Page, srcIdx *hugosite.SourceIndex) *hugosite.SourcePage {
+	slug := strings.Trim(p.Slug, "/")
+	if src, ok := srcIdx.GetBySlug(slug); ok {
+		return src
+	}
+	if p.Lang != "" {
+		if rest, found := strings.CutPrefix(slug, p.Lang+"/"); found {
+			if src, ok := srcIdx.GetBySlug(rest); ok {
+				return src
+			}
+		}
+	}
+	return nil
 }
 
 func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string) []pageDTO {
