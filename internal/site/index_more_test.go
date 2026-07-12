@@ -272,3 +272,69 @@ func TestIndexBoundariesAndDefaults(t *testing.T) {
 func htmlParseForTest(raw []byte) (*html.Node, error) {
 	return html.Parse(strings.NewReader(string(raw)))
 }
+
+func TestBacklinkCache(t *testing.T) {
+	// buildReverseMap with nil index returns empty map
+	if got := buildReverseMap(nil); len(got) != 0 {
+		t.Fatalf("buildReverseMap(nil) = %v", got)
+	}
+
+	// Build an index where page A links to page B
+	pageA := Page{
+		Slug:    "/posts/a/",
+		Title:   "Page A",
+		URL:     "https://example.test/posts/a/",
+		RawHTML: `<article><a href="/posts/b/">go to B</a></article>`,
+		Lang:    "en",
+	}
+	pageB := Page{
+		Slug:    "/posts/b/",
+		Title:   "Page B",
+		URL:     "https://example.test/posts/b/",
+		RawHTML: `<article><p>no outgoing links</p></article>`,
+		Lang:    "en",
+	}
+	idx := &Index{
+		entries: []entry{{page: pageA}, {page: pageB}},
+		bySlug:  map[string]int{"/posts/a/": 0, "/posts/b/": 1},
+		info:    map[string]string{"url": "https://example.test"},
+	}
+	idx.contentClassifier = NewClassifier(idx)
+
+	// GetBacklinks on B should return A
+	bls := idx.GetBacklinks("/posts/b/")
+	if len(bls) != 1 || bls[0].FromSlug != "/posts/a/" {
+		t.Fatalf("GetBacklinks(/posts/b/) = %#v", bls)
+	}
+	// GetBacklinks on A returns nothing (B does not link to A)
+	if got := idx.GetBacklinks("/posts/a/"); len(got) != 0 {
+		t.Fatalf("GetBacklinks(/posts/a/) = %#v", got)
+	}
+	// Unknown slug returns nil/empty
+	if got := idx.GetBacklinks("/posts/missing/"); len(got) != 0 {
+		t.Fatalf("GetBacklinks(missing) = %#v", got)
+	}
+
+	// invalidate clears the cache
+	idx.blCache.invalidate()
+	if idx.blCache.index != nil {
+		t.Fatal("invalidate() did not nil the cache")
+	}
+	// rebuild on next call
+	if bls2 := idx.GetBacklinks("/posts/b/"); len(bls2) != 1 {
+		t.Fatalf("GetBacklinks after invalidate = %#v", bls2)
+	}
+}
+
+func TestExtractLinksHTML(t *testing.T) {
+	links := extractLinksHTML(`<a href="/posts/a/">link</a><a href="mailto:x@x.com">mail</a>`)
+	if len(links) != 2 {
+		t.Fatalf("extractLinksHTML() = %v", links)
+	}
+	if extractLinksHTML("") != nil {
+		t.Fatal("extractLinksHTML(empty) should return nil")
+	}
+	if extractLinksHTML("<p>no links</p>") != nil {
+		t.Fatal("extractLinksHTML(no links) should return nil")
+	}
+}
