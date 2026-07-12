@@ -272,11 +272,13 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 // (secret-bearing) clients whose redirect URIs overlap with the DCR request.
 // This lets Claude.ai and ChatGPT inherit the scope of their pre-registered
 // counterparts when they do Dynamic Client Registration. Falls back to
-// "content.read" when no pre-registered client matches.
+// "" (anonymous) when no pre-registered client matches, so public tools like
+// MCP scanners that self-register via RFC 7591 get anonymous read-only access
+// without automatically gaining content.read privileges.
 func (s *Service) resolveRegistrationScope(redirectURIs []string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	scopes := []string{"content.read"}
+	var scopes []string
 clientLoop:
 	for _, c := range s.clients {
 		if c.SecretHash == "" {
@@ -291,7 +293,7 @@ clientLoop:
 			}
 		}
 	}
-	return highestConfiguredScope(scopes)
+	return highestMatchedScope(scopes)
 }
 
 func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {
@@ -439,9 +441,6 @@ func (s *Service) exchangeToken(grantType, clientID, clientSecret, redirectURI, 
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
 	scope := CanonicalScope(data.Scope)
-	if scope == "" {
-		scope = "content.read"
-	}
 	if err := s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(ttl)); err != nil {
 		return nil, fmt.Errorf("server_error: store token: %w", err)
 	}

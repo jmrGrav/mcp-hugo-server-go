@@ -103,7 +103,7 @@ func TestDynamicClientRegistrationScopeInheritance(t *testing.T) {
 		{"claude.ai primary callback → site.admin", []string{"https://claude.ai/api/oauth/callback"}, "site.admin"},
 		{"claude.ai alternate callback → site.admin", []string{"https://claude.ai/oauth/callback"}, "site.admin"},
 		{"chatgpt callback → content.write", []string{"https://chatgpt.com/aip/oauth/callback"}, "content.write"},
-		{"unknown client → content.read", []string{"https://unknown.example.com/callback"}, "content.read"},
+		{"unknown client → anonymous", []string{"https://unknown.example.com/callback"}, ""},
 	}
 
 	for _, tc := range tests {
@@ -154,6 +154,79 @@ func TestDynamicClientRegistrationDisabled(t *testing.T) {
 	}
 	if errResp.Error != "invalid_request" {
 		t.Fatalf("error = %q want invalid_request", errResp.Error)
+	}
+}
+
+func TestDCRAnonymousScopePreservedThroughTokenExchange(t *testing.T) {
+	// A DCR client whose redirect_uri matches no pre-registered client must get
+	// anonymous scope ("") all the way through: registration → authorize → token.
+	// The token exchange must NOT promote "" to "content.read" (#249).
+	svc, store := newTestService(t)
+	clientID := registerClient(t, svc, []string{"https://scanner.example.com/callback"})
+
+	// Registration should return scope "".
+	body, _ := json.Marshal(map[string]any{"redirect_uris": []string{"https://scanner.example.com/callback"}})
+	regReq := httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader(body))
+	regReq.Header.Set("Content-Type", "application/json")
+	regRec := httptest.NewRecorder()
+	svc.HandleRegister(regRec, regReq)
+	if regRec.Code != http.StatusCreated {
+		t.Fatalf("register: status = %d body = %q", regRec.Code, regRec.Body.String())
+	}
+	var regResp struct {
+		Scope string `json:"scope"`
+	}
+	_ = json.Unmarshal(regRec.Body.Bytes(), &regResp)
+	if regResp.Scope != "" {
+		t.Errorf("registration scope = %q want \"\" (anonymous)", regResp.Scope)
+	}
+
+	// Complete PKCE flow.
+	verifier := "anon-verifier-anon-verifier-anon-verifier-ano0"
+	challenge := oauth.CodeChallengeS256(verifier)
+	authURL := "/authorize?" + url.Values{
+		"response_type": {"code"}, "client_id": {clientID},
+		"redirect_uri": {"https://scanner.example.com/callback"}, "state": {"s1"},
+		"code_challenge": {challenge}, "code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, _ := url.Parse(authRec.Header().Get("Location"))
+	code := loc.Query().Get("code")
+
+	tokenForm := url.Values{
+		"grant_type": {"authorization_code"}, "client_id": {clientID},
+		"code": {code}, "redirect_uri": {"https://scanner.example.com/callback"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
+	}
+	_ = json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp)
+	if tokenResp.Scope != "" {
+		t.Errorf("token scope = %q want \"\" (anonymous)", tokenResp.Scope)
+	}
+
+	// Token must validate as anonymous scope.
+	scope, ok := store.ValidateAccessToken(oauth.HashToken(tokenResp.AccessToken))
+	if !ok {
+		t.Fatal("token: not found in store")
+	}
+	if scope != "" {
+		t.Errorf("stored scope = %q want \"\" (anonymous)", scope)
 	}
 }
 
@@ -625,8 +698,9 @@ func TestBearerValidationViaTokenEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatal("freshly issued token must validate")
 	}
-	if scope != "content.read" {
-		t.Fatalf("scope = %q want content.read", scope)
+	// Unmatched DCR client gets anonymous scope ("") per #249.
+	if scope != "" {
+		t.Fatalf("scope = %q want \"\" (anonymous — unmatched DCR redirect URI)", scope)
 	}
 
 	if _, ok := svc.ValidateBearer("completely-wrong-token"); ok {

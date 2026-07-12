@@ -79,6 +79,26 @@ func highestConfiguredScope(scopes []string) string {
 	return highest
 }
 
+// highestMatchedScope returns the highest scope among the given list, returning
+// "" (anonymous) when the list is empty or no scope is set. Unlike
+// highestConfiguredScope this does NOT fall back to "content.read" — it is
+// used for DCR scope resolution where an unmatched client should get anonymous
+// access, not read access.
+func highestMatchedScope(scopes []string) string {
+	if len(scopes) == 0 {
+		return ""
+	}
+	highest := scopes[0]
+	highestRank := tools.ScopeRank(highest)
+	for _, scope := range scopes[1:] {
+		if rank := tools.ScopeRank(scope); rank > highestRank {
+			highest = scope
+			highestRank = rank
+		}
+	}
+	return highest
+}
+
 func requestedScope(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

@@ -39,6 +39,22 @@ func mustTestServer(t *testing.T) *server.Server {
 
 func mustOAuthServer(t *testing.T) *server.Server {
 	t.Helper()
+	// Bake in a content.read client for http://localhost:9999/cb so that
+	// obtainBearerToken (which DCR-registers with that redirect URI) inherits
+	// content.read scope via resolveRegistrationScope. Without this, unmatched
+	// DCR clients get anonymous scope ("") after the #249 fix, which would make
+	// TestContentReadCannotCallWriteTool and TestContentReadCannotCallSiteAdminTool
+	// test the wrong boundary (anonymous→write, not content.read→write).
+	registryPath := filepath.Join(t.TempDir(), "clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`clients:
+- client_id: test-read-client
+  client_secret: test-read-secret
+  redirect_uris:
+    - http://localhost:9999/cb
+  scope: content.read
+`), 0o600); err != nil {
+		t.Fatalf("write test registry: %v", err)
+	}
 	cfg := config.Default()
 	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
 	cfg.HugoRoot = t.TempDir()
@@ -50,6 +66,7 @@ func mustOAuthServer(t *testing.T) *server.Server {
 		AuthCodeTTLSeconds:    300,
 		AccessTokenTTLSeconds: 3600,
 		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32", "::1/128"},
+		ClientRegistryPath:    registryPath,
 	}
 	idx, err := site.NewIndex(cfg)
 	if err != nil {
@@ -409,6 +426,9 @@ func TestUnauthenticatedMCPReturns401WithWWWAuthenticate(t *testing.T) {
 }
 
 func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
+	// mustOAuthServer includes a content.read client for http://localhost:9999/cb,
+	// so obtainBearerToken (which DCR-registers with that redirect URI) gets a
+	// content.read token via resolveRegistrationScope (#249).
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
