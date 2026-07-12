@@ -1,4 +1,4 @@
-.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke
+.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
@@ -45,6 +45,9 @@ check-agent-ready:
 
 smoke-agent-interop:
 	./scripts/smoke-agent-interop.sh
+
+soak-local:
+	./scripts/soak-local.sh
 
 check-changelog:
 	@test -n "$(RELEASE_VERSION)" || (echo "RELEASE_VERSION is required, e.g. make check-changelog RELEASE_VERSION=v1.2.11" >&2; exit 2)
