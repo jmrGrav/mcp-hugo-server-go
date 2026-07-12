@@ -77,6 +77,11 @@ type deletePageOutput struct {
 	Warning   string                   `json:"warning,omitempty"`
 }
 
+// normalizeInputSlug strips leading and trailing slashes so agents that pass
+// /posts/foo/ and posts/foo reach the same content directory and source-index
+// entry (#265).
+func normalizeInputSlug(s string) string { return strings.Trim(s, "/") }
+
 var reservedSlugs = map[string]bool{
 	"_index": true,
 	"index":  true,
@@ -129,7 +134,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in createPageInput) (*mcp.CallToolResult, createPageOutput, error) {
-		in.Slug = strings.Trim(in.Slug, "/")
+		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, createPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -223,7 +228,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
-		in.Slug = strings.Trim(in.Slug, "/")
+		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -353,7 +358,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
-		in.Slug = strings.Trim(in.Slug, "/")
+		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
