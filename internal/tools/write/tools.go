@@ -660,6 +660,8 @@ func simpleDiff(path, old, new string) string {
 	if m > 500 || n > 500 {
 		return fmt.Sprintf("--- a/%s\n+++ b/%s\n# content changed (%d → %d lines)\n", path, path, m, n)
 	}
+	// Clamp after the guard so static analysis can verify allocation sizes are bounded.
+	m, n = min(m, 500), min(n, 500)
 	// Wagner-Fischer LCS
 	dp := make([][]int, m+1)
 	for i := range dp {
