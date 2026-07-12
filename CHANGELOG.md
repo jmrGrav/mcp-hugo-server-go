@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [v1.3.8] - 2026-07-12
 
 ### Added
 - **SQLite-backed derived index** (#221): optional persistent index controlled by `db_path` in
@@ -50,6 +50,32 @@ All notable changes to this project are documented here.
   `list_pages` for content-only browsing.
 - `search_content` description: cross-references `search_pages` for unauthenticated keyword search.
 - `validate_site` description: notes equivalence to `validate_front_matter` with no slug filter.
+- **Explicit `ServerCapabilities` in `mcp.NewServer`** (#250): all four scope servers (anonymous,
+  content.read, content.write, site.admin) now pass `&mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{Logging, Tools}}`
+  explicitly so static code analysis scanners (mcpscan.dev) can inspect declared capabilities.
+  The SDK still auto-merges runtime-detected tool capabilities on top.
+
+### Fixed
+- **Build resilience** (#246): Hugo timeout/cancellation now kills the entire process group (not just
+  the top-level process) so shell-wrapper scripts and their children are terminated. Post-build
+  callbacks run in bounded goroutines with a 30s deadline; `partial_success` + warning is returned
+  instead of blocking forever. Optional side-effect callbacks (Cloudflare purge, search indexing)
+  swallow errors so only required callbacks can trigger `partial_success`. DB delete and
+  public-output cleanup failures in `delete_page` are surfaced as `Warning` fields instead of being
+  silently ignored (#238–#244).
+- **TOCTOU symlink-swap** (#248): `create_page` and `update_page` now use `AtomicWriteChecked`
+  which re-validates the parent directory via `pg.RevalidateForWrite` both before `os.CreateTemp`
+  and before `os.Rename`, closing the write-time TOCTOU window. `generate_featured_image` uses a
+  guard anchored at `HugoRoot` with `rejectSymlinks` forced `true`, validated before `MkdirAll`,
+  to detect symlinked `static/images` regardless of the operator's `RejectSymlinks` config setting.
+  `delete_page` audit-log failures are now surfaced as a `Warning` field instead of being silently
+  discarded (#233–#235).
+- **DCR anonymous scope default** (#249): RFC 7591 dynamic client registration now returns `""`
+  (anonymous) scope when the requested redirect URIs don't match any pre-registered client, enabling
+  MCP scanners to self-register and reach anonymous-only tools. The `if scope == "" { scope = "content.read" }`
+  promotion in `exchangeToken` is removed so anonymous tokens remain anonymous through the full
+  PKCE flow. Pre-registered clients (Claude.ai, ChatGPT) continue to inherit their configured scope
+  via `resolveRegistrationScope`.
 
 ## [v1.3.7] - 2026-07-11
 
