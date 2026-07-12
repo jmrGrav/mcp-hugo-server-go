@@ -9,7 +9,6 @@
 [![ChatGPT](https://img.shields.io/badge/ChatGPT-compatible-10a37f.svg)](https://chatgpt.com/)
 [![Claude](https://img.shields.io/badge/Claude.ai-compatible-5f6bed.svg)](https://claude.ai)
 [![Agent Ready](https://img.shields.io/badge/IsItAgentReady-100%25-brightgreen.svg)](https://isitagentready.com/www.arleo.eu)
-[![MCP Scan](https://img.shields.io/badge/MCP%20Scan-97%2F100-brightgreen)](https://mcpscan.dev)
 
 Canonical unified MCP server for Hugo sites.
 
