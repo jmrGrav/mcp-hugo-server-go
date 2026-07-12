@@ -114,7 +114,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   fileutil.BoolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in createPageInput) (*mcp.CallToolResult, createPageOutput, error) {
 		if in.Slug == "" {
@@ -205,7 +205,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  false,
-			OpenWorldHint:   fileutil.BoolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
 		if in.Slug == "" {
@@ -329,7 +329,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(true),
 			IdempotentHint:  true,
-			OpenWorldHint:   fileutil.BoolPtr(false),
+			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
 		if in.Slug == "" {

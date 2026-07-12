@@ -34,6 +34,15 @@ All notable changes to this project are documented here.
   disambiguation table for commonly confused tool pairs (#225, #227).
 
 ### Changed
+- **Tool annotations — `OpenWorldHint` corrected for write and build tools**: `create_page`,
+  `update_page`, `delete_page`, and `build_site` now declare `OpenWorldHint: true`, accurately
+  reflecting that these operations interact with external systems (Cloudflare CDN purge, IndexNow,
+  Google Search Console, filesystem). Read-only and anonymous tools remain `false`. This resolves
+  SPEC_006 on mcpscan.dev.
+- **`server.New` accepts `...ScopeExtension` hooks**: operators can now register additional MCP
+  tools per scope without modifying core packages. Pass one or more `ScopeExtension` functions to
+  `server.New`; each receives the scope name and the `*mcp.Server` for that scope, enabling
+  `mcp.AddTool` calls at startup. Resolves EASE_004 on mcpscan.dev.
 - `list_pages` description: clarifies it returns content pages only (not taxonomy list pages) and
   cross-references `get_sitemap` for the full URL inventory.
 - `search_pages` description: cross-references `search_content` for filtered/paginated search.

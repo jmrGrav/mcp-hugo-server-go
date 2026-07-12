@@ -85,7 +85,22 @@ func openStore(cfg config.OAuthConfig) (storage.Store, error) {
 	}
 }
 
-func New(cfg config.Config, idx *site.Index) (*Server, error) {
+// ScopeExtension is a plug-and-play hook for registering additional MCP tools
+// without modifying core server packages. It is called once per scope server
+// (scopeName is one of "", "content.read", "content.write", "site.admin").
+// Implementations should call mcp.AddTool on s to add tools to that scope.
+//
+// Example:
+//
+//	ext := server.ScopeExtension(func(scope string, s *mcp.Server) {
+//	    if scope == "content.read" {
+//	        mcp.AddTool(s, &mcp.Tool{Name: "my_custom_tool", ...}, myHandler)
+//	    }
+//	})
+//	srv, _ := server.New(cfg, idx, ext)
+type ScopeExtension func(scopeName string, s *mcp.Server)
+
+func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
 	impl := &mcp.Implementation{Name: Name, Version: Version}
 	logger := observability.NewLogger()
 	metrics := observability.NewMetrics()
@@ -133,6 +148,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	anonServer := mcp.NewServer(impl, nil)
 	anonServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "", knownTools))
 	anonymous.Register(anonServer, idx, cfg, srcIdx)
+	for _, ext := range extensions {
+		ext("", anonServer)
+	}
 
 	readServer := mcp.NewServer(impl, nil)
 	readServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.read", knownTools))
@@ -140,6 +158,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	read.Register(readServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
 		read.RegisterWithSourceIndex(readServer, idx, srcIdx, cfg, siteDB)
+	}
+	for _, ext := range extensions {
+		ext("content.read", readServer)
 	}
 
 	writeServer := mcp.NewServer(impl, nil)
@@ -152,6 +173,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	if writeEnabled {
 		toolswrite.Register(writeServer, pg, srcIdx, cfg, siteDB, idx)
 	}
+	for _, ext := range extensions {
+		ext("content.write", writeServer)
+	}
 
 	siteAdminServer := mcp.NewServer(impl, nil)
 	siteAdminServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "site.admin", knownTools))
@@ -162,6 +186,9 @@ func New(cfg config.Config, idx *site.Index) (*Server, error) {
 	}
 	if writeEnabled {
 		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg, siteDB, idx)
+	}
+	for _, ext := range extensions {
+		ext("site.admin", siteAdminServer)
 	}
 	admin.Register(siteAdminServer, cfg,
 		func() error { return idx.Reload(cfg) },
