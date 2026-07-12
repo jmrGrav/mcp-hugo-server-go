@@ -401,8 +401,9 @@ func TestBuildSitePermissionDeniedErrorIncludesSuggestion(t *testing.T) {
 }
 
 // TestBuildSiteCallbackTimeout verifies that a slow post-build callback does
-// not block build_site indefinitely and that the response is partial_success
-// with a warning (#241).
+// not block build_site indefinitely, the response is partial_success with a
+// warning naming the first timed-out callback, and subsequent callbacks are
+// not started (preventing goroutine leaks and misleading warning messages) (#241).
 func TestBuildSiteCallbackTimeout(t *testing.T) {
 	dir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
@@ -411,14 +412,20 @@ func TestBuildSiteCallbackTimeout(t *testing.T) {
 	cfg.SiteRoot = t.TempDir()
 	cfg.HugoRoot = t.TempDir()
 
-	// A callback that blocks indefinitely.
+	var secondCalled bool
+	// First callback: blocks indefinitely.
 	slowCallback := func() error {
 		time.Sleep(10 * time.Minute)
 		return nil
 	}
+	// Second callback: must NOT be called after the first times out.
+	sentinelCallback := func() error {
+		secondCalled = true
+		return nil
+	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, slowCallback)
+	admin.RegisterBuild(s, cfg, slowCallback, sentinelCallback)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -433,16 +440,16 @@ func TestBuildSiteCallbackTimeout(t *testing.T) {
 	defer session.Close()
 
 	// The call must return in under 35s (callback timeout is 30s).
-	done := make(chan struct{})
+	doneCh := make(chan struct{})
 	var res *mcp.CallToolResult
 	var callErr error
 	go func() {
 		res, callErr = session.CallTool(ctx, &mcp.CallToolParams{Name: "build_site", Arguments: map[string]any{}})
-		close(done)
+		close(doneCh)
 	}()
 
 	select {
-	case <-done:
+	case <-doneCh:
 	case <-time.After(35 * time.Second):
 		t.Fatal("build_site blocked past callback timeout — #241 regression")
 	}
@@ -461,8 +468,17 @@ func TestBuildSiteCallbackTimeout(t *testing.T) {
 	if out["status"] != "partial_success" {
 		t.Errorf("status: want partial_success, got %v", out["status"])
 	}
-	if warning, _ := out["warning"].(string); warning == "" {
+	warning, _ := out["warning"].(string)
+	if warning == "" {
 		t.Error("expected non-empty warning when callback times out")
+	}
+	// Warning must identify callback 0, not a later index (which would indicate
+	// the loop continued past the timeout and overwrote the first warning).
+	if !strings.Contains(warning, "callback 0") {
+		t.Errorf("warning %q must identify callback 0 (first to time out)", warning)
+	}
+	if secondCalled {
+		t.Error("sentinel callback must not be invoked after the deadline fires — loop must break on cbCtx.Done()")
 	}
 }
 

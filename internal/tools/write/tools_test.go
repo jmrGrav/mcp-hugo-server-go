@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
@@ -36,6 +37,35 @@ func newTestServerWithSiteRoot(t *testing.T, contentRoot, siteRoot string) (*mcp
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg, nil)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, func() { _ = session.Close() }
+}
+
+func newTestServerWithDB(t *testing.T, contentRoot string, siteDB *db.DB) (*mcp.ClientSession, func()) {
+	t.Helper()
+	pg, err := security.New(contentRoot, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+	idx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex: %v", err)
+	}
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	write.Register(s, pg, idx, cfg, siteDB)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -447,6 +477,48 @@ func TestDeletePagePublicCleanupWarning(t *testing.T) {
 	raw, _ := json.Marshal(res.Content)
 	if !strings.Contains(string(raw), "warning") {
 		t.Errorf("expected a warning in response when public cleanup fails, got: %s", raw)
+	}
+}
+
+// TestDeletePageDBWarning verifies that when the derived DB cannot be updated
+// (e.g. the connection is closed), delete_page still removes the source file
+// and surfaces a warning rather than failing hard (#242).
+func TestDeletePageDBWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	siteDB, err := db.Open(filepath.Join(t.TempDir(), "test.sqlite"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	// Close the DB so any operation on it returns "sql: database is closed".
+	siteDB.Close()
+
+	session, done := newTestServerWithDB(t, contentRoot, siteDB)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/db-warning-test", "title": "DB Warning",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/db-warning-test"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page must not hard-fail on DB error: %s", raw)
+	}
+
+	// Source must be gone.
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "db-warning-test")); !os.IsNotExist(err) {
+		t.Error("source directory must be removed even when DB update fails")
+	}
+
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "warning") {
+		t.Errorf("expected a warning in response when DB delete fails, got: %s", raw)
 	}
 }
 

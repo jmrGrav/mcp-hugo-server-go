@@ -335,6 +335,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 		cbCtx, cbCancel := context.WithTimeout(context.Background(), callbackTimeout)
 		defer cbCancel()
 		var cbWarning string
+	cbLoop:
 		for i, fn := range siteReload {
 			if fn == nil {
 				continue
@@ -350,6 +351,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			case <-cbCtx.Done():
 				cbWarning = fmt.Sprintf("post-build callback %d timed out after %s", i, callbackTimeout)
 				slog.Warn("build_site: post-build callback timed out", "callback_index", i, "timeout", callbackTimeout)
+				break cbLoop
 			}
 		}
 
