@@ -88,15 +88,16 @@ func (pg *PathGuard) rejectSymlinkComponents(path string) error {
 	return nil
 }
 
-// RevalidateForWrite re-checks symlink components on the parent directory of
-// path immediately before a write, closing the TOCTOU window between SafeJoin
-// (validation at T1) and the actual file write (T2). No-op when rejectSymlinks
-// is false.
+// RevalidateForWrite re-checks symlink components on path and its ancestors
+// immediately before a write, closing the TOCTOU window between SafeJoin
+// (validation at T1) and the actual file write (T2). Checks the full path so
+// a symlinked target file (e.g. an existing page overwrite) is also caught.
+// No-op when rejectSymlinks is false.
 func (pg *PathGuard) RevalidateForWrite(path string) error {
 	if !pg.rejectSymlinks {
 		return nil
 	}
-	return pg.rejectSymlinkComponents(filepath.Dir(path))
+	return pg.rejectSymlinkComponents(path)
 }
 
 func (pg *PathGuard) WithinRoot(abs string) bool {

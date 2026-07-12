@@ -258,6 +258,51 @@ func TestGetPageEmptySlug(t *testing.T) {
 	}
 }
 
+// TestGetPageDateGates verifies that source-fallback get_page blocks pages
+// whose publishDate is in the future or whose expiryDate is in the past (#232).
+func TestGetPageDateGates(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	write := func(slug, front string) {
+		p := filepath.Join(contentRoot, filepath.FromSlash(slug), "index.md")
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(p, []byte("---\n"+front+"---\nbody\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	write("posts/future", "title: Future\npublishDate: 2099-01-01\n")
+	write("posts/expired", "title: Expired\nexpiryDate: 2000-01-01\n")
+	write("posts/live", "title: Live\npublishDate: 2000-01-01\nexpiryDate: 2099-01-01\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	session, done := newTestClientWithSourceIndex(t, &site.Index{}, srcIdx)
+	defer done()
+
+	for _, slug := range []string{"/posts/future/", "/posts/expired/"} {
+		res := callTool(t, session, "get_page", map[string]any{"slug": slug, "allow_source_fallback": true})
+		if !res.IsError {
+			t.Errorf("get_page %s should be blocked by date gate but returned success", slug)
+			continue
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "content_not_found") {
+			t.Errorf("get_page %s date-gate error missing 'content_not_found': %s", slug, raw)
+		}
+	}
+
+	// Page with valid window must be accessible.
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/live/", "allow_source_fallback": true})
+	if res.IsError {
+		t.Fatalf("get_page live page should be accessible but returned error: %v", res.Content)
+	}
+}
+
 func TestGetPageNotFound(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
