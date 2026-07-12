@@ -8,7 +8,7 @@ import (
 )
 
 func TestWriteToolSchemasPresent(t *testing.T) {
-	session, done := newTestServer(t, t.TempDir())
+	session, _, done := newTestServer(t, t.TempDir())
 	defer done()
 
 	result, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})

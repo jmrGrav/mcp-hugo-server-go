@@ -18,13 +18,21 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func newTestServer(t *testing.T, contentRoot string) (*mcp.ClientSession, func()) {
-	t.Helper()
-	return newTestServerWithSiteRoot(t, contentRoot, "")
+type testServerOpts struct {
+	SiteRoot string
+	SiteDB   *db.DB
+	SiteIdx  *site.Index
 }
 
-func newTestServerWithSiteRoot(t *testing.T, contentRoot, siteRoot string) (*mcp.ClientSession, func()) {
+// newTestServer builds a write-tool MCP server over an in-memory transport and
+// returns the client session, the source index (for post-call inspection), and
+// a cleanup function. Callers that don't need the source index can ignore it.
+func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*mcp.ClientSession, *hugosite.SourceIndex, func()) {
 	t.Helper()
+	var o testServerOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
 	pg, err := security.New(contentRoot, true)
 	if err != nil {
 		t.Fatalf("security.New: %v", err)
@@ -35,109 +43,22 @@ func newTestServerWithSiteRoot(t *testing.T, contentRoot, siteRoot string) (*mcp
 	}
 	cfg := config.Default()
 	cfg.ContentRoot = contentRoot
-	cfg.SiteRoot = siteRoot
+	cfg.SiteRoot = o.SiteRoot
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	write.Register(s, pg, idx, cfg, nil)
+	write.Register(s, pg, idx, cfg, o.SiteDB, o.SiteIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := s.Connect(ctx, t1, nil); err != nil {
 		t.Fatalf("server connect: %v", err)
 	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
-	session, err := client.Connect(ctx, t2, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	return session, func() { _ = session.Close() }
-}
-
-func newTestServerWithSourceIdx(t *testing.T, contentRoot string) (*mcp.ClientSession, *hugosite.SourceIndex, func()) {
-	t.Helper()
-	pg, err := security.New(contentRoot, true)
-	if err != nil {
-		t.Fatalf("security.New: %v", err)
-	}
-	idx, err := hugosite.NewSourceIndex(contentRoot)
-	if err != nil {
-		t.Fatalf("hugosite.NewSourceIndex: %v", err)
-	}
-	cfg := config.Default()
-	cfg.ContentRoot = contentRoot
-
-	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	write.Register(s, pg, idx, cfg, nil)
-
-	ctx := context.Background()
-	t1, t2 := mcp.NewInMemoryTransports()
-	if _, err := s.Connect(ctx, t1, nil); err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
-	session, err := client.Connect(ctx, t2, nil)
+	c := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := c.Connect(ctx, t2, nil)
 	if err != nil {
 		t.Fatalf("client connect: %v", err)
 	}
 	return session, idx, func() { _ = session.Close() }
-}
-
-func newTestServerWithSiteIdx(t *testing.T, contentRoot string, siteIdx *site.Index) (*mcp.ClientSession, func()) {
-	t.Helper()
-	pg, err := security.New(contentRoot, true)
-	if err != nil {
-		t.Fatalf("security.New: %v", err)
-	}
-	idx, err := hugosite.NewSourceIndex(contentRoot)
-	if err != nil {
-		t.Fatalf("hugosite.NewSourceIndex: %v", err)
-	}
-	cfg := config.Default()
-	cfg.ContentRoot = contentRoot
-
-	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	write.Register(s, pg, idx, cfg, nil, siteIdx)
-
-	ctx := context.Background()
-	t1, t2 := mcp.NewInMemoryTransports()
-	if _, err := s.Connect(ctx, t1, nil); err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
-	session, err := client.Connect(ctx, t2, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	return session, func() { _ = session.Close() }
-}
-
-func newTestServerWithDB(t *testing.T, contentRoot string, siteDB *db.DB) (*mcp.ClientSession, func()) {
-	t.Helper()
-	pg, err := security.New(contentRoot, true)
-	if err != nil {
-		t.Fatalf("security.New: %v", err)
-	}
-	idx, err := hugosite.NewSourceIndex(contentRoot)
-	if err != nil {
-		t.Fatalf("hugosite.NewSourceIndex: %v", err)
-	}
-	cfg := config.Default()
-	cfg.ContentRoot = contentRoot
-
-	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	write.Register(s, pg, idx, cfg, siteDB)
-
-	ctx := context.Background()
-	t1, t2 := mcp.NewInMemoryTransports()
-	if _, err := s.Connect(ctx, t1, nil); err != nil {
-		t.Fatalf("server connect: %v", err)
-	}
-	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
-	session, err := client.Connect(ctx, t2, nil)
-	if err != nil {
-		t.Fatalf("client connect: %v", err)
-	}
-	return session, func() { _ = session.Close() }
 }
 
 func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
@@ -164,7 +85,7 @@ func decodeWriteContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 
 func TestCreatePage(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -208,7 +129,7 @@ func TestCreatePageSymlinkBlocked(t *testing.T) {
 		t.Fatalf("os.Symlink: %v", err)
 	}
 
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -222,7 +143,7 @@ func TestCreatePageSymlinkBlocked(t *testing.T) {
 
 func TestCreatePageReservedSlug(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -236,7 +157,7 @@ func TestCreatePageReservedSlug(t *testing.T) {
 
 func TestDeletePageRateLimit(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	// Create 6 pages. Delete the first 5 (each succeeds). The 6th delete targets
@@ -271,7 +192,7 @@ func TestDeletePageRateLimit(t *testing.T) {
 
 func TestUpdatePageNotFound(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "update_page", map[string]any{
@@ -289,7 +210,7 @@ func TestUpdatePageNotFound(t *testing.T) {
 
 func TestCreatePageEmptySlug(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{"slug": "", "title": "T"})
@@ -300,7 +221,7 @@ func TestCreatePageEmptySlug(t *testing.T) {
 
 func TestCreatePageEmptyTitle(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{"slug": "valid-slug", "title": ""})
@@ -311,7 +232,7 @@ func TestCreatePageEmptyTitle(t *testing.T) {
 
 func TestUpdatePageEmptySlug(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "update_page", map[string]any{"slug": "", "title": "T"})
@@ -322,7 +243,7 @@ func TestUpdatePageEmptySlug(t *testing.T) {
 
 func TestDeletePageEmptySlug(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "delete_page", map[string]any{"slug": ""})
@@ -333,7 +254,7 @@ func TestDeletePageEmptySlug(t *testing.T) {
 
 func TestUpdatePageSuccess(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	// create first
@@ -370,7 +291,7 @@ func TestUpdatePageSuccess(t *testing.T) {
 
 func TestDeletePageSuccess(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -399,7 +320,7 @@ func TestDeletePageSuccess(t *testing.T) {
 
 func TestDeletePageRemovesWholeDirectory(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -447,7 +368,7 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "update_page", map[string]any{
@@ -487,7 +408,7 @@ func TestUpdatePageDryRunMultilingualPath(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "update_page", map[string]any{
@@ -515,7 +436,7 @@ func TestDeletePageCleansPublicDir(t *testing.T) {
 	contentRoot := t.TempDir()
 	siteRoot := t.TempDir()
 
-	session, done := newTestServerWithSiteRoot(t, contentRoot, siteRoot)
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteRoot: siteRoot})
 	defer done()
 
 	// Create source page.
@@ -559,7 +480,7 @@ func TestDeletePageCleansPublicDir(t *testing.T) {
 // both reach the same content directory (#265).
 func TestCreatePageSlugNormalization(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -579,7 +500,7 @@ func TestCreatePageSlugNormalization(t *testing.T) {
 // leading and trailing slashes and resolves to the same page (#265).
 func TestUpdatePageSlugNormalization(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -604,7 +525,7 @@ func TestUpdatePageSlugNormalization(t *testing.T) {
 // leading and trailing slashes and removes the correct directory (#265).
 func TestDeletePageSlugNormalization(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -630,7 +551,7 @@ func TestDeletePageSlugNormalization(t *testing.T) {
 // already-deleted slug returns not_found instead of silent success (#266).
 func TestDeletePageNotFoundOnDoubleDeletion(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -662,7 +583,7 @@ func TestDeletePageNotFoundOnDoubleDeletion(t *testing.T) {
 // page content and an empty backlinks list without removing the file (#267).
 func TestDeletePageDryRun(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -704,7 +625,7 @@ func TestDeletePageDryRun(t *testing.T) {
 // returns not_found (#267).
 func TestDeletePageDryRunNotFound(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "delete_page", map[string]any{
@@ -725,7 +646,7 @@ func TestDeletePageDryRunNotFound(t *testing.T) {
 // create_page stored, leaving a stale index entry (#265).
 func TestDeletePageSlugNormalizationSourceIndex(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, srcIdx, done := newTestServerWithSourceIdx(t, contentRoot)
+	session, srcIdx, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -778,7 +699,7 @@ func TestDeletePageDryRunWithBacklinks(t *testing.T) {
 		RawHTML: `<article><a href="/posts/dry-run-bl/">go to target</a></article>`,
 	})
 
-	session, done := newTestServerWithSiteIdx(t, contentRoot, siteIdx)
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteIdx: siteIdx})
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -822,7 +743,7 @@ func TestDeletePagePublicCleanupWarning(t *testing.T) {
 	contentRoot := t.TempDir()
 	siteRoot := t.TempDir()
 
-	session, done := newTestServerWithSiteRoot(t, contentRoot, siteRoot)
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteRoot: siteRoot})
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -873,7 +794,7 @@ func TestDeletePageDBWarning(t *testing.T) {
 	// Close the DB so any operation on it returns "sql: database is closed".
 	siteDB.Close()
 
-	session, done := newTestServerWithDB(t, contentRoot, siteDB)
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -904,7 +825,7 @@ func TestDeletePageDBWarning(t *testing.T) {
 
 func TestCreatePageDryRun(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -931,7 +852,7 @@ func TestCreatePageDryRun(t *testing.T) {
 
 func TestUpdatePageDryRun(t *testing.T) {
 	contentRoot := t.TempDir()
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	// Create a real page first
@@ -984,7 +905,7 @@ func TestCreatePageAtomicWriteCheckedRejectsSymlink(t *testing.T) {
 		t.Fatalf("os.Symlink: %v", err)
 	}
 
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	res := callTool(t, session, "create_page", map[string]any{
@@ -1016,7 +937,7 @@ func TestUpdatePageAtomicWriteCheckedRejectsSymlink(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	session, done := newTestServer(t, contentRoot)
+	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
 	// Confirm update succeeds before swapping.
@@ -1059,7 +980,7 @@ func TestDeletePageAuditLogErrorSurfacedAsWarning(t *testing.T) {
 	contentRoot := t.TempDir()
 	siteRoot := t.TempDir()
 
-	session, done := newTestServerWithSiteRoot(t, contentRoot, siteRoot)
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteRoot: siteRoot})
 	defer done()
 
 	// Create a page to delete.
