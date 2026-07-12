@@ -26,9 +26,12 @@ func New(root string, rejectSymlinks bool) (*PathGuard, error) {
 
 // SafeJoin joins rel to the guard root and validates that the result stays
 // within the root. When rejectSymlinks is true it also rejects any existing
-// path component (including the target itself) that is a symbolic link,
-// mitigating TOCTOU attacks where a parent directory is swapped for a symlink
-// between path validation and file creation.
+// path component (including the target itself) that is a symbolic link at the
+// moment of the call. This closes the window at T1 (path construction) but not
+// the T2/T3 window between SafeJoin and the actual file write; callers that
+// need write-time protection must use fileutil.AtomicWriteChecked, which
+// re-validates the parent directory immediately before CreateTemp and before
+// Rename.
 func (pg *PathGuard) SafeJoin(rel string) (string, error) {
 	if rel == "" {
 		return "", errors.New("pathguard: empty relative path")
