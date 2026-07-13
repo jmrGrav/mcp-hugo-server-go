@@ -111,8 +111,13 @@ type exportAgentContextOutput struct {
 }
 
 type exportResultDTO struct {
-	Pages []pageExportDTO `json:"pages"`
-	Total int             `json:"total"`
+	Pages         []pageExportDTO `json:"pages"`
+	Total         int             `json:"total"`
+	Limit         int             `json:"limit"`
+	Offset        int             `json:"offset"`
+	ReturnedCount int             `json:"returned_count"`
+	HasMore       bool            `json:"has_more"`
+	NextOffset    *int            `json:"next_offset,omitempty"`
 }
 
 func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
@@ -235,12 +240,22 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				offset = 0
 			}
 			if offset >= len(filtered) {
-				return nil, exportAgentContextOutput{Export: exportResultDTO{Pages: []pageExportDTO{}, Total: total}}, nil
+				meta := paginationMeta(total, limit, offset, 0)
+				return nil, exportAgentContextOutput{Export: exportResultDTO{
+					Pages:         []pageExportDTO{},
+					Total:         meta.Total,
+					Limit:         meta.Limit,
+					Offset:        meta.Offset,
+					ReturnedCount: meta.ReturnedCount,
+					HasMore:       meta.HasMore,
+					NextOffset:    meta.NextOffset,
+				}}, nil
 			}
 			slice := filtered[offset:]
 			if len(slice) > limit {
 				slice = slice[:limit]
 			}
+			meta := paginationMeta(total, limit, offset, len(slice))
 			pages := make([]pageExportDTO, 0, len(slice))
 			for _, pg := range slice {
 				resolved, _ := resolver.Resolve(pg.Slug)
@@ -252,7 +267,15 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					Markdown:    md,
 				})
 			}
-			return nil, exportAgentContextOutput{Export: exportResultDTO{Pages: pages, Total: total}}, nil
+			return nil, exportAgentContextOutput{Export: exportResultDTO{
+				Pages:         pages,
+				Total:         meta.Total,
+				Limit:         meta.Limit,
+				Offset:        meta.Offset,
+				ReturnedCount: meta.ReturnedCount,
+				HasMore:       meta.HasMore,
+				NextOffset:    meta.NextOffset,
+			}}, nil
 		})
 }
 
@@ -442,6 +465,30 @@ func clampLimit(v, defaultVal, maxVal int) int {
 		return maxVal
 	}
 	return v
+}
+
+type paginationResult struct {
+	Total         int
+	Limit         int
+	Offset        int
+	ReturnedCount int
+	HasMore       bool
+	NextOffset    *int
+}
+
+func paginationMeta(total, limit, offset, returned int) paginationResult {
+	meta := paginationResult{
+		Total:         total,
+		Limit:         limit,
+		Offset:        offset,
+		ReturnedCount: returned,
+	}
+	if offset+returned < total {
+		meta.HasMore = true
+		next := offset + returned
+		meta.NextOffset = &next
+	}
+	return meta
 }
 
 func nullsafeStrings(s []string) []string {

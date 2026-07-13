@@ -28,16 +28,19 @@ type getPageInput struct {
 }
 
 type searchPagesInput struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit,omitempty"`
+	Query  string `json:"query"`
+	Limit  int    `json:"limit,omitempty"`
+	Offset int    `json:"offset,omitempty"`
 }
 
 type getRecentPostsInput struct {
-	Limit int `json:"limit,omitempty"`
+	Limit  int `json:"limit,omitempty"`
+	Offset int `json:"offset,omitempty"`
 }
 
 type getFeedInput struct {
-	Limit int `json:"limit,omitempty"`
+	Limit  int `json:"limit,omitempty"`
+	Offset int `json:"offset,omitempty"`
 }
 
 type pageDTO struct {
@@ -94,7 +97,13 @@ type siteInfoDTO struct {
 }
 
 type listPagesOutput struct {
-	Pages []pageDTO `json:"pages"`
+	Pages         []pageDTO `json:"pages"`
+	Total         int       `json:"total"`
+	Limit         int       `json:"limit"`
+	Offset        int       `json:"offset"`
+	ReturnedCount int       `json:"returned_count"`
+	HasMore       bool      `json:"has_more"`
+	NextOffset    *int      `json:"next_offset,omitempty"`
 }
 
 type getPageOutput struct {
@@ -102,11 +111,23 @@ type getPageOutput struct {
 }
 
 type searchPagesOutput struct {
-	Pages []pageDTO `json:"pages"`
+	Pages         []pageDTO `json:"pages"`
+	Total         int       `json:"total"`
+	Limit         int       `json:"limit"`
+	Offset        int       `json:"offset"`
+	ReturnedCount int       `json:"returned_count"`
+	HasMore       bool      `json:"has_more"`
+	NextOffset    *int      `json:"next_offset,omitempty"`
 }
 
 type getRecentPostsOutput struct {
-	Pages []pageDTO `json:"pages"`
+	Pages         []pageDTO `json:"pages"`
+	Total         int       `json:"total"`
+	Limit         int       `json:"limit"`
+	Offset        int       `json:"offset"`
+	ReturnedCount int       `json:"returned_count"`
+	HasMore       bool      `json:"has_more"`
+	NextOffset    *int      `json:"next_offset,omitempty"`
 }
 
 type listTagsOutput struct {
@@ -118,11 +139,23 @@ type listCategoriesOutput struct {
 }
 
 type getSitemapOutput struct {
-	Entries []sitemapEntryDTO `json:"entries"`
+	Entries       []sitemapEntryDTO `json:"entries"`
+	Total         int               `json:"total"`
+	Limit         int               `json:"limit"`
+	Offset        int               `json:"offset"`
+	ReturnedCount int               `json:"returned_count"`
+	HasMore       bool              `json:"has_more"`
+	NextOffset    *int              `json:"next_offset,omitempty"`
 }
 
 type getFeedOutput struct {
-	Items []feedItemDTO `json:"items"`
+	Items         []feedItemDTO `json:"items"`
+	Total         int           `json:"total"`
+	Limit         int           `json:"limit"`
+	Offset        int           `json:"offset"`
+	ReturnedCount int           `json:"returned_count"`
+	HasMore       bool          `json:"has_more"`
+	NextOffset    *int          `json:"next_offset,omitempty"`
 }
 
 type getSiteInformationOutput struct {
@@ -150,14 +183,17 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if offset < 0 {
 				offset = 0
 			}
+			total := len(all)
 			if offset >= len(all) {
-				return nil, listPagesOutput{Pages: []pageDTO{}}, nil
+				meta := paginationMeta(total, limit, offset, 0)
+				return nil, listPagesOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 			}
 			slice := all[offset:]
 			if len(slice) > limit {
 				slice = slice[:limit]
 			}
-			return nil, listPagesOutput{Pages: toPageDTOsEnriched(slice, srcIdx, aliases)}, nil
+			meta := paginationMeta(total, limit, offset, len(slice))
+			return nil, listPagesOutput{Pages: toPageDTOsEnriched(slice, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
 	addReadOnlyTool(s, "get_page", "Read page",
@@ -212,8 +248,22 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, searchPagesOutput{}, fmt.Errorf("invalid_params: query must not be empty")
 			}
 			limit := clampLimit(in.Limit, 50, 50)
-			pages := idx.Search(in.Query, limit)
-			return nil, searchPagesOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases)}, nil
+			offset := in.Offset
+			if offset < 0 {
+				offset = 0
+			}
+			all := idx.Search(in.Query, 0)
+			total := len(all)
+			if offset >= total {
+				meta := paginationMeta(total, limit, offset, 0)
+				return nil, searchPagesOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+			}
+			pages := all[offset:]
+			if len(pages) > limit {
+				pages = pages[:limit]
+			}
+			meta := paginationMeta(total, limit, offset, len(pages))
+			return nil, searchPagesOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
@@ -222,8 +272,22 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, getRecentPostsOutput{}, fmt.Errorf("index not initialized")
 			}
 			limit := clampLimit(in.Limit, 10, 50)
-			pages := idx.RecentPosts(limit)
-			return nil, getRecentPostsOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases)}, nil
+			offset := in.Offset
+			if offset < 0 {
+				offset = 0
+			}
+			all := idx.RecentPosts(0)
+			total := len(all)
+			if offset >= total {
+				meta := paginationMeta(total, limit, offset, 0)
+				return nil, getRecentPostsOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+			}
+			pages := all[offset:]
+			if len(pages) > limit {
+				pages = pages[:limit]
+			}
+			meta := paginationMeta(total, limit, offset, len(pages))
+			return nil, getRecentPostsOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
 	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
@@ -281,8 +345,10 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if offset < 0 {
 				offset = 0
 			}
+			total := len(all)
 			if offset >= len(all) {
-				return nil, getSitemapOutput{Entries: []sitemapEntryDTO{}}, nil
+				meta := paginationMeta(total, limit, offset, 0)
+				return nil, getSitemapOutput{Entries: []sitemapEntryDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 			}
 			slice := all[offset:]
 			if len(slice) > limit {
@@ -292,7 +358,8 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			for i, p := range slice {
 				entries[i] = sitemapEntryDTO{Slug: p.Slug, URL: p.URL, Date: p.Date}
 			}
-			return nil, getSitemapOutput{Entries: entries}, nil
+			meta := paginationMeta(total, limit, offset, len(entries))
+			return nil, getSitemapOutput{Entries: entries, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
 	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication.",
@@ -301,12 +368,26 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, getFeedOutput{}, fmt.Errorf("index not initialized")
 			}
 			limit := clampLimit(in.Limit, 20, 50)
-			pages := idx.GetFeed(limit)
+			offset := in.Offset
+			if offset < 0 {
+				offset = 0
+			}
+			all := idx.GetFeed(0)
+			total := len(all)
+			if offset >= total {
+				meta := paginationMeta(total, limit, offset, 0)
+				return nil, getFeedOutput{Items: []feedItemDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+			}
+			pages := all[offset:]
+			if len(pages) > limit {
+				pages = pages[:limit]
+			}
 			items := make([]feedItemDTO, len(pages))
 			for i, p := range pages {
 				items[i] = feedItemDTO{Slug: p.Slug, Title: p.Title, Summary: p.Summary, Date: p.Date, URL: p.URL}
 			}
-			return nil, getFeedOutput{Items: items}, nil
+			meta := paginationMeta(total, limit, offset, len(items))
+			return nil, getFeedOutput{Items: items, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
@@ -349,6 +430,30 @@ func clampLimit(v, defaultVal, maxVal int) int {
 		return maxVal
 	}
 	return v
+}
+
+type paginationResult struct {
+	Total         int
+	Limit         int
+	Offset        int
+	ReturnedCount int
+	HasMore       bool
+	NextOffset    *int
+}
+
+func paginationMeta(total, limit, offset, returned int) paginationResult {
+	meta := paginationResult{
+		Total:         total,
+		Limit:         limit,
+		Offset:        offset,
+		ReturnedCount: returned,
+	}
+	if offset+returned < total {
+		meta.HasMore = true
+		next := offset + returned
+		meta.NextOffset = &next
+	}
+	return meta
 }
 
 func toPageDTO(p site.Page) pageDTO {
