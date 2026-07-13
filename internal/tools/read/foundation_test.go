@@ -21,6 +21,9 @@ func TestPageIdentityFromPage(t *testing.T) {
 	if got.Slug != "/posts/hello/" {
 		t.Fatalf("pageIdentityFromPage().Slug = %q", got.Slug)
 	}
+	if got.SourcePath != "content/posts/hello.md" {
+		t.Fatalf("pageIdentityFromPage().SourcePath = %q", got.SourcePath)
+	}
 	if got.ReadingTime != 7 {
 		t.Fatalf("pageIdentityFromPage().ReadingTime = %d", got.ReadingTime)
 	}

@@ -21,11 +21,12 @@ type legacyEnvelopeDTO[T any] struct {
 	Errors      []string `json:"errors"`
 }
 
-func pageIdentityFromPage(p site.Page, _ string, readingTime int) contentmodel.PageIdentity {
+func pageIdentityFromPage(p site.Page, sourcePath string, readingTime int) contentmodel.PageIdentity {
 	return contentmodel.PageIdentity{
 		Slug:        p.Slug,
 		Lang:        p.Lang,
 		URL:         p.URL,
+		SourcePath:  sourcePath,
 		Title:       p.Title,
 		Tags:        toContentmodelTerms(site.NormalizeTaxonomyTerms(p.Tags)),
 		Categories:  toContentmodelTerms(site.NormalizeTaxonomyTerms(p.Categories)),
