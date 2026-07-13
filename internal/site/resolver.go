@@ -56,22 +56,21 @@ func (r *PageResolver) resolveSource(sourceSlug, lang string) (*hugosite.SourceP
 	if r == nil || r.srcIdx == nil {
 		return nil, false
 	}
-	for _, candidate := range SourceSlugCandidates(sourceSlug) {
-		if lang != "" {
-			if p, ok := r.srcIdx.GetBySlugLang(candidate, lang); ok {
+	candidates := SourceSlugCandidates(sourceSlug)
+	if lang != "" {
+		for _, c := range candidates {
+			if p, ok := r.srcIdx.GetBySlugLang(c, lang); ok {
+				return p, true
+			}
+		}
+		for _, c := range candidates {
+			if p, ok := r.srcIdx.GetDefaultBySlug(c); ok {
 				return p, true
 			}
 		}
 	}
-	for _, candidate := range SourceSlugCandidates(sourceSlug) {
-		if lang != "" {
-			if p, ok := r.srcIdx.GetDefaultBySlug(candidate); ok {
-				return p, true
-			}
-		}
-	}
-	for _, candidate := range SourceSlugCandidates(sourceSlug) {
-		if p, ok := r.srcIdx.GetBySlug(candidate); ok {
+	for _, c := range candidates {
+		if p, ok := r.srcIdx.GetBySlug(c); ok {
 			return p, true
 		}
 	}
