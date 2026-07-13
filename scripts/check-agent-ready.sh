@@ -39,6 +39,16 @@ expect_contains() {
   fi
 }
 
+expect_not_contains() {
+  local json="$1"
+  local needle="$2"
+  local label="$3"
+  if jq -e --arg needle "$needle" 'index($needle) != null' <<<"$json" >/dev/null; then
+    echo "$label: unexpected '$needle'" >&2
+    exit 1
+  fi
+}
+
 auth_meta="$(json_get "$BASE_URL/.well-known/oauth-authorization-server")"
 resource_meta="$(json_get "$BASE_URL/.well-known/oauth-protected-resource")"
 resource_meta_alias="$(json_get "$BASE_URL/.well-known/oauth-protected-resource/mcp")"
@@ -69,7 +79,7 @@ expect_eq "$alias_transport_endpoint" "/mcp" "mcp alias transport.endpoint"
 expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "content.read" "auth scopes"
 expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "content.write" "auth scopes"
 expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "site.admin" "auth scopes"
-expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "system.admin" "auth scopes"
+expect_not_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "system.admin" "auth scopes"
 
 for needle in \
   "registration_flow" \
