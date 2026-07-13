@@ -800,6 +800,46 @@ func TestSearchContentPaginationMetadata(t *testing.T) {
 	assertReadPaginationMetadata(t, data, 2, 1, 0, 1, true, 1, true)
 }
 
+func TestSearchContentInvalidTypeStructuredError(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_content", map[string]any{
+		"type": "wrong",
+	})
+	if !res.IsError {
+		t.Fatal("search_content with invalid type should return error result")
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	if m["success"] != false {
+		t.Fatalf("search_content error success = %v, want false", m["success"])
+	}
+	errors, ok := m["errors"].([]any)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("search_content errors = %#v", m["errors"])
+	}
+	err0 := errors[0].(map[string]any)
+	if got := err0["code"]; got != "invalid_params" {
+		t.Fatalf("search_content error code = %v, want invalid_params", got)
+	}
+	if got := err0["field"]; got != "type" {
+		t.Fatalf("search_content error field = %v, want type", got)
+	}
+	resolution, ok := err0["resolution"].(map[string]any)
+	if !ok {
+		t.Fatalf("search_content resolution = %T", err0["resolution"])
+	}
+	allowed, ok := resolution["allowed_values"].([]any)
+	if !ok || len(allowed) == 0 {
+		t.Fatalf("search_content allowed_values = %#v", resolution["allowed_values"])
+	}
+}
+
 func TestExplainSiteStructure(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

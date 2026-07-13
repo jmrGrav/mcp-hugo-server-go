@@ -1,6 +1,13 @@
 package toolcontract
 
-import "time"
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
 
 type ResponseMeta struct {
 	GeneratedAt   string `json:"generated_at"`
@@ -81,4 +88,148 @@ func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 		Warnings: []string{},
 		Meta:     meta,
 	}
+}
+
+func Failure(meta ResponseMeta, errs ...ToolError) ToolResponse[map[string]any] {
+	if errs == nil {
+		errs = []ToolError{}
+	}
+	return ToolResponse[map[string]any]{
+		Success:  false,
+		Data:     map[string]any{},
+		Errors:   errs,
+		Warnings: []string{},
+		Meta:     meta,
+	}
+}
+
+func ParseToolError(err error) ToolError {
+	if err == nil {
+		return NewError("tool_error", "unknown error")
+	}
+	code, message := splitErrorPrefix(err.Error())
+	out := NewError(code, message)
+
+	switch code {
+	case "ambiguous_language":
+		out.Field = "lang"
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{
+			Action:        "retry_with_parameter",
+			Parameter:     "lang",
+			AllowedValues: parseAllowedValues(message),
+		}
+	case "invalid_params":
+		if field := missingRequiredField(message); field != "" {
+			out.Code = "missing_required_parameter"
+			out.Field = field
+			out.Retryable = true
+			out.Resolution = &ErrorResolution{
+				Action:    "retry_with_parameter",
+				Parameter: field,
+			}
+			return out
+		}
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{Action: "retry_with_parameter"}
+		if field := inferField(message); field != "" {
+			out.Field = field
+			out.Resolution.Parameter = field
+		}
+		if allowed := parseAllowedValues(message); len(allowed) > 0 {
+			out.Resolution.AllowedValues = allowed
+		}
+	case "build_in_progress", "rate_limit_exceeded":
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{Action: "retry_later"}
+	}
+
+	return out
+}
+
+func ErrorResult(err error, meta ResponseMeta) *mcp.CallToolResult {
+	toolErr := ParseToolError(err)
+	payload := Failure(meta, toolErr)
+	text := fmt.Sprintf("%s: %s", toolErr.Code, toolErr.Message)
+	if raw, marshalErr := json.Marshal(payload); marshalErr == nil {
+		text = string(raw)
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: text}},
+		IsError: true,
+	}
+}
+
+func splitErrorPrefix(raw string) (string, string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "tool_error", "unknown error"
+	}
+	head, tail, ok := strings.Cut(raw, ":")
+	if !ok {
+		return "tool_error", raw
+	}
+	head = strings.TrimSpace(head)
+	if !isMachineCode(head) {
+		return "tool_error", raw
+	}
+	return head, strings.TrimSpace(tail)
+}
+
+func isMachineCode(raw string) bool {
+	if raw == "" {
+		return false
+	}
+	for _, r := range raw {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func missingRequiredField(message string) string {
+	prefixes := []string{"slug", "title", "query", "lang", "body"}
+	for _, field := range prefixes {
+		if message == field+" must not be empty" {
+			return field
+		}
+	}
+	return ""
+}
+
+func inferField(message string) string {
+	prefixes := []string{"slug", "title", "query", "lang", "type", "style", "accent"}
+	for _, field := range prefixes {
+		if strings.HasPrefix(message, field+" ") {
+			return field
+		}
+	}
+	return ""
+}
+
+func parseAllowedValues(message string) []string {
+	if _, tail, ok := strings.Cut(message, "available: "); ok {
+		return splitValues(strings.TrimSuffix(tail, ")"))
+	}
+	if _, tail, ok := strings.Cut(message, "must be one of: "); ok {
+		if idx := strings.Index(tail, " ("); idx >= 0 {
+			tail = tail[:idx]
+		}
+		return splitValues(tail)
+	}
+	return nil
+}
+
+func splitValues(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(strings.Trim(part, `"'`))
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }

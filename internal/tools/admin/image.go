@@ -16,6 +16,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -25,6 +26,7 @@ var validAccent = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // maxImageBytes caps the response body from the image generation API (10 MiB).
 const maxImageBytes = 10 << 20
+const toolResultVersion = "v1.0.0"
 
 type generateFeaturedImageInput struct {
 	Slug     string   `json:"slug"`
@@ -94,7 +96,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
+	}, wrapAdminTool(func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
 		if in.Slug == "" {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -183,7 +185,18 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		}
 
 		return nil, generateFeaturedImageOutput{Path: destPath}, nil
-	})
+	}))
+}
+
+func wrapAdminTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		res, out, err := handler(ctx, req, in)
+		if err != nil {
+			var zero Out
+			return toolcontract.ErrorResult(err, toolcontract.NewMeta(toolResultVersion, time.Now())), zero, nil
+		}
+		return res, out, nil
+	}
 }
 
 func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {

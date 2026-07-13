@@ -22,11 +22,14 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
 )
+
+const toolResultVersion = "v1.0.0"
 
 type createPageInput struct {
 	Slug       string   `json:"slug"`
@@ -89,6 +92,17 @@ type deletePageOutput struct {
 	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
 	Warning            string                   `json:"warning,omitempty"`
 	State              *site.LifecycleState     `json:"state,omitempty"`
+}
+
+func wrapMutationTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		res, out, err := handler(ctx, req, in)
+		if err != nil {
+			var zero Out
+			return toolcontract.ErrorResult(err, toolcontract.NewMeta(toolResultVersion, time.Now())), zero, nil
+		}
+		return res, out, nil
+	}
 }
 
 // normalizeInputSlug strips leading and trailing slashes so agents that pass
@@ -160,7 +174,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in createPageInput) (*mcp.CallToolResult, createPageOutput, error) {
+	}, wrapMutationTool(func(_ context.Context, _ *mcp.CallToolRequest, in createPageInput) (*mcp.CallToolResult, createPageOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, createPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
@@ -259,7 +273,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ResolvedSourcePath: filePath,
 			State:              &state,
 		}, nil
-	})
+	}))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "update_page",
@@ -277,7 +291,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, func(_ context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
+	}, wrapMutationTool(func(_ context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
@@ -414,7 +428,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ResolvedSourcePath: filePath,
 			State:              &state,
 		}, nil
-	})
+	}))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
@@ -428,7 +442,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
+	}, wrapMutationTool(func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
@@ -560,7 +574,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Warning:            deleteWarning,
 			State:              &state,
 		}, nil
-	})
+	}))
 }
 
 func createPageState() site.LifecycleState {
@@ -788,7 +802,6 @@ func marshalWithIndent(v any, indent int) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
-
 
 func inspectDeleteSource(dir string) contentmodel.ResolvedSource {
 	entries, err := os.ReadDir(dir)
