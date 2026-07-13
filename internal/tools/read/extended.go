@@ -509,18 +509,12 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			for i, e := range entries {
 				dtos[i] = backlinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL}
 			}
-			return nil, getBacklinksOutput{
-				Success:     true,
-				Version:     toolResultVersion,
-				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-				Data: getBacklinksData{
-					Slug:      targetSlug,
-					Count:     len(dtos),
-					Backlinks: dtos,
-				},
-				Warnings: []string{},
-				Errors:   []string{},
-			}, nil
+			env := legacyEnvelope(getBacklinksData{
+				Slug:      targetSlug,
+				Count:     len(dtos),
+				Backlinks: dtos,
+			}, time.Now().UTC())
+			return nil, getBacklinksOutput(env), nil
 		})
 
 	addReadOnlyTool(s, "suggest_internal_links", "Suggest internal links",
