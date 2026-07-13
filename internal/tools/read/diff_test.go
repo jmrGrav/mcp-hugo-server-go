@@ -96,6 +96,7 @@ func TestDiffPage(t *testing.T) {
 	if strings.TrimSpace(asString(t, data["head_commit"])) == "" {
 		t.Fatal("diff_page missing head_commit")
 	}
+	assertReadPageState(t, data["state"], "present", "built", "available", "fresh")
 }
 
 func TestDiffPageResolvesMultilingualBundleFromSourceIndex(t *testing.T) {
@@ -135,6 +136,7 @@ func TestDiffPageResolvesMultilingualBundleFromSourceIndex(t *testing.T) {
 	if got := data["resolved_lang"]; got != "fr" {
 		t.Fatalf("diff_page multilingual resolved_lang = %v, want fr", got)
 	}
+	assertReadPageState(t, data["state"], "present", "built", "available", "fresh")
 }
 
 func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
@@ -172,6 +174,7 @@ func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
 	if got := data["resolved_source_path"]; got != pagePath {
 		t.Fatalf("diff_page no-git resolved_source_path = %v, want %s", got, pagePath)
 	}
+	assertReadPageState(t, data["state"], "present", "pending", "not_yet_available", "source_only")
 	warnings := m["warnings"].([]any)
 	if len(warnings) == 0 {
 		t.Fatal("expected warning explaining git is unavailable")

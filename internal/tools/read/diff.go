@@ -23,17 +23,18 @@ type diffPageInput struct {
 }
 
 type diffPageData struct {
-	Slug          string `json:"slug"`
-	Path          string `json:"path"`
-	ResolvedLang  string `json:"resolved_lang"`
-	ResolvedPath  string `json:"resolved_source_path"`
-	Status        string `json:"status"`
-	DiffAvailable bool   `json:"diff_available"`
-	FallbackMode  string `json:"fallback_mode,omitempty"`
-	BaseCommit    string `json:"base_commit"`
-	HeadCommit    string `json:"head_commit"`
-	Diff          string `json:"diff"`
-	SourceContent string `json:"source_content,omitempty"`
+	Slug          string              `json:"slug"`
+	Path          string              `json:"path"`
+	ResolvedLang  string              `json:"resolved_lang"`
+	ResolvedPath  string              `json:"resolved_source_path"`
+	State         site.LifecycleState `json:"state"`
+	Status        string              `json:"status"`
+	DiffAvailable bool                `json:"diff_available"`
+	FallbackMode  string              `json:"fallback_mode,omitempty"`
+	BaseCommit    string              `json:"base_commit"`
+	HeadCommit    string              `json:"head_commit"`
+	Diff          string              `json:"diff"`
+	SourceContent string              `json:"source_content,omitempty"`
 }
 
 type diffPageOutput struct {
@@ -55,7 +56,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository, a configured content root, and content.read. Use this before editing or reviewing a page.",
+	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository, a configured content root, and content.read. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. Use this before editing or reviewing a page.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in diffPageInput) (*mcp.CallToolResult, diffPageOutput, error) {
 			if srcIdx == nil {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: source index not initialized")
@@ -85,6 +86,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 					Path:          relPath,
 					ResolvedLang:  resolved.Source.Lang,
 					ResolvedPath:  absPathOrResolved(resolved.SourcePath, relPath),
+					State:         resolvedState(resolved, cfg.SiteRoot),
 					Status:        "git_not_available",
 					DiffAvailable: false,
 					FallbackMode:  "source_content",
@@ -131,6 +133,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				Path:          relPath,
 				ResolvedLang:  resolved.Source.Lang,
 				ResolvedPath:  absPathOrResolved(absPath, relPath),
+				State:         resolvedState(resolved, cfg.SiteRoot),
 				Status:        status,
 				DiffAvailable: true,
 				BaseCommit:    strings.TrimSpace(headCommit),

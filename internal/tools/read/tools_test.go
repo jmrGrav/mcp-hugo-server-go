@@ -137,6 +137,7 @@ func TestGetFullPageMarkdown(t *testing.T) {
 		!strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
 		t.Fatalf("get_full_page_markdown resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
 	}
+	assertReadPageState(t, page["state"], "present", "built", "available", "fresh")
 }
 
 func TestGetFullPageMarkdownUnknown(t *testing.T) {
@@ -192,6 +193,7 @@ func TestGetPageFrontmatter(t *testing.T) {
 	if term["source"] != "tutorials" || term["slug"] != "tutorials" || term["label"] != "Tutorials" {
 		t.Fatalf("category term = %#v, want source/slug/label for tutorials", term)
 	}
+	assertReadPageState(t, fm["state"], "present", "built", "available", "fresh")
 }
 
 func TestGetPageFrontmatterExposesStableMetadataContract(t *testing.T) {
@@ -269,6 +271,8 @@ func TestBuildAgentContext(t *testing.T) {
 	if got := fm["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
 		t.Fatalf("build_agent_context resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
 	}
+	assertReadPageState(t, fm["state"], "present", "built", "available", "fresh")
+	assertReadPageState(t, ctx["state"], "present", "built", "available", "fresh")
 	markdown, ok := ctx["markdown"].(string)
 	if !ok {
 		t.Fatal("build_agent_context: missing 'markdown' in context")
@@ -320,6 +324,7 @@ func TestExportAgentContext(t *testing.T) {
 	if slug0 == slug1 {
 		t.Fatalf("export_agent_context offset should skip pages: got same slug %v at offset 0 and 1", slug0)
 	}
+	assertReadPageState(t, pages0[0].(map[string]any)["state"], "present", "built", "available", "fresh")
 }
 
 func TestExportAgentContextPaginationMetadata(t *testing.T) {
@@ -775,6 +780,7 @@ func TestSearchContent(t *testing.T) {
 	if got := hello["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
 		t.Fatalf("search_content resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
 	}
+	assertReadPageState(t, hello["state"], "present", "built", "available", "fresh")
 }
 
 func TestSearchContentPaginationMetadata(t *testing.T) {
@@ -860,6 +866,11 @@ func TestExplainSiteStructure(t *testing.T) {
 	if _, ok := data["summary"]; !ok {
 		t.Fatal("explain_site_structure missing summary")
 	}
+	recentPages, ok := data["recent_pages"].([]any)
+	if !ok || len(recentPages) == 0 {
+		t.Fatalf("explain_site_structure recent_pages = %#v, want at least one page", data["recent_pages"])
+	}
+	assertReadPageState(t, recentPages[0].(map[string]any)["state"], "present", "built", "available", "fresh")
 }
 
 func TestValidateFrontMatter(t *testing.T) {
@@ -959,6 +970,26 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		}
 		assertSchemaHasProperties(t, tool, "outputSchema", tc.keys...)
 		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "server_version")
+	}
+}
+
+func assertReadPageState(t *testing.T, raw any, source, build, public, index string) {
+	t.Helper()
+	state, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("state type = %T", raw)
+	}
+	if got := state["source_state"]; got != source {
+		t.Fatalf("source_state = %v, want %q", got, source)
+	}
+	if got := state["build_state"]; got != build {
+		t.Fatalf("build_state = %v, want %q", got, build)
+	}
+	if got := state["public_state"]; got != public {
+		t.Fatalf("public_state = %v, want %q", got, public)
+	}
+	if got := state["index_state"]; got != index {
+		t.Fatalf("index_state = %v, want %q", got, index)
 	}
 }
 

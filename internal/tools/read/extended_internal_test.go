@@ -63,11 +63,11 @@ func TestContentHelperFunctions(t *testing.T) {
 		t.Fatalf("sliceContentPages(offset overflow) = %#v", got)
 	}
 
-	dto := toPageDTO(pages[0], nil)
+	dto := toPageDTO(pages[0], nil, "")
 	if dto.Slug != pages[0].Slug || dto.Title != "Alpha" {
 		t.Fatalf("toPageDTO() = %#v", dto)
 	}
-	if got := toPageDTOs(pages, nil, nil); len(got) != 3 || got[1].Slug != "/posts/b/" {
+	if got := toPageDTOs(pages, nil, nil, ""); len(got) != 3 || got[1].Slug != "/posts/b/" {
 		t.Fatalf("toPageDTOs() = %#v", got)
 	}
 	if got := countSections(pages); len(got) == 0 || got[0].Name == "" {

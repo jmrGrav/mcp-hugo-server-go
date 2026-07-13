@@ -174,6 +174,80 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 	}
 }
 
+func TestContractRichReadToolsExposeLifecycleState(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	readSession, readDone := newReadSession(t, idx, cfg, srcIdx)
+	defer readDone()
+
+	const slug = "/posts/hello/"
+	tests := []struct {
+		name string
+		tool string
+		args map[string]any
+		read func(*testing.T, map[string]any) map[string]any
+	}{
+		{
+			name: "get_full_page_markdown",
+			tool: "get_full_page_markdown",
+			args: map[string]any{"slug": slug},
+			read: func(t *testing.T, m map[string]any) map[string]any {
+				t.Helper()
+				return mapAt(t, m, "page")
+			},
+		},
+		{
+			name: "get_page_frontmatter",
+			tool: "get_page_frontmatter",
+			args: map[string]any{"slug": slug},
+			read: func(t *testing.T, m map[string]any) map[string]any {
+				t.Helper()
+				return mapAt(t, m, "frontmatter")
+			},
+		},
+		{
+			name: "build_agent_context",
+			tool: "build_agent_context",
+			args: map[string]any{"slug": slug},
+			read: func(t *testing.T, m map[string]any) map[string]any {
+				t.Helper()
+				return mapAt(t, m, "context")
+			},
+		},
+		{
+			name: "search_content",
+			tool: "search_content",
+			args: map[string]any{"query": "hello", "limit": 1, "offset": 0},
+			read: func(t *testing.T, m map[string]any) map[string]any {
+				t.Helper()
+				data := mapAt(t, m, "data")
+				pages, ok := data["pages"].([]any)
+				if !ok || len(pages) == 0 {
+					t.Fatalf("search_content pages = %#v, want one page", data["pages"])
+				}
+				page, ok := pages[0].(map[string]any)
+				if !ok {
+					t.Fatalf("search_content page type = %T", pages[0])
+				}
+				return page
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := callTool(t, readSession, tc.tool, tc.args)
+			if res.IsError {
+				t.Fatalf("%s returned error: %s", tc.tool, marshalAny(t, res.Content))
+			}
+			state := mapAt(t, tc.read(t, decodeContent(t, res)), "state")
+			assertLifecycleState(t, state, "present", "built", "available", "fresh")
+		})
+	}
+}
+
 func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
@@ -597,6 +671,22 @@ func identityFromDiffPage(t *testing.T, res *mcp.CallToolResult) identity {
 func extractTopLevelPages(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
 	t.Helper()
 	return extractCollection(t, m, "pages")
+}
+
+func assertLifecycleState(t *testing.T, state map[string]any, source, build, public, index string) {
+	t.Helper()
+	if got := asString(state["source_state"]); got != source {
+		t.Fatalf("source_state = %q, want %q", got, source)
+	}
+	if got := asString(state["build_state"]); got != build {
+		t.Fatalf("build_state = %q, want %q", got, build)
+	}
+	if got := asString(state["public_state"]); got != public {
+		t.Fatalf("public_state = %q, want %q", got, public)
+	}
+	if got := asString(state["index_state"]); got != index {
+		t.Fatalf("index_state = %q, want %q", got, index)
+	}
 }
 
 func extractTopLevelItems(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {

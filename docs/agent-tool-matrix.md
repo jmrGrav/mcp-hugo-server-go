@@ -11,22 +11,22 @@ by trial and error.
 | Scenario | Tool | Notes |
 |---|---|---|
 | Read a published page (summary + HTML) | `get_page` | No auth needed |
-| Read a page's source Markdown for editing | `get_full_page_markdown` | Needs `content.read` |
-| Get a full context bundle before editing | `build_agent_context` | Frontmatter + Markdown + related |
-| Bulk-export content for analysis | `export_agent_context` | Tag/category filter + pagination |
+| Read a page's source Markdown for editing | `get_full_page_markdown` | Needs `content.read`; includes `page.state` |
+| Get a full context bundle before editing | `build_agent_context` | Frontmatter + Markdown + related + `context.state` |
+| Bulk-export content for analysis | `export_agent_context` | Tag/category filter + pagination + per-page `state` |
 | Simple keyword search (no auth) | `search_pages` | Title, summary, tags, URL |
-| Filtered search (type, tag, language, sort) | `search_content` | Full filter set + pagination |
+| Filtered search (type, tag, language, sort) | `search_content` | Full filter set + pagination + per-result `state` |
 | List all published pages with pagination | `list_pages` | No auth, metadata only |
 | Get the full URL list (including taxonomy) | `get_sitemap` | No auth, all slugs |
 | Read recent posts for a digest | `get_recent_posts` | No auth |
 | List all tags | `list_tags` | No auth |
 | List all categories | `list_categories` | No auth |
 | Read site name/URL/language | `get_site_information` | No auth |
-| Get page metadata only (no body) | `get_page_frontmatter` | Reading time, tags, categories |
+| Get page metadata only (no body) | `get_page_frontmatter` | Reading time, tags, categories + `frontmatter.state` |
 | Find pages related to a slug | `get_related_content` | Shared tags/categories |
 | **Suggest links to add in a draft** | `suggest_internal_links` | Tags/categories → ranked suggestions |
 | Check what links to a page (before delete) | `get_backlinks` | Impact analysis |
-| Show what changed since last Git commit | `diff_page` | Requires local Git |
+| Show what changed since last Git commit | `diff_page` | Requires local Git; includes `data.state` even in fallback mode |
 | Validate frontmatter before publishing | `validate_front_matter` | One slug or all pages |
 | Full-site validation pass | `validate_site` | All source pages |
 | Audit all internal broken links | `get_broken_links` | Published index only |
