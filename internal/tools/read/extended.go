@@ -13,6 +13,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
@@ -70,6 +71,32 @@ type contentEnvelope struct {
 	Data        contentEnvelopeData `json:"data"`
 	Warnings    []string            `json:"warnings"`
 	Errors      []string            `json:"errors"`
+}
+
+type searchContentData struct {
+	Pages         []pageDTO `json:"pages,omitempty"`
+	Total         int       `json:"total"`
+	Limit         int       `json:"limit"`
+	Offset        int       `json:"offset"`
+	ReturnedCount int       `json:"returned_count"`
+	HasMore       bool      `json:"has_more"`
+	NextOffset    *int      `json:"next_offset,omitempty"`
+	Sort          string    `json:"sort,omitempty"`
+	Order         string    `json:"order,omitempty"`
+	Query         string    `json:"query,omitempty"`
+	Type          string    `json:"type,omitempty"`
+	Tag           string    `json:"tag,omitempty"`
+	Category      string    `json:"category,omitempty"`
+	Language      string    `json:"language,omitempty"`
+}
+
+type searchContentEnvelope struct {
+	Success     bool              `json:"success"`
+	Version     string            `json:"version"`
+	GeneratedAt string            `json:"generated_at"`
+	Data        searchContentData `json:"data"`
+	Warnings    []string          `json:"warnings"`
+	Errors      []string          `json:"errors"`
 }
 
 type validateFrontMatterInput struct {
@@ -227,12 +254,12 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	RegisterDiffPage(s, idx, srcIdx, cfg)
 
 	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Requires content.read. For a simple unauthenticated keyword search use search_pages.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, contentEnvelope, error) {
+		func(_ context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {
 			if idx == nil {
-				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
+				return nil, searchContentEnvelope{}, fmt.Errorf("index not initialized")
 			}
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
-				return nil, contentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
+				return nil, searchContentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
 			}
 
 			// FTS5 path: use SQLite full-text search for ranked, snippet-annotated results.
@@ -263,24 +290,28 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 						offset = 0
 					}
 					pages := sliceContentPages(ranked, offset, limit)
+					meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 					now := time.Now().UTC().Format(time.RFC3339)
 					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx)
-					return nil, contentEnvelope{
+					return nil, searchContentEnvelope{
 						Success:     true,
 						Version:     toolResultVersion,
 						GeneratedAt: now,
-						Data: contentEnvelopeData{
-							Pages:    dtos,
-							Total:    total,
-							Limit:    limit,
-							Offset:   offset,
-							Sort:     "relevance",
-							Order:    "desc",
-							Query:    q,
-							Type:     strings.TrimSpace(in.Type),
-							Tag:      strings.TrimSpace(in.Tag),
-							Category: strings.TrimSpace(in.Category),
-							Language: strings.TrimSpace(in.Language),
+						Data: searchContentData{
+							Pages:         dtos,
+							Total:         meta.Total,
+							Limit:         meta.Limit,
+							Offset:        meta.Offset,
+							ReturnedCount: meta.ReturnedCount,
+							HasMore:       meta.HasMore,
+							NextOffset:    meta.NextOffset,
+							Sort:          "relevance",
+							Order:         "desc",
+							Query:         q,
+							Type:          strings.TrimSpace(in.Type),
+							Tag:           strings.TrimSpace(in.Tag),
+							Category:      strings.TrimSpace(in.Category),
+							Language:      strings.TrimSpace(in.Language),
 						},
 						Warnings: []string{},
 						Errors:   []string{},
@@ -310,23 +341,27 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				offset = 0
 			}
 			pages := sliceContentPages(filtered, offset, limit)
+			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			now := time.Now().UTC().Format(time.RFC3339)
-			return nil, contentEnvelope{
+			return nil, searchContentEnvelope{
 				Success:     true,
 				Version:     toolResultVersion,
 				GeneratedAt: now,
-				Data: contentEnvelopeData{
-					Pages:    toPageDTOs(pages, aliases, srcIdx),
-					Total:    total,
-					Limit:    limit,
-					Offset:   offset,
-					Sort:     effectiveSort(in),
-					Order:    canonicalOrder(in.Order),
-					Query:    strings.TrimSpace(in.Query),
-					Type:     strings.TrimSpace(in.Type),
-					Tag:      strings.TrimSpace(in.Tag),
-					Category: strings.TrimSpace(in.Category),
-					Language: strings.TrimSpace(in.Language),
+				Data: searchContentData{
+					Pages:         toPageDTOs(pages, aliases, srcIdx),
+					Total:         meta.Total,
+					Limit:         meta.Limit,
+					Offset:        meta.Offset,
+					ReturnedCount: meta.ReturnedCount,
+					HasMore:       meta.HasMore,
+					NextOffset:    meta.NextOffset,
+					Sort:          effectiveSort(in),
+					Order:         canonicalOrder(in.Order),
+					Query:         strings.TrimSpace(in.Query),
+					Type:          strings.TrimSpace(in.Type),
+					Tag:           strings.TrimSpace(in.Tag),
+					Category:      strings.TrimSpace(in.Category),
+					Language:      strings.TrimSpace(in.Language),
 				},
 				Warnings: []string{},
 				Errors:   []string{},

@@ -11,6 +11,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -111,8 +112,13 @@ type exportAgentContextOutput struct {
 }
 
 type exportResultDTO struct {
-	Pages []pageExportDTO `json:"pages"`
-	Total int             `json:"total"`
+	Pages         []pageExportDTO `json:"pages"`
+	Total         int             `json:"total"`
+	Limit         int             `json:"limit"`
+	Offset        int             `json:"offset"`
+	ReturnedCount int             `json:"returned_count"`
+	HasMore       bool            `json:"has_more"`
+	NextOffset    *int            `json:"next_offset,omitempty"`
 }
 
 func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
@@ -235,12 +241,22 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				offset = 0
 			}
 			if offset >= len(filtered) {
-				return nil, exportAgentContextOutput{Export: exportResultDTO{Pages: []pageExportDTO{}, Total: total}}, nil
+				meta := toolcontract.ComputePagination(total, limit, offset, 0)
+				return nil, exportAgentContextOutput{Export: exportResultDTO{
+					Pages:         []pageExportDTO{},
+					Total:         meta.Total,
+					Limit:         meta.Limit,
+					Offset:        meta.Offset,
+					ReturnedCount: meta.ReturnedCount,
+					HasMore:       meta.HasMore,
+					NextOffset:    meta.NextOffset,
+				}}, nil
 			}
 			slice := filtered[offset:]
 			if len(slice) > limit {
 				slice = slice[:limit]
 			}
+			meta := toolcontract.ComputePagination(total, limit, offset, len(slice))
 			pages := make([]pageExportDTO, 0, len(slice))
 			for _, pg := range slice {
 				resolved, _ := resolver.Resolve(pg.Slug)
@@ -252,7 +268,15 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					Markdown:    md,
 				})
 			}
-			return nil, exportAgentContextOutput{Export: exportResultDTO{Pages: pages, Total: total}}, nil
+			return nil, exportAgentContextOutput{Export: exportResultDTO{
+				Pages:         pages,
+				Total:         meta.Total,
+				Limit:         meta.Limit,
+				Offset:        meta.Offset,
+				ReturnedCount: meta.ReturnedCount,
+				HasMore:       meta.HasMore,
+				NextOffset:    meta.NextOffset,
+			}}, nil
 		})
 }
 
@@ -443,6 +467,7 @@ func clampLimit(v, defaultVal, maxVal int) int {
 	}
 	return v
 }
+
 
 func nullsafeStrings(s []string) []string {
 	if s == nil {

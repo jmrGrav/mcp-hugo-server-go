@@ -322,6 +322,40 @@ func TestExportAgentContext(t *testing.T) {
 	}
 }
 
+func TestExportAgentContextPaginationMetadata(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "export_agent_context", map[string]any{"limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("export_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	exportVal, ok := m["export"].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context export type = %T", m["export"])
+	}
+	assertReadPaginationMetadata(t, exportVal, 2, 1, 0, 1, true, 1, true)
+}
+
+func TestExportAgentContextPaginationMetadataTerminalPage(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "export_agent_context", map[string]any{"limit": 10, "offset": 1})
+	if res.IsError {
+		t.Fatalf("export_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	exportVal, ok := m["export"].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context export type = %T", m["export"])
+	}
+	assertReadPaginationMetadata(t, exportVal, 2, 10, 1, 1, false, 0, false)
+}
+
 func TestExportAgentContextUsesSourceMarkdownForPublicLanguageSlug(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -404,6 +438,29 @@ func TestSearchContent(t *testing.T) {
 	if got := hello["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
 		t.Fatalf("search_content resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
 	}
+}
+
+func TestSearchContentPaginationMetadata(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_content", map[string]any{
+		"query":  "hugo",
+		"limit":  1,
+		"offset": 0,
+		"sort":   "relevance",
+		"order":  "desc",
+	})
+	if res.IsError {
+		t.Fatalf("search_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("search_content data type = %T", m["data"])
+	}
+	assertReadPaginationMetadata(t, data, 2, 1, 0, 1, true, 1, true)
 }
 
 func TestExplainSiteStructure(t *testing.T) {
@@ -927,5 +984,38 @@ func TestValidateFrontMatterDTOHasLangField(t *testing.T) {
 	}
 	if _, ok := firstDTO["lang"]; !ok {
 		t.Fatal("validate_front_matter page DTO: 'lang' field missing")
+	}
+}
+
+func assertReadPaginationMetadata(t *testing.T, m map[string]any, total, limit, offset, returned int, hasMore bool, nextOffset int, hasNextOffset bool) {
+	t.Helper()
+
+	if got := int(m["total"].(float64)); got != total {
+		t.Fatalf("total = %d, want %d", got, total)
+	}
+	if got := int(m["limit"].(float64)); got != limit {
+		t.Fatalf("limit = %d, want %d", got, limit)
+	}
+	if got := int(m["offset"].(float64)); got != offset {
+		t.Fatalf("offset = %d, want %d", got, offset)
+	}
+	if got := int(m["returned_count"].(float64)); got != returned {
+		t.Fatalf("returned_count = %d, want %d", got, returned)
+	}
+	if got := m["has_more"].(bool); got != hasMore {
+		t.Fatalf("has_more = %v, want %v", got, hasMore)
+	}
+	gotNext, ok := m["next_offset"]
+	if hasNextOffset {
+		if !ok {
+			t.Fatal("next_offset missing")
+		}
+		if got := int(gotNext.(float64)); got != nextOffset {
+			t.Fatalf("next_offset = %d, want %d", got, nextOffset)
+		}
+		return
+	}
+	if ok {
+		t.Fatalf("next_offset = %v, want omitted", gotNext)
 	}
 }

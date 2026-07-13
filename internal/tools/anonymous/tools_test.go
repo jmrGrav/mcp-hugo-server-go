@@ -119,6 +119,19 @@ func TestListPages(t *testing.T) {
 	}
 }
 
+func TestListPagesPaginationMetadata(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "list_pages", map[string]any{"limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("list_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	assertPaginationMetadata(t, m, 2, 1, 0, 1, true, 1, true)
+}
+
 func TestListPagesLimitCap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -387,6 +400,19 @@ func TestSearchPagesResults(t *testing.T) {
 	}
 }
 
+func TestSearchPagesPaginationMetadata(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_pages", map[string]any{"query": "hugo", "limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("search_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	assertPaginationMetadata(t, m, 2, 1, 0, 1, true, 1, true)
+}
+
 func TestSearchPagesLimitCap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -424,6 +450,19 @@ func TestGetRecentPosts(t *testing.T) {
 	if len(pages) == 0 {
 		t.Fatal("get_recent_posts: expected at least one post")
 	}
+}
+
+func TestGetRecentPostsPaginationMetadata(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_recent_posts", map[string]any{"limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("get_recent_posts returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	assertPaginationMetadata(t, m, 2, 1, 0, 1, true, 1, true)
 }
 
 func TestGetRecentPostsDefaultLimit(t *testing.T) {
@@ -785,6 +824,19 @@ func TestGetSitemapExcludeTaxonomies(t *testing.T) {
 	}
 }
 
+func TestGetSitemapPaginationMetadata(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_sitemap", map[string]any{"limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("get_sitemap returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	assertPaginationMetadata(t, m, 3, 1, 0, 1, true, 1, true)
+}
+
 func TestGetFeed(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -799,6 +851,32 @@ func TestGetFeed(t *testing.T) {
 	if !ok {
 		t.Fatal("get_feed: missing 'items' key")
 	}
+}
+
+func TestGetFeedPaginationMetadata(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_feed", map[string]any{"limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("get_feed returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	assertPaginationMetadata(t, m, 2, 1, 0, 1, true, 1, true)
+}
+
+func TestListPagesPaginationMetadataTerminalPage(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "list_pages", map[string]any{"limit": 10, "offset": 1})
+	if res.IsError {
+		t.Fatalf("list_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	assertPaginationMetadata(t, m, 2, 10, 1, 1, false, 0, false)
 }
 
 func TestGetFeedLimitCap(t *testing.T) {
@@ -975,5 +1053,37 @@ func assertObjectSchema(t *testing.T, tool *mcp.Tool, field string) {
 	}
 	if m["type"] != "object" {
 		t.Fatalf("tool %q: %s.type = %v, want object", tool.Name, field, m["type"])
+	}
+}
+
+func assertPaginationMetadata(t *testing.T, m map[string]any, total, limit, offset, returned int, hasMore bool, nextOffset int, hasNextOffset bool) {
+	t.Helper()
+	if got := int(m["total"].(float64)); got != total {
+		t.Fatalf("total = %d, want %d", got, total)
+	}
+	if got := int(m["limit"].(float64)); got != limit {
+		t.Fatalf("limit = %d, want %d", got, limit)
+	}
+	if got := int(m["offset"].(float64)); got != offset {
+		t.Fatalf("offset = %d, want %d", got, offset)
+	}
+	if got := int(m["returned_count"].(float64)); got != returned {
+		t.Fatalf("returned_count = %d, want %d", got, returned)
+	}
+	if got := m["has_more"].(bool); got != hasMore {
+		t.Fatalf("has_more = %v, want %v", got, hasMore)
+	}
+	gotNext, ok := m["next_offset"]
+	if hasNextOffset {
+		if !ok {
+			t.Fatal("next_offset missing")
+		}
+		if got := int(gotNext.(float64)); got != nextOffset {
+			t.Fatalf("next_offset = %d, want %d", got, nextOffset)
+		}
+		return
+	}
+	if ok {
+		t.Fatalf("next_offset = %v, want omitted", gotNext)
 	}
 }
