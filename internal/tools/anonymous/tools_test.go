@@ -912,6 +912,7 @@ func TestGetSitemapPaginationMetadata(t *testing.T) {
 	assertPaginationMetadata(t, m, 3, 1, 0, 1, true, 1, true)
 }
 
+
 func TestGetFeed(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
