@@ -389,6 +389,170 @@ func TestExportAgentContextUsesSourceMarkdownForPublicLanguageSlug(t *testing.T)
 	}
 }
 
+func newMultilingualHelloReadSession(t *testing.T) (*mcp.ClientSession, func()) {
+	t.Helper()
+	htmlDir := t.TempDir()
+	htmlPage := filepath.Join(htmlDir, "en", "posts", "hello")
+	if err := os.MkdirAll(htmlPage, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	htmlFile := filepath.Join(htmlPage, "index.html")
+	const html = `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/en/posts/hello/">
+<meta property="og:title" content="Hello EN">
+<meta property="article:tag" content="Hugo">
+</head><body><article>English public body</article></body></html>`
+	if err := os.WriteFile(htmlFile, []byte(html), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	writeSource := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeSource("posts/hello/index.fr.md", "---\ntitle: Bonjour FR\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nBonjour depuis la source francaise.\n")
+	writeSource("posts/hello/index.en.md", "---\ntitle: Hello EN\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nHello from the English source.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	return newTestClientWithSourceIndex(t, idx, srcIdx)
+}
+
+func TestExportAgentContextPrefersMatchingLanguageSource(t *testing.T) {
+	session, done := newMultilingualHelloReadSession(t)
+	defer done()
+
+	res := callTool(t, session, "export_agent_context", map[string]any{"tag": "Hugo", "limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("export_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	exportVal, ok := m["export"].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context export type = %T", m["export"])
+	}
+	pages, ok := exportVal["pages"].([]any)
+	if !ok || len(pages) != 1 {
+		t.Fatalf("export_agent_context pages = %#v, want one page", exportVal["pages"])
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("export page type = %T", pages[0])
+	}
+	fm, ok := page["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("frontmatter type = %T", page["frontmatter"])
+	}
+	if got := fm["lang"]; got != "en" {
+		t.Fatalf("frontmatter.lang = %v, want en", got)
+	}
+	if got := fm["resolved_lang"]; got != "en" {
+		t.Fatalf("frontmatter.resolved_lang = %v, want en", got)
+	}
+	if got := asString(t, fm["resolved_source_path"]); !strings.HasSuffix(got, filepath.ToSlash("posts/hello/index.en.md")) {
+		t.Fatalf("frontmatter.resolved_source_path = %q, want suffix posts/hello/index.en.md", got)
+	}
+	md, _ := page["markdown"].(string)
+	if !strings.Contains(md, "Hello from the English source.") {
+		t.Fatalf("markdown = %q, want English source content", md)
+	}
+	if strings.Contains(md, "Bonjour depuis la source francaise.") {
+		t.Fatalf("markdown unexpectedly used French source content: %q", md)
+	}
+}
+
+func TestRichReadToolsPreferMatchingLanguageSource(t *testing.T) {
+	session, done := newMultilingualHelloReadSession(t)
+	defer done()
+
+	checkFrontmatter := func(t *testing.T, fm map[string]any) {
+		t.Helper()
+		if got := fm["lang"]; got != "en" {
+			t.Fatalf("lang = %v, want en", got)
+		}
+		if got := fm["resolved_lang"]; got != "en" {
+			t.Fatalf("resolved_lang = %v, want en", got)
+		}
+		if got := asString(t, fm["resolved_source_path"]); !strings.HasSuffix(got, filepath.ToSlash("posts/hello/index.en.md")) {
+			t.Fatalf("resolved_source_path = %q, want suffix posts/hello/index.en.md", got)
+		}
+	}
+
+	t.Run("get_page_frontmatter", func(t *testing.T) {
+		res := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/en/posts/hello/"})
+		if res.IsError {
+			t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+		}
+		m := decodeContent(t, res)
+		fm, ok := m["frontmatter"].(map[string]any)
+		if !ok {
+			t.Fatalf("frontmatter type = %T", m["frontmatter"])
+		}
+		checkFrontmatter(t, fm)
+	})
+
+	t.Run("get_full_page_markdown", func(t *testing.T) {
+		res := callTool(t, session, "get_full_page_markdown", map[string]any{"slug": "/en/posts/hello/"})
+		if res.IsError {
+			t.Fatalf("get_full_page_markdown returned error: %v", res.Content)
+		}
+		m := decodeContent(t, res)
+		page, ok := m["page"].(map[string]any)
+		if !ok {
+			t.Fatalf("page type = %T", m["page"])
+		}
+		checkFrontmatter(t, page)
+		md, _ := page["markdown"].(string)
+		if !strings.Contains(md, "Hello from the English source.") {
+			t.Fatalf("markdown = %q, want English source content", md)
+		}
+	})
+
+	t.Run("build_agent_context", func(t *testing.T) {
+		res := callTool(t, session, "build_agent_context", map[string]any{"slug": "/en/posts/hello/"})
+		if res.IsError {
+			t.Fatalf("build_agent_context returned error: %v", res.Content)
+		}
+		m := decodeContent(t, res)
+		ctx, ok := m["context"].(map[string]any)
+		if !ok {
+			t.Fatalf("context type = %T", m["context"])
+		}
+		fm, ok := ctx["frontmatter"].(map[string]any)
+		if !ok {
+			t.Fatalf("context.frontmatter type = %T", ctx["frontmatter"])
+		}
+		checkFrontmatter(t, fm)
+		md, _ := ctx["markdown"].(string)
+		if !strings.Contains(md, "Hello from the English source.") {
+			t.Fatalf("markdown = %q, want English source content", md)
+		}
+	})
+}
+
 func TestSearchContent(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
