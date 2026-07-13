@@ -33,7 +33,7 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
       - name: build
-        run: go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=${GITHUB_REF_NAME:-dev}" ./...
+        run: go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=${GITHUB_REF_NAME:-dev}" ./...
       - name: README release policy gate
         run: go run ./cmd/check-readme-release
       - name: oauth-clients registry lint
@@ -59,7 +59,7 @@ jobs:
         with:
           go-version-file: 'go.mod'
       - name: Build binary
-        run: go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=${GITHUB_REF_NAME:-dev}" -o /tmp/mcp-server ./cmd/mcp-hugo-server-go/
+        run: go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=${GITHUB_REF_NAME:-dev}" -o /tmp/mcp-server ./cmd/mcp-hugo-server-go/
       - name: Create test config and registry
         run: |
           mkdir -p /tmp/boot-check/site

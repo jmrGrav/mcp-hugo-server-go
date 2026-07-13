@@ -7,10 +7,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const ToolResultVersion = "v1.0.0"
+const ToolResultVersion = buildinfo.SchemaVersion
 
 type ResponseMeta struct {
 	GeneratedAt   string `json:"generated_at"`
@@ -92,7 +93,7 @@ func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 		Errors:      []ToolError{},
 		Warnings:    []string{},
 		Meta:        meta,
-		Version:     meta.ServerVersion,
+		Version:     ToolResultVersion,
 		GeneratedAt: meta.GeneratedAt,
 	}
 }
@@ -107,7 +108,7 @@ func Failure(meta ResponseMeta, errs ...ToolError) ToolResponse[map[string]any] 
 		Errors:      errs,
 		Warnings:    []string{},
 		Meta:        meta,
-		Version:     meta.ServerVersion,
+		Version:     ToolResultVersion,
 		GeneratedAt: meta.GeneratedAt,
 	}
 }
@@ -161,7 +162,7 @@ func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerF
 		res, out, err := handler(ctx, req, in)
 		if err != nil {
 			var zero Out
-			return ErrorResult(err, NewMeta(ToolResultVersion, time.Now())), zero, nil
+			return ErrorResult(err, NewMeta(buildinfo.Version, time.Now())), zero, nil
 		}
 		return res, out, nil
 	}

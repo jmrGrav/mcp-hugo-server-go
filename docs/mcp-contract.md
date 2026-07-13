@@ -135,8 +135,8 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 
 - `version: "v1.0.0"` in structured envelopes refers to the **response schema
   version**, not the server version.
-- The server version is not included in individual tool responses; it is
-  available via the MCP server metadata and `get_site_health`.
+- The deployed server version is carried separately in
+  `meta.server_version` inside structured tool responses.
 - Flat envelope tools do not carry a `version` field; their schema is
   implicitly v1.
 

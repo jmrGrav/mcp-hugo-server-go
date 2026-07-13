@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
@@ -201,7 +202,7 @@ func buildMCPServerCard(cfg config.Config) mcpServerCard {
 		ServerInfo: mcpServerInfo{
 			Name:    "mcp-hugo-server-go",
 			Title:   title,
-			Version: Version,
+			Version: buildinfo.Version,
 		},
 		Description: description + " — a Hugo-published site available via MCP.",
 		Transport: mcpTransport{
