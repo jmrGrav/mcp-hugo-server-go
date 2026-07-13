@@ -71,10 +71,6 @@ func collectCandidates(slug, contentDir string) []candidate {
 		}
 		sort.Strings(matches)
 		for _, match := range matches {
-			if strings.HasSuffix(match, ".md") && !strings.HasSuffix(match, "index.md") && !strings.HasSuffix(match, slug+".md") {
-				candidates = append(candidates, candidate{path: match, lang: extractLang(match)})
-				continue
-			}
 			if strings.HasSuffix(match, "index.md") {
 				continue
 			}
@@ -124,9 +120,6 @@ func extractLang(path string) string {
 func normalizeSlug(slug string) string {
 	slug = strings.Trim(strings.TrimSpace(slug), "/")
 	if slug == "" {
-		return ""
-	}
-	if strings.HasPrefix(slug, "/") {
 		return ""
 	}
 	cleaned := filepath.Clean(slug)
