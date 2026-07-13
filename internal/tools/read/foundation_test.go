@@ -36,7 +36,7 @@ func TestPageIdentityFromPage(t *testing.T) {
 	}
 }
 
-func TestLegacyEnvelopeUsesToolcontractMeta(t *testing.T) {
+func TestSuccessEnvelopePopulatesCompatibilityFields(t *testing.T) {
 	now := time.Date(2026, 7, 13, 8, 30, 0, 0, time.UTC)
 	got := successEnvelope(getBacklinksData{Slug: "/posts/hello/"}, now)
 
