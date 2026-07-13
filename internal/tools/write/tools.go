@@ -52,15 +52,16 @@ type createPageOutput struct {
 }
 
 type updatePageInput struct {
-	Slug        string   `json:"slug"`
-	Lang        string   `json:"lang,omitempty"`
-	Title       string   `json:"title,omitempty"`
-	Body        string   `json:"body,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Categories  []string `json:"categories,omitempty"`
-	Draft       *bool    `json:"draft,omitempty"`
-	Description string   `json:"description,omitempty"`
-	DryRun      bool     `json:"dry_run,omitempty"`
+	Slug             string   `json:"slug"`
+	Lang             string   `json:"lang,omitempty"`
+	Title            string   `json:"title,omitempty"`
+	Body             string   `json:"body,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	Categories       []string `json:"categories,omitempty"`
+	Draft            *bool    `json:"draft,omitempty"`
+	Description      string   `json:"description,omitempty"`
+	ExpectedRevision string   `json:"expected_revision,omitempty"`
+	DryRun           bool     `json:"dry_run,omitempty"`
 }
 
 type updatePageOutput struct {
@@ -73,8 +74,9 @@ type updatePageOutput struct {
 }
 
 type deletePageInput struct {
-	Slug   string `json:"slug"`
-	DryRun bool   `json:"dry_run,omitempty"`
+	Slug             string `json:"slug"`
+	ExpectedRevision string `json:"expected_revision,omitempty"`
+	DryRun           bool   `json:"dry_run,omitempty"`
 }
 
 type deletePageBacklinkDTO struct {
@@ -338,6 +340,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Error("update_page: read failed", "slug", in.Slug, "path", filePath, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("read_error: failed to read page")
 		}
+		currentRevision := contentmodel.SourceRevisionBytes(raw)
+		if !in.DryRun {
+			if strings.TrimSpace(in.ExpectedRevision) == "" {
+				return nil, updatePageOutput{}, fmt.Errorf("invalid_params: expected_revision is required for non-dry-run update_page")
+			}
+			if in.ExpectedRevision != currentRevision {
+				return nil, updatePageOutput{}, fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")
+			}
+		}
 		opts := pageUpdateOpts{
 			Tags:        in.Tags,
 			Categories:  in.Categories,
@@ -481,6 +492,20 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Content:            content,
 				Backlinks:          &bls,
 			}, nil
+		}
+		if strings.TrimSpace(in.ExpectedRevision) == "" {
+			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page")
+		}
+		currentRevision := ""
+		if resolvedSource.SourcePath != "" {
+			currentRevision, err = contentmodel.SourceRevision(resolvedSource.SourcePath)
+			if err != nil {
+				slog.Error("delete_page: read revision failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
+				return nil, deletePageOutput{}, fmt.Errorf("read_error: failed to read page revision")
+			}
+		}
+		if in.ExpectedRevision != currentRevision {
+			return nil, deletePageOutput{}, fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")
 		}
 
 		callerKey := deleteCallerKey(ctx)

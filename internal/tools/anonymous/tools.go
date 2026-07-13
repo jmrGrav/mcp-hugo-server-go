@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
@@ -68,6 +69,7 @@ type pageDetailDTO struct {
 	Lang               string                  `json:"lang"`
 	ResolvedLang       string                  `json:"resolved_lang"`
 	ResolvedSourcePath string                  `json:"resolved_source_path"`
+	Revision           string                  `json:"revision,omitempty"`
 	HTML               string                  `json:"html"`
 	State              site.LifecycleState     `json:"state"`
 }
@@ -636,6 +638,7 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		if resolved.Source != nil {
 			dto.ResolvedLang = resolved.Source.Lang
 			dto.ResolvedSourcePath = resolved.SourcePath
+			dto.Revision = resolvedSourceRevision(resolved.SourcePath)
 		}
 		return dto
 	}
@@ -661,8 +664,20 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		Date:               src.Date,
 		ResolvedLang:       src.Lang,
 		ResolvedSourcePath: resolved.SourcePath,
+		Revision:           resolvedSourceRevision(resolved.SourcePath),
 		HTML:               src.Body,
 	}
+}
+
+func resolvedSourceRevision(path string) string {
+	if path == "" {
+		return ""
+	}
+	rev, err := contentmodel.SourceRevision(path)
+	if err != nil {
+		return ""
+	}
+	return rev
 }
 
 // isTaxonomyURL returns true if the URL belongs to a Hugo taxonomy listing page
