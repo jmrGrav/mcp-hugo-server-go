@@ -167,6 +167,8 @@ jobs:
             exit 1
           fi
           echo "OK   scope clamping works — code issued, no error"
+      - name: Agent-ready shell smoke matches canonical scope contract
+        run: bash scripts/test-check-agent-ready.sh
       - name: Stop server
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true
