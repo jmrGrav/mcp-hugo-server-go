@@ -790,7 +790,6 @@ func marshalWithIndent(v any, indent int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-
 func inspectDeleteSource(dir string) contentmodel.ResolvedSource {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
