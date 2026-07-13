@@ -1,0 +1,87 @@
+{
+  "data": {
+    "has_more": false,
+    "limit": 2,
+    "offset": 0,
+    "pages": [
+      {
+        "categories": [
+          "tutorials"
+        ],
+        "date": "2026-01-05T03:04:05Z",
+        "lang": "en",
+        "slug": "/posts/hello/",
+        "summary": "Minimal English article",
+        "tags": [
+          "Hugo",
+          "Read-only"
+        ],
+        "title": "Hello",
+        "url": "https://example.test/posts/hello/"
+      },
+      {
+        "categories": [
+          "Homelab",
+          "Infrastructure"
+        ],
+        "date": "2026-01-02T03:04:05Z",
+        "lang": "fr",
+        "slug": "/posts/bonjour/",
+        "summary": "Article français minimal",
+        "tags": [
+          "Hugo",
+          "Security"
+        ],
+        "title": "Bonjour",
+        "url": "https://example.test/posts/bonjour/"
+      }
+    ],
+    "returned_count": 2,
+    "total": 2
+  },
+  "errors": [],
+  "has_more": false,
+  "limit": 2,
+  "meta": {
+    "server_version": "v1.0.0"
+  },
+  "offset": 0,
+  "pages": [
+    {
+      "categories": [
+        "tutorials"
+      ],
+      "date": "2026-01-05T03:04:05Z",
+      "lang": "en",
+      "slug": "/posts/hello/",
+      "summary": "Minimal English article",
+      "tags": [
+        "Hugo",
+        "Read-only"
+      ],
+      "title": "Hello",
+      "url": "https://example.test/posts/hello/"
+    },
+    {
+      "categories": [
+        "Homelab",
+        "Infrastructure"
+      ],
+      "date": "2026-01-02T03:04:05Z",
+      "lang": "fr",
+      "slug": "/posts/bonjour/",
+      "summary": "Article français minimal",
+      "tags": [
+        "Hugo",
+        "Security"
+      ],
+      "title": "Bonjour",
+      "url": "https://example.test/posts/bonjour/"
+    }
+  ],
+  "returned_count": 2,
+  "success": true,
+  "total": 2,
+  "version": "v1.0.0",
+  "warnings": []
+}

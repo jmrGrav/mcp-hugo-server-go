@@ -1,0 +1,85 @@
+{
+  "data": {
+    "related": [
+      {
+        "lang": "fr",
+        "shared_tag_terms": [
+          {
+            "label": "Hugo",
+            "slug": "hugo",
+            "source": "Hugo"
+          }
+        ],
+        "shared_tags": [
+          "hugo"
+        ],
+        "slug": "/posts/bonjour/",
+        "title": "Bonjour",
+        "url": "https://example.test/posts/bonjour/"
+      }
+    ],
+    "related_pages": [
+      {
+        "lang": "fr",
+        "shared_tag_terms": [
+          {
+            "label": "Hugo",
+            "slug": "hugo",
+            "source": "Hugo"
+          }
+        ],
+        "shared_tags": [
+          "hugo"
+        ],
+        "slug": "/posts/bonjour/",
+        "title": "Bonjour",
+        "url": "https://example.test/posts/bonjour/"
+      }
+    ],
+    "translations": []
+  },
+  "errors": [],
+  "meta": {
+    "server_version": "v1.0.0"
+  },
+  "related": [
+    {
+      "lang": "fr",
+      "shared_tag_terms": [
+        {
+          "label": "Hugo",
+          "slug": "hugo",
+          "source": "Hugo"
+        }
+      ],
+      "shared_tags": [
+        "hugo"
+      ],
+      "slug": "/posts/bonjour/",
+      "title": "Bonjour",
+      "url": "https://example.test/posts/bonjour/"
+    }
+  ],
+  "related_pages": [
+    {
+      "lang": "fr",
+      "shared_tag_terms": [
+        {
+          "label": "Hugo",
+          "slug": "hugo",
+          "source": "Hugo"
+        }
+      ],
+      "shared_tags": [
+        "hugo"
+      ],
+      "slug": "/posts/bonjour/",
+      "title": "Bonjour",
+      "url": "https://example.test/posts/bonjour/"
+    }
+  ],
+  "success": true,
+  "translations": [],
+  "version": "v1.0.0",
+  "warnings": []
+}
