@@ -18,7 +18,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-
 type searchContentInput struct {
 	Query    string `json:"query,omitempty"`
 	Type     string `json:"type,omitempty"`
@@ -64,12 +63,24 @@ type contentEnvelopeData struct {
 }
 
 type contentEnvelope struct {
-	Success     bool                `json:"success"`
-	Version     string              `json:"version"`
-	GeneratedAt string              `json:"generated_at"`
-	Data        contentEnvelopeData `json:"data"`
-	Warnings    []string            `json:"warnings"`
-	Errors      []string            `json:"errors"`
+	toolcontract.ToolResponse[contentEnvelopeData]
+	Status                  string       `json:"status,omitempty"`
+	Score                   int          `json:"score,omitempty"`
+	PublishedPages          int          `json:"published_pages,omitempty"`
+	SourcePages             int          `json:"source_pages,omitempty"`
+	DraftPages              int          `json:"draft_pages,omitempty"`
+	Tags                    int          `json:"tags,omitempty"`
+	Categories              int          `json:"categories,omitempty"`
+	MissingTitles           int          `json:"missing_titles,omitempty"`
+	MissingDates            int          `json:"missing_dates,omitempty"`
+	ValidationErrors        int          `json:"validation_errors,omitempty"`
+	TaxonomyInconsistencies []string     `json:"taxonomy_inconsistencies,omitempty"`
+	OrphanPages             []string     `json:"orphan_pages,omitempty"`
+	Sections                []sectionDTO `json:"sections,omitempty"`
+	Languages               []string     `json:"languages,omitempty"`
+	Summary                 string       `json:"summary,omitempty"`
+	RecentPages             []pageDTO    `json:"recent_pages,omitempty"`
+	Notes                   []string     `json:"notes,omitempty"`
 }
 
 type searchContentData struct {
@@ -90,12 +101,21 @@ type searchContentData struct {
 }
 
 type searchContentEnvelope struct {
-	Success     bool              `json:"success"`
-	Version     string            `json:"version"`
-	GeneratedAt string            `json:"generated_at"`
-	Data        searchContentData `json:"data"`
-	Warnings    []string          `json:"warnings"`
-	Errors      []string          `json:"errors"`
+	toolcontract.ToolResponse[searchContentData]
+	Pages         []pageDTO `json:"pages,omitempty"`
+	Total         int       `json:"total"`
+	Limit         int       `json:"limit"`
+	Offset        int       `json:"offset"`
+	ReturnedCount int       `json:"returned_count"`
+	HasMore       bool      `json:"has_more"`
+	NextOffset    *int      `json:"next_offset,omitempty"`
+	Sort          string    `json:"sort,omitempty"`
+	Order         string    `json:"order,omitempty"`
+	Query         string    `json:"query,omitempty"`
+	Type          string    `json:"type,omitempty"`
+	Tag           string    `json:"tag,omitempty"`
+	Category      string    `json:"category,omitempty"`
+	Language      string    `json:"language,omitempty"`
 }
 
 type validateFrontMatterInput struct {
@@ -142,12 +162,14 @@ type validateOutputData struct {
 }
 
 type validateOutput struct {
-	Success     bool               `json:"success"`
-	Version     string             `json:"version"`
-	GeneratedAt string             `json:"generated_at"`
-	Data        validateOutputData `json:"data"`
-	Warnings    []string           `json:"warnings"`
-	Errors      []string           `json:"errors"`
+	toolcontract.ToolResponse[validateOutputData]
+	PagesChecked int                   `json:"pages_checked"`
+	PagesPassed  int                   `json:"pages_passed"`
+	Invalid      int                   `json:"invalid"`
+	Returned     int                   `json:"returned_count,omitempty"`
+	Limit        int                   `json:"limit,omitempty"`
+	Offset       int                   `json:"offset,omitempty"`
+	Pages        []frontMatterIssueDTO `json:"pages"`
 }
 
 type brokenLinkInput struct {
@@ -171,12 +193,12 @@ type brokenLinkData struct {
 }
 
 type brokenLinkOutput struct {
-	Success     bool           `json:"success"`
-	Version     string         `json:"version"`
-	GeneratedAt string         `json:"generated_at"`
-	Data        brokenLinkData `json:"data"`
-	Warnings    []string       `json:"warnings"`
-	Errors      []string       `json:"errors"`
+	toolcontract.ToolResponse[brokenLinkData]
+	TotalPages  int             `json:"total_pages"`
+	BrokenLinks int             `json:"broken_links"`
+	Limit       int             `json:"limit"`
+	Offset      int             `json:"offset"`
+	Links       []brokenLinkDTO `json:"links"`
 }
 
 type getBacklinksInput struct {
@@ -196,12 +218,10 @@ type getBacklinksData struct {
 }
 
 type getBacklinksOutput struct {
-	Success     bool             `json:"success"`
-	Version     string           `json:"version"`
-	GeneratedAt string           `json:"generated_at"`
-	Data        getBacklinksData `json:"data"`
-	Warnings    []string         `json:"warnings"`
-	Errors      []string         `json:"errors"`
+	toolcontract.ToolResponse[getBacklinksData]
+	Slug      string        `json:"slug"`
+	Count     int           `json:"count"`
+	Backlinks []backlinkDTO `json:"backlinks"`
 }
 
 type suggestInternalLinksInput struct {
@@ -232,12 +252,12 @@ type suggestInternalLinksData struct {
 }
 
 type suggestInternalLinksOutput struct {
-	Success     bool                     `json:"success"`
-	Version     string                   `json:"version"`
-	GeneratedAt string                   `json:"generated_at"`
-	Data        suggestInternalLinksData `json:"data"`
-	Warnings    []string                 `json:"warnings"`
-	Errors      []string                 `json:"errors"`
+	toolcontract.ToolResponse[suggestInternalLinksData]
+	Slug           string               `json:"slug,omitempty"`
+	Total          int                  `json:"total"`
+	Translations   []translationPageDTO `json:"translations"`
+	Suggestions    []linkSuggestionDTO  `json:"suggestions"`
+	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
 }
 
 // RegisterWithSourceIndex wires additional read-only tools that benefit from the
@@ -292,31 +312,23 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					}
 					pages := sliceContentPages(ranked, offset, limit)
 					meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-					now := time.Now().UTC().Format(time.RFC3339)
 					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx)
-					return nil, searchContentEnvelope{
-						Success:     true,
-						Version:     toolcontract.ToolResultVersion,
-						GeneratedAt: now,
-						Data: searchContentData{
-							Pages:         dtos,
-							Total:         meta.Total,
-							Limit:         meta.Limit,
-							Offset:        meta.Offset,
-							ReturnedCount: meta.ReturnedCount,
-							HasMore:       meta.HasMore,
-							NextOffset:    meta.NextOffset,
-							Sort:          "relevance",
-							Order:         "desc",
-							Query:         q,
-							Type:          strings.TrimSpace(in.Type),
-							Tag:           strings.TrimSpace(in.Tag),
-							Category:      strings.TrimSpace(in.Category),
-							Language:      strings.TrimSpace(in.Language),
-						},
-						Warnings: []string{},
-						Errors:   []string{},
-					}, nil
+					return nil, newSearchContentEnvelope(searchContentData{
+						Pages:         dtos,
+						Total:         meta.Total,
+						Limit:         meta.Limit,
+						Offset:        meta.Offset,
+						ReturnedCount: meta.ReturnedCount,
+						HasMore:       meta.HasMore,
+						NextOffset:    meta.NextOffset,
+						Sort:          "relevance",
+						Order:         "desc",
+						Query:         q,
+						Type:          strings.TrimSpace(in.Type),
+						Tag:           strings.TrimSpace(in.Tag),
+						Category:      strings.TrimSpace(in.Category),
+						Language:      strings.TrimSpace(in.Language),
+					}, time.Now().UTC()), nil
 				}
 			}
 
@@ -343,30 +355,22 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}
 			pages := sliceContentPages(filtered, offset, limit)
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-			now := time.Now().UTC().Format(time.RFC3339)
-			return nil, searchContentEnvelope{
-				Success:     true,
-				Version:     toolcontract.ToolResultVersion,
-				GeneratedAt: now,
-				Data: searchContentData{
-					Pages:         toPageDTOs(pages, aliases, srcIdx),
-					Total:         meta.Total,
-					Limit:         meta.Limit,
-					Offset:        meta.Offset,
-					ReturnedCount: meta.ReturnedCount,
-					HasMore:       meta.HasMore,
-					NextOffset:    meta.NextOffset,
-					Sort:          effectiveSort(in),
-					Order:         canonicalOrder(in.Order),
-					Query:         strings.TrimSpace(in.Query),
-					Type:          strings.TrimSpace(in.Type),
-					Tag:           strings.TrimSpace(in.Tag),
-					Category:      strings.TrimSpace(in.Category),
-					Language:      strings.TrimSpace(in.Language),
-				},
-				Warnings: []string{},
-				Errors:   []string{},
-			}, nil
+			return nil, newSearchContentEnvelope(searchContentData{
+				Pages:         toPageDTOs(pages, aliases, srcIdx),
+				Total:         meta.Total,
+				Limit:         meta.Limit,
+				Offset:        meta.Offset,
+				ReturnedCount: meta.ReturnedCount,
+				HasMore:       meta.HasMore,
+				NextOffset:    meta.NextOffset,
+				Sort:          effectiveSort(in),
+				Order:         canonicalOrder(in.Order),
+				Query:         strings.TrimSpace(in.Query),
+				Type:          strings.TrimSpace(in.Type),
+				Tag:           strings.TrimSpace(in.Tag),
+				Category:      strings.TrimSpace(in.Category),
+				Language:      strings.TrimSpace(in.Language),
+			}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "explain_site_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Requires content.read.",
@@ -391,26 +395,18 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			catCount := len(taxonomy.ApplyAliases(rawCats, aliases))
 			summary := fmt.Sprintf("%d published pages across %d sections, %d tags, and %d categories.",
 				len(contentPages), len(sections), tagCount, catCount)
-			now := time.Now().UTC().Format(time.RFC3339)
-			return nil, contentEnvelope{
-				Success:     true,
-				Version:     toolcontract.ToolResultVersion,
-				GeneratedAt: now,
-				Data: contentEnvelopeData{
-					Summary:     summary,
-					Sections:    sections,
-					Languages:   languages,
-					Tags:        tagCount,
-					Categories:  catCount,
-					RecentPages: toPageDTOsEnriched(recent, srcIdx, aliases),
-					Notes: []string{
-						"Top-level sections are derived from page slugs.",
-						"Posts are detected from the /posts/ path prefix.",
-					},
+			return nil, newContentEnvelope(contentEnvelopeData{
+				Summary:     summary,
+				Sections:    sections,
+				Languages:   languages,
+				Tags:        tagCount,
+				Categories:  catCount,
+				RecentPages: toPageDTOsEnriched(recent, srcIdx, aliases),
+				Notes: []string{
+					"Top-level sections are derived from page slugs.",
+					"Posts are detected from the /posts/ path prefix.",
 				},
-				Warnings: []string{},
-				Errors:   []string{},
-			}, nil
+			}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. Use this before publishing or reviewing content. Requires content.read.",
@@ -419,27 +415,19 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
 			health := buildSiteHealth(idx, srcIdx, aliases)
-			now := time.Now().UTC().Format(time.RFC3339)
-			return nil, contentEnvelope{
-				Success:     true,
-				Version:     toolcontract.ToolResultVersion,
-				GeneratedAt: now,
-				Data: contentEnvelopeData{
-					Status:                  health.Status,
-					Score:                   health.Score,
-					PublishedPages:          health.PublishedPages,
-					SourcePages:             health.SourcePages,
-					DraftPages:              health.DraftPages,
-					Tags:                    health.Tags,
-					Categories:              health.Categories,
-					MissingTitles:           health.MissingTitles,
-					MissingDates:            health.MissingDates,
-					ValidationErrors:        health.ValidationErrors,
-					TaxonomyInconsistencies: health.TaxonomyInconsistencies,
-				},
-				Warnings: []string{},
-				Errors:   []string{},
-			}, nil
+			return nil, newContentEnvelope(contentEnvelopeData{
+				Status:                  health.Status,
+				Score:                   health.Score,
+				PublishedPages:          health.PublishedPages,
+				SourcePages:             health.SourcePages,
+				DraftPages:              health.DraftPages,
+				Tags:                    health.Tags,
+				Categories:              health.Categories,
+				MissingTitles:           health.MissingTitles,
+				MissingDates:            health.MissingDates,
+				ValidationErrors:        health.ValidationErrors,
+				TaxonomyInconsistencies: health.TaxonomyInconsistencies,
+			}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "validate_front_matter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. Requires content.read.",
@@ -487,39 +475,25 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 							Reason:   "missing target page",
 						})
 					}
-					return nil, brokenLinkOutput{
-						Success:     true,
-						Version:     toolcontract.ToolResultVersion,
-						GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-						Data: brokenLinkData{
-							TotalPages:  len(idx.Sitemap()),
-							BrokenLinks: len(issues),
-							Limit:       limit,
-							Offset:      offset,
-							Links:       sliceBrokenLinks(issues, offset, limit),
-						},
-						Warnings: []string{},
-						Errors:   []string{},
-					}, nil
+					return nil, newBrokenLinkOutput(brokenLinkData{
+						TotalPages:  len(idx.Sitemap()),
+						BrokenLinks: len(issues),
+						Limit:       limit,
+						Offset:      offset,
+						Links:       sliceBrokenLinks(issues, offset, limit),
+					}, time.Now().UTC()), nil
 				}
 			}
 
 			// In-memory fallback: re-scan HTML on each call.
 			issues := collectBrokenLinks(idx)
-			return nil, brokenLinkOutput{
-				Success:     true,
-				Version:     toolcontract.ToolResultVersion,
-				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-				Data: brokenLinkData{
-					TotalPages:  len(idx.Sitemap()),
-					BrokenLinks: len(issues),
-					Limit:       limit,
-					Offset:      offset,
-					Links:       sliceBrokenLinks(issues, offset, limit),
-				},
-				Warnings: []string{},
-				Errors:   []string{},
-			}, nil
+			return nil, newBrokenLinkOutput(brokenLinkData{
+				TotalPages:  len(idx.Sitemap()),
+				BrokenLinks: len(issues),
+				Limit:       limit,
+				Offset:      offset,
+				Links:       sliceBrokenLinks(issues, offset, limit),
+			}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). Requires content.read.",
@@ -547,12 +521,12 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			for i, e := range entries {
 				dtos[i] = backlinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL}
 			}
-			env := legacyEnvelope(getBacklinksData{
+			env := newGetBacklinksOutput(getBacklinksData{
 				Slug:      targetSlug,
 				Count:     len(dtos),
 				Backlinks: dtos,
 			}, time.Now().UTC())
-			return nil, getBacklinksOutput(env), nil
+			return nil, env, nil
 		})
 
 	addReadOnlyTool(s, "suggest_internal_links", "Suggest internal links",
@@ -606,20 +580,15 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				}
 			}
 			suggestions := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, limit)
-			return nil, suggestInternalLinksOutput{
-				Success:     true,
-				Version:     toolcontract.ToolResultVersion,
-				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-				Data: suggestInternalLinksData{
-					Slug:           resolvedSlug,
-					Total:          len(suggestions),
-					Translations:   translations,
-					Suggestions:    suggestions,
-					SuggestedLinks: suggestions,
-				},
-				Warnings: warnings,
-				Errors:   []string{},
-			}, nil
+			resp := newSuggestInternalLinksOutput(suggestInternalLinksData{
+				Slug:           resolvedSlug,
+				Total:          len(suggestions),
+				Translations:   translations,
+				Suggestions:    suggestions,
+				SuggestedLinks: suggestions,
+			}, time.Now().UTC())
+			resp.Warnings = warnings
+			return nil, resp, nil
 		})
 }
 
@@ -999,21 +968,101 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 	if len(results) > limit {
 		results = results[:limit]
 	}
+	return newValidateOutput(validateOutputData{
+		PagesChecked: total,
+		PagesPassed:  total - invalid,
+		Invalid:      invalid,
+		Returned:     len(results),
+		Limit:        limit,
+		Offset:       offset,
+		Pages:        results,
+	}, time.Now().UTC())
+}
+
+func newContentEnvelope(data contentEnvelopeData, now time.Time) contentEnvelope {
+	return contentEnvelope{
+		ToolResponse:            successEnvelope(data, now),
+		Status:                  data.Status,
+		Score:                   data.Score,
+		PublishedPages:          data.PublishedPages,
+		SourcePages:             data.SourcePages,
+		DraftPages:              data.DraftPages,
+		Tags:                    data.Tags,
+		Categories:              data.Categories,
+		MissingTitles:           data.MissingTitles,
+		MissingDates:            data.MissingDates,
+		ValidationErrors:        data.ValidationErrors,
+		TaxonomyInconsistencies: data.TaxonomyInconsistencies,
+		OrphanPages:             data.OrphanPages,
+		Sections:                data.Sections,
+		Languages:               data.Languages,
+		Summary:                 data.Summary,
+		RecentPages:             data.RecentPages,
+		Notes:                   data.Notes,
+	}
+}
+
+func newSearchContentEnvelope(data searchContentData, now time.Time) searchContentEnvelope {
+	return searchContentEnvelope{
+		ToolResponse:  successEnvelope(data, now),
+		Pages:         data.Pages,
+		Total:         data.Total,
+		Limit:         data.Limit,
+		Offset:        data.Offset,
+		ReturnedCount: data.ReturnedCount,
+		HasMore:       data.HasMore,
+		NextOffset:    data.NextOffset,
+		Sort:          data.Sort,
+		Order:         data.Order,
+		Query:         data.Query,
+		Type:          data.Type,
+		Tag:           data.Tag,
+		Category:      data.Category,
+		Language:      data.Language,
+	}
+}
+
+func newValidateOutput(data validateOutputData, now time.Time) validateOutput {
 	return validateOutput{
-		Success:     true,
-		Version:     toolcontract.ToolResultVersion,
-		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-		Data: validateOutputData{
-			PagesChecked: total,
-			PagesPassed:  total - invalid,
-			Invalid:      invalid,
-			Returned:     len(results),
-			Limit:        limit,
-			Offset:       offset,
-			Pages:        results,
-		},
-		Warnings: []string{},
-		Errors:   []string{},
+		ToolResponse: successEnvelope(data, now),
+		PagesChecked: data.PagesChecked,
+		PagesPassed:  data.PagesPassed,
+		Invalid:      data.Invalid,
+		Returned:     data.Returned,
+		Limit:        data.Limit,
+		Offset:       data.Offset,
+		Pages:        data.Pages,
+	}
+}
+
+func newBrokenLinkOutput(data brokenLinkData, now time.Time) brokenLinkOutput {
+	return brokenLinkOutput{
+		ToolResponse: successEnvelope(data, now),
+		TotalPages:   data.TotalPages,
+		BrokenLinks:  data.BrokenLinks,
+		Limit:        data.Limit,
+		Offset:       data.Offset,
+		Links:        data.Links,
+	}
+}
+
+func newGetBacklinksOutput(data getBacklinksData, now time.Time) getBacklinksOutput {
+	return getBacklinksOutput{
+		ToolResponse: successEnvelope(data, now),
+		Slug:         data.Slug,
+		Count:        data.Count,
+		Backlinks:    data.Backlinks,
+	}
+}
+
+func newSuggestInternalLinksOutput(data suggestInternalLinksData, now time.Time) suggestInternalLinksOutput {
+	return suggestInternalLinksOutput{
+		ToolResponse:   successEnvelope(data, now),
+		Slug:           data.Slug,
+		Total:          data.Total,
+		Translations:   data.Translations,
+		Suggestions:    data.Suggestions,
+		SuggestedLinks: data.SuggestedLinks,
 	}
 }
 

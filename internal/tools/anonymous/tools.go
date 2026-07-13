@@ -98,7 +98,74 @@ type siteInfoDTO struct {
 	Lang string `json:"lang"`
 }
 
+type listPagesData struct {
+	Pages         []pageDTO `json:"pages"`
+	Total         int       `json:"total"`
+	Limit         int       `json:"limit"`
+	Offset        int       `json:"offset"`
+	ReturnedCount int       `json:"returned_count"`
+	HasMore       bool      `json:"has_more"`
+	NextOffset    *int      `json:"next_offset,omitempty"`
+}
+
+type getPageData struct {
+	Page pageDetailDTO `json:"page"`
+}
+
+type searchPagesData struct {
+	Pages         []pageDTO `json:"pages"`
+	Total         int       `json:"total"`
+	Limit         int       `json:"limit"`
+	Offset        int       `json:"offset"`
+	ReturnedCount int       `json:"returned_count"`
+	HasMore       bool      `json:"has_more"`
+	NextOffset    *int      `json:"next_offset,omitempty"`
+}
+
+type getRecentPostsData struct {
+	Pages         []pageDTO `json:"pages"`
+	Total         int       `json:"total"`
+	Limit         int       `json:"limit"`
+	Offset        int       `json:"offset"`
+	ReturnedCount int       `json:"returned_count"`
+	HasMore       bool      `json:"has_more"`
+	NextOffset    *int      `json:"next_offset,omitempty"`
+}
+
+type listTagsData struct {
+	Tags []string `json:"tags"`
+}
+
+type listCategoriesData struct {
+	Categories []string `json:"categories"`
+}
+
+type getSitemapData struct {
+	Entries       []sitemapEntryDTO `json:"entries"`
+	Total         int               `json:"total"`
+	Limit         int               `json:"limit"`
+	Offset        int               `json:"offset"`
+	ReturnedCount int               `json:"returned_count"`
+	HasMore       bool              `json:"has_more"`
+	NextOffset    *int              `json:"next_offset,omitempty"`
+}
+
+type getFeedData struct {
+	Items         []feedItemDTO `json:"items"`
+	Total         int           `json:"total"`
+	Limit         int           `json:"limit"`
+	Offset        int           `json:"offset"`
+	ReturnedCount int           `json:"returned_count"`
+	HasMore       bool          `json:"has_more"`
+	NextOffset    *int          `json:"next_offset,omitempty"`
+}
+
+type getSiteInformationData struct {
+	Site siteInfoDTO `json:"site"`
+}
+
 type listPagesOutput struct {
+	toolcontract.ToolResponse[listPagesData]
 	Pages         []pageDTO `json:"pages"`
 	Total         int       `json:"total"`
 	Limit         int       `json:"limit"`
@@ -109,10 +176,12 @@ type listPagesOutput struct {
 }
 
 type getPageOutput struct {
+	toolcontract.ToolResponse[getPageData]
 	Page pageDetailDTO `json:"page"`
 }
 
 type searchPagesOutput struct {
+	toolcontract.ToolResponse[searchPagesData]
 	Pages         []pageDTO `json:"pages"`
 	Total         int       `json:"total"`
 	Limit         int       `json:"limit"`
@@ -123,6 +192,7 @@ type searchPagesOutput struct {
 }
 
 type getRecentPostsOutput struct {
+	toolcontract.ToolResponse[getRecentPostsData]
 	Pages         []pageDTO `json:"pages"`
 	Total         int       `json:"total"`
 	Limit         int       `json:"limit"`
@@ -133,14 +203,17 @@ type getRecentPostsOutput struct {
 }
 
 type listTagsOutput struct {
+	toolcontract.ToolResponse[listTagsData]
 	Tags []string `json:"tags"`
 }
 
 type listCategoriesOutput struct {
+	toolcontract.ToolResponse[listCategoriesData]
 	Categories []string `json:"categories"`
 }
 
 type getSitemapOutput struct {
+	toolcontract.ToolResponse[getSitemapData]
 	Entries       []sitemapEntryDTO `json:"entries"`
 	Total         int               `json:"total"`
 	Limit         int               `json:"limit"`
@@ -151,6 +224,7 @@ type getSitemapOutput struct {
 }
 
 type getFeedOutput struct {
+	toolcontract.ToolResponse[getFeedData]
 	Items         []feedItemDTO `json:"items"`
 	Total         int           `json:"total"`
 	Limit         int           `json:"limit"`
@@ -161,6 +235,7 @@ type getFeedOutput struct {
 }
 
 type getSiteInformationOutput struct {
+	toolcontract.ToolResponse[getSiteInformationData]
 	Site siteInfoDTO `json:"site"`
 }
 
@@ -188,14 +263,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			total := len(all)
 			if offset >= len(all) {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
-				return nil, listPagesOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+				return nil, newListPagesOutput(listPagesData{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 			}
 			slice := all[offset:]
 			if len(slice) > limit {
 				slice = slice[:limit]
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(slice))
-			return nil, listPagesOutput{Pages: toPageDTOsEnriched(slice, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+			return nil, newListPagesOutput(listPagesData{Pages: toPageDTOsEnriched(slice, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "get_page", "Read page",
@@ -240,7 +315,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			} else if in.ContentOnly {
 				dto.HTML = ""
 			}
-			return nil, getPageOutput{Page: dto}, nil
+			return nil, newGetPageOutput(getPageData{Page: dto}), nil
 		})
 
 	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. For filtered search with type, language, sort, pagination, or to search source-only content use search_content (requires content.read).",
@@ -260,14 +335,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			total := len(all)
 			if offset >= total {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
-				return nil, searchPagesOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+				return nil, newSearchPagesOutput(searchPagesData{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 			}
 			pages := all[offset:]
 			if len(pages) > limit {
 				pages = pages[:limit]
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-			return nil, searchPagesOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+			return nil, newSearchPagesOutput(searchPagesData{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
@@ -284,14 +359,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			total := len(all)
 			if offset >= total {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
-				return nil, getRecentPostsOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+				return nil, newGetRecentPostsOutput(getRecentPostsData{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 			}
 			pages := all[offset:]
 			if len(pages) > limit {
 				pages = pages[:limit]
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-			return nil, getRecentPostsOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+			return nil, newGetRecentPostsOutput(getRecentPostsData{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
@@ -307,7 +382,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				tags = []string{}
 			}
 			tags = taxonomy.ApplyAliases(tags, aliases)
-			return nil, listTagsOutput{Tags: tags}, nil
+			return nil, newListTagsOutput(listTagsData{Tags: tags}), nil
 		})
 
 	addReadOnlyTool(s, "list_categories", "Browse categories", "List the categories discovered from the index. Returns a sorted category list and does not require authentication.",
@@ -323,7 +398,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				cats = []string{}
 			}
 			cats = taxonomy.ApplyAliases(cats, aliases)
-			return nil, listCategoriesOutput{Categories: cats}, nil
+			return nil, newListCategoriesOutput(listCategoriesData{Categories: cats}), nil
 		})
 
 	addReadOnlyTool(s, "get_sitemap", "Read sitemap",
@@ -352,7 +427,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			total := len(all)
 			if offset >= len(all) {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
-				return nil, getSitemapOutput{Entries: []sitemapEntryDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+				return nil, newGetSitemapOutput(getSitemapData{Entries: []sitemapEntryDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 			}
 			slice := all[offset:]
 			if len(slice) > limit {
@@ -363,7 +438,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				entries[i] = sitemapEntryDTO{Slug: p.Slug, URL: p.URL, Date: p.Date}
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(entries))
-			return nil, getSitemapOutput{Entries: entries, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+			return nil, newGetSitemapOutput(getSitemapData{Entries: entries, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication.",
@@ -380,7 +455,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			total := len(all)
 			if offset >= total {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
-				return nil, getFeedOutput{Items: []feedItemDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+				return nil, newGetFeedOutput(getFeedData{Items: []feedItemDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 			}
 			pages := all[offset:]
 			if len(pages) > limit {
@@ -391,7 +466,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				items[i] = feedItemDTO{Slug: p.Slug, Title: p.Title, Summary: p.Summary, Date: p.Date, URL: p.URL}
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(items))
-			return nil, getFeedOutput{Items: items, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
+			return nil, newGetFeedOutput(getFeedData{Items: items, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
@@ -400,11 +475,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, getSiteInformationOutput{}, fmt.Errorf("index not initialized")
 			}
 			info := idx.SiteInfo()
-			return nil, getSiteInformationOutput{Site: siteInfoDTO{
+			return nil, newGetSiteInformationOutput(getSiteInformationData{Site: siteInfoDTO{
 				Name: info["name"],
 				URL:  info["url"],
 				Lang: info["lang"],
-			}}, nil
+			}}), nil
 		})
 }
 
@@ -425,6 +500,46 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func success[T any](data T) toolcontract.ToolResponse[T] {
+	return toolcontract.Success(data, toolcontract.NewMeta(toolcontract.ToolResultVersion, time.Now().UTC()))
+}
+
+func newListPagesOutput(data listPagesData) listPagesOutput {
+	return listPagesOutput{ToolResponse: success(data), Pages: data.Pages, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+}
+
+func newGetPageOutput(data getPageData) getPageOutput {
+	return getPageOutput{ToolResponse: success(data), Page: data.Page}
+}
+
+func newSearchPagesOutput(data searchPagesData) searchPagesOutput {
+	return searchPagesOutput{ToolResponse: success(data), Pages: data.Pages, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+}
+
+func newGetRecentPostsOutput(data getRecentPostsData) getRecentPostsOutput {
+	return getRecentPostsOutput{ToolResponse: success(data), Pages: data.Pages, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+}
+
+func newListTagsOutput(data listTagsData) listTagsOutput {
+	return listTagsOutput{ToolResponse: success(data), Tags: data.Tags}
+}
+
+func newListCategoriesOutput(data listCategoriesData) listCategoriesOutput {
+	return listCategoriesOutput{ToolResponse: success(data), Categories: data.Categories}
+}
+
+func newGetSitemapOutput(data getSitemapData) getSitemapOutput {
+	return getSitemapOutput{ToolResponse: success(data), Entries: data.Entries, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+}
+
+func newGetFeedOutput(data getFeedData) getFeedOutput {
+	return getFeedOutput{ToolResponse: success(data), Items: data.Items, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+}
+
+func newGetSiteInformationOutput(data getSiteInformationData) getSiteInformationOutput {
+	return getSiteInformationOutput{ToolResponse: success(data), Site: data.Site}
+}
 
 func clampLimit(v, defaultVal, maxVal int) int {
 	if v <= 0 {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -35,7 +36,7 @@ type pageMarkdownDTO struct {
 	Markdown           string              `json:"markdown"`
 }
 
-type getFullPageMarkdownOutput struct {
+type getFullPageMarkdownData struct {
 	Page pageMarkdownDTO `json:"page"`
 }
 
@@ -58,7 +59,7 @@ type frontmatterDTO struct {
 	ReadingTimeMin     int                         `json:"reading_time_minutes"`
 }
 
-type getPageFrontmatterOutput struct {
+type getPageFrontmatterData struct {
 	Frontmatter frontmatterDTO `json:"frontmatter"`
 }
 
@@ -85,7 +86,7 @@ type translationPageDTO struct {
 	Lang  string `json:"lang,omitempty"`
 }
 
-type getRelatedContentOutput struct {
+type getRelatedContentData struct {
 	Translations []translationPageDTO `json:"translations"`
 	RelatedPages []relatedPageDTO     `json:"related_pages"`
 	Related      []relatedPageDTO     `json:"related"`
@@ -102,7 +103,7 @@ type agentContextDTO struct {
 	RelatedPages []relatedPageDTO     `json:"related_pages"`
 }
 
-type buildAgentContextOutput struct {
+type buildAgentContextData struct {
 	Context agentContextDTO `json:"context"`
 }
 
@@ -118,11 +119,43 @@ type pageExportDTO struct {
 	Markdown    string         `json:"markdown"`
 }
 
-type exportAgentContextOutput struct {
-	Export exportResultDTO `json:"export"`
+type exportResultDTO struct {
+	Pages         []pageExportDTO `json:"pages"`
+	Total         int             `json:"total"`
+	Limit         int             `json:"limit"`
+	Offset        int             `json:"offset"`
+	ReturnedCount int             `json:"returned_count"`
+	HasMore       bool            `json:"has_more"`
+	NextOffset    *int            `json:"next_offset,omitempty"`
 }
 
-type exportResultDTO struct {
+type exportAgentContextData = exportResultDTO
+
+type getFullPageMarkdownOutput struct {
+	toolcontract.ToolResponse[getFullPageMarkdownData]
+	Page pageMarkdownDTO `json:"page"`
+}
+
+type getPageFrontmatterOutput struct {
+	toolcontract.ToolResponse[getPageFrontmatterData]
+	Frontmatter frontmatterDTO `json:"frontmatter"`
+}
+
+type getRelatedContentOutput struct {
+	toolcontract.ToolResponse[getRelatedContentData]
+	Translations []translationPageDTO `json:"translations"`
+	RelatedPages []relatedPageDTO     `json:"related_pages"`
+	Related      []relatedPageDTO     `json:"related"`
+}
+
+type buildAgentContextOutput struct {
+	toolcontract.ToolResponse[buildAgentContextData]
+	Context agentContextDTO `json:"context"`
+}
+
+type exportAgentContextOutput struct {
+	toolcontract.ToolResponse[exportAgentContextData]
+	Export        exportResultDTO `json:"export"`
 	Pages         []pageExportDTO `json:"pages"`
 	Total         int             `json:"total"`
 	Limit         int             `json:"limit"`
@@ -153,7 +186,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if !ok {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			return nil, getFullPageMarkdownOutput{Page: toResolvedPageMarkdownDTO(resolved)}, nil
+			return nil, newGetFullPageMarkdownOutput(getFullPageMarkdownData{Page: toResolvedPageMarkdownDTO(resolved)}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_page_frontmatter", "Read page metadata",
@@ -169,7 +202,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			return nil, getPageFrontmatterOutput{Frontmatter: toFrontmatterDTO(p, resolved.SourcePath, resolvedLang(resolved), rt)}, nil
+			return nil, newGetPageFrontmatterOutput(getPageFrontmatterData{Frontmatter: toFrontmatterDTO(p, resolved.SourcePath, resolvedLang(resolved), rt)}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
@@ -189,11 +222,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			translations := collectTranslations(idx, ref)
 			related := computeRelated(idx, ref, limit)
-			return nil, getRelatedContentOutput{
+			return nil, newGetRelatedContentOutput(getRelatedContentData{
 				Translations: translations,
 				RelatedPages: related,
 				Related:      related,
-			}, nil
+			}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
@@ -222,7 +255,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				Translations: translations,
 				RelatedPages: related,
 			}
-			return nil, buildAgentContextOutput{Context: ac}, nil
+			return nil, newBuildAgentContextOutput(buildAgentContextData{Context: ac}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "export_agent_context", "Export agent context",
@@ -260,7 +293,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			if offset >= len(filtered) {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
-				return nil, exportAgentContextOutput{Export: exportResultDTO{
+				payload := exportAgentContextData{
 					Pages:         []pageExportDTO{},
 					Total:         meta.Total,
 					Limit:         meta.Limit,
@@ -268,7 +301,8 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					ReturnedCount: meta.ReturnedCount,
 					HasMore:       meta.HasMore,
 					NextOffset:    meta.NextOffset,
-				}}, nil
+				}
+				return nil, newExportAgentContextOutput(payload, time.Now().UTC()), nil
 			}
 			slice := filtered[offset:]
 			if len(slice) > limit {
@@ -286,7 +320,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					Markdown:    md,
 				})
 			}
-			return nil, exportAgentContextOutput{Export: exportResultDTO{
+			payload := exportAgentContextData{
 				Pages:         pages,
 				Total:         meta.Total,
 				Limit:         meta.Limit,
@@ -294,8 +328,44 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				ReturnedCount: meta.ReturnedCount,
 				HasMore:       meta.HasMore,
 				NextOffset:    meta.NextOffset,
-			}}, nil
+			}
+			return nil, newExportAgentContextOutput(payload, time.Now().UTC()), nil
 		})
+}
+
+func newGetFullPageMarkdownOutput(data getFullPageMarkdownData, now time.Time) getFullPageMarkdownOutput {
+	return getFullPageMarkdownOutput{ToolResponse: successEnvelope(data, now), Page: data.Page}
+}
+
+func newGetPageFrontmatterOutput(data getPageFrontmatterData, now time.Time) getPageFrontmatterOutput {
+	return getPageFrontmatterOutput{ToolResponse: successEnvelope(data, now), Frontmatter: data.Frontmatter}
+}
+
+func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRelatedContentOutput {
+	return getRelatedContentOutput{
+		ToolResponse: successEnvelope(data, now),
+		Translations: data.Translations,
+		RelatedPages: data.RelatedPages,
+		Related:      data.Related,
+	}
+}
+
+func newBuildAgentContextOutput(data buildAgentContextData, now time.Time) buildAgentContextOutput {
+	return buildAgentContextOutput{ToolResponse: successEnvelope(data, now), Context: data.Context}
+}
+
+func newExportAgentContextOutput(data exportAgentContextData, now time.Time) exportAgentContextOutput {
+	return exportAgentContextOutput{
+		ToolResponse:  successEnvelope(data, now),
+		Export:        exportResultDTO(data),
+		Pages:         data.Pages,
+		Total:         data.Total,
+		Limit:         data.Limit,
+		Offset:        data.Offset,
+		ReturnedCount: data.ReturnedCount,
+		HasMore:       data.HasMore,
+		NextOffset:    data.NextOffset,
+	}
 }
 
 func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang string) pageMarkdownDTO {

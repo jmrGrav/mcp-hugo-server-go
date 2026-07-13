@@ -38,21 +38,21 @@ func TestPageIdentityFromPage(t *testing.T) {
 
 func TestLegacyEnvelopeUsesToolcontractMeta(t *testing.T) {
 	now := time.Date(2026, 7, 13, 8, 30, 0, 0, time.UTC)
-	got := legacyEnvelope(getBacklinksData{Slug: "/posts/hello/"}, now)
+	got := successEnvelope(getBacklinksData{Slug: "/posts/hello/"}, now)
 
 	if got.Success != true {
-		t.Fatalf("legacyEnvelope().Success = %v, want true", got.Success)
+		t.Fatalf("successEnvelope().Success = %v, want true", got.Success)
 	}
 	if got.Version != toolcontract.ToolResultVersion {
-		t.Fatalf("legacyEnvelope().Version = %q, want %q", got.Version, toolcontract.ToolResultVersion)
+		t.Fatalf("successEnvelope().Version = %q, want %q", got.Version, toolcontract.ToolResultVersion)
 	}
 	if got.GeneratedAt != now.Format(time.RFC3339) {
-		t.Fatalf("legacyEnvelope().GeneratedAt = %q", got.GeneratedAt)
+		t.Fatalf("successEnvelope().GeneratedAt = %q", got.GeneratedAt)
 	}
 	if len(got.Warnings) != 0 {
-		t.Fatalf("legacyEnvelope().Warnings = %#v, want empty", got.Warnings)
+		t.Fatalf("successEnvelope().Warnings = %#v, want empty", got.Warnings)
 	}
 	if len(got.Errors) != 0 {
-		t.Fatalf("legacyEnvelope().Errors = %#v, want empty", got.Errors)
+		t.Fatalf("successEnvelope().Errors = %#v, want empty", got.Errors)
 	}
 }

@@ -32,11 +32,13 @@ type ToolError struct {
 }
 
 type ToolResponse[T any] struct {
-	Success  bool         `json:"success"`
-	Data     T            `json:"data"`
-	Errors   []ToolError  `json:"errors"`
-	Warnings []string     `json:"warnings"`
-	Meta     ResponseMeta `json:"meta"`
+	Success     bool         `json:"success"`
+	Data        T            `json:"data"`
+	Errors      []ToolError  `json:"errors"`
+	Warnings    []string     `json:"warnings"`
+	Meta        ResponseMeta `json:"meta"`
+	Version     string       `json:"version,omitempty"`
+	GeneratedAt string       `json:"generated_at,omitempty"`
 }
 
 type PaginatedResponse[T any] struct {
@@ -85,11 +87,13 @@ func NewError(code, message string) ToolError {
 
 func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 	return ToolResponse[T]{
-		Success:  true,
-		Data:     data,
-		Errors:   []ToolError{},
-		Warnings: []string{},
-		Meta:     meta,
+		Success:     true,
+		Data:        data,
+		Errors:      []ToolError{},
+		Warnings:    []string{},
+		Meta:        meta,
+		Version:     meta.ServerVersion,
+		GeneratedAt: meta.GeneratedAt,
 	}
 }
 
@@ -98,11 +102,13 @@ func Failure(meta ResponseMeta, errs ...ToolError) ToolResponse[map[string]any] 
 		errs = []ToolError{}
 	}
 	return ToolResponse[map[string]any]{
-		Success:  false,
-		Data:     map[string]any{},
-		Errors:   errs,
-		Warnings: []string{},
-		Meta:     meta,
+		Success:     false,
+		Data:        map[string]any{},
+		Errors:      errs,
+		Warnings:    []string{},
+		Meta:        meta,
+		Version:     meta.ServerVersion,
+		GeneratedAt: meta.GeneratedAt,
 	}
 }
 

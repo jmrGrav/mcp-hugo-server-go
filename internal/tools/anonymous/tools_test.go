@@ -1083,6 +1083,17 @@ func TestReadOnlyAnnotations(t *testing.T) {
 		got[tools.Tools[i].Name] = tools.Tools[i]
 	}
 	names := []string{"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information"}
+	wantProps := map[string][]string{
+		"list_pages":           {"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"},
+		"get_page":             {"success", "data", "errors", "warnings", "meta", "page"},
+		"search_pages":         {"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"},
+		"get_recent_posts":     {"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"},
+		"list_tags":            {"success", "data", "errors", "warnings", "meta", "tags"},
+		"list_categories":      {"success", "data", "errors", "warnings", "meta", "categories"},
+		"get_sitemap":          {"success", "data", "errors", "warnings", "meta", "entries", "total", "limit", "offset", "returned_count", "has_more"},
+		"get_feed":             {"success", "data", "errors", "warnings", "meta", "items", "total", "limit", "offset", "returned_count", "has_more"},
+		"get_site_information": {"success", "data", "errors", "warnings", "meta", "site"},
+	}
 	for _, name := range names {
 		tool, ok := got[name]
 		if !ok {
@@ -1090,6 +1101,8 @@ func TestReadOnlyAnnotations(t *testing.T) {
 		}
 		assertObjectSchema(t, tool, "inputSchema")
 		assertObjectSchema(t, tool, "outputSchema")
+		assertSchemaHasProperties(t, tool, "outputSchema", wantProps[name]...)
+		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "server_version")
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
 			t.Fatalf("tool %q: ReadOnlyHint not set", name)
 		}
@@ -1103,6 +1116,53 @@ func TestReadOnlyAnnotations(t *testing.T) {
 			t.Fatalf("tool %q: OpenWorldHint should be false", name)
 		}
 	}
+}
+
+func assertSchemaHasProperties(t *testing.T, tool *mcp.Tool, field string, want ...string) {
+	t.Helper()
+	schema := schemaAt(t, tool, field)
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: %s.properties type = %T, want map[string]any", tool.Name, field, schema["properties"])
+	}
+	for _, key := range want {
+		if _, ok := props[key]; !ok {
+			t.Fatalf("tool %q: %s.properties missing %q", tool.Name, field, key)
+		}
+	}
+}
+
+func schemaAt(t *testing.T, tool *mcp.Tool, field string) map[string]any {
+	t.Helper()
+	parts := strings.Split(field, ".")
+	var current any
+	switch parts[0] {
+	case "inputSchema":
+		current = tool.InputSchema
+	case "outputSchema":
+		current = tool.OutputSchema
+	default:
+		t.Fatalf("unknown schema field %q", field)
+	}
+	for _, part := range parts[1:] {
+		m, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("tool %q: schema path %q type = %T, want map[string]any", tool.Name, field, current)
+		}
+		props, ok := m["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool %q: schema path %q missing properties map", tool.Name, field)
+		}
+		current, ok = props[part]
+		if !ok {
+			t.Fatalf("tool %q: schema path %q missing property %q", tool.Name, field, part)
+		}
+	}
+	m, ok := current.(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: schema path %q final type = %T, want map[string]any", tool.Name, field, current)
+	}
+	return m
 }
 
 func TestGetPageDescriptionDocumentsSourceFallbackContract(t *testing.T) {
