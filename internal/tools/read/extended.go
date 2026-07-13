@@ -90,17 +90,19 @@ type sectionDTO struct {
 }
 
 type pageDTO struct {
-	Slug          string              `json:"slug"`
-	Title         string              `json:"title"`
-	Summary       string              `json:"summary"`
-	Tags          []string            `json:"tags"`
-	Categories    []string            `json:"categories"`
-	TagTerms      []site.TaxonomyTerm `json:"tag_terms,omitempty"`
-	CategoryTerms []site.TaxonomyTerm `json:"category_terms,omitempty"`
-	Date          string              `json:"date"`
-	URL           string              `json:"url"`
-	Lang          string              `json:"lang"`
-	Snippet       string              `json:"snippet,omitempty"`
+	Slug               string              `json:"slug"`
+	Title              string              `json:"title"`
+	Summary            string              `json:"summary"`
+	Tags               []string            `json:"tags"`
+	Categories         []string            `json:"categories"`
+	TagTerms           []site.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms      []site.TaxonomyTerm `json:"category_terms,omitempty"`
+	Date               string              `json:"date"`
+	URL                string              `json:"url"`
+	Lang               string              `json:"lang"`
+	ResolvedLang       string              `json:"resolved_lang"`
+	ResolvedSourcePath string              `json:"resolved_source_path"`
+	Snippet            string              `json:"snippet,omitempty"`
 }
 
 type validateOutputData struct {
@@ -262,7 +264,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					}
 					pages := sliceContentPages(ranked, offset, limit)
 					now := time.Now().UTC().Format(time.RFC3339)
-					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap)
+					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx)
 					return nil, contentEnvelope{
 						Success:     true,
 						Version:     toolResultVersion,
@@ -314,7 +316,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Version:     toolResultVersion,
 				GeneratedAt: now,
 				Data: contentEnvelopeData{
-					Pages:    toPageDTOs(pages, aliases),
+					Pages:    toPageDTOs(pages, aliases, srcIdx),
 					Total:    total,
 					Limit:    limit,
 					Offset:   offset,
@@ -1191,10 +1193,13 @@ func toPageDTO(p site.Page, aliases map[string]string) pageDTO {
 	}
 }
 
-func toPageDTOs(pages []site.Page, aliases map[string]string) []pageDTO {
+func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.SourceIndex) []pageDTO {
+	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		out[i] = toPageDTO(p, aliases)
+		dto := toPageDTO(p, aliases)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases)
+		out[i] = dto
 	}
 	return out
 }
@@ -1207,29 +1212,157 @@ func toPageDTOs(pages []site.Page, aliases map[string]string) []pageDTO {
 // site.SourceSlugCandidates, which tries the bare slug then strips the lang
 // prefix to match the source-index key (posts/foo).
 func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string) []pageDTO {
+	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
 		dto := toPageDTO(p, aliases)
-		if srcIdx != nil {
-			for _, candidate := range site.SourceSlugCandidates(p.Slug) {
-				if src, ok := srcIdx.GetBySlug(candidate); ok {
-					dto.Categories = taxonomy.ApplyAliases(nullsafeStrings(src.Categories), aliases)
-					dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
-					break
-				}
-			}
-		}
+		enrichPageDTOFromSource(&dto, p, lookup, aliases)
 		out[i] = dto
 	}
 	return out
 }
 
-func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string) []pageDTO {
+func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string, srcIdx *hugosite.SourceIndex) []pageDTO {
+	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
 		dto := toPageDTO(p, aliases)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases)
 		dto.Snippet = snippets[p.Slug]
 		out[i] = dto
 	}
 	return out
+}
+
+type sourceLookup struct {
+	byLang    map[string]hugosite.SourcePage
+	byDefault map[string]hugosite.SourcePage
+	bySlug    map[string]hugosite.SourcePage
+}
+
+type resolvedSourceMatch struct {
+	Page         hugosite.SourcePage
+	ResolvedLang string
+}
+
+func newSourceLookup(srcIdx *hugosite.SourceIndex) *sourceLookup {
+	if srcIdx == nil {
+		return nil
+	}
+	pages := srcIdx.ListPages(0, 0)
+	lookup := &sourceLookup{
+		byLang:    make(map[string]hugosite.SourcePage, len(pages)),
+		byDefault: make(map[string]hugosite.SourcePage, len(pages)),
+		bySlug:    make(map[string]hugosite.SourcePage, len(pages)),
+	}
+	for _, src := range pages {
+		if _, ok := lookup.bySlug[src.Slug]; !ok {
+			lookup.bySlug[src.Slug] = src
+		}
+		if src.Lang == "" {
+			if _, ok := lookup.byDefault[src.Slug]; !ok {
+				lookup.byDefault[src.Slug] = src
+			}
+			continue
+		}
+		key := sourceLookupKey(src.Slug, src.Lang)
+		if _, ok := lookup.byLang[key]; !ok {
+			lookup.byLang[key] = src
+		}
+	}
+	return lookup
+}
+
+func sourceLookupKey(slug, lang string) string {
+	return slug + "\x00" + lang
+}
+
+func sourceSlugCandidatesForPage(p site.Page) []string {
+	seen := map[string]struct{}{}
+	add := func(out []string, slug string) []string {
+		slug = strings.TrimSpace(slug)
+		if slug == "" {
+			return out
+		}
+		if _, ok := seen[slug]; ok {
+			return out
+		}
+		seen[slug] = struct{}{}
+		return append(out, slug)
+	}
+
+	var out []string
+	for _, candidate := range site.SourceSlugCandidates(p.Slug) {
+		out = add(out, candidate)
+		if p.Lang != "" {
+			out = add(out, candidate+"."+p.Lang)
+		}
+	}
+	return out
+}
+
+func resolveSourceForPage(p site.Page, lookup *sourceLookup) (resolvedSourceMatch, bool) {
+	if lookup == nil {
+		return resolvedSourceMatch{}, false
+	}
+	candidates := sourceSlugCandidatesForPage(p)
+	var languageSpecific []string
+	var base []string
+	for _, candidate := range candidates {
+		if p.Lang != "" && strings.HasSuffix(candidate, "."+p.Lang) {
+			languageSpecific = append(languageSpecific, candidate)
+			continue
+		}
+		base = append(base, candidate)
+	}
+	if p.Lang != "" {
+		for _, candidate := range candidates {
+			if src, ok := lookup.byLang[sourceLookupKey(candidate, p.Lang)]; ok {
+				return resolvedSourceMatch{Page: src, ResolvedLang: p.Lang}, true
+			}
+		}
+	}
+	for _, candidate := range languageSpecific {
+		if src, ok := lookup.bySlug[candidate]; ok {
+			return resolvedSourceMatch{Page: src, ResolvedLang: firstNonEmpty(src.Lang, p.Lang)}, true
+		}
+	}
+	for _, candidate := range base {
+		if src, ok := lookup.byDefault[candidate]; ok {
+			return resolvedSourceMatch{Page: src, ResolvedLang: src.Lang}, true
+		}
+	}
+	for _, candidate := range base {
+		if src, ok := lookup.bySlug[candidate]; ok {
+			return resolvedSourceMatch{Page: src, ResolvedLang: firstNonEmpty(src.Lang, p.Lang)}, true
+		}
+	}
+	for _, candidate := range languageSpecific {
+		if src, ok := lookup.bySlug[candidate]; ok {
+			return resolvedSourceMatch{Page: src, ResolvedLang: firstNonEmpty(src.Lang, p.Lang)}, true
+		}
+	}
+	return resolvedSourceMatch{}, false
+}
+
+func enrichPageDTOFromSource(dto *pageDTO, p site.Page, lookup *sourceLookup, aliases map[string]string) {
+	if dto == nil || lookup == nil {
+		return
+	}
+	if match, ok := resolveSourceForPage(p, lookup); ok {
+		src := match.Page
+		dto.Categories = taxonomy.ApplyAliases(nullsafeStrings(src.Categories), aliases)
+		dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
+		dto.ResolvedLang = match.ResolvedLang
+		dto.ResolvedSourcePath = src.FilePath
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

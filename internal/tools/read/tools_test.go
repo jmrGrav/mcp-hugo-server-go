@@ -387,6 +387,23 @@ func TestSearchContent(t *testing.T) {
 	if len(pages) == 0 {
 		t.Fatal("search_content expected results")
 	}
+	var hello map[string]any
+	for _, raw := range pages {
+		page, _ := raw.(map[string]any)
+		if page["slug"] == "/posts/hello/" {
+			hello = page
+			break
+		}
+	}
+	if hello == nil {
+		t.Fatal("search_content expected /posts/hello/ result")
+	}
+	if got := hello["resolved_lang"]; got != "" {
+		t.Fatalf("search_content resolved_lang = %v, want empty default source lang for hello.md fixture", got)
+	}
+	if got := hello["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
+		t.Fatalf("search_content resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
+	}
 }
 
 func TestExplainSiteStructure(t *testing.T) {
