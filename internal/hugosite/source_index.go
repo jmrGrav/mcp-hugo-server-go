@@ -100,32 +100,9 @@ func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
 		return pages[i].Slug < pages[j].Slug
 	})
 
-	bySlug := make(map[string]int, len(pages))
-	bySlugLang := make(map[string]int, len(pages))
-	byDefault := make(map[string]int, len(pages))
-	for i, p := range pages {
-		bySlug[p.Slug] = i
-		if p.Lang != "" {
-			if prev, exists := bySlugLang[sourceLangKey(p.Slug, p.Lang)]; exists {
-				slog.Warn("hugosite source index: duplicate slug/lang detected, last-write wins",
-					"slug", p.Slug,
-					"lang", p.Lang,
-					"prev_index", prev,
-					"current_index", i)
-			}
-			bySlugLang[sourceLangKey(p.Slug, p.Lang)] = i
-			continue
-		}
-		if prev, exists := byDefault[p.Slug]; exists {
-			slog.Warn("hugosite source index: duplicate default-language slug detected, last-write wins",
-				"slug", p.Slug,
-				"prev_index", prev,
-				"current_index", i)
-		}
-		byDefault[p.Slug] = i
-	}
-
-	return &SourceIndex{pages: pages, bySlug: bySlug, bySlugLang: bySlugLang, byDefault: byDefault}, nil
+	idx := &SourceIndex{pages: pages}
+	idx.rebuildMaps()
+	return idx, nil
 }
 
 func (idx *SourceIndex) GetBySlug(slug string) (*SourcePage, bool) {
@@ -284,8 +261,17 @@ func (idx *SourceIndex) rebuildMaps() {
 	for i, p := range idx.pages {
 		idx.bySlug[p.Slug] = i
 		if p.Lang != "" {
-			idx.bySlugLang[sourceLangKey(p.Slug, p.Lang)] = i
+			key := sourceLangKey(p.Slug, p.Lang)
+			if prev, exists := idx.bySlugLang[key]; exists {
+				slog.Warn("hugosite source index: duplicate slug/lang detected, last-write wins",
+					"slug", p.Slug, "lang", p.Lang, "prev_index", prev, "current_index", i)
+			}
+			idx.bySlugLang[key] = i
 			continue
+		}
+		if prev, exists := idx.byDefault[p.Slug]; exists {
+			slog.Warn("hugosite source index: duplicate default-language slug detected, last-write wins",
+				"slug", p.Slug, "prev_index", prev, "current_index", i)
 		}
 		idx.byDefault[p.Slug] = i
 	}
