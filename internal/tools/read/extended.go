@@ -313,7 +313,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					}
 					pages := sliceContentPages(ranked, offset, limit)
 					meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-				dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx, cfg.SiteRoot)
+					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx, cfg.SiteRoot)
 					return nil, newSearchContentEnvelope(searchContentData{
 						Pages:         dtos,
 						Total:         meta.Total,
