@@ -23,5 +23,8 @@ func LogicalContentPath(contentRoot, sourcePath string) string {
 			return filepath.ToSlash(filepath.Join("content", rel))
 		}
 	}
+	if filepath.IsAbs(sourcePath) {
+		return ""
+	}
 	return filepath.ToSlash(sourcePath)
 }
