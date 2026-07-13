@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -495,6 +496,58 @@ func TestDeletePageRejectsStaleExpectedRevision(t *testing.T) {
 	raw := marshalContent(t, res)
 	if !strings.Contains(raw, "revision_conflict") {
 		t.Fatalf("delete_page stale revision error = %s", raw)
+	}
+}
+
+func TestDeletePageDetectsRevisionChangeWhileWaitingForLock(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	const slug = "lock-race-delete"
+	filePath := filepath.Join(contentRoot, slug, "index.md")
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       slug,
+		"title":      "Race Target",
+		"body":       "initial body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+	expected := currentRevision(t, filePath)
+
+	hugosite.ContentMu.Lock()
+	defer hugosite.ContentMu.Unlock()
+
+	resultCh := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		resultCh <- callTool(t, session, "delete_page", map[string]any{
+			"slug":              slug,
+			"expected_revision": expected,
+		})
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	if err := os.WriteFile(filePath, []byte("---\ntitle: Race Target\n---\nchanged while waiting"), 0o644); err != nil {
+		t.Fatalf("WriteFile while lock held: %v", err)
+	}
+
+	hugosite.ContentMu.Unlock()
+	res := <-resultCh
+	hugosite.ContentMu.Lock()
+
+	if !res.IsError {
+		t.Fatal("delete_page should reject when revision changes while waiting for lock")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "revision_conflict") {
+		t.Fatalf("delete_page waiting-lock revision error = %s", raw)
+	}
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatalf("page should remain on disk after revision conflict: %v", err)
 	}
 }
 

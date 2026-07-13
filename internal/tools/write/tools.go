@@ -496,17 +496,6 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if strings.TrimSpace(in.ExpectedRevision) == "" {
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page")
 		}
-		currentRevision := ""
-		if resolvedSource.SourcePath != "" {
-			currentRevision, err = contentmodel.SourceRevision(resolvedSource.SourcePath)
-			if err != nil {
-				slog.Error("delete_page: read revision failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
-				return nil, deletePageOutput{}, fmt.Errorf("read_error: failed to read page revision")
-			}
-		}
-		if in.ExpectedRevision != currentRevision {
-			return nil, deletePageOutput{}, fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")
-		}
 
 		callerKey := deleteCallerKey(ctx)
 		if !deleteCallerLimiter(&deleteMu, deleteLimiters, callerKey).Allow() {
@@ -530,6 +519,18 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			hugosite.ContentMu.Unlock()
 			slog.Debug("delete_page: lock_released")
 		}()
+
+		currentRevision := ""
+		if resolvedSource.SourcePath != "" {
+			currentRevision, err = contentmodel.SourceRevision(resolvedSource.SourcePath)
+			if err != nil {
+				slog.Error("delete_page: read revision failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
+				return nil, deletePageOutput{}, fmt.Errorf("read_error: failed to read page revision")
+			}
+		}
+		if in.ExpectedRevision != currentRevision {
+			return nil, deletePageOutput{}, fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")
+		}
 
 		if err := os.RemoveAll(dir); err != nil {
 			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
