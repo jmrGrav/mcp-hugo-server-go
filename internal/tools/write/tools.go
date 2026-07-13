@@ -1,6 +1,7 @@
 package write
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -569,7 +570,7 @@ func applyPageUpdates(fileContent, newTitle, newBody string, opts pageUpdateOpts
 		if opts.Description != "" {
 			setYAMLKey(mapping, "description", opts.Description)
 		}
-		out, err := yaml.Marshal(doc.Content[0])
+		out, err := marshalYAMLMappingWithIndent(doc.Content[0], 2)
 		if err != nil {
 			return "", fmt.Errorf("YAML marshal: %w", err)
 		}
@@ -635,6 +636,20 @@ func setYAMLBool(mapping *yaml.Node, key string, value bool) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		node,
 	)
+}
+
+func marshalYAMLMappingWithIndent(node *yaml.Node, indent int) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(indent)
+	if err := enc.Encode(node); err != nil {
+		_ = enc.Close()
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 // resolveUpdateFilePath discovers the correct index file to update for a given

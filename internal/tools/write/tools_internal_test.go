@@ -195,6 +195,29 @@ func TestApplyPageUpdatesExtendedFields(t *testing.T) {
 	}
 }
 
+func TestApplyPageUpdatesPreservesTwoSpaceSequenceIndent(t *testing.T) {
+	input := "---\ntitle: Page\ntags:\n  - old\ncategories:\n  - OldCat\n---\n\nBody."
+
+	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{
+		Tags:       []string{"go", "hugo"},
+		Categories: []string{"Infrastructure"},
+	})
+	if err != nil {
+		t.Fatalf("applyPageUpdates error: %v", err)
+	}
+	for _, want := range []string{
+		"tags:\n  - go\n  - hugo",
+		"categories:\n  - Infrastructure",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("applyPageUpdates sequence indent mismatch, missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\n    - ") {
+		t.Fatalf("applyPageUpdates wrote 4-space sequence indent:\n%s", got)
+	}
+}
+
 func TestApplyPageUpdatesNewDescription(t *testing.T) {
 	input := "---\ntitle: Page\ntags: []\n---\n\nBody."
 	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{Description: "New desc."})
