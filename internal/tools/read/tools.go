@@ -214,7 +214,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
-		"Return pages related to a given slug by shared tags or categories. Use this for content recommendations and editorial linking. Input: indexed slug only.",
+		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. Input: indexed slug only.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getRelatedContentInput) (*mcp.CallToolResult, getRelatedContentOutput, error) {
 			if idx == nil {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("index not initialized")
