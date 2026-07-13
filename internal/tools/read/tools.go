@@ -518,7 +518,7 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 			IdempotentHint:  true,
 			OpenWorldHint:   boolPtr(false),
 		},
-	}, handler)
+	}, toolcontract.WrapTool(handler))
 }
 
 func boolPtr(v bool) *bool { return &v }
@@ -532,7 +532,6 @@ func clampLimit(v, defaultVal, maxVal int) int {
 	}
 	return v
 }
-
 
 func nullsafeStrings(s []string) []string {
 	if s == nil {

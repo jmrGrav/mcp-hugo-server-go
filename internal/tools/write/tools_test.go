@@ -507,6 +507,55 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 	}
 }
 
+func TestUpdatePageAmbiguousLanguageStructuredError(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: FR\n---\nBonjour"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN\n---\nHello"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":  "posts/bilingual",
+		"title": "Changed",
+	})
+	if !res.IsError {
+		t.Fatal("update_page on multilingual page without lang should return error result")
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	errors, ok := m["errors"].([]any)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("update_page errors = %#v", m["errors"])
+	}
+	err0 := errors[0].(map[string]any)
+	if got := err0["code"]; got != "ambiguous_language" {
+		t.Fatalf("update_page error code = %v, want ambiguous_language", got)
+	}
+	if got := err0["field"]; got != "lang" {
+		t.Fatalf("update_page error field = %v, want lang", got)
+	}
+	resolution, ok := err0["resolution"].(map[string]any)
+	if !ok {
+		t.Fatalf("update_page resolution = %T", err0["resolution"])
+	}
+	allowed, ok := resolution["allowed_values"].([]any)
+	if !ok || len(allowed) != 2 {
+		t.Fatalf("update_page allowed_values = %#v", resolution["allowed_values"])
+	}
+}
+
 func TestCreatePageAcceptsExplicitLang(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)

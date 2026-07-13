@@ -421,7 +421,7 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 			IdempotentHint:  true,
 			OpenWorldHint:   boolPtr(false),
 		},
-	}, handler)
+	}, toolcontract.WrapTool(handler))
 }
 
 func boolPtr(v bool) *bool { return &v }
@@ -435,7 +435,6 @@ func clampLimit(v, defaultVal, maxVal int) int {
 	}
 	return v
 }
-
 
 func toPageDTO(p site.Page) pageDTO {
 	tags := p.Tags

@@ -16,6 +16,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -94,7 +95,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
 		if in.Slug == "" {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
@@ -183,7 +184,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		}
 
 		return nil, generateFeaturedImageOutput{Path: destPath}, nil
-	})
+	}))
 }
 
 func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {

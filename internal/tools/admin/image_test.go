@@ -310,6 +310,21 @@ func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
 	if !strings.Contains(text, "invalid_params") {
 		t.Fatalf("error text %q does not contain 'invalid_params'", text)
 	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("Unmarshal error payload: %v", err)
+	}
+	errors, ok := m["errors"].([]any)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("structured errors = %#v", m["errors"])
+	}
+	err0 := errors[0].(map[string]any)
+	if got := err0["code"]; got != "invalid_params" {
+		t.Fatalf("generate_featured_image error code = %v, want invalid_params", got)
+	}
+	if got := err0["field"]; got != "slug" {
+		t.Fatalf("generate_featured_image error field = %v, want slug", got)
+	}
 }
 
 // TestGenerateFeaturedImage_SymlinkedImagesDir_APIMode verifies that

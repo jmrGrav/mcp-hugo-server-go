@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 )
 
 func TestPageIdentityFromPage(t *testing.T) {
@@ -42,8 +43,8 @@ func TestLegacyEnvelopeUsesToolcontractMeta(t *testing.T) {
 	if got.Success != true {
 		t.Fatalf("legacyEnvelope().Success = %v, want true", got.Success)
 	}
-	if got.Version != toolResultVersion {
-		t.Fatalf("legacyEnvelope().Version = %q, want %q", got.Version, toolResultVersion)
+	if got.Version != toolcontract.ToolResultVersion {
+		t.Fatalf("legacyEnvelope().Version = %q, want %q", got.Version, toolcontract.ToolResultVersion)
 	}
 	if got.GeneratedAt != now.Format(time.RFC3339) {
 		t.Fatalf("legacyEnvelope().GeneratedAt = %q", got.GeneratedAt)

@@ -447,8 +447,27 @@ func TestSearchPagesMinLength(t *testing.T) {
 		t.Fatal("search_pages with empty query should return error result")
 	}
 	raw, _ := json.Marshal(res.Content)
-	if !strings.Contains(string(raw), "invalid_params") {
-		t.Fatalf("search_pages empty query error missing 'invalid_params': %s", raw)
+	if !strings.Contains(string(raw), "missing_required_parameter") {
+		t.Fatalf("search_pages empty query error missing 'missing_required_parameter': %s", raw)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	if m["success"] != false {
+		t.Fatalf("search_pages error success = %v, want false", m["success"])
+	}
+	errors, ok := m["errors"].([]any)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("search_pages error payload = %#v", m["errors"])
+	}
+	err0 := errors[0].(map[string]any)
+	if got := err0["code"]; got != "missing_required_parameter" {
+		t.Fatalf("search_pages error code = %v, want missing_required_parameter", got)
+	}
+	if got := err0["field"]; got != "query" {
+		t.Fatalf("search_pages error field = %v, want query", got)
 	}
 }
 
@@ -917,7 +936,6 @@ func TestGetSitemapPaginationMetadata(t *testing.T) {
 	m := decodeContent(t, res)
 	assertPaginationMetadata(t, m, 3, 1, 0, 1, true, 1, true)
 }
-
 
 func TestGetFeed(t *testing.T) {
 	idx := mustTestIndex(t)
