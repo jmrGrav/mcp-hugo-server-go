@@ -29,6 +29,94 @@ type identity struct {
 	CategorySlugs      []string
 }
 
+func TestContractAnonymousReadToolsUseToolResponseEnvelope(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	session, done := newAnonymousSession(t, idx, cfg, srcIdx)
+	defer done()
+
+	tests := []struct {
+		tool string
+		args map[string]any
+	}{
+		{tool: "list_pages", args: map[string]any{"limit": 2, "offset": 0}},
+		{tool: "get_page", args: map[string]any{"slug": "/posts/hello/"}},
+		{tool: "search_pages", args: map[string]any{"query": "hello", "limit": 2, "offset": 0}},
+		{tool: "get_recent_posts", args: map[string]any{"limit": 2, "offset": 0}},
+		{tool: "list_tags", args: map[string]any{}},
+		{tool: "list_categories", args: map[string]any{}},
+		{tool: "get_sitemap", args: map[string]any{"limit": 2, "offset": 0, "exclude_taxonomies": true}},
+		{tool: "get_feed", args: map[string]any{"limit": 2, "offset": 0}},
+		{tool: "get_site_information", args: map[string]any{}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.tool, func(t *testing.T) {
+			res := callTool(t, session, tc.tool, tc.args)
+			if res.IsError {
+				t.Fatalf("%s returned error: %s", tc.tool, marshalAny(t, res.Content))
+			}
+			assertToolResponseEnvelope(t, tc.tool, decodeContent(t, res))
+		})
+	}
+}
+
+func TestContractContentReadToolsUseToolResponseEnvelope(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	session, done := newReadSession(t, idx, cfg, srcIdx)
+	defer done()
+
+	tests := []struct {
+		tool string
+		args map[string]any
+	}{
+		{tool: "get_full_page_markdown", args: map[string]any{"slug": "/posts/hello/"}},
+		{tool: "get_page_frontmatter", args: map[string]any{"slug": "/posts/hello/"}},
+		{tool: "get_related_content", args: map[string]any{"slug": "/posts/hello/", "limit": 2}},
+		{tool: "build_agent_context", args: map[string]any{"slug": "/posts/hello/"}},
+		{tool: "export_agent_context", args: map[string]any{"limit": 1, "offset": 0}},
+		{tool: "search_content", args: map[string]any{"type": "all", "limit": 2, "offset": 0}},
+		{tool: "explain_site_structure", args: map[string]any{}},
+		{tool: "get_site_health", args: map[string]any{}},
+		{tool: "validate_front_matter", args: map[string]any{"slug": "/posts/hello/"}},
+		{tool: "validate_site", args: map[string]any{}},
+		{tool: "get_broken_links", args: map[string]any{"limit": 2, "offset": 0}},
+		{tool: "get_backlinks", args: map[string]any{"slug": "/posts/hello/"}},
+		{tool: "suggest_internal_links", args: map[string]any{"slug": "/posts/hello/", "limit": 2}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.tool, func(t *testing.T) {
+			res := callTool(t, session, tc.tool, tc.args)
+			if res.IsError {
+				t.Fatalf("%s returned error: %s", tc.tool, marshalAny(t, res.Content))
+			}
+			assertToolResponseEnvelope(t, tc.tool, decodeContent(t, res))
+		})
+	}
+}
+
+func TestContractDiffPageErrorUsesStructuredEnvelope(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	session, done := newReadSession(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "diff_page", map[string]any{"slug": "/posts/hello/"})
+	if !res.IsError {
+		t.Fatal("diff_page without a usable git root should return an error result in the fixture environment")
+	}
+	m := decodeErrorContent(t, res)
+	assertToolErrorEnvelope(t, "diff_page", m, "git_metadata_unavailable")
+}
+
 func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
@@ -617,6 +705,83 @@ func cloneMap(in map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+func assertToolResponseEnvelope(t *testing.T, tool string, m map[string]any) {
+	t.Helper()
+	if got, ok := m["success"].(bool); !ok || !got {
+		t.Fatalf("%s success = %v, want true", tool, m["success"])
+	}
+	if _, ok := m["data"].(map[string]any); !ok {
+		t.Fatalf("%s data type = %T, want map[string]any", tool, m["data"])
+	}
+	if _, ok := m["errors"].([]any); !ok {
+		t.Fatalf("%s errors type = %T, want []any", tool, m["errors"])
+	}
+	assertToolResponseEnvelopeMeta(t, tool, m)
+}
+
+func decodeErrorContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	if len(res.Content) == 0 {
+		t.Fatal("error result content is empty")
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("error result content[0] type = %T, want *mcp.TextContent", res.Content[0])
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text.Text), &m); err != nil {
+		t.Fatalf("unmarshal error content: %v\nraw: %s", err, text.Text)
+	}
+	return m
+}
+
+func assertToolErrorEnvelope(t *testing.T, tool string, m map[string]any, wantCode string) {
+	t.Helper()
+	if got, ok := m["success"].(bool); !ok || got {
+		t.Fatalf("%s success = %v, want false", tool, m["success"])
+	}
+	if _, ok := m["data"].(map[string]any); !ok {
+		t.Fatalf("%s data type = %T, want map[string]any", tool, m["data"])
+	}
+	errors, ok := m["errors"].([]any)
+	if !ok || len(errors) == 0 {
+		t.Fatalf("%s errors = %#v, want non-empty []any", tool, m["errors"])
+	}
+	first, ok := errors[0].(map[string]any)
+	if !ok {
+		t.Fatalf("%s errors[0] type = %T, want map[string]any", tool, errors[0])
+	}
+	if got := asString(first["code"]); got != wantCode {
+		t.Fatalf("%s errors[0].code = %q, want %q", tool, got, wantCode)
+	}
+	assertToolResponseEnvelopeMeta(t, tool, m)
+}
+
+func assertToolResponseEnvelopeMeta(t *testing.T, tool string, m map[string]any) {
+	t.Helper()
+	if _, ok := m["warnings"].([]any); !ok {
+		t.Fatalf("%s warnings type = %T, want []any", tool, m["warnings"])
+	}
+	meta, ok := m["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s meta type = %T, want map[string]any", tool, m["meta"])
+	}
+	metaVersion, ok := meta["server_version"].(string)
+	if !ok || metaVersion == "" {
+		t.Fatalf("%s meta.server_version = %v, want non-empty string", tool, meta["server_version"])
+	}
+	metaGeneratedAt, ok := meta["generated_at"].(string)
+	if !ok || metaGeneratedAt == "" {
+		t.Fatalf("%s meta.generated_at = %v, want non-empty string", tool, meta["generated_at"])
+	}
+	if got := asString(m["version"]); got != metaVersion {
+		t.Fatalf("%s version = %q, want meta.server_version %q", tool, got, metaVersion)
+	}
+	if got := asString(m["generated_at"]); got != metaGeneratedAt {
+		t.Fatalf("%s generated_at = %q, want meta.generated_at %q", tool, got, metaGeneratedAt)
+	}
 }
 
 func writeFile(t *testing.T, path, body string) {

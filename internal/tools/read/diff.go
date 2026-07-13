@@ -37,12 +37,18 @@ type diffPageData struct {
 }
 
 type diffPageOutput struct {
-	Success     bool         `json:"success"`
-	Version     string       `json:"version"`
-	GeneratedAt string       `json:"generated_at"`
-	Data        diffPageData `json:"data"`
-	Warnings    []string     `json:"warnings"`
-	Errors      []string     `json:"errors"`
+	toolcontract.ToolResponse[diffPageData]
+	Slug          string `json:"slug"`
+	Path          string `json:"path"`
+	ResolvedLang  string `json:"resolved_lang"`
+	ResolvedPath  string `json:"resolved_source_path"`
+	Status        string `json:"status"`
+	DiffAvailable bool   `json:"diff_available"`
+	FallbackMode  string `json:"fallback_mode,omitempty"`
+	BaseCommit    string `json:"base_commit"`
+	HeadCommit    string `json:"head_commit"`
+	Diff          string `json:"diff"`
+	SourceContent string `json:"source_content,omitempty"`
 }
 
 func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
@@ -74,24 +80,19 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 						relPath = rel
 					}
 				}
-				return nil, diffPageOutput{
-					Success:     true,
-					Version:     toolcontract.ToolResultVersion,
-					GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-					Data: diffPageData{
-						Slug:          resolved.Source.Slug,
-						Path:          relPath,
-						ResolvedLang:  resolved.Source.Lang,
-						ResolvedPath:  absPathOrResolved(resolved.SourcePath, relPath),
-						Status:        "git_not_available",
-						DiffAvailable: false,
-						FallbackMode:  "source_content",
-						HeadCommit:    "working-tree",
-						SourceContent: resolved.Source.Body,
-					},
-					Warnings: []string{"Git repository metadata is unavailable; returning source content without a diff."},
-					Errors:   []string{},
-				}, nil
+				resp := newDiffPageOutput(diffPageData{
+					Slug:          resolved.Source.Slug,
+					Path:          relPath,
+					ResolvedLang:  resolved.Source.Lang,
+					ResolvedPath:  absPathOrResolved(resolved.SourcePath, relPath),
+					Status:        "git_not_available",
+					DiffAvailable: false,
+					FallbackMode:  "source_content",
+					HeadCommit:    "working-tree",
+					SourceContent: resolved.Source.Body,
+				}, time.Now().UTC())
+				resp.Warnings = []string{"Git repository metadata is unavailable; returning source content without a diff."}
+				return nil, resp, nil
 			}
 			absPath := resolved.SourcePath
 			if absPath == "" {
@@ -125,25 +126,35 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			if err != nil {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: unable to compute diff")
 			}
-			return nil, diffPageOutput{
-				Success:     true,
-				Version:     toolcontract.ToolResultVersion,
-				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
-				Data: diffPageData{
-					Slug:          resolved.Source.Slug,
-					Path:          relPath,
-					ResolvedLang:  resolved.Source.Lang,
-					ResolvedPath:  absPathOrResolved(absPath, relPath),
-					Status:        status,
-					DiffAvailable: true,
-					BaseCommit:    strings.TrimSpace(headCommit),
-					HeadCommit:    "working-tree",
-					Diff:          diffText,
-				},
-				Warnings: []string{},
-				Errors:   []string{},
-			}, nil
+			return nil, newDiffPageOutput(diffPageData{
+				Slug:          resolved.Source.Slug,
+				Path:          relPath,
+				ResolvedLang:  resolved.Source.Lang,
+				ResolvedPath:  absPathOrResolved(absPath, relPath),
+				Status:        status,
+				DiffAvailable: true,
+				BaseCommit:    strings.TrimSpace(headCommit),
+				HeadCommit:    "working-tree",
+				Diff:          diffText,
+			}, time.Now().UTC()), nil
 		})
+}
+
+func newDiffPageOutput(data diffPageData, now time.Time) diffPageOutput {
+	return diffPageOutput{
+		ToolResponse:  successEnvelope(data, now),
+		Slug:          data.Slug,
+		Path:          data.Path,
+		ResolvedLang:  data.ResolvedLang,
+		ResolvedPath:  data.ResolvedPath,
+		Status:        data.Status,
+		DiffAvailable: data.DiffAvailable,
+		FallbackMode:  data.FallbackMode,
+		BaseCommit:    data.BaseCommit,
+		HeadCommit:    data.HeadCommit,
+		Diff:          data.Diff,
+		SourceContent: data.SourceContent,
+	}
 }
 
 func absPathOrResolved(absPath, relPath string) string {

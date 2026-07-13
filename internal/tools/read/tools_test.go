@@ -920,6 +920,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		}
 		assertObjectSchema(t, tool, "inputSchema")
 		assertObjectSchema(t, tool, "outputSchema")
+		assertSchemaHasProperties(t, tool, "outputSchema", "success", "data", "errors", "warnings", "meta")
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
 			t.Fatalf("tool %q: ReadOnlyHint not set", name)
 		}
@@ -932,6 +933,32 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		if tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
 			t.Fatalf("tool %q: OpenWorldHint should be false", name)
 		}
+	}
+	for _, tc := range []struct {
+		tool string
+		keys []string
+	}{
+		{tool: "get_full_page_markdown", keys: []string{"success", "data", "errors", "warnings", "meta", "page"}},
+		{tool: "get_page_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "frontmatter"}},
+		{tool: "get_related_content", keys: []string{"success", "data", "errors", "warnings", "meta", "translations", "related_pages", "related"}},
+		{tool: "build_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "context"}},
+		{tool: "export_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "export", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
+		{tool: "search_content", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
+		{tool: "explain_site_structure", keys: []string{"success", "data", "errors", "warnings", "meta", "summary", "sections", "languages"}},
+		{tool: "get_site_health", keys: []string{"success", "data", "errors", "warnings", "meta", "status", "score", "published_pages"}},
+		{tool: "get_broken_links", keys: []string{"success", "data", "errors", "warnings", "meta", "links", "broken_links", "total_pages"}},
+		{tool: "get_backlinks", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "count", "backlinks"}},
+		{tool: "suggest_internal_links", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "total", "translations", "suggestions", "suggested_links"}},
+		{tool: "diff_page", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "path", "status", "diff_available"}},
+		{tool: "validate_front_matter", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
+		{tool: "validate_site", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
+	} {
+		tool, ok := got[tc.tool]
+		if !ok {
+			t.Fatalf("missing tool %q", tc.tool)
+		}
+		assertSchemaHasProperties(t, tool, "outputSchema", tc.keys...)
+		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "server_version")
 	}
 }
 
@@ -956,6 +983,53 @@ func assertObjectSchema(t *testing.T, tool *mcp.Tool, field string) {
 	if m["type"] != "object" {
 		t.Fatalf("tool %q: %s.type = %v, want object", tool.Name, field, m["type"])
 	}
+}
+
+func assertSchemaHasProperties(t *testing.T, tool *mcp.Tool, field string, want ...string) {
+	t.Helper()
+	schema := schemaAt(t, tool, field)
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: %s.properties type = %T, want map[string]any", tool.Name, field, schema["properties"])
+	}
+	for _, key := range want {
+		if _, ok := props[key]; !ok {
+			t.Fatalf("tool %q: %s.properties missing %q", tool.Name, field, key)
+		}
+	}
+}
+
+func schemaAt(t *testing.T, tool *mcp.Tool, field string) map[string]any {
+	t.Helper()
+	parts := strings.Split(field, ".")
+	var current any
+	switch parts[0] {
+	case "inputSchema":
+		current = tool.InputSchema
+	case "outputSchema":
+		current = tool.OutputSchema
+	default:
+		t.Fatalf("unknown schema field %q", field)
+	}
+	for _, part := range parts[1:] {
+		m, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("tool %q: schema path %q type = %T, want map[string]any", tool.Name, field, current)
+		}
+		props, ok := m["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool %q: schema path %q missing properties map", tool.Name, field)
+		}
+		current, ok = props[part]
+		if !ok {
+			t.Fatalf("tool %q: schema path %q missing property %q", tool.Name, field, part)
+		}
+	}
+	m, ok := current.(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: schema path %q final type = %T, want map[string]any", tool.Name, field, current)
+	}
+	return m
 }
 
 func TestExplainSiteStructureUsesSourceIndexCategories(t *testing.T) {
