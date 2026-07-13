@@ -74,6 +74,9 @@ func TestDiffPage(t *testing.T) {
 	if got := data["status"]; got != "modified" {
 		t.Fatalf("diff_page status = %v, want modified", got)
 	}
+	if got := data["diff_available"]; got != true {
+		t.Fatalf("diff_page diff_available = %v, want true", got)
+	}
 	if got := data["path"]; got != "posts/hello/index.md" {
 		t.Fatalf("diff_page path = %v, want posts/hello/index.md", got)
 	}
@@ -156,6 +159,12 @@ func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
 	data := m["data"].(map[string]any)
 	if got := data["status"]; got != "git_not_available" {
 		t.Fatalf("diff_page status = %v, want git_not_available", got)
+	}
+	if got := data["diff_available"]; got != false {
+		t.Fatalf("diff_page diff_available = %v, want false", got)
+	}
+	if got := data["fallback_mode"]; got != "source_content" {
+		t.Fatalf("diff_page fallback_mode = %v, want source_content", got)
 	}
 	if got := data["source_content"]; got != "No git source body." {
 		t.Fatalf("source_content = %q, want source body", got)

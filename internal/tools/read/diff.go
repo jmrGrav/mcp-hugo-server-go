@@ -27,6 +27,8 @@ type diffPageData struct {
 	ResolvedLang  string `json:"resolved_lang"`
 	ResolvedPath  string `json:"resolved_source_path"`
 	Status        string `json:"status"`
+	DiffAvailable bool   `json:"diff_available"`
+	FallbackMode  string `json:"fallback_mode,omitempty"`
 	BaseCommit    string `json:"base_commit"`
 	HeadCommit    string `json:"head_commit"`
 	Diff          string `json:"diff"`
@@ -81,6 +83,8 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 						ResolvedLang:  resolved.Source.Lang,
 						ResolvedPath:  absPathOrResolved(resolved.SourcePath, relPath),
 						Status:        "git_not_available",
+						DiffAvailable: false,
+						FallbackMode:  "source_content",
 						HeadCommit:    "working-tree",
 						SourceContent: resolved.Source.Body,
 					},
@@ -125,14 +129,15 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				Version:     toolResultVersion,
 				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 				Data: diffPageData{
-					Slug:         resolved.Source.Slug,
-					Path:         relPath,
-					ResolvedLang: resolved.Source.Lang,
-					ResolvedPath: absPathOrResolved(absPath, relPath),
-					Status:       status,
-					BaseCommit:   strings.TrimSpace(headCommit),
-					HeadCommit:   "working-tree",
-					Diff:         diffText,
+					Slug:          resolved.Source.Slug,
+					Path:          relPath,
+					ResolvedLang:  resolved.Source.Lang,
+					ResolvedPath:  absPathOrResolved(absPath, relPath),
+					Status:        status,
+					DiffAvailable: true,
+					BaseCommit:    strings.TrimSpace(headCommit),
+					HeadCommit:    "working-tree",
+					Diff:          diffText,
 				},
 				Warnings: []string{},
 				Errors:   []string{},
