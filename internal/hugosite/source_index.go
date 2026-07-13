@@ -34,6 +34,7 @@ type SourcePage struct {
 	Categories     []string
 	Body           string
 	FrontmatterRaw map[string]any
+	BuildPending   bool
 }
 
 type SourceIndex struct {
@@ -190,6 +191,15 @@ func (idx *SourceIndex) Delete(slug string) {
 	}
 	idx.pages = idx.pages[:last]
 	delete(idx.bySlug, slug)
+}
+
+func (idx *SourceIndex) ClearAllBuildPending() {
+	if idx == nil {
+		return
+	}
+	for i := range idx.pages {
+		idx.pages[i].BuildPending = false
+	}
 }
 
 func SlugFromRel(rel string) string {

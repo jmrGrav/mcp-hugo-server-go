@@ -39,12 +39,13 @@ type createPageInput struct {
 }
 
 type createPageOutput struct {
-	Slug               string `json:"slug"`
-	Path               string `json:"path,omitempty"`
-	ResolvedLang       string `json:"resolved_lang"`
-	ResolvedSourcePath string `json:"resolved_source_path"`
-	DryRun             bool   `json:"dry_run,omitempty"`
-	Content            string `json:"content,omitempty"`
+	Slug               string               `json:"slug"`
+	Path               string               `json:"path,omitempty"`
+	ResolvedLang       string               `json:"resolved_lang"`
+	ResolvedSourcePath string               `json:"resolved_source_path"`
+	DryRun             bool                 `json:"dry_run,omitempty"`
+	Content            string               `json:"content,omitempty"`
+	State              *site.LifecycleState `json:"state,omitempty"`
 }
 
 type updatePageInput struct {
@@ -60,11 +61,12 @@ type updatePageInput struct {
 }
 
 type updatePageOutput struct {
-	Slug               string `json:"slug"`
-	ResolvedLang       string `json:"resolved_lang"`
-	ResolvedSourcePath string `json:"resolved_source_path"`
-	DryRun             bool   `json:"dry_run,omitempty"`
-	Diff               string `json:"diff,omitempty"`
+	Slug               string               `json:"slug"`
+	ResolvedLang       string               `json:"resolved_lang"`
+	ResolvedSourcePath string               `json:"resolved_source_path"`
+	DryRun             bool                 `json:"dry_run,omitempty"`
+	Diff               string               `json:"diff,omitempty"`
+	State              *site.LifecycleState `json:"state,omitempty"`
 }
 
 type deletePageInput struct {
@@ -86,6 +88,7 @@ type deletePageOutput struct {
 	Content            string                   `json:"content,omitempty"`
 	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
 	Warning            string                   `json:"warning,omitempty"`
+	State              *site.LifecycleState     `json:"state,omitempty"`
 }
 
 // normalizeInputSlug strips leading and trailing slashes so agents that pass
@@ -148,7 +151,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -237,6 +240,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Categories:     in.Categories,
 			Body:           in.Body,
 			FrontmatterRaw: map[string]any{"title": in.Title, "date": now, "draft": false},
+			BuildPending:   true,
 		}
 		idx.Upsert(created)
 		// Do NOT insert into the public site index — the page is source-only until
@@ -247,11 +251,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
+		state := createPageState()
 		return nil, createPageOutput{
 			Slug:               in.Slug,
 			Path:               filePath,
 			ResolvedLang:       resolvedLang,
 			ResolvedSourcePath: filePath,
+			State:              &state,
 		}, nil
 	})
 
@@ -261,7 +267,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
 			"Use title/body to revise content. Use tags/categories/draft/description to update front matter fields. " +
 			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
-			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs.",
+			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
+			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state.",
 		InputSchema:  tools.MustSchema[updatePageInput](),
 		OutputSchema: tools.MustSchema[updatePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -375,9 +382,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if in.Categories != nil {
 			updated.Categories = in.Categories
 		}
+		updated.BuildPending = true
 		idx.Upsert(updated)
+		hadPublic := false
 		if siteIdx != nil {
 			if pub, ok := siteIdx.GetBySlug(in.Slug); ok {
+				hadPublic = true
 				pubUpdated := *pub
 				if in.Title != "" {
 					pubUpdated.Title = in.Title
@@ -397,17 +407,19 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
+		state := updatePageState(siteIdx != nil, hadPublic)
 		return nil, updatePageOutput{
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
 			ResolvedSourcePath: filePath,
+			State:              &state,
 		}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -491,15 +503,18 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			siteIdx.RemoveBySlug(in.Slug)
 		}
 		var deleteWarning string
+		dbDeleteFailed := false
 		if siteDB != nil {
 			if err := siteDB.DeletePage(in.Slug); err != nil {
 				// Source and in-memory indexes are already gone; surface the DB
 				// staleness explicitly so callers know get_broken_links may be
 				// stale until the next build (#242).
 				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", err)
+				dbDeleteFailed = true
 				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", err)
 			}
 		}
+		publicCleanupFailed := false
 		if cfg.SiteRoot != "" {
 			publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
 			if rmErr := os.RemoveAll(publicPath); rmErr != nil {
@@ -511,6 +526,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				} else {
 					deleteWarning = msg
 				}
+				publicCleanupFailed = true
 				slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
 			}
 		}
@@ -536,13 +552,63 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
+		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
 		return nil, deletePageOutput{
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
 			ResolvedSourcePath: resolvedSource.SourcePath,
 			Warning:            deleteWarning,
+			State:              &state,
 		}, nil
 	})
+}
+
+func createPageState() site.LifecycleState {
+	return site.LifecycleState{
+		SourceState: "present",
+		BuildState:  "pending",
+		PublicState: "not_yet_available",
+		IndexState:  "source_only",
+	}
+}
+
+func updatePageState(hasSiteIndex, hadPublic bool) site.LifecycleState {
+	state := site.LifecycleState{
+		SourceState: "present",
+		BuildState:  "pending",
+	}
+	switch {
+	case hadPublic:
+		state.PublicState = "stale"
+		state.IndexState = "stale"
+	case hasSiteIndex:
+		state.PublicState = "not_yet_available"
+		state.IndexState = "source_only"
+	default:
+		state.PublicState = "unknown"
+		state.IndexState = "unknown"
+	}
+	return state
+}
+
+func deletePageState(hasSiteRoot, publicCleanupFailed, dbDeleteFailed bool) site.LifecycleState {
+	state := site.LifecycleState{
+		SourceState: "deleted",
+		BuildState:  "not_applicable",
+		IndexState:  "removed",
+	}
+	switch {
+	case !hasSiteRoot:
+		state.PublicState = "unknown"
+	case publicCleanupFailed:
+		state.PublicState = "stale"
+	default:
+		state.PublicState = "removed"
+	}
+	if dbDeleteFailed {
+		state.IndexState = "stale"
+	}
+	return state
 }
 
 type frontmatterDoc struct {

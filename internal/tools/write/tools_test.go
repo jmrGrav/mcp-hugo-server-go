@@ -83,6 +83,26 @@ func decodeWriteContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return m
 }
 
+func assertWritePageState(t *testing.T, raw any, source, build, public, index string) {
+	t.Helper()
+	state, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("state type = %T", raw)
+	}
+	if got := state["source_state"]; got != source {
+		t.Fatalf("source_state = %v, want %q", got, source)
+	}
+	if got := state["build_state"]; got != build {
+		t.Fatalf("build_state = %v, want %q", got, build)
+	}
+	if got := state["public_state"]; got != public {
+		t.Fatalf("public_state = %v, want %q", got, public)
+	}
+	if got := state["index_state"]; got != index {
+		t.Fatalf("index_state = %v, want %q", got, index)
+	}
+}
+
 func TestCreatePage(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
@@ -99,6 +119,8 @@ func TestCreatePage(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("create_page returned error: %s", raw)
 	}
+	out := decodeWriteContent(t, res)
+	assertWritePageState(t, out["state"], "present", "pending", "not_yet_available", "source_only")
 
 	path := filepath.Join(contentRoot, "my-post", "index.md")
 	data, err := os.ReadFile(path)
@@ -197,6 +219,36 @@ func TestDeletePageRateLimit(t *testing.T) {
 	}
 }
 
+func TestDeletePageExposesLifecycleState(t *testing.T) {
+	contentRoot := t.TempDir()
+	siteRoot := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(filepath.Join(siteRoot, "to-delete"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(siteRoot): %v", err)
+	}
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteRoot: siteRoot})
+	defer done()
+
+	createRes := callTool(t, session, "create_page", map[string]any{
+		"slug":       "to-delete",
+		"title":      "Delete Me",
+		"body":       "",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if createRes.IsError {
+		raw, _ := json.Marshal(createRes.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{"slug": "to-delete"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page failed: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	assertWritePageState(t, out["state"], "deleted", "not_applicable", "removed", "removed")
+}
+
 func TestUpdatePageNotFound(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
@@ -213,6 +265,46 @@ func TestUpdatePageNotFound(t *testing.T) {
 	if !strings.Contains(string(raw), "not_found") {
 		t.Errorf("expected not_found error, got: %s", raw)
 	}
+}
+
+func TestUpdatePageExposesLifecycleState(t *testing.T) {
+	contentRoot := t.TempDir()
+	siteRoot := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(filepath.Join(siteRoot, "my-post"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(siteRoot): %v", err)
+	}
+	cfg := config.Default()
+	siteIdx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex: %v", err)
+	}
+	siteIdx.UpsertPage(site.Page{Slug: "/my-post/", Title: "My Post", URL: "https://example.test/my-post/"})
+
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteRoot: siteRoot, SiteIdx: siteIdx})
+	defer done()
+
+	createRes := callTool(t, session, "create_page", map[string]any{
+		"slug":       "my-post",
+		"title":      "My Post",
+		"body":       "Hello world.",
+		"tags":       []any{"go"},
+		"categories": []any{"tutorials"},
+	})
+	if createRes.IsError {
+		raw, _ := json.Marshal(createRes.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":  "my-post",
+		"title": "New Title",
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page failed: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	assertWritePageState(t, out["state"], "present", "pending", "stale", "stale")
 }
 
 func TestCreatePageEmptySlug(t *testing.T) {
