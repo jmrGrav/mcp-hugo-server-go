@@ -279,3 +279,57 @@ func TestSourceIndexUpsertCreateThenUpdate(t *testing.T) {
 		t.Fatalf("title = %q want Refreshed", got.Title)
 	}
 }
+
+func TestSourceIndexMaintainsLanguageIndexesAcrossUpsertAndDelete(t *testing.T) {
+	idx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fr := hugosite.SourcePage{
+		Slug:           "posts/hello",
+		Lang:           "fr",
+		Title:          "Bonjour",
+		FilePath:       "/tmp/posts/hello/index.fr.md",
+		Body:           "Bonjour FR",
+		FrontmatterRaw: map[string]any{"title": "Bonjour"},
+	}
+	en := hugosite.SourcePage{
+		Slug:           "posts/hello",
+		Lang:           "en",
+		Title:          "Hello",
+		FilePath:       "/tmp/posts/hello/index.en.md",
+		Body:           "Hello EN",
+		FrontmatterRaw: map[string]any{"title": "Hello"},
+	}
+
+	idx.Upsert(fr)
+	idx.Upsert(en)
+
+	if got, ok := idx.GetBySlugLang("posts/hello", "fr"); !ok || got.FilePath != fr.FilePath {
+		t.Fatalf("GetBySlugLang(fr) = %#v, %v", got, ok)
+	}
+	if got, ok := idx.GetBySlugLang("posts/hello", "en"); !ok || got.FilePath != en.FilePath {
+		t.Fatalf("GetBySlugLang(en) = %#v, %v", got, ok)
+	}
+
+	enUpdated := en
+	enUpdated.Title = "Hello Updated"
+	enUpdated.Body = "Hello EN updated"
+	idx.Upsert(enUpdated)
+
+	if got, ok := idx.GetBySlugLang("posts/hello", "en"); !ok || got.Title != "Hello Updated" {
+		t.Fatalf("GetBySlugLang(en updated) = %#v, %v", got, ok)
+	}
+
+	idx.Delete("posts/hello")
+	if _, ok := idx.GetBySlug("posts/hello"); ok {
+		t.Fatal("GetBySlug() should miss deleted multilingual slug")
+	}
+	if _, ok := idx.GetBySlugLang("posts/hello", "fr"); ok {
+		t.Fatal("GetBySlugLang(fr) should miss deleted multilingual slug")
+	}
+	if _, ok := idx.GetBySlugLang("posts/hello", "en"); ok {
+		t.Fatal("GetBySlugLang(en) should miss deleted multilingual slug")
+	}
+}

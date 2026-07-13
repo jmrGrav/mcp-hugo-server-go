@@ -38,8 +38,10 @@ type SourcePage struct {
 }
 
 type SourceIndex struct {
-	pages  []SourcePage
-	bySlug map[string]int
+	pages      []SourcePage
+	bySlug     map[string]int
+	bySlugLang map[string]int
+	byDefault  map[string]int
 }
 
 func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
@@ -99,21 +101,59 @@ func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
 	})
 
 	bySlug := make(map[string]int, len(pages))
+	bySlugLang := make(map[string]int, len(pages))
+	byDefault := make(map[string]int, len(pages))
 	for i, p := range pages {
-		if prev, exists := bySlug[p.Slug]; exists {
-			slog.Warn("hugosite source index: duplicate slug detected, last-write wins",
+		bySlug[p.Slug] = i
+		if p.Lang != "" {
+			if prev, exists := bySlugLang[sourceLangKey(p.Slug, p.Lang)]; exists {
+				slog.Warn("hugosite source index: duplicate slug/lang detected, last-write wins",
+					"slug", p.Slug,
+					"lang", p.Lang,
+					"prev_index", prev,
+					"current_index", i)
+			}
+			bySlugLang[sourceLangKey(p.Slug, p.Lang)] = i
+			continue
+		}
+		if prev, exists := byDefault[p.Slug]; exists {
+			slog.Warn("hugosite source index: duplicate default-language slug detected, last-write wins",
 				"slug", p.Slug,
 				"prev_index", prev,
 				"current_index", i)
 		}
-		bySlug[p.Slug] = i
+		byDefault[p.Slug] = i
 	}
 
-	return &SourceIndex{pages: pages, bySlug: bySlug}, nil
+	return &SourceIndex{pages: pages, bySlug: bySlug, bySlugLang: bySlugLang, byDefault: byDefault}, nil
 }
 
 func (idx *SourceIndex) GetBySlug(slug string) (*SourcePage, bool) {
 	i, ok := idx.bySlug[slug]
+	if !ok {
+		return nil, false
+	}
+	p := idx.pages[i]
+	return &p, true
+}
+
+func (idx *SourceIndex) GetBySlugLang(slug, lang string) (*SourcePage, bool) {
+	if idx == nil {
+		return nil, false
+	}
+	i, ok := idx.bySlugLang[sourceLangKey(slug, lang)]
+	if !ok {
+		return nil, false
+	}
+	p := idx.pages[i]
+	return &p, true
+}
+
+func (idx *SourceIndex) GetDefaultBySlug(slug string) (*SourcePage, bool) {
+	if idx == nil {
+		return nil, false
+	}
+	i, ok := idx.byDefault[slug]
 	if !ok {
 		return nil, false
 	}
@@ -169,28 +209,39 @@ func uniqueSortedSourceStrings(values func(SourcePage) []string, pages []SourceP
 // ContentMu is held for writing, so callers (create_page, update_page) must
 // acquire the write lock before the filesystem write and index update.
 func (idx *SourceIndex) Upsert(page SourcePage) {
-	if i, ok := idx.bySlug[page.Slug]; ok {
+	if idx == nil {
+		return
+	}
+	if page.Lang != "" {
+		if i, ok := idx.bySlugLang[sourceLangKey(page.Slug, page.Lang)]; ok {
+			idx.pages[i] = page
+			idx.rebuildMaps()
+			return
+		}
+	} else if i, ok := idx.byDefault[page.Slug]; ok {
 		idx.pages[i] = page
+		idx.rebuildMaps()
 		return
 	}
 	idx.pages = append(idx.pages, page)
-	idx.bySlug[page.Slug] = len(idx.pages) - 1
+	idx.rebuildMaps()
 }
 
 // Delete removes the index entry for slug. It must be called while ContentMu
 // is held for writing.
 func (idx *SourceIndex) Delete(slug string) {
-	i, ok := idx.bySlug[slug]
-	if !ok {
+	if idx == nil || len(idx.pages) == 0 {
 		return
 	}
-	last := len(idx.pages) - 1
-	if i != last {
-		idx.pages[i] = idx.pages[last]
-		idx.bySlug[idx.pages[i].Slug] = i
+	filtered := idx.pages[:0]
+	for _, page := range idx.pages {
+		if page.Slug == slug {
+			continue
+		}
+		filtered = append(filtered, page)
 	}
-	idx.pages = idx.pages[:last]
-	delete(idx.bySlug, slug)
+	idx.pages = filtered
+	idx.rebuildMaps()
 }
 
 func (idx *SourceIndex) ClearAllBuildPending() {
@@ -220,6 +271,24 @@ func SlugFromRel(rel string) string {
 		}
 	}
 	return strings.TrimSuffix(rel, ".md")
+}
+
+func sourceLangKey(slug, lang string) string {
+	return slug + "\x00" + lang
+}
+
+func (idx *SourceIndex) rebuildMaps() {
+	idx.bySlug = make(map[string]int, len(idx.pages))
+	idx.bySlugLang = make(map[string]int, len(idx.pages))
+	idx.byDefault = make(map[string]int, len(idx.pages))
+	for i, p := range idx.pages {
+		idx.bySlug[p.Slug] = i
+		if p.Lang != "" {
+			idx.bySlugLang[sourceLangKey(p.Slug, p.Lang)] = i
+			continue
+		}
+		idx.byDefault[p.Slug] = i
+	}
 }
 
 func langFromRel(rel string) string {

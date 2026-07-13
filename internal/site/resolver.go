@@ -30,14 +30,16 @@ func (r *PageResolver) Resolve(rawSlug string) (ResolvedPage, bool) {
 	}
 
 	var out ResolvedPage
+	resolvedLang := languagePrefixFromSlug(publicSlug)
 	if r != nil && r.idx != nil {
 		if p, ok := r.idx.GetBySlug(publicSlug); ok {
 			out.Public = p
+			resolvedLang = p.Lang
 			_, sourceSlug = normalizeResolverSlugs(p.Slug)
 		}
 	}
 	if r != nil && r.srcIdx != nil {
-		if p, ok := r.resolveSource(sourceSlug); ok {
+		if p, ok := r.resolveSource(sourceSlug, resolvedLang); ok {
 			out.Source = p
 			out.SourcePath = p.FilePath
 			if out.Public == nil && r.idx != nil {
@@ -50,9 +52,25 @@ func (r *PageResolver) Resolve(rawSlug string) (ResolvedPage, bool) {
 	return out, out.Public != nil || out.Source != nil
 }
 
-func (r *PageResolver) resolveSource(sourceSlug string) (*hugosite.SourcePage, bool) {
-	for _, candidate := range SourceSlugCandidates(sourceSlug) {
-		if p, ok := r.srcIdx.GetBySlug(candidate); ok {
+func (r *PageResolver) resolveSource(sourceSlug, lang string) (*hugosite.SourcePage, bool) {
+	if r == nil || r.srcIdx == nil {
+		return nil, false
+	}
+	candidates := SourceSlugCandidates(sourceSlug)
+	if lang != "" {
+		for _, c := range candidates {
+			if p, ok := r.srcIdx.GetBySlugLang(c, lang); ok {
+				return p, true
+			}
+		}
+		for _, c := range candidates {
+			if p, ok := r.srcIdx.GetDefaultBySlug(c); ok {
+				return p, true
+			}
+		}
+	}
+	for _, c := range candidates {
+		if p, ok := r.srcIdx.GetBySlug(c); ok {
 			return p, true
 		}
 	}
@@ -86,4 +104,16 @@ func normalizeResolverSlugs(raw string) (publicSlug, sourceSlug string) {
 	publicSlug = normalizeSlug(raw)
 	sourceSlug = strings.Trim(publicSlug, "/")
 	return publicSlug, sourceSlug
+}
+
+func languagePrefixFromSlug(slug string) string {
+	parts := strings.Split(strings.Trim(slug, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return ""
+	}
+	stripped := stripLanguagePrefix(parts)
+	if len(stripped) == len(parts) {
+		return ""
+	}
+	return parts[0]
 }
