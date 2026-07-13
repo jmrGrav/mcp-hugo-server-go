@@ -713,6 +713,62 @@ func TestGetSitemap(t *testing.T) {
 	}
 }
 
+func TestGetSitemapExcludeTaxonomies(t *testing.T) {
+	root := t.TempDir()
+	writeHTML := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+	}
+	writeHTML("en/tags/webhook/index.html", `<!doctype html><html><head><title>Webhook tag</title><link rel="canonical" href="https://example.test/en/tags/webhook/"></head><body><main>Tag page</main></body></html>`)
+	writeHTML("fr/categories/securite/index.html", `<!doctype html><html><head><title>Securite category</title><link rel="canonical" href="https://example.test/fr/categories/securite/"></head><body><main>Category page</main></body></html>`)
+	writeHTML("authors/jm/index.html", `<!doctype html><html><head><title>JM author</title><link rel="canonical" href="https://example.test/authors/jm/"></head><body><main>Author page</main></body></html>`)
+	writeHTML("posts/hello/index.html", `<!doctype html><html><head><title>Hello</title><meta property="og:type" content="article"><link rel="canonical" href="https://example.test/posts/hello/"></head><body><article>Hello</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = root
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	session, done := newTestClientWithCfg(t, idx, cfg, nil)
+	defer done()
+
+	res := callTool(t, session, "get_sitemap", map[string]any{"exclude_taxonomies": true})
+	if res.IsError {
+		t.Fatalf("get_sitemap exclude_taxonomies returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	entries, ok := m["entries"].([]any)
+	if !ok {
+		t.Fatalf("get_sitemap exclude_taxonomies entries type = %T", m["entries"])
+	}
+	if len(entries) == 0 {
+		t.Fatal("get_sitemap exclude_taxonomies expected content entries")
+	}
+	if len(entries) != 1 {
+		t.Fatalf("get_sitemap exclude_taxonomies returned %d entries, want 1 content page after filtering", len(entries))
+	}
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		url, _ := entry["url"].(string)
+		if strings.Contains(url, "/tags/") || strings.Contains(url, "/categories/") || strings.Contains(url, "/authors/") {
+			t.Fatalf("get_sitemap exclude_taxonomies returned taxonomy URL %q", url)
+		}
+	}
+}
+
 func TestGetFeed(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

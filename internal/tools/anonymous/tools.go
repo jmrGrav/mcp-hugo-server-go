@@ -3,6 +3,8 @@ package anonymous
 import (
 	"context"
 	"fmt"
+	neturl "net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -263,9 +265,10 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			all := idx.Sitemap()
 			if in.ExcludeTaxonomies {
+				classifier := site.NewClassifierFromPages(all)
 				filtered := all[:0]
 				for _, p := range all {
-					if !isTaxonomyURL(p.URL) {
+					if classifier.Classify(p) != site.KindTaxonomy && !isTaxonomyURL(p.Slug) && !isTaxonomyURL(p.URL) {
 						filtered = append(filtered, p)
 					}
 				}
@@ -458,13 +461,44 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 // It matches the default Hugo taxonomy URL structure; custom taxonomies may need
 // to be excluded manually.
 func isTaxonomyURL(url string) bool {
+	if parsed, err := neturl.Parse(url); err == nil && parsed.Path != "" {
+		url = parsed.Path
+	}
 	taxPrefixes := []string{"/tags/", "/categories/", "/authors/"}
+	if parts := strings.Split(strings.Trim(url, "/"), "/"); len(parts) >= 2 {
+		first := parts[0]
+		second := "/" + parts[1] + "/"
+		if looksLikeLanguageCode(first) && slices.Contains(taxPrefixes, second) {
+			url = "/" + strings.Join(parts[1:], "/")
+			if !strings.HasSuffix(url, "/") {
+				url += "/"
+			}
+		}
+	}
 	for _, prefix := range taxPrefixes {
 		if strings.HasPrefix(url, prefix) || url == strings.TrimSuffix(prefix, "/") {
 			return true
 		}
 	}
 	return false
+}
+
+func looksLikeLanguageCode(v string) bool {
+	if len(v) != 2 && len(v) != 5 {
+		return false
+	}
+	for i, r := range v {
+		if i == 2 {
+			if r != '-' && r != '_' {
+				return false
+			}
+			continue
+		}
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return true
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).
