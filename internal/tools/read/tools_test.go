@@ -441,6 +441,74 @@ func newMultilingualHelloReadSession(t *testing.T) (*mcp.ClientSession, func()) 
 	return newTestClientWithSourceIndex(t, idx, srcIdx)
 }
 
+func newEditorialGraphSession(t *testing.T) (*mcp.ClientSession, func()) {
+	t.Helper()
+	htmlDir := t.TempDir()
+	writeHTML := func(rel, html string) {
+		t.Helper()
+		full := filepath.Join(htmlDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeHTML(filepath.Join("posts", "hello", "index.html"), `<!DOCTYPE html><html lang="fr"><head>
+<link rel="canonical" href="https://example.test/posts/hello/">
+<meta property="og:title" content="Bonjour FR">
+<meta property="article:tag" content="Hugo">
+<meta property="article:section" content="Infrastructure">
+</head><body><article>Bonjour FR public body</article></body></html>`)
+	writeHTML(filepath.Join("en", "posts", "hello", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/en/posts/hello/">
+<meta property="og:title" content="Hello EN">
+<meta property="article:tag" content="Hugo">
+<meta property="article:section" content="Infrastructure">
+</head><body><article>Hello EN public body</article></body></html>`)
+	writeHTML(filepath.Join("posts", "guide", "index.html"), `<!DOCTYPE html><html lang="fr"><head>
+<link rel="canonical" href="https://example.test/posts/guide/">
+<meta property="og:title" content="Guide FR">
+<meta property="article:tag" content="Hugo">
+<meta property="article:section" content="Infrastructure">
+</head><body><article>Guide FR public body</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	writeSource := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeSource("posts/hello/index.fr.md", "---\ntitle: Bonjour FR\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nBonjour depuis la source francaise.\n")
+	writeSource("posts/hello/index.en.md", "---\ntitle: Hello EN\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nHello from the English source.\n")
+	writeSource("posts/guide/index.fr.md", "---\ntitle: Guide FR\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nGuide associe en francais.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	return newTestClientWithSourceIndex(t, idx, srcIdx)
+}
+
 func TestExportAgentContextPrefersMatchingLanguageSource(t *testing.T) {
 	session, done := newMultilingualHelloReadSession(t)
 	defer done()
@@ -551,6 +619,111 @@ func TestRichReadToolsPreferMatchingLanguageSource(t *testing.T) {
 			t.Fatalf("markdown = %q, want English source content", md)
 		}
 	})
+}
+
+func TestGetRelatedContentSeparatesTranslations(t *testing.T) {
+	session, done := newEditorialGraphSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/", "limit": 10})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	translations, ok := m["translations"].([]any)
+	if !ok || len(translations) != 1 {
+		t.Fatalf("translations = %#v, want one translation", m["translations"])
+	}
+	translation := translations[0].(map[string]any)
+	if got := translation["slug"]; got != "/en/posts/hello/" {
+		t.Fatalf("translation slug = %v, want /en/posts/hello/", got)
+	}
+	if got := translation["lang"]; got != "en" {
+		t.Fatalf("translation lang = %v, want en", got)
+	}
+
+	relatedPages, ok := m["related_pages"].([]any)
+	if !ok || len(relatedPages) == 0 {
+		t.Fatalf("related_pages = %#v, want at least one real related page", m["related_pages"])
+	}
+	legacyRelated, ok := m["related"].([]any)
+	if !ok || len(legacyRelated) == 0 {
+		t.Fatalf("related = %#v, want legacy compatibility alias", m["related"])
+	}
+	for _, raw := range append(relatedPages, legacyRelated...) {
+		related := raw.(map[string]any)
+		if got := related["slug"]; got == "/en/posts/hello/" {
+			t.Fatalf("translation leaked into related content: %#v", related)
+		}
+	}
+	if got := relatedPages[0].(map[string]any)["slug"]; got != "/posts/guide/" {
+		t.Fatalf("top related slug = %v, want /posts/guide/", got)
+	}
+}
+
+func TestBuildAgentContextSeparatesTranslations(t *testing.T) {
+	session, done := newEditorialGraphSession(t)
+	defer done()
+
+	res := callTool(t, session, "build_agent_context", map[string]any{"slug": "/posts/hello/"})
+	if res.IsError {
+		t.Fatalf("build_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	ctx, ok := m["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("context type = %T", m["context"])
+	}
+	translations, ok := ctx["translations"].([]any)
+	if !ok || len(translations) != 1 {
+		t.Fatalf("translations = %#v, want one translation", ctx["translations"])
+	}
+	relatedPages, ok := ctx["related_pages"].([]any)
+	if !ok || len(relatedPages) == 0 {
+		t.Fatalf("related_pages = %#v, want at least one related page", ctx["related_pages"])
+	}
+	for _, raw := range relatedPages {
+		related := raw.(map[string]any)
+		if got := related["slug"]; got == "/en/posts/hello/" {
+			t.Fatalf("translation leaked into build_agent_context related_pages: %#v", related)
+		}
+	}
+}
+
+func TestSuggestInternalLinksSeparatesTranslations(t *testing.T) {
+	session, done := newEditorialGraphSession(t)
+	defer done()
+
+	res := callTool(t, session, "suggest_internal_links", map[string]any{"slug": "/posts/hello/", "limit": 10})
+	if res.IsError {
+		t.Fatalf("suggest_internal_links returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T", m["data"])
+	}
+	translations, ok := data["translations"].([]any)
+	if !ok || len(translations) != 1 {
+		t.Fatalf("translations = %#v, want one translation", data["translations"])
+	}
+	legacySuggestions, ok := data["suggestions"].([]any)
+	if !ok || len(legacySuggestions) == 0 {
+		t.Fatalf("suggestions = %#v, want at least one suggestion", data["suggestions"])
+	}
+	suggestedLinks, ok := data["suggested_links"].([]any)
+	if !ok || len(suggestedLinks) == 0 {
+		t.Fatalf("suggested_links = %#v, want compatibility alias", data["suggested_links"])
+	}
+	for _, raw := range append(legacySuggestions, suggestedLinks...) {
+		suggestion := raw.(map[string]any)
+		if got := suggestion["slug"]; got == "/en/posts/hello/" {
+			t.Fatalf("translation leaked into suggested links: %#v", suggestion)
+		}
+	}
+	if got := legacySuggestions[0].(map[string]any)["slug"]; got != "/posts/guide/" {
+		t.Fatalf("top suggestion slug = %v, want /posts/guide/", got)
+	}
 }
 
 func TestSearchContent(t *testing.T) {

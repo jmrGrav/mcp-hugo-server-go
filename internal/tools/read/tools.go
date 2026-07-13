@@ -71,14 +71,26 @@ type relatedPageDTO struct {
 	Slug                string                  `json:"slug"`
 	Title               string                  `json:"title"`
 	URL                 string                  `json:"url"`
+	Lang                string                  `json:"lang,omitempty"`
 	SharedTags          []string                `json:"shared_tags,omitempty"`
 	SharedCategories    []string                `json:"shared_categories,omitempty"`
 	SharedTagTerms      []taxonomy.TaxonomyTerm `json:"shared_tag_terms,omitempty"`
 	SharedCategoryTerms []taxonomy.TaxonomyTerm `json:"shared_category_terms,omitempty"`
 }
 
+type translationPageDTO struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
+	Lang  string `json:"lang,omitempty"`
+}
+
 type getRelatedContentOutput struct {
-	Related []relatedPageDTO `json:"related"`
+	Translations   []translationPageDTO `json:"translations"`
+	RelatedPages   []relatedPageDTO     `json:"related_pages"`
+	Related        []relatedPageDTO     `json:"related"`
+	Backlinks      []backlinkDTO        `json:"backlinks"`
+	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
 }
 
 type buildAgentContextInput struct {
@@ -86,9 +98,10 @@ type buildAgentContextInput struct {
 }
 
 type agentContextDTO struct {
-	Frontmatter  frontmatterDTO   `json:"frontmatter"`
-	Markdown     string           `json:"markdown"`
-	RelatedPages []relatedPageDTO `json:"related_pages"`
+	Frontmatter  frontmatterDTO       `json:"frontmatter"`
+	Markdown     string               `json:"markdown"`
+	Translations []translationPageDTO `json:"translations"`
+	RelatedPages []relatedPageDTO     `json:"related_pages"`
 }
 
 type buildAgentContextOutput struct {
@@ -176,8 +189,15 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if resolved.Public != nil {
 				ref = *resolved.Public
 			}
+			translations := collectTranslations(idx, ref)
 			related := computeRelated(idx, ref, limit)
-			return nil, getRelatedContentOutput{Related: related}, nil
+			return nil, getRelatedContentOutput{
+				Translations:   translations,
+				RelatedPages:   related,
+				Related:        related,
+				Backlinks:      []backlinkDTO{},
+				SuggestedLinks: []linkSuggestionDTO{},
+			}, nil
 		})
 
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
@@ -198,10 +218,12 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if resolved.Public != nil {
 				ref = *resolved.Public
 			}
+			translations := collectTranslations(idx, ref)
 			related := computeRelated(idx, ref, 5)
 			ac := agentContextDTO{
 				Frontmatter:  fm,
 				Markdown:     md,
+				Translations: translations,
 				RelatedPages: related,
 			}
 			return nil, buildAgentContextOutput{Context: ac}, nil
@@ -385,8 +407,12 @@ func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO 
 		dto   relatedPageDTO
 	}
 	var candidates []scored
+	refTranslationKey := translationKey(ref.Slug)
 	for _, pg := range idx.Sitemap() {
 		if pg.Slug == ref.Slug {
+			continue
+		}
+		if isTranslationVariant(refTranslationKey, pg.Slug) {
 			continue
 		}
 		sharedTagTerms := taxonomy.SharedTerms(pg.Tags, ref.Tags)
@@ -402,6 +428,7 @@ func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO 
 				Slug:                pg.Slug,
 				Title:               pg.Title,
 				URL:                 pg.URL,
+				Lang:                pg.Lang,
 				SharedTags:          taxonomy.Slugs(sharedTagTerms),
 				SharedCategories:    taxonomy.Slugs(sharedCatTerms),
 				SharedTagTerms:      sharedTagTerms,
@@ -423,6 +450,48 @@ func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO 
 		out[i] = c.dto
 	}
 	return out
+}
+
+func collectTranslations(idx *site.Index, ref site.Page) []translationPageDTO {
+	if idx == nil {
+		return []translationPageDTO{}
+	}
+	key := translationKey(ref.Slug)
+	if key == "" {
+		return []translationPageDTO{}
+	}
+	out := make([]translationPageDTO, 0, 2)
+	for _, pg := range idx.ContentPages() {
+		if pg.Slug == ref.Slug {
+			continue
+		}
+		if translationKey(pg.Slug) != key {
+			continue
+		}
+		out = append(out, translationPageDTO{Slug: pg.Slug, Title: pg.Title, URL: pg.URL, Lang: pg.Lang})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Lang != out[j].Lang {
+			return out[i].Lang < out[j].Lang
+		}
+		return out[i].Slug < out[j].Slug
+	})
+	return out
+}
+
+func translationKey(slug string) string {
+	candidates := site.SourceSlugCandidates(strings.Trim(slug, "/"))
+	if len(candidates) == 0 {
+		return ""
+	}
+	return candidates[len(candidates)-1]
+}
+
+func isTranslationVariant(refKey, candidateSlug string) bool {
+	if refKey == "" {
+		return false
+	}
+	return translationKey(candidateSlug) == refKey
 }
 
 func readingTimeMinutes(md string) int {
