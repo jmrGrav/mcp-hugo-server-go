@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
@@ -19,16 +20,18 @@ type getFullPageMarkdownInput struct {
 }
 
 type pageMarkdownDTO struct {
-	Slug          string              `json:"slug"`
-	Title         string              `json:"title"`
-	Date          string              `json:"date"`
-	Tags          []string            `json:"tags"`
-	Categories    []string            `json:"categories"`
-	TagTerms      []site.TaxonomyTerm `json:"tag_terms,omitempty"`
-	CategoryTerms []site.TaxonomyTerm `json:"category_terms,omitempty"`
-	URL           string              `json:"url"`
-	Lang          string              `json:"lang"`
-	Markdown      string              `json:"markdown"`
+	Slug               string              `json:"slug"`
+	Title              string              `json:"title"`
+	Date               string              `json:"date"`
+	Tags               []string            `json:"tags"`
+	Categories         []string            `json:"categories"`
+	TagTerms           []site.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms      []site.TaxonomyTerm `json:"category_terms,omitempty"`
+	URL                string              `json:"url"`
+	Lang               string              `json:"lang"`
+	ResolvedLang       string              `json:"resolved_lang"`
+	ResolvedSourcePath string              `json:"resolved_source_path"`
+	Markdown           string              `json:"markdown"`
 }
 
 type getFullPageMarkdownOutput struct {
@@ -40,16 +43,18 @@ type getPageFrontmatterInput struct {
 }
 
 type frontmatterDTO struct {
-	Slug           string              `json:"slug"`
-	Title          string              `json:"title"`
-	Date           string              `json:"date"`
-	Tags           []string            `json:"tags"`
-	Categories     []string            `json:"categories"`
-	TagTerms       []site.TaxonomyTerm `json:"tag_terms,omitempty"`
-	CategoryTerms  []site.TaxonomyTerm `json:"category_terms,omitempty"`
-	URL            string              `json:"url"`
-	Lang           string              `json:"lang"`
-	ReadingTimeMin int                 `json:"reading_time_minutes"`
+	Slug               string                      `json:"slug"`
+	Title              string                      `json:"title"`
+	Date               string                      `json:"date"`
+	Tags               []string                    `json:"tags"`
+	Categories         []string                    `json:"categories"`
+	TagTerms           []contentmodel.TaxonomyTerm `json:"tag_terms,omitempty"`
+	CategoryTerms      []contentmodel.TaxonomyTerm `json:"category_terms,omitempty"`
+	URL                string                      `json:"url"`
+	Lang               string                      `json:"lang"`
+	ResolvedLang       string                      `json:"resolved_lang"`
+	ResolvedSourcePath string                      `json:"resolved_source_path"`
+	ReadingTimeMin     int                         `json:"reading_time_minutes"`
 }
 
 type getPageFrontmatterOutput struct {
@@ -147,7 +152,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			return nil, getPageFrontmatterOutput{Frontmatter: toFrontmatterDTO(p, rt)}, nil
+			return nil, getPageFrontmatterOutput{Frontmatter: toFrontmatterDTO(p, resolved.SourcePath, resolvedLang(resolved), rt)}, nil
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
@@ -182,7 +187,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			fm := toFrontmatterDTO(p, rt)
+			fm := toFrontmatterDTO(p, resolved.SourcePath, resolvedLang(resolved), rt)
 			ref := p
 			if resolved.Public != nil {
 				ref = *resolved.Public
@@ -243,7 +248,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				md := resolvedMarkdown(resolved)
 				rt := readingTimeMinutes(md)
 				pages = append(pages, pageExportDTO{
-					Frontmatter: toFrontmatterDTO(p, rt),
+					Frontmatter: toFrontmatterDTO(p, resolved.SourcePath, resolvedLang(resolved), rt),
 					Markdown:    md,
 				})
 			}
@@ -251,24 +256,26 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 }
 
-func toPageMarkdownDTO(p site.Page, md string) pageMarkdownDTO {
+func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang string) pageMarkdownDTO {
 	return pageMarkdownDTO{
-		Slug:          p.Slug,
-		Title:         p.Title,
-		Date:          p.Date,
-		Tags:          nullsafeStrings(p.Tags),
-		Categories:    nullsafeStrings(p.Categories),
-		TagTerms:      site.NormalizeTaxonomyTerms(p.Tags),
-		CategoryTerms: site.NormalizeTaxonomyTerms(p.Categories),
-		URL:           p.URL,
-		Lang:          p.Lang,
-		Markdown:      md,
+		Slug:               p.Slug,
+		Title:              p.Title,
+		Date:               p.Date,
+		Tags:               nullsafeStrings(p.Tags),
+		Categories:         nullsafeStrings(p.Categories),
+		TagTerms:           site.NormalizeTaxonomyTerms(p.Tags),
+		CategoryTerms:      site.NormalizeTaxonomyTerms(p.Categories),
+		URL:                p.URL,
+		Lang:               p.Lang,
+		ResolvedLang:       resolvedLang,
+		ResolvedSourcePath: resolvedSourcePath,
+		Markdown:           md,
 	}
 }
 
 func toResolvedPageMarkdownDTO(resolved site.ResolvedPage) pageMarkdownDTO {
 	p := resolvedPublicPage(resolved)
-	return toPageMarkdownDTO(p, resolvedMarkdown(resolved))
+	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), resolved.SourcePath, resolvedLang(resolved))
 }
 
 func resolvedMarkdown(resolved site.ResolvedPage) string {
@@ -306,19 +313,32 @@ func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
 	}
 }
 
-func toFrontmatterDTO(p site.Page, readingTimeMin int) frontmatterDTO {
+func toFrontmatterDTO(p site.Page, sourcePath, resolvedLanguage string, readingTimeMin int) frontmatterDTO {
+	identity := pageIdentityFromPage(p, sourcePath, readingTimeMin)
 	return frontmatterDTO{
-		Slug:           p.Slug,
-		Title:          p.Title,
-		Date:           p.Date,
-		Tags:           nullsafeStrings(p.Tags),
-		Categories:     nullsafeStrings(p.Categories),
-		TagTerms:       site.NormalizeTaxonomyTerms(p.Tags),
-		CategoryTerms:  site.NormalizeTaxonomyTerms(p.Categories),
-		URL:            p.URL,
-		Lang:           p.Lang,
-		ReadingTimeMin: readingTimeMin,
+		Slug:               identity.Slug,
+		Title:              identity.Title,
+		Date:               p.Date,
+		Tags:               nullsafeStrings(p.Tags),
+		Categories:         nullsafeStrings(p.Categories),
+		TagTerms:           identity.Tags,
+		CategoryTerms:      identity.Categories,
+		URL:                identity.URL,
+		Lang:               identity.Lang,
+		ResolvedLang:       resolvedLanguage,
+		ResolvedSourcePath: identity.SourcePath,
+		ReadingTimeMin:     identity.ReadingTime,
 	}
+}
+
+func resolvedLang(resolved site.ResolvedPage) string {
+	if resolved.Source != nil {
+		return resolved.Source.Lang
+	}
+	if resolved.Public != nil {
+		return resolved.Public.Lang
+	}
+	return ""
 }
 
 func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO {

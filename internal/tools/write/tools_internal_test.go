@@ -195,6 +195,29 @@ func TestApplyPageUpdatesExtendedFields(t *testing.T) {
 	}
 }
 
+func TestApplyPageUpdatesPreservesTwoSpaceSequenceIndent(t *testing.T) {
+	input := "---\ntitle: Page\ntags:\n  - old\ncategories:\n  - OldCat\n---\n\nBody."
+
+	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{
+		Tags:       []string{"go", "hugo"},
+		Categories: []string{"Infrastructure"},
+	})
+	if err != nil {
+		t.Fatalf("applyPageUpdates error: %v", err)
+	}
+	for _, want := range []string{
+		"tags:\n  - go\n  - hugo",
+		"categories:\n  - Infrastructure",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("applyPageUpdates sequence indent mismatch, missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\n    - ") {
+		t.Fatalf("applyPageUpdates wrote 4-space sequence indent:\n%s", got)
+	}
+}
+
 func TestApplyPageUpdatesNewDescription(t *testing.T) {
 	input := "---\ntitle: Page\ntags: []\n---\n\nBody."
 	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{Description: "New desc."})
@@ -217,77 +240,80 @@ func TestApplyPageUpdatesRejectsNonMappingFrontmatter(t *testing.T) {
 	}
 }
 
-func TestResolveUpdateFilePath(t *testing.T) {
-	dir := t.TempDir()
-	writeFile := func(name string) {
-		f, _ := os.Create(filepath.Join(dir, name))
-		f.Close()
+func TestResolveExistingSource(t *testing.T) {
+	makeBundle := func(root, slug string, files ...string) {
+		dir := filepath.Join(append([]string{root}, strings.Split(slug, "/")...)...)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		for _, name := range files {
+			f, _ := os.Create(filepath.Join(dir, name))
+			f.Close()
+		}
 	}
 
 	t.Run("single index.md", func(t *testing.T) {
-		d := t.TempDir()
-		os.Create(filepath.Join(d, "index.md"))
-		got, err := resolveUpdateFilePath(d, "posts/test", "")
+		root := t.TempDir()
+		makeBundle(root, "posts/test", "index.md")
+		got, err := resolveExistingSource(root, "posts/test", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if filepath.Base(got) != "index.md" {
-			t.Errorf("want index.md, got %s", filepath.Base(got))
+		if filepath.Base(got.SourcePath) != "index.md" {
+			t.Errorf("want index.md, got %s", filepath.Base(got.SourcePath))
 		}
 	})
 
 	t.Run("single lang file with no lang param", func(t *testing.T) {
-		d := t.TempDir()
-		os.Create(filepath.Join(d, "index.fr.md"))
-		got, err := resolveUpdateFilePath(d, "posts/test", "")
+		root := t.TempDir()
+		makeBundle(root, "posts/test", "index.fr.md")
+		got, err := resolveExistingSource(root, "posts/test", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if filepath.Base(got) != "index.fr.md" {
-			t.Errorf("want index.fr.md, got %s", filepath.Base(got))
+		if filepath.Base(got.SourcePath) != "index.fr.md" {
+			t.Errorf("want index.fr.md, got %s", filepath.Base(got.SourcePath))
+		}
+		if got.Lang != "fr" {
+			t.Errorf("want lang=fr, got %q", got.Lang)
 		}
 	})
 
 	t.Run("ambiguous: two lang files, no lang param", func(t *testing.T) {
-		d := t.TempDir()
-		os.Create(filepath.Join(d, "index.fr.md"))
-		os.Create(filepath.Join(d, "index.en.md"))
-		_, err := resolveUpdateFilePath(d, "posts/test", "")
+		root := t.TempDir()
+		makeBundle(root, "posts/test", "index.fr.md", "index.en.md")
+		_, err := resolveExistingSource(root, "posts/test", "")
 		if err == nil || !strings.Contains(err.Error(), "ambiguous_language") {
 			t.Errorf("want ambiguous_language error, got %v", err)
 		}
 	})
 
 	t.Run("lang param selects correct file", func(t *testing.T) {
-		d := t.TempDir()
-		os.Create(filepath.Join(d, "index.fr.md"))
-		os.Create(filepath.Join(d, "index.en.md"))
-		got, err := resolveUpdateFilePath(d, "posts/test", "fr")
+		root := t.TempDir()
+		makeBundle(root, "posts/test", "index.fr.md", "index.en.md")
+		got, err := resolveExistingSource(root, "posts/test", "fr")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if filepath.Base(got) != "index.fr.md" {
-			t.Errorf("want index.fr.md, got %s", filepath.Base(got))
+		if filepath.Base(got.SourcePath) != "index.fr.md" {
+			t.Errorf("want index.fr.md, got %s", filepath.Base(got.SourcePath))
 		}
 	})
 
 	t.Run("lang param not found", func(t *testing.T) {
-		d := t.TempDir()
-		os.Create(filepath.Join(d, "index.fr.md"))
-		_, err := resolveUpdateFilePath(d, "posts/test", "de")
+		root := t.TempDir()
+		makeBundle(root, "posts/test", "index.fr.md")
+		_, err := resolveExistingSource(root, "posts/test", "de")
 		if err == nil || !strings.Contains(err.Error(), "not_found") {
 			t.Errorf("want not_found error, got %v", err)
 		}
 	})
 
 	t.Run("no files", func(t *testing.T) {
-		d := t.TempDir()
-		_, err := resolveUpdateFilePath(d, "posts/test", "")
+		root := t.TempDir()
+		_, err := resolveExistingSource(root, "posts/test", "")
 		if err == nil || !strings.Contains(err.Error(), "not_found") {
 			t.Errorf("want not_found error, got %v", err)
 		}
 	})
-
-	_ = dir
-	_ = writeFile
 }

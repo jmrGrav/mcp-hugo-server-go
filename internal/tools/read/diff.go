@@ -24,6 +24,8 @@ type diffPageInput struct {
 type diffPageData struct {
 	Slug          string `json:"slug"`
 	Path          string `json:"path"`
+	ResolvedLang  string `json:"resolved_lang"`
+	ResolvedPath  string `json:"resolved_source_path"`
 	Status        string `json:"status"`
 	DiffAvailable bool   `json:"diff_available"`
 	FallbackMode  string `json:"fallback_mode,omitempty"`
@@ -78,6 +80,8 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 					Data: diffPageData{
 						Slug:          resolved.Source.Slug,
 						Path:          relPath,
+						ResolvedLang:  resolved.Source.Lang,
+						ResolvedPath:  absPathOrResolved(resolved.SourcePath, relPath),
 						Status:        "git_not_available",
 						DiffAvailable: false,
 						FallbackMode:  "source_content",
@@ -127,6 +131,8 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				Data: diffPageData{
 					Slug:          resolved.Source.Slug,
 					Path:          relPath,
+					ResolvedLang:  resolved.Source.Lang,
+					ResolvedPath:  absPathOrResolved(absPath, relPath),
 					Status:        status,
 					DiffAvailable: true,
 					BaseCommit:    strings.TrimSpace(headCommit),
@@ -137,6 +143,13 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				Errors:   []string{},
 			}, nil
 		})
+}
+
+func absPathOrResolved(absPath, relPath string) string {
+	if strings.TrimSpace(absPath) != "" {
+		return absPath
+	}
+	return filepath.ToSlash(relPath)
 }
 
 func findGitRoot(ctx context.Context, start string) (string, error) {
