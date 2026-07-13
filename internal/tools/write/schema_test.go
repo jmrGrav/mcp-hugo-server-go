@@ -2,6 +2,7 @@ package write_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,6 +27,39 @@ func TestWriteToolSchemasPresent(t *testing.T) {
 		}
 		assertObjectSchema(t, tool, "inputSchema")
 		assertObjectSchema(t, tool, "outputSchema")
+	}
+}
+
+func TestWriteToolAnnotationsDescribeIdempotency(t *testing.T) {
+	session, _, done := newTestServer(t, t.TempDir())
+	defer done()
+
+	result, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	got := map[string]*mcp.Tool{}
+	for i := range result.Tools {
+		got[result.Tools[i].Name] = result.Tools[i]
+	}
+
+	createTool := got["create_page"]
+	if createTool == nil || createTool.Annotations == nil {
+		t.Fatalf("create_page annotations missing: %#v", createTool)
+	}
+	if createTool.Annotations.IdempotentHint {
+		t.Fatalf("create_page IdempotentHint = true, want false because repeated calls rewrite date/frontmatter")
+	}
+	if !strings.Contains(createTool.Description, "not idempotent") {
+		t.Fatalf("create_page description = %q, want explicit non-idempotent rationale", createTool.Description)
+	}
+
+	updateTool := got["update_page"]
+	if updateTool == nil || updateTool.Annotations == nil {
+		t.Fatalf("update_page annotations missing: %#v", updateTool)
+	}
+	if !updateTool.Annotations.IdempotentHint {
+		t.Fatal("update_page IdempotentHint = false, want true for same-input convergent updates")
 	}
 }
 

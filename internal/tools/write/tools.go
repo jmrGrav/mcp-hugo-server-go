@@ -151,7 +151,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available.",
+		Description:  "Create or replace a Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page. This operation is intentionally not idempotent because repeated calls regenerate time-based front matter such as `date`. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -274,7 +274,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
 			DestructiveHint: fileutil.BoolPtr(false),
-			IdempotentHint:  false,
+			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, func(_ context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
