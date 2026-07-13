@@ -35,6 +35,8 @@ These public URLs must stay coherent:
 | --- | --- |
 | `https://www.arleo.eu/auth.md` | `200 text/markdown`, contains `agent_auth_metadata` and ID-JAG credential types |
 | `https://www.arleo.eu/.well-known/oauth-protected-resource` | `200 application/json`, resource is `https://www.arleo.eu`, authorization server is `https://mcp.arleo.eu` |
+| `https://www.arleo.eu/.well-known/oauth-protected-resource/mcp` | compatibility alias for the MCP protected-resource document; must not degrade to HTML `403` |
+| `https://www.arleo.eu/.well-known/mcp/server-card.json` | compatibility redirect to the canonical MCP server card on `mcp.arleo.eu` |
 | `https://mcp.arleo.eu/.well-known/oauth-authorization-server` | `200 application/json`, issuer is `https://mcp.arleo.eu`, contains `agent_auth` |
 | `https://mcp.arleo.eu/.well-known/oauth-protected-resource` | `200 application/json`, resource is `https://mcp.arleo.eu/mcp` |
 | `https://mcp.arleo.eu/.well-known/mcp/server-card.json` | `200 application/json`, transport endpoint is `/mcp` |
@@ -72,6 +74,8 @@ Key points:
 - `www.arleo.eu/mcp` redirects to `https://mcp.arleo.eu/mcp`.
 - `www.arleo.eu/.well-known/oauth-authorization-server` redirects to the MCP issuer.
 - `www.arleo.eu/.well-known/oauth-protected-resource` is a protected-resource document for the website resource.
+- `www.arleo.eu/.well-known/oauth-protected-resource/mcp` redirects to the MCP protected-resource alias on `mcp.arleo.eu`.
+- `www.arleo.eu/.well-known/mcp/server-card.json` redirects to the canonical MCP server card on `mcp.arleo.eu`.
 - `mcp.arleo.eu` proxies all paths to `mcp-hugo-server-go` on the Hugo VM.
 
 ## Hugo VM Nginx
