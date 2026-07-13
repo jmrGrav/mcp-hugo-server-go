@@ -259,6 +259,26 @@ func TestWellKnownMCPServerCard(t *testing.T) {
 		t.Fatalf("transport.endpoint = %v", transport["endpoint"])
 	}
 
+	capabilities, ok := got["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("capabilities type = %T", got["capabilities"])
+	}
+	toolsCaps, ok := capabilities["tools"].(map[string]any)
+	if !ok || toolsCaps["listChanged"] != true {
+		t.Fatalf("capabilities.tools = %#v want listChanged=true", capabilities["tools"])
+	}
+	promptsCaps, ok := capabilities["prompts"].(map[string]any)
+	if !ok || promptsCaps["listChanged"] != true {
+		t.Fatalf("capabilities.prompts = %#v want listChanged=true", capabilities["prompts"])
+	}
+	resourcesCaps, ok := capabilities["resources"].(map[string]any)
+	if !ok {
+		t.Fatalf("capabilities.resources type = %T", capabilities["resources"])
+	}
+	if resourcesCaps["listChanged"] != true || resourcesCaps["subscribe"] != true {
+		t.Fatalf("capabilities.resources = %#v want listChanged=true subscribe=true", capabilities["resources"])
+	}
+
 	auth, ok := got["authentication"].(map[string]any)
 	if !ok {
 		t.Fatalf("authentication type = %T", got["authentication"])
