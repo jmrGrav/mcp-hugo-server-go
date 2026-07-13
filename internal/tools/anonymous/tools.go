@@ -69,6 +69,7 @@ type pageDetailDTO struct {
 	ResolvedLang       string                  `json:"resolved_lang"`
 	ResolvedSourcePath string                  `json:"resolved_source_path"`
 	HTML               string                  `json:"html"`
+	State              site.LifecycleState     `json:"state"`
 }
 
 type getSitemapInput struct {
@@ -204,6 +205,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"(e.g. immediately after create_page, before the next Hugo build); draft pages are always excluded. "+
 			"Pass content_only=true to strip navigation, header, and footer from the rendered HTML of published pages "+
 			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; if `content_only=true` is also set, the `html` field is returned empty for source-only fallback results). "+
+			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
 			"For the raw Markdown source, use get_full_page_markdown (requires content.read). "+
 			"Does not require authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
@@ -232,6 +234,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				}
 			}
 			dto := toResolvedPageDetailDTO(resolved)
+			dto.State = site.StateForResolvedPage(resolved, cfg.SiteRoot)
 			if in.ContentOnly && resolved.Public != nil {
 				dto.HTML = site.ExtractArticleHTML(dto.HTML)
 			} else if in.ContentOnly {

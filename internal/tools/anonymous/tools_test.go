@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -237,6 +238,7 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	if page["title"] != "Fresh" || page["html"] != "Fresh body" {
 		t.Fatalf("get_page source-only page = %#v", page)
 	}
+	assertPageState(t, page["state"], "present", "pending", "not_yet_available", "source_only")
 	if page["lang"] != "" {
 		t.Fatalf("get_page source-only lang = %#v, want empty string", page["lang"])
 	}
@@ -360,6 +362,79 @@ func TestGetPageNotFound(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("get_page for missing slug should return error result")
 	}
+}
+
+func TestGetPagePublishedExposesLifecycleState(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page := m["page"].(map[string]any)
+	assertPageState(t, page["state"], "absent", "built", "available", "fresh")
+}
+
+func TestGetPagePublishedSourceDriftExposesStaleLifecycleState(t *testing.T) {
+	contentRoot := t.TempDir()
+	publicRoot := t.TempDir()
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "hello"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(content): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "hello", "index.md"), []byte("---\ntitle: Hello\ncategories: [tutorials]\ntags: [hugo]\ndate: 2024-01-01\n---\nNew source body\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(content): %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	idx.UpsertPage(site.Page{
+		Slug:       "/posts/hello/",
+		Title:      "Hello",
+		Summary:    "Summary",
+		Tags:       []string{"hugo"},
+		Categories: []string{"tutorials"},
+		Date:       "2024-01-01",
+		URL:        "https://example.test/posts/hello/",
+		Lang:       "en",
+		RawHTML:    "<article>Any built body</article>",
+	})
+	publicPath := filepath.Join(publicRoot, "posts", "hello", "index.html")
+	if err := os.MkdirAll(filepath.Dir(publicPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(public): %v", err)
+	}
+	if err := os.WriteFile(publicPath, []byte("<article>Any built body</article>"), 0o644); err != nil {
+		t.Fatalf("WriteFile(public): %v", err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(publicPath, old, old); err != nil {
+		t.Fatalf("Chtimes(public): %v", err)
+	}
+
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page := m["page"].(map[string]any)
+	assertPageState(t, page["state"], "present", "pending", "stale", "stale")
 }
 
 func TestSearchPagesMinLength(t *testing.T) {
@@ -1085,5 +1160,25 @@ func assertPaginationMetadata(t *testing.T, m map[string]any, total, limit, offs
 	}
 	if ok {
 		t.Fatalf("next_offset = %v, want omitted", gotNext)
+	}
+}
+
+func assertPageState(t *testing.T, raw any, source, build, public, index string) {
+	t.Helper()
+	state, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("state type = %T", raw)
+	}
+	if got := state["source_state"]; got != source {
+		t.Fatalf("source_state = %v, want %q", got, source)
+	}
+	if got := state["build_state"]; got != build {
+		t.Fatalf("build_state = %v, want %q", got, build)
+	}
+	if got := state["public_state"]; got != public {
+		t.Fatalf("public_state = %v, want %q", got, public)
+	}
+	if got := state["index_state"]; got != index {
+		t.Fatalf("index_state = %v, want %q", got, index)
 	}
 }

@@ -213,7 +213,15 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		ext("site.admin", siteAdminServer)
 	}
 	admin.Register(siteAdminServer, cfg,
-		func() error { return idx.Reload(cfg) },
+		func() error {
+			if err := idx.Reload(cfg); err != nil {
+				return err
+			}
+			if srcIdx != nil {
+				srcIdx.ClearAllBuildPending()
+			}
+			return nil
+		},
 		func() error {
 			// Reindex the SQLite derived index after a successful build.
 			if siteDB != nil {
