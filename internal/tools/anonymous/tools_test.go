@@ -54,7 +54,9 @@ func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 
 func newTestClientWithSourceIndex(t *testing.T, idx *site.Index, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
 	t.Helper()
-	return newTestClientWithCfg(t, idx, config.Default(), srcIdx)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
 }
 
 func newTestClientWithCfg(t *testing.T, idx *site.Index, cfg config.Config, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
@@ -196,8 +198,8 @@ func TestGetPageBySlug(t *testing.T) {
 	if page["resolved_lang"] != "" {
 		t.Fatalf("get_page: resolved_lang = %v, want empty default source lang for hello.md fixture", page["resolved_lang"])
 	}
-	if got, _ := page["resolved_source_path"].(string); !strings.HasSuffix(got, filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
-		t.Fatalf("get_page: resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", page["resolved_source_path"])
+	if got, _ := page["resolved_source_path"].(string); got != "content/posts/hello.md" {
+		t.Fatalf("get_page: resolved_source_path = %v, want content/posts/hello.md", page["resolved_source_path"])
 	}
 }
 
@@ -215,7 +217,9 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 		t.Fatalf("NewSourceIndex() error = %v", err)
 	}
 	idx := &site.Index{}
-	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
 	defer done()
 
 	// Without allow_source_fallback the source-only page must not be accessible.
@@ -248,8 +252,8 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	if page["resolved_lang"] != "" {
 		t.Fatalf("get_page source-only resolved_lang = %#v, want empty string", page["resolved_lang"])
 	}
-	if page["resolved_source_path"] != full {
-		t.Fatalf("get_page source-only resolved_source_path = %#v, want %s", page["resolved_source_path"], full)
+	if page["resolved_source_path"] != "content/drafts/fresh/index.md" {
+		t.Fatalf("get_page source-only resolved_source_path = %#v, want content/drafts/fresh/index.md", page["resolved_source_path"])
 	}
 
 	resContentOnly := callTool(t, session, "get_page", map[string]any{

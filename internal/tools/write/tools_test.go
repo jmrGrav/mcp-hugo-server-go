@@ -141,8 +141,8 @@ func TestCreatePage(t *testing.T) {
 		t.Errorf("frontmatter missing draft field: %s", content)
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != path {
-		t.Fatalf("create_page resolved_source_path = %v, want %s", got, path)
+	if got := decoded["resolved_source_path"]; got != "content/my-post/index.md" {
+		t.Fatalf("create_page resolved_source_path = %v, want content/my-post/index.md", got)
 	}
 	if got := decoded["resolved_lang"]; got != "" {
 		t.Fatalf("create_page resolved_lang = %v, want empty default lang", got)
@@ -387,8 +387,8 @@ func TestUpdatePageSuccess(t *testing.T) {
 		t.Errorf("updated file missing new title: %s", data)
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != filepath.Join(contentRoot, "update-me", "index.md") {
-		t.Fatalf("update_page resolved_source_path = %v, want %s", got, filepath.Join(contentRoot, "update-me", "index.md"))
+	if got := decoded["resolved_source_path"]; got != "content/update-me/index.md" {
+		t.Fatalf("update_page resolved_source_path = %v, want content/update-me/index.md", got)
 	}
 }
 
@@ -420,8 +420,8 @@ func TestDeletePageSuccess(t *testing.T) {
 		t.Error("expected page directory to be fully removed")
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != filepath.Join(contentRoot, "to-delete", "index.md") {
-		t.Fatalf("delete_page resolved_source_path = %v, want %s", got, filepath.Join(contentRoot, "to-delete", "index.md"))
+	if got := decoded["resolved_source_path"]; got != "content/to-delete/index.md" {
+		t.Fatalf("delete_page resolved_source_path = %v, want content/to-delete/index.md", got)
 	}
 }
 
@@ -499,8 +499,8 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 		t.Error("update_page must not create index.md when only index.fr.md exists")
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != frFile {
-		t.Fatalf("update_page multilingual resolved_source_path = %v, want %s", got, frFile)
+	if got := decoded["resolved_source_path"]; got != "content/posts/csp-nonce/index.fr.md" {
+		t.Fatalf("update_page multilingual resolved_source_path = %v, want content/posts/csp-nonce/index.fr.md", got)
 	}
 	if got := decoded["resolved_lang"]; got != "fr" {
 		t.Fatalf("update_page multilingual resolved_lang = %v, want fr", got)
@@ -582,8 +582,8 @@ func TestCreatePageAcceptsExplicitLang(t *testing.T) {
 		t.Fatal("create_page with explicit lang must not create default index.md")
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != frPath {
-		t.Fatalf("create_page resolved_source_path = %v, want %s", got, frPath)
+	if got := decoded["resolved_source_path"]; got != "content/posts/bilingual/index.fr.md" {
+		t.Fatalf("create_page resolved_source_path = %v, want content/posts/bilingual/index.fr.md", got)
 	}
 	if got := decoded["resolved_lang"]; got != "fr" {
 		t.Fatalf("create_page resolved_lang = %v, want fr", got)

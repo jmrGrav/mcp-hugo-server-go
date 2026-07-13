@@ -60,7 +60,7 @@ func TestAnonymousHelperDTOBranches(t *testing.T) {
 			Tags:       []string{"Ia"},
 			Categories: []string{"Infra"},
 		},
-	})
+	}, contentRoot)
 	if len(resolvedPublic.Tags) != 1 || resolvedPublic.Tags[0] != "Ia" {
 		t.Fatalf("toResolvedPageDetailDTO(public+source) tags = %#v", resolvedPublic.Tags)
 	}
@@ -74,12 +74,12 @@ func TestAnonymousHelperDTOBranches(t *testing.T) {
 			Tags:       []string{"draft"},
 			Categories: []string{"notes"},
 		},
-	})
+	}, contentRoot)
 	if resolvedSource.Slug != "/drafts/fresh/" || resolvedSource.HTML != "Fresh body" {
 		t.Fatalf("toResolvedPageDetailDTO(source-only) = %#v", resolvedSource)
 	}
 
-	empty := toResolvedPageDetailDTO(site.ResolvedPage{})
+	empty := toResolvedPageDetailDTO(site.ResolvedPage{}, contentRoot)
 	if empty.Slug != "" || empty.Title != "" || empty.HTML != "" || len(empty.Tags) != 0 || len(empty.Categories) != 0 {
 		t.Fatalf("toResolvedPageDetailDTO(empty) = %#v", empty)
 	}

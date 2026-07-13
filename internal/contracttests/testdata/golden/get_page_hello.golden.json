@@ -15,7 +15,7 @@
       "html": "\n  \u003carticle\u003e\n    \u003ch1\u003eHello\u003c/h1\u003e\n    \u003cp\u003eMinimal English content.\u003c/p\u003e\n  \u003c/article\u003e\n\n\n",
       "lang": "en",
       "resolved_lang": "",
-      "resolved_source_path": "testdata/fixtures/content/posts/hello.md",
+      "resolved_source_path": "content/posts/hello.md",
       "slug": "/posts/hello/",
       "state": {
         "build_state": "built",
@@ -63,7 +63,7 @@
     "html": "\n  \u003carticle\u003e\n    \u003ch1\u003eHello\u003c/h1\u003e\n    \u003cp\u003eMinimal English content.\u003c/p\u003e\n  \u003c/article\u003e\n\n\n",
     "lang": "en",
     "resolved_lang": "",
-    "resolved_source_path": "testdata/fixtures/content/posts/hello.md",
+    "resolved_source_path": "content/posts/hello.md",
     "slug": "/posts/hello/",
     "state": {
       "build_state": "built",
