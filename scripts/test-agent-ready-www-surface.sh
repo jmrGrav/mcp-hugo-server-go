@@ -11,7 +11,7 @@ need_pattern() {
   local file="$1"
   local pattern="$2"
   local label="$3"
-  if ! rg -q --fixed-strings "$pattern" "$file"; then
+  if ! grep -qF "$pattern" "$file"; then
     echo "FAIL: $label missing in $file" >&2
     return 1
   fi
@@ -22,7 +22,7 @@ forbid_pattern() {
   local file="$1"
   local pattern="$2"
   local label="$3"
-  if rg -q --fixed-strings "$pattern" "$file"; then
+  if grep -qF "$pattern" "$file"; then
     echo "FAIL: $label unexpectedly present in $file" >&2
     return 1
   fi
