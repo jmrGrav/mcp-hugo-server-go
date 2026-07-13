@@ -116,13 +116,11 @@ type ScopeExtension func(scopeName string, s *mcp.Server)
 
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
 	impl := &mcp.Implementation{Name: Name, Version: Version}
+	serverCaps := defaultServerCapabilities()
 	// Explicitly declare capabilities so static scanners (mcpscan.dev) can
 	// inspect them. The SDK merges these with auto-detected tool/resource caps.
 	serverOpts := &mcp.ServerOptions{
-		Capabilities: &mcp.ServerCapabilities{
-			Logging: &mcp.LoggingCapabilities{},
-			Tools:   &mcp.ToolCapabilities{ListChanged: true},
-		},
+		Capabilities: serverCaps,
 	}
 	logger := observability.NewLogger()
 	metrics := observability.NewMetrics()
@@ -501,6 +499,15 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		resetIPCounts: resetIP,
 		siteDB:        siteDB,
 	}, nil
+}
+
+func defaultServerCapabilities() *mcp.ServerCapabilities {
+	return &mcp.ServerCapabilities{
+		Logging:   &mcp.LoggingCapabilities{},
+		Tools:     &mcp.ToolCapabilities{ListChanged: true},
+		Prompts:   &mcp.PromptCapabilities{ListChanged: true},
+		Resources: &mcp.ResourceCapabilities{ListChanged: true, Subscribe: true},
+	}
 }
 
 func (s *Server) Handler() http.Handler {
