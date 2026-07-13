@@ -45,6 +45,17 @@ body:
     attributes:
       label: Compatibility or rollout risks
       description: Backward compatibility, migration, docs, or operator concerns
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Suggested priority
+      description: Choose the closest priority for triage
+      options:
+        - P1
+        - P2
+        - P0
+    validations:
+      required: true
   - type: checkboxes
     id: checks
     attributes:

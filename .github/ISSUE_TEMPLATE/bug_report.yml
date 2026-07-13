@@ -68,6 +68,17 @@ body:
       description: Why this matters for users, operators, agents, security, or release quality
     validations:
       required: true
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Suggested priority
+      description: Choose the closest priority for triage
+      options:
+        - P0
+        - P1
+        - P2
+    validations:
+      required: true
   - type: checkboxes
     id: checks
     attributes:
