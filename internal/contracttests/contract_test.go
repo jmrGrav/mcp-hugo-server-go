@@ -492,6 +492,51 @@ func TestContractPaginationWalksToEndWithoutGaps(t *testing.T) {
 	}
 }
 
+func TestContractGetPageMatchesGolden(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	session, done := newAnonymousSession(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello/"})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %s", marshalAny(t, res.Content))
+	}
+	assertGoldenJSON(t, "get_page_hello", decodeContent(t, res))
+}
+
+func TestContractListPagesMatchesGolden(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	session, done := newAnonymousSession(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "list_pages", map[string]any{"limit": 2, "offset": 0})
+	if res.IsError {
+		t.Fatalf("list_pages returned error: %s", marshalAny(t, res.Content))
+	}
+	assertGoldenJSON(t, "list_pages_page1", decodeContent(t, res))
+}
+
+func TestContractGetRelatedContentMatchesGolden(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	session, done := newReadSession(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/", "limit": 2})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %s", marshalAny(t, res.Content))
+	}
+	assertGoldenJSON(t, "get_related_content_hello", decodeContent(t, res))
+}
+
 func fixtureConfig() config.Config {
 	cfg := config.Default()
 	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
@@ -881,5 +926,91 @@ func writeFile(t *testing.T, path, body string) {
 	}
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func assertGoldenJSON(t *testing.T, name string, got map[string]any) {
+	t.Helper()
+	normalized := normalizeGoldenMap(cloneMap(got))
+	raw, err := json.MarshalIndent(normalized, "", "  ")
+	if err != nil {
+		t.Fatalf("MarshalIndent(%s) error = %v", name, err)
+	}
+	goldenPath := filepath.Join("testdata", "golden", name+".golden.json")
+	want, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", goldenPath, err)
+	}
+	if diff := strings.TrimSpace(string(raw)); diff != strings.TrimSpace(string(want)) {
+		t.Fatalf("%s golden mismatch\n--- got ---\n%s\n--- want ---\n%s", name, raw, want)
+	}
+}
+
+func normalizeGoldenMap(m map[string]any) map[string]any {
+	delete(m, "generated_at")
+	if meta, ok := m["meta"].(map[string]any); ok {
+		delete(meta, "generated_at")
+	}
+	normalizeSourcePaths(m)
+	return m
+}
+
+func normalizeSourcePaths(v any) {
+	switch x := v.(type) {
+	case map[string]any:
+		for key, child := range x {
+			if key == "resolved_source_path" {
+				if path, ok := child.(string); ok {
+					path = filepath.ToSlash(path)
+					if idx := strings.Index(path, "testdata/fixtures/"); idx >= 0 {
+						path = path[idx:]
+					}
+					x[key] = path
+				}
+				continue
+			}
+			normalizeSourcePaths(child)
+		}
+	case []any:
+		for _, item := range x {
+			normalizeSourcePaths(item)
+		}
+	}
+}
+
+func TestContractGoldenFixturesExist(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		"get_page_hello",
+		"list_pages_page1",
+		"get_related_content_hello",
+	} {
+		path := filepath.Join("testdata", "golden", name+".golden.json")
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("missing golden fixture %s: %v", path, err)
+		}
+		if info.IsDir() {
+			t.Fatalf("golden fixture %s is a directory", path)
+		}
+	}
+}
+
+func TestContractGoldenFilesAreValidJSON(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{
+		"get_page_hello",
+		"list_pages_page1",
+		"get_related_content_hello",
+	} {
+		path := filepath.Join("testdata", "golden", name+".golden.json")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		var decoded any
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatalf("%s is not valid JSON: %v", path, err)
+		}
 	}
 }

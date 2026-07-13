@@ -1,0 +1,97 @@
+{
+  "data": {
+    "page": {
+      "categories": [
+        "tutorials"
+      ],
+      "category_terms": [
+        {
+          "label": "Tutorials",
+          "slug": "tutorials",
+          "source": "tutorials"
+        }
+      ],
+      "date": "2026-01-05T03:04:05Z",
+      "html": "\n  \u003carticle\u003e\n    \u003ch1\u003eHello\u003c/h1\u003e\n    \u003cp\u003eMinimal English content.\u003c/p\u003e\n  \u003c/article\u003e\n\n\n",
+      "lang": "en",
+      "resolved_lang": "",
+      "resolved_source_path": "testdata/fixtures/content/posts/hello.md",
+      "slug": "/posts/hello/",
+      "state": {
+        "build_state": "built",
+        "index_state": "fresh",
+        "public_state": "available",
+        "source_state": "present"
+      },
+      "summary": "Minimal English article",
+      "tag_terms": [
+        {
+          "label": "Go",
+          "slug": "go",
+          "source": "go"
+        },
+        {
+          "label": "Hugo",
+          "slug": "hugo",
+          "source": "hugo"
+        }
+      ],
+      "tags": [
+        "go",
+        "hugo"
+      ],
+      "title": "Hello",
+      "url": "https://example.test/posts/hello/"
+    }
+  },
+  "errors": [],
+  "meta": {
+    "server_version": "v1.0.0"
+  },
+  "page": {
+    "categories": [
+      "tutorials"
+    ],
+    "category_terms": [
+      {
+        "label": "Tutorials",
+        "slug": "tutorials",
+        "source": "tutorials"
+      }
+    ],
+    "date": "2026-01-05T03:04:05Z",
+    "html": "\n  \u003carticle\u003e\n    \u003ch1\u003eHello\u003c/h1\u003e\n    \u003cp\u003eMinimal English content.\u003c/p\u003e\n  \u003c/article\u003e\n\n\n",
+    "lang": "en",
+    "resolved_lang": "",
+    "resolved_source_path": "testdata/fixtures/content/posts/hello.md",
+    "slug": "/posts/hello/",
+    "state": {
+      "build_state": "built",
+      "index_state": "fresh",
+      "public_state": "available",
+      "source_state": "present"
+    },
+    "summary": "Minimal English article",
+    "tag_terms": [
+      {
+        "label": "Go",
+        "slug": "go",
+        "source": "go"
+      },
+      {
+        "label": "Hugo",
+        "slug": "hugo",
+        "source": "hugo"
+      }
+    ],
+    "tags": [
+      "go",
+      "hugo"
+    ],
+    "title": "Hello",
+    "url": "https://example.test/posts/hello/"
+  },
+  "success": true,
+  "version": "v1.0.0",
+  "warnings": []
+}
