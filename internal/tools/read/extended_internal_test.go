@@ -67,7 +67,7 @@ func TestContentHelperFunctions(t *testing.T) {
 	if dto.Slug != pages[0].Slug || dto.Title != "Alpha" {
 		t.Fatalf("toPageDTO() = %#v", dto)
 	}
-	if got := toPageDTOs(pages, nil); len(got) != 3 || got[1].Slug != "/posts/b/" {
+	if got := toPageDTOs(pages, nil, nil); len(got) != 3 || got[1].Slug != "/posts/b/" {
 		t.Fatalf("toPageDTOs() = %#v", got)
 	}
 	if got := countSections(pages); len(got) == 0 || got[0].Name == "" {
@@ -81,6 +81,50 @@ func TestContentHelperFunctions(t *testing.T) {
 	}
 	if got := uniqueLanguages(pages); len(got) != 2 {
 		t.Fatalf("uniqueLanguages() = %#v", got)
+	}
+}
+
+func TestResolveSourceForPagePrefersMatchingLanguage(t *testing.T) {
+	if lookup := newSourceLookup(nil); lookup != nil {
+		t.Fatal("newSourceLookup(nil) should return nil")
+	}
+
+	lookup := &sourceLookup{
+		byLang: map[string]hugosite.SourcePage{
+			sourceLookupKey("posts/hello", "fr"): {Slug: "posts/hello", Lang: "fr", FilePath: "/tmp/posts/hello/index.fr.md"},
+			sourceLookupKey("posts/hello", "en"): {Slug: "posts/hello", Lang: "en", FilePath: "/tmp/posts/hello/index.en.md"},
+		},
+		byDefault: map[string]hugosite.SourcePage{
+			"posts/default": {Slug: "posts/default", FilePath: "/tmp/posts/default/index.md"},
+		},
+		bySlug: map[string]hugosite.SourcePage{
+			"posts/hello":    {Slug: "posts/hello", Lang: "fr", FilePath: "/tmp/posts/hello/index.fr.md"},
+			"posts/default":  {Slug: "posts/default", FilePath: "/tmp/posts/default/index.md"},
+			"posts/leaf.fr":  {Slug: "posts/leaf.fr", FilePath: "/tmp/posts/leaf.fr.md"},
+			"posts/leaf":     {Slug: "posts/leaf", FilePath: "/tmp/posts/leaf.md"},
+			"posts/bonjour":  {Slug: "posts/bonjour", Lang: "fr", FilePath: "/tmp/posts/bonjour/index.fr.md"},
+			"posts/bonjour2": {Slug: "posts/bonjour2", Lang: "fr", FilePath: "/tmp/posts/bonjour2/index.fr.md"},
+		},
+	}
+
+	got, ok := resolveSourceForPage(site.Page{Slug: "/fr/posts/hello/", Lang: "fr"}, lookup)
+	if !ok || got.Page.FilePath != "/tmp/posts/hello/index.fr.md" || got.ResolvedLang != "fr" {
+		t.Fatalf("resolveSourceForPage(fr) = %#v, %v", got, ok)
+	}
+
+	got, ok = resolveSourceForPage(site.Page{Slug: "/en/posts/hello/", Lang: "en"}, lookup)
+	if !ok || got.Page.FilePath != "/tmp/posts/hello/index.en.md" || got.ResolvedLang != "en" {
+		t.Fatalf("resolveSourceForPage(en) = %#v, %v", got, ok)
+	}
+
+	got, ok = resolveSourceForPage(site.Page{Slug: "/en/posts/default/", Lang: "en"}, lookup)
+	if !ok || got.Page.FilePath != "/tmp/posts/default/index.md" {
+		t.Fatalf("resolveSourceForPage(default fallback) = %#v, %v", got, ok)
+	}
+
+	match, ok := resolveSourceForPage(site.Page{Slug: "/fr/posts/leaf/", Lang: "fr"}, lookup)
+	if !ok || match.Page.FilePath != "/tmp/posts/leaf.fr.md" || match.ResolvedLang != "fr" {
+		t.Fatalf("resolveSourceForPage(leaf fallback) = %#v, %v", match, ok)
 	}
 }
 
