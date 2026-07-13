@@ -169,6 +169,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 
 	anonServer := mcp.NewServer(impl, serverOpts)
 	anonServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "", knownTools))
+	registerSharedResources(anonServer)
 	anonymous.Register(anonServer, idx, cfg, srcIdx)
 	for _, ext := range extensions {
 		ext("", anonServer)
@@ -176,6 +177,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 
 	readServer := mcp.NewServer(impl, serverOpts)
 	readServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.read", knownTools))
+	registerSharedResources(readServer)
 	anonymous.Register(readServer, idx, cfg, srcIdx)
 	read.Register(readServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
@@ -187,6 +189,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 
 	writeServer := mcp.NewServer(impl, serverOpts)
 	writeServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.write", knownTools))
+	registerSharedResources(writeServer)
 	anonymous.Register(writeServer, idx, cfg, srcIdx)
 	read.Register(writeServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
@@ -201,6 +204,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 
 	siteAdminServer := mcp.NewServer(impl, serverOpts)
 	siteAdminServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "site.admin", knownTools))
+	registerSharedResources(siteAdminServer)
 	anonymous.Register(siteAdminServer, idx, cfg, srcIdx)
 	read.Register(siteAdminServer, idx, cfg, srcIdx)
 	if srcIdx != nil {

@@ -69,3 +69,13 @@ Use `slug` for stable filtering/grouping and `label` for display. The original `
 ## Discovery
 
 - `/.well-known/agent.json` - A2A agent card for Google-compatible discovery
+
+## Shared Resources
+
+The server also publishes a small additive MCP resource catalog for reusable shared schemas. Agents that need a canonical entity shape can inspect these via `resources/list` and `resources/read` instead of reverse-engineering the same DTO from multiple tool schemas.
+
+- `schema://mcp-hugo-server-go/contentmodel/page-identity`
+- `schema://mcp-hugo-server-go/toolcontract/pagination-meta`
+- `schema://mcp-hugo-server-go/site/lifecycle-state`
+
+Use these resources when you need the stable shared contract behind multiple tools; use per-tool input/output schemas when you need the exact shape of one specific call.
