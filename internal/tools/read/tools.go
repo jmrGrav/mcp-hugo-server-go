@@ -86,11 +86,9 @@ type translationPageDTO struct {
 }
 
 type getRelatedContentOutput struct {
-	Translations   []translationPageDTO `json:"translations"`
-	RelatedPages   []relatedPageDTO     `json:"related_pages"`
-	Related        []relatedPageDTO     `json:"related"`
-	Backlinks      []backlinkDTO        `json:"backlinks"`
-	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
+	Translations []translationPageDTO `json:"translations"`
+	RelatedPages []relatedPageDTO     `json:"related_pages"`
+	Related      []relatedPageDTO     `json:"related"`
 }
 
 type buildAgentContextInput struct {
@@ -192,11 +190,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			translations := collectTranslations(idx, ref)
 			related := computeRelated(idx, ref, limit)
 			return nil, getRelatedContentOutput{
-				Translations:   translations,
-				RelatedPages:   related,
-				Related:        related,
-				Backlinks:      []backlinkDTO{},
-				SuggestedLinks: []linkSuggestionDTO{},
+				Translations: translations,
+				RelatedPages: related,
+				Related:      related,
 			}, nil
 		})
 
