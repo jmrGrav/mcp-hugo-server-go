@@ -338,7 +338,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				classifier := site.NewClassifierFromPages(all)
 				filtered := all[:0]
 				for _, p := range all {
-					if classifier.Classify(p) != site.KindTaxonomy && !isTaxonomyURL(p.Slug) && !isTaxonomyURL(p.URL) {
+					if classifier.IsContent(p) && !isTaxonomyURL(p.Slug) && !isTaxonomyURL(p.URL) {
 						filtered = append(filtered, p)
 					}
 				}

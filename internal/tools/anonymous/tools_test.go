@@ -858,6 +858,9 @@ func TestGetSitemapExcludeTaxonomies(t *testing.T) {
 	writeHTML("en/tags/webhook/index.html", `<!doctype html><html><head><title>Webhook tag</title><link rel="canonical" href="https://example.test/en/tags/webhook/"></head><body><main>Tag page</main></body></html>`)
 	writeHTML("fr/categories/securite/index.html", `<!doctype html><html><head><title>Securite category</title><link rel="canonical" href="https://example.test/fr/categories/securite/"></head><body><main>Category page</main></body></html>`)
 	writeHTML("authors/jm/index.html", `<!doctype html><html><head><title>JM author</title><link rel="canonical" href="https://example.test/authors/jm/"></head><body><main>Author page</main></body></html>`)
+	writeHTML("posts/index.html", `<!doctype html><html><head><title>Posts section</title><link rel="canonical" href="https://example.test/posts/"></head><body><main>Posts section</main></body></html>`)
+	writeHTML("404.html", `<!doctype html><html><head><title>Not Found</title><link rel="canonical" href="https://example.test/404.html"></head><body><main>404</main></body></html>`)
+	writeHTML("index.html", `<!doctype html><html><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>Home</main></body></html>`)
 	writeHTML("posts/hello/index.html", `<!doctype html><html><head><title>Hello</title><meta property="og:type" content="article"><link rel="canonical" href="https://example.test/posts/hello/"></head><body><article>Hello</article></body></html>`)
 
 	cfg := config.Default()
@@ -895,6 +898,9 @@ func TestGetSitemapExcludeTaxonomies(t *testing.T) {
 		url, _ := entry["url"].(string)
 		if strings.Contains(url, "/tags/") || strings.Contains(url, "/categories/") || strings.Contains(url, "/authors/") {
 			t.Fatalf("get_sitemap exclude_taxonomies returned taxonomy URL %q", url)
+		}
+		if url == "https://example.test/posts/" || url == "https://example.test/404.html" || url == "https://example.test/" {
+			t.Fatalf("get_sitemap exclude_taxonomies returned non-content URL %q", url)
 		}
 	}
 }
