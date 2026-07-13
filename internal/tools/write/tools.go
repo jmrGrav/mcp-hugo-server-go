@@ -496,7 +496,7 @@ func buildFrontmatter(title string, tags, categories []string, body string) stri
 		Categories: categories,
 		Draft:      false,
 	}
-	raw, _ := yaml.Marshal(doc)
+	raw, _ := marshalWithIndent(doc, 2)
 	var sb strings.Builder
 	sb.WriteString("---\n")
 	sb.Write(raw)
@@ -509,7 +509,7 @@ func buildFrontmatter(title string, tags, categories []string, body string) stri
 }
 
 func buildFrontmatterFromMap(fm map[string]any, body string) string {
-	raw, _ := yaml.Marshal(fm)
+	raw, _ := marshalWithIndent(fm, 2)
 	var sb strings.Builder
 	sb.WriteString("---\n")
 	sb.Write(raw)
@@ -570,7 +570,7 @@ func applyPageUpdates(fileContent, newTitle, newBody string, opts pageUpdateOpts
 		if opts.Description != "" {
 			setYAMLKey(mapping, "description", opts.Description)
 		}
-		out, err := marshalYAMLMappingWithIndent(doc.Content[0], 2)
+		out, err := marshalWithIndent(doc.Content[0], 2)
 		if err != nil {
 			return "", fmt.Errorf("YAML marshal: %w", err)
 		}
@@ -638,11 +638,11 @@ func setYAMLBool(mapping *yaml.Node, key string, value bool) {
 	)
 }
 
-func marshalYAMLMappingWithIndent(node *yaml.Node, indent int) ([]byte, error) {
+func marshalWithIndent(v any, indent int) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(indent)
-	if err := enc.Encode(node); err != nil {
+	if err := enc.Encode(v); err != nil {
 		_ = enc.Close()
 		return nil, err
 	}
