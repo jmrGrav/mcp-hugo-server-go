@@ -118,6 +118,13 @@ func TestCreatePage(t *testing.T) {
 	if !strings.Contains(content, "draft") {
 		t.Errorf("frontmatter missing draft field: %s", content)
 	}
+	decoded := decodeWriteContent(t, res)
+	if got := decoded["resolved_source_path"]; got != path {
+		t.Fatalf("create_page resolved_source_path = %v, want %s", got, path)
+	}
+	if got := decoded["resolved_lang"]; got != "" {
+		t.Fatalf("create_page resolved_lang = %v, want empty default lang", got)
+	}
 }
 
 func TestCreatePageSymlinkBlocked(t *testing.T) {
@@ -287,6 +294,10 @@ func TestUpdatePageSuccess(t *testing.T) {
 	if !strings.Contains(string(data), "New Title") {
 		t.Errorf("updated file missing new title: %s", data)
 	}
+	decoded := decodeWriteContent(t, res)
+	if got := decoded["resolved_source_path"]; got != filepath.Join(contentRoot, "update-me", "index.md") {
+		t.Fatalf("update_page resolved_source_path = %v, want %s", got, filepath.Join(contentRoot, "update-me", "index.md"))
+	}
 }
 
 func TestDeletePageSuccess(t *testing.T) {
@@ -315,6 +326,10 @@ func TestDeletePageSuccess(t *testing.T) {
 	// The entire directory must be removed, not just index.md.
 	if _, err := os.Stat(filepath.Join(contentRoot, "to-delete")); !os.IsNotExist(err) {
 		t.Error("expected page directory to be fully removed")
+	}
+	decoded := decodeWriteContent(t, res)
+	if got := decoded["resolved_source_path"]; got != filepath.Join(contentRoot, "to-delete", "index.md") {
+		t.Fatalf("delete_page resolved_source_path = %v, want %s", got, filepath.Join(contentRoot, "to-delete", "index.md"))
 	}
 }
 
@@ -390,6 +405,97 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(pageDir, "index.md")); !os.IsNotExist(err) {
 		t.Error("update_page must not create index.md when only index.fr.md exists")
+	}
+	decoded := decodeWriteContent(t, res)
+	if got := decoded["resolved_source_path"]; got != frFile {
+		t.Fatalf("update_page multilingual resolved_source_path = %v, want %s", got, frFile)
+	}
+	if got := decoded["resolved_lang"]; got != "fr" {
+		t.Fatalf("update_page multilingual resolved_lang = %v, want fr", got)
+	}
+}
+
+func TestCreatePageAcceptsExplicitLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/bilingual",
+		"lang":       "fr",
+		"title":      "Bonjour",
+		"body":       "Contenu",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page with explicit lang failed: %s", raw)
+	}
+
+	frPath := filepath.Join(contentRoot, "posts", "bilingual", "index.fr.md")
+	if _, err := os.Stat(frPath); err != nil {
+		t.Fatalf("expected explicit lang file at %s: %v", frPath, err)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "bilingual", "index.md")); !os.IsNotExist(err) {
+		t.Fatal("create_page with explicit lang must not create default index.md")
+	}
+	decoded := decodeWriteContent(t, res)
+	if got := decoded["resolved_source_path"]; got != frPath {
+		t.Fatalf("create_page resolved_source_path = %v, want %s", got, frPath)
+	}
+	if got := decoded["resolved_lang"]; got != "fr" {
+		t.Fatalf("create_page resolved_lang = %v, want fr", got)
+	}
+}
+
+func TestCreatePageRejectsInvalidLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	for _, lang := range []string{"../escape", "zh-Hant"} {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug":       "posts/bad-lang",
+			"lang":       lang,
+			"title":      "Bad",
+			"body":       "body",
+			"tags":       []any{},
+			"categories": []any{},
+		})
+		if !res.IsError {
+			t.Fatalf("create_page with invalid lang %q should fail", lang)
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "invalid_params") {
+			t.Fatalf("create_page invalid lang %q must return invalid_params, got: %s", lang, raw)
+		}
+	}
+}
+
+func TestDeletePageMultilingualBundleStillSucceeds(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual-delete")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: FR\n---\nBonjour"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN\n---\nHello"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{"slug": "posts/bilingual-delete"})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page on multilingual bundle failed: %s", raw)
+	}
+	if _, err := os.Stat(pageDir); !os.IsNotExist(err) {
+		t.Fatal("delete_page must remove multilingual bundle directory")
 	}
 }
 

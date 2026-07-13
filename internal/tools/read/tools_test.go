@@ -133,6 +133,10 @@ func TestGetFullPageMarkdown(t *testing.T) {
 	if markdown != "This is the hello world post body." {
 		t.Fatalf("get_full_page_markdown markdown = %q, want source body", markdown)
 	}
+	if got := page["resolved_source_path"]; got != "testdata/fixtures/content/posts/hello.md" &&
+		!strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
+		t.Fatalf("get_full_page_markdown resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
+	}
 }
 
 func TestGetFullPageMarkdownUnknown(t *testing.T) {
@@ -204,10 +208,16 @@ func TestGetPageFrontmatterExposesStableMetadataContract(t *testing.T) {
 	if !ok {
 		t.Fatalf("get_page_frontmatter frontmatter type = %T", m["frontmatter"])
 	}
-	for _, key := range []string{"slug", "lang", "url", "title", "reading_time_minutes", "tag_terms", "category_terms"} {
+	for _, key := range []string{"slug", "lang", "url", "title", "reading_time_minutes", "tag_terms", "category_terms", "resolved_lang", "resolved_source_path"} {
 		if _, ok := fm[key]; !ok {
 			t.Fatalf("get_page_frontmatter missing %q in frontmatter: %#v", key, fm)
 		}
+	}
+	if got := fm["resolved_lang"]; got != "" {
+		t.Fatalf("get_page_frontmatter resolved_lang = %v, want empty default lang for hello.md fixture", got)
+	}
+	if got := fm["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
+		t.Fatalf("get_page_frontmatter resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
 	}
 }
 
@@ -254,6 +264,10 @@ func TestBuildAgentContext(t *testing.T) {
 	}
 	if _, ok := ctx["frontmatter"]; !ok {
 		t.Fatal("build_agent_context: missing 'frontmatter' in context")
+	}
+	fm := ctx["frontmatter"].(map[string]any)
+	if got := fm["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
+		t.Fatalf("build_agent_context resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
 	}
 	markdown, ok := ctx["markdown"].(string)
 	if !ok {
@@ -372,6 +386,23 @@ func TestSearchContent(t *testing.T) {
 	}
 	if len(pages) == 0 {
 		t.Fatal("search_content expected results")
+	}
+	var hello map[string]any
+	for _, raw := range pages {
+		page, _ := raw.(map[string]any)
+		if page["slug"] == "/posts/hello/" {
+			hello = page
+			break
+		}
+	}
+	if hello == nil {
+		t.Fatal("search_content expected /posts/hello/ result")
+	}
+	if got := hello["resolved_lang"]; got != "" {
+		t.Fatalf("search_content resolved_lang = %v, want empty default source lang for hello.md fixture", got)
+	}
+	if got := hello["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
+		t.Fatalf("search_content resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
 	}
 }
 

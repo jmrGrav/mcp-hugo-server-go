@@ -6,12 +6,15 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -26,6 +29,7 @@ import (
 
 type createPageInput struct {
 	Slug       string   `json:"slug"`
+	Lang       string   `json:"lang,omitempty"`
 	Title      string   `json:"title"`
 	Body       string   `json:"body"`
 	Tags       []string `json:"tags"`
@@ -34,10 +38,12 @@ type createPageInput struct {
 }
 
 type createPageOutput struct {
-	Slug    string `json:"slug"`
-	Path    string `json:"path,omitempty"`
-	DryRun  bool   `json:"dry_run,omitempty"`
-	Content string `json:"content,omitempty"`
+	Slug               string `json:"slug"`
+	Path               string `json:"path,omitempty"`
+	ResolvedLang       string `json:"resolved_lang"`
+	ResolvedSourcePath string `json:"resolved_source_path"`
+	DryRun             bool   `json:"dry_run,omitempty"`
+	Content            string `json:"content,omitempty"`
 }
 
 type updatePageInput struct {
@@ -53,9 +59,11 @@ type updatePageInput struct {
 }
 
 type updatePageOutput struct {
-	Slug   string `json:"slug"`
-	DryRun bool   `json:"dry_run,omitempty"`
-	Diff   string `json:"diff,omitempty"`
+	Slug               string `json:"slug"`
+	ResolvedLang       string `json:"resolved_lang"`
+	ResolvedSourcePath string `json:"resolved_source_path"`
+	DryRun             bool   `json:"dry_run,omitempty"`
+	Diff               string `json:"diff,omitempty"`
 }
 
 type deletePageInput struct {
@@ -70,11 +78,13 @@ type deletePageBacklinkDTO struct {
 }
 
 type deletePageOutput struct {
-	Slug      string                   `json:"slug"`
-	DryRun    bool                     `json:"dry_run,omitempty"`
-	Content   string                   `json:"content,omitempty"`
-	Backlinks *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
-	Warning   string                   `json:"warning,omitempty"`
+	Slug               string                   `json:"slug"`
+	ResolvedLang       string                   `json:"resolved_lang"`
+	ResolvedSourcePath string                   `json:"resolved_source_path"`
+	DryRun             bool                     `json:"dry_run,omitempty"`
+	Content            string                   `json:"content,omitempty"`
+	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
+	Warning            string                   `json:"warning,omitempty"`
 }
 
 // normalizeInputSlug strips leading and trailing slashes so agents that pass
@@ -86,6 +96,8 @@ var reservedSlugs = map[string]bool{
 	"_index": true,
 	"index":  true,
 }
+
+var validLangPattern = regexp.MustCompile(`^[A-Za-z0-9-]{2,5}$`)
 
 // deleteCallerKey builds a rate-limit key that isolates delete budgets by caller IP.
 // Falls back to "unknown" when context carries no IP (e.g. in tests).
@@ -107,6 +119,17 @@ func deleteCallerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string)
 	l := rate.NewLimiter(rate.Every(time.Minute/5), 5)
 	m[key] = l
 	return l
+}
+
+func validateLangParam(lang string) (string, error) {
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return "", nil
+	}
+	if !validLangPattern.MatchString(lang) || strings.Contains(lang, "..") || strings.ContainsAny(lang, `/\`) {
+		return "", fmt.Errorf("invalid_params: lang must be a simple language code")
+	}
+	return lang, nil
 }
 
 func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) {
@@ -138,6 +161,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if in.Slug == "" {
 			return nil, createPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
+		resolvedLang, err := validateLangParam(in.Lang)
+		if err != nil {
+			return nil, createPageOutput{}, err
+		}
 		if in.Title == "" {
 			return nil, createPageOutput{}, fmt.Errorf("invalid_params: title must not be empty")
 		}
@@ -152,6 +179,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		filePath := filepath.Join(dir, "index.md")
+		if resolvedLang != "" {
+			filePath = filepath.Join(dir, "index."+resolvedLang+".md")
+		}
 		content := buildFrontmatter(in.Title, in.Tags, in.Categories, in.Body)
 
 		// Round-trip guard: verify the generated content parses correctly.
@@ -160,7 +190,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		if in.DryRun {
-			return nil, createPageOutput{Slug: in.Slug, DryRun: true, Content: content}, nil
+			return nil, createPageOutput{
+				Slug:               in.Slug,
+				ResolvedLang:       resolvedLang,
+				ResolvedSourcePath: filePath,
+				DryRun:             true,
+				Content:            content,
+			}, nil
 		}
 
 		const lockWait = 10 * time.Second
@@ -193,6 +229,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		created := hugosite.SourcePage{
 			Slug:           in.Slug,
 			FilePath:       filePath,
+			Lang:           resolvedLang,
 			Title:          in.Title,
 			Date:           now,
 			Tags:           in.Tags,
@@ -209,7 +246,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
-		return nil, createPageOutput{Slug: in.Slug, Path: filePath}, nil
+		return nil, createPageOutput{
+			Slug:               in.Slug,
+			Path:               filePath,
+			ResolvedLang:       resolvedLang,
+			ResolvedSourcePath: filePath,
+		}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -231,6 +273,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
+		}
+		lang, err := validateLangParam(in.Lang)
+		if err != nil {
+			return nil, updatePageOutput{}, err
 		}
 
 		const lockWait = 10 * time.Second
@@ -256,16 +302,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, fmt.Errorf("not_found: page not found")
 		}
 
-		dir, err := pg.SafeJoin(in.Slug)
-		if err != nil {
+		if _, err := pg.SafeJoin(in.Slug); err != nil {
 			slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
 
-		filePath, langErr := resolveUpdateFilePath(dir, in.Slug, in.Lang)
+		resolvedSource, langErr := resolveExistingSource(cfg.ContentRoot, in.Slug, lang)
 		if langErr != nil {
 			return nil, updatePageOutput{}, langErr
 		}
+		filePath := resolvedSource.SourcePath
 
 		raw, err := os.ReadFile(filePath)
 		if err != nil {
@@ -293,7 +339,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			// matches the file that a real write would touch.
 			diffLabel := in.Slug + "/" + filepath.Base(filePath)
 			diff := simpleDiff(diffLabel, string(raw), content)
-			return nil, updatePageOutput{Slug: in.Slug, DryRun: true, Diff: diff}, nil
+			return nil, updatePageOutput{
+				Slug:               in.Slug,
+				ResolvedLang:       resolvedSource.Lang,
+				ResolvedSourcePath: filePath,
+				DryRun:             true,
+				Diff:               diff,
+			}, nil
 		}
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("update_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
@@ -304,6 +356,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}
 		updated := *existing
+		updated.FilePath = filePath
+		updated.Lang = resolvedSource.Lang
 		if in.Title != "" {
 			updated.Title = in.Title
 			if updated.FrontmatterRaw == nil {
@@ -342,7 +396,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
-		return nil, updatePageOutput{Slug: in.Slug}, nil
+		return nil, updatePageOutput{
+			Slug:               in.Slug,
+			ResolvedLang:       resolvedSource.Lang,
+			ResolvedSourcePath: filePath,
+		}, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -374,12 +432,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 			return nil, deletePageOutput{}, fmt.Errorf("not_found: page not found for slug %q", in.Slug)
 		}
+		resolvedSource := inspectDeleteSource(dir)
 
 		// dry_run: return page content + backlinks that would break, without touching disk (#267).
 		if in.DryRun {
 			content := ""
-			if filePath, fpErr := resolveUpdateFilePath(dir, in.Slug, ""); fpErr == nil {
-				if raw, readErr := os.ReadFile(filePath); readErr == nil {
+			if resolvedSource.SourcePath != "" {
+				if raw, readErr := os.ReadFile(resolvedSource.SourcePath); readErr == nil {
 					content = string(raw)
 				}
 			}
@@ -389,7 +448,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 					bls = append(bls, deletePageBacklinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL})
 				}
 			}
-			return nil, deletePageOutput{Slug: in.Slug, DryRun: true, Content: content, Backlinks: &bls}, nil
+			return nil, deletePageOutput{
+				Slug:               in.Slug,
+				ResolvedLang:       resolvedSource.Lang,
+				ResolvedSourcePath: resolvedSource.SourcePath,
+				DryRun:             true,
+				Content:            content,
+				Backlinks:          &bls,
+			}, nil
 		}
 
 		callerKey := deleteCallerKey(ctx)
@@ -469,7 +535,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
-		return nil, deletePageOutput{Slug: in.Slug, Warning: deleteWarning}, nil
+		return nil, deletePageOutput{
+			Slug:               in.Slug,
+			ResolvedLang:       resolvedSource.Lang,
+			ResolvedSourcePath: resolvedSource.SourcePath,
+			Warning:            deleteWarning,
+		}, nil
 	})
 }
 
@@ -637,70 +708,52 @@ func setYAMLBool(mapping *yaml.Node, key string, value bool) {
 	)
 }
 
-// resolveUpdateFilePath discovers the correct index file to update for a given
-// content bundle directory. Returns ambiguous_language error when multiple
-// language files exist and no lang is specified.
-func resolveUpdateFilePath(dir, slug, lang string) (string, error) {
+func inspectDeleteSource(dir string) contentmodel.ResolvedSource {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		slog.Error("update_page: cannot read bundle dir", "slug", slug, "dir", dir, "error", err)
-		return "", fmt.Errorf("read_error: failed to read content directory for slug %q", slug)
+		return contentmodel.ResolvedSource{}
 	}
-
 	var files []string
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if name == "index.md" {
+		if name == "index.md" || (strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md")) {
 			files = append(files, filepath.Join(dir, name))
-			continue
-		}
-		if strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md") {
-			mid := strings.TrimSuffix(strings.TrimPrefix(name, "index."), ".md")
-			if len(mid) >= 2 && len(mid) <= 8 && !strings.Contains(mid, ".") {
-				files = append(files, filepath.Join(dir, name))
-			}
 		}
 	}
-
 	if len(files) == 0 {
-		return "", fmt.Errorf("not_found: no index file found for slug %q", slug)
+		return contentmodel.ResolvedSource{}
 	}
-
-	if lang != "" {
-		target := filepath.Join(dir, "index."+lang+".md")
-		for _, f := range files {
-			if f == target {
-				return f, nil
-			}
-		}
-		return "", fmt.Errorf("not_found: no index.%s.md for slug %q; available: %s",
-			lang, slug, strings.Join(bundleLangs(files, dir), ", "))
+	sort.Strings(files)
+	path := files[0]
+	return contentmodel.ResolvedSource{
+		SourcePath: path,
+		Lang:       inferLangFromIndexFile(path),
 	}
-
-	if len(files) == 1 {
-		return files[0], nil
-	}
-
-	return "", fmt.Errorf("ambiguous_language: page %q has multiple language files; specify lang (available: %s)",
-		slug, strings.Join(bundleLangs(files, dir), ", "))
 }
 
-// bundleLangs extracts language codes from a list of index file paths.
-func bundleLangs(files []string, dir string) []string {
-	langs := make([]string, 0, len(files))
-	for _, f := range files {
-		base := filepath.Base(f)
-		if base == "index.md" {
-			langs = append(langs, "default")
-		} else {
-			lang := strings.TrimSuffix(strings.TrimPrefix(base, "index."), ".md")
-			langs = append(langs, lang)
+func inferLangFromIndexFile(path string) string {
+	base := filepath.Base(path)
+	if base == "index.md" {
+		return ""
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(base, "index."), ".md")
+}
+
+func resolveExistingSource(contentRoot, slug, lang string) (contentmodel.ResolvedSource, error) {
+	resolved, err := contentmodel.ResolvePageSource(slug, lang, contentRoot)
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.HasPrefix(msg, "source_file_not_found:"):
+			return contentmodel.ResolvedSource{}, fmt.Errorf("not_found: page not found")
+		default:
+			return contentmodel.ResolvedSource{}, err
 		}
 	}
-	return langs
+	return resolved, nil
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).

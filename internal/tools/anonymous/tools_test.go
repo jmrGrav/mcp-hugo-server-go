@@ -153,7 +153,11 @@ func TestListPagesOffset(t *testing.T) {
 
 func TestGetPageBySlug(t *testing.T) {
 	idx := mustTestIndex(t)
-	session, done := newTestClient(t, idx)
+	srcIdx, err := hugosite.NewSourceIndex(filepath.Join("..", "..", "..", "testdata", "fixtures", "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
 	defer done()
 
 	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello"})
@@ -174,6 +178,12 @@ func TestGetPageBySlug(t *testing.T) {
 	}
 	if page["lang"] != "en" {
 		t.Fatalf("get_page: lang = %v, want en", page["lang"])
+	}
+	if page["resolved_lang"] != "" {
+		t.Fatalf("get_page: resolved_lang = %v, want empty default source lang for hello.md fixture", page["resolved_lang"])
+	}
+	if got, _ := page["resolved_source_path"].(string); !strings.HasSuffix(got, filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
+		t.Fatalf("get_page: resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", page["resolved_source_path"])
 	}
 }
 
@@ -219,6 +229,12 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	}
 	if page["url"] != "" {
 		t.Fatalf("get_page source-only url = %#v, want empty string", page["url"])
+	}
+	if page["resolved_lang"] != "" {
+		t.Fatalf("get_page source-only resolved_lang = %#v, want empty string", page["resolved_lang"])
+	}
+	if page["resolved_source_path"] != full {
+		t.Fatalf("get_page source-only resolved_source_path = %#v, want %s", page["resolved_source_path"], full)
 	}
 
 	resContentOnly := callTool(t, session, "get_page", map[string]any{

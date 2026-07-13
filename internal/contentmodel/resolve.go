@@ -122,9 +122,6 @@ func normalizeSlug(slug string) string {
 	if slug == "" {
 		return ""
 	}
-	if strings.HasPrefix(slug, "/") {
-		return ""
-	}
 	cleaned := filepath.Clean(slug)
 	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return ""
