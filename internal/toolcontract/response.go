@@ -1,6 +1,7 @@
 package toolcontract
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -8,6 +9,8 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+const ToolResultVersion = "v1.0.0"
 
 type ResponseMeta struct {
 	GeneratedAt   string `json:"generated_at"`
@@ -145,6 +148,17 @@ func ParseToolError(err error) ToolError {
 	}
 
 	return out
+}
+
+func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
+	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		res, out, err := handler(ctx, req, in)
+		if err != nil {
+			var zero Out
+			return ErrorResult(err, NewMeta(ToolResultVersion, time.Now())), zero, nil
+		}
+		return res, out, nil
+	}
 }
 
 func ErrorResult(err error, meta ResponseMeta) *mcp.CallToolResult {

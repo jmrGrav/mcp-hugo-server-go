@@ -35,7 +35,7 @@ func pageIdentityFromPage(p site.Page, sourcePath string, readingTime int) conte
 }
 
 func legacyEnvelope[T any](data T, now time.Time) legacyEnvelopeDTO[T] {
-	resp := toolcontract.Success(data, toolcontract.NewMeta(toolResultVersion, now))
+	resp := toolcontract.Success(data, toolcontract.NewMeta(toolcontract.ToolResultVersion, now))
 	return legacyEnvelopeDTO[T]{
 		Success:     resp.Success,
 		Version:     resp.Meta.ServerVersion,

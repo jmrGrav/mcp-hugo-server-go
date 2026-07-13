@@ -14,6 +14,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -75,7 +76,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				}
 				return nil, diffPageOutput{
 					Success:     true,
-					Version:     toolResultVersion,
+					Version:     toolcontract.ToolResultVersion,
 					GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 					Data: diffPageData{
 						Slug:          resolved.Source.Slug,
@@ -126,7 +127,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			}
 			return nil, diffPageOutput{
 				Success:     true,
-				Version:     toolResultVersion,
+				Version:     toolcontract.ToolResultVersion,
 				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 				Data: diffPageData{
 					Slug:          resolved.Source.Slug,

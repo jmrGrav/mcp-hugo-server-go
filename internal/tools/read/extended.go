@@ -18,7 +18,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-const toolResultVersion = "v1.0.0"
 
 type searchContentInput struct {
 	Query    string `json:"query,omitempty"`
@@ -297,7 +296,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx)
 					return nil, searchContentEnvelope{
 						Success:     true,
-						Version:     toolResultVersion,
+						Version:     toolcontract.ToolResultVersion,
 						GeneratedAt: now,
 						Data: searchContentData{
 							Pages:         dtos,
@@ -347,7 +346,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			now := time.Now().UTC().Format(time.RFC3339)
 			return nil, searchContentEnvelope{
 				Success:     true,
-				Version:     toolResultVersion,
+				Version:     toolcontract.ToolResultVersion,
 				GeneratedAt: now,
 				Data: searchContentData{
 					Pages:         toPageDTOs(pages, aliases, srcIdx),
@@ -395,7 +394,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			now := time.Now().UTC().Format(time.RFC3339)
 			return nil, contentEnvelope{
 				Success:     true,
-				Version:     toolResultVersion,
+				Version:     toolcontract.ToolResultVersion,
 				GeneratedAt: now,
 				Data: contentEnvelopeData{
 					Summary:     summary,
@@ -423,7 +422,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			now := time.Now().UTC().Format(time.RFC3339)
 			return nil, contentEnvelope{
 				Success:     true,
-				Version:     toolResultVersion,
+				Version:     toolcontract.ToolResultVersion,
 				GeneratedAt: now,
 				Data: contentEnvelopeData{
 					Status:                  health.Status,
@@ -490,7 +489,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					}
 					return nil, brokenLinkOutput{
 						Success:     true,
-						Version:     toolResultVersion,
+						Version:     toolcontract.ToolResultVersion,
 						GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 						Data: brokenLinkData{
 							TotalPages:  len(idx.Sitemap()),
@@ -509,7 +508,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			issues := collectBrokenLinks(idx)
 			return nil, brokenLinkOutput{
 				Success:     true,
-				Version:     toolResultVersion,
+				Version:     toolcontract.ToolResultVersion,
 				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 				Data: brokenLinkData{
 					TotalPages:  len(idx.Sitemap()),
@@ -609,7 +608,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			suggestions := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, limit)
 			return nil, suggestInternalLinksOutput{
 				Success:     true,
-				Version:     toolResultVersion,
+				Version:     toolcontract.ToolResultVersion,
 				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 				Data: suggestInternalLinksData{
 					Slug:           resolvedSlug,
@@ -1002,7 +1001,7 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 	}
 	return validateOutput{
 		Success:     true,
-		Version:     toolResultVersion,
+		Version:     toolcontract.ToolResultVersion,
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 		Data: validateOutputData{
 			PagesChecked: total,

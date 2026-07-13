@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -507,14 +506,6 @@ func readingTimeMinutes(md string) int {
 }
 
 func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out]) {
-	wrapped := func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
-		res, out, err := handler(ctx, req, in)
-		if err != nil {
-			var zero Out
-			return toolcontract.ErrorResult(err, toolcontract.NewMeta(toolResultVersion, time.Now())), zero, nil
-		}
-		return res, out, nil
-	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         name,
 		Title:        title,
@@ -527,7 +518,7 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 			IdempotentHint:  true,
 			OpenWorldHint:   boolPtr(false),
 		},
-	}, wrapped)
+	}, toolcontract.WrapTool(handler))
 }
 
 func boolPtr(v bool) *bool { return &v }
