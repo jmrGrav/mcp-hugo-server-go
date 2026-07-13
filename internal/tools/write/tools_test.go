@@ -184,6 +184,53 @@ func TestCreatePageReservedSlug(t *testing.T) {
 	}
 }
 
+func TestCreatePageRejectsExistingSlugWithoutOverwrite(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "existing-post",
+		"title":      "Original Title",
+		"body":       "Original body.",
+		"tags":       []any{"go"},
+		"categories": []any{"tutorials"},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial create_page failed: %s", raw)
+	}
+
+	second := callTool(t, session, "create_page", map[string]any{
+		"slug":       "existing-post",
+		"title":      "Replacement Title",
+		"body":       "Replacement body.",
+		"tags":       []any{"overwrite"},
+		"categories": []any{"danger"},
+	})
+	if !second.IsError {
+		raw, _ := json.Marshal(second.Content)
+		t.Fatalf("duplicate create_page should fail, got success: %s", raw)
+	}
+	raw, _ := json.Marshal(second.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("duplicate create_page must return already_exists, got: %s", raw)
+	}
+
+	path := filepath.Join(contentRoot, "existing-post", "index.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(existing page): %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Original Title") || !strings.Contains(content, "Original body.") {
+		t.Fatalf("existing page content was overwritten:\n%s", content)
+	}
+	if strings.Contains(content, "Replacement Title") || strings.Contains(content, "Replacement body.") {
+		t.Fatalf("duplicate create_page leaked replacement content into file:\n%s", content)
+	}
+}
+
 func TestDeletePageRateLimit(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)

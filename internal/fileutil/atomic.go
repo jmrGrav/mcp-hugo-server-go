@@ -1,6 +1,8 @@
 package fileutil
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -65,6 +67,44 @@ func AtomicWriteChecked(path, content string, pg *security.PathGuard) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// AtomicCreateChecked creates path atomically only if it does not already
+// exist. Content is first written to a temp file in the same directory, then
+// linked into place. This preserves create-only semantics without overwriting
+// an existing file. When the destination already exists, fs.ErrExist is
+// returned.
+func AtomicCreateChecked(path, content string, pg *security.PathGuard) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := pg.RevalidateForWrite(dir); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".mcp-create-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := pg.RevalidateForWrite(dir); err != nil {
+		return err
+	}
+	if err := os.Link(tmpName, path); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			return fs.ErrExist
+		}
+		return err
+	}
+	return nil
 }
 
 // AtomicWriteBytes writes data to path atomically using a unique temp file.

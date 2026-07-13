@@ -66,8 +66,7 @@ func runWriteScenarioProperty(t *testing.T, seeds int) {
 }
 
 // TestWriteErrorPaths verifies that the tools return errors for invalid
-// operations: empty/reserved slug, update/delete on missing slug.
-// Note: create_page on an existing slug is intentionally an upsert (not an error).
+// operations: empty/reserved slug, duplicate create, update/delete on missing slug.
 func TestWriteErrorPaths(t *testing.T) {
 	t.Parallel()
 
@@ -92,6 +91,14 @@ func TestWriteErrorPaths(t *testing.T) {
 	mustError(t, callTool(t, session, "create_page", map[string]any{
 		"slug": "_index", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
 	}), "create_page with reserved slug _index")
+
+	// Duplicate slug must fail instead of overwriting.
+	mustToolSucceed(t, callTool(t, session, "create_page", map[string]any{
+		"slug": "err/existing", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
+	}), scenarioOp{Kind: "create", Slug: "err/existing"}, nil)
+	mustError(t, callTool(t, session, "create_page", map[string]any{
+		"slug": "err/existing", "title": "T2", "body": "B2", "tags": []any{}, "categories": []any{},
+	}), "create_page on existing slug")
 
 	// update on missing slug must fail (not_found).
 	mustError(t, callTool(t, session, "update_page", map[string]any{

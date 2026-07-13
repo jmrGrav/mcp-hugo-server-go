@@ -363,6 +363,47 @@ func TestContractDryRunMutationsDoNotWriteToDisk(t *testing.T) {
 	}
 }
 
+func TestContractCreatePageRejectsDuplicateSlugWithoutOverwrite(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSession, writeDone := newWriteSession(t, contentRoot, fixtureConfig(), nil)
+	defer writeDone()
+
+	callMustSucceed(t, writeSession, "create_page", map[string]any{
+		"slug":       "posts/duplicate-check",
+		"title":      "Original Title",
+		"body":       "Original body.",
+		"tags":       []any{"go"},
+		"categories": []any{"tutorials"},
+	})
+
+	res := callTool(t, writeSession, "create_page", map[string]any{
+		"slug":       "posts/duplicate-check",
+		"title":      "Replacement Title",
+		"body":       "Replacement body.",
+		"tags":       []any{"overwrite"},
+		"categories": []any{"danger"},
+	})
+	if !res.IsError {
+		t.Fatalf("duplicate create_page should fail, got success: %s", marshalAny(t, res.Content))
+	}
+	if got := marshalAny(t, res.Content); !strings.Contains(got, "already_exists") {
+		t.Fatalf("duplicate create_page must return already_exists, got: %s", got)
+	}
+
+	path := filepath.Join(contentRoot, "posts", "duplicate-check", "index.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(duplicate-check) error = %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Original Title") || !strings.Contains(content, "Original body.") {
+		t.Fatalf("original page content was not preserved:\n%s", content)
+	}
+	if strings.Contains(content, "Replacement Title") || strings.Contains(content, "Replacement body.") {
+		t.Fatalf("duplicate create_page overwrote file contents:\n%s", content)
+	}
+}
+
 func TestContractPaginationWalksToEndWithoutGaps(t *testing.T) {
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)

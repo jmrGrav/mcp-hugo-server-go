@@ -114,6 +114,30 @@ func TestAtomicWriteCheckedSucceedsNormalPath(t *testing.T) {
 	}
 }
 
+func TestAtomicCreateCheckedRejectsExistingFile(t *testing.T) {
+	base := t.TempDir()
+	pg, err := security.New(base, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+
+	filePath := filepath.Join(base, "sub", "file.txt")
+	if err := fileutil.AtomicCreateChecked(filePath, "first", pg); err != nil {
+		t.Fatalf("AtomicCreateChecked(first): %v", err)
+	}
+	if err := fileutil.AtomicCreateChecked(filePath, "second", pg); err == nil {
+		t.Fatal("expected AtomicCreateChecked to fail on existing file")
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "first" {
+		t.Fatalf("content = %q, want %q", string(data), "first")
+	}
+}
+
 func TestBoolPtr(t *testing.T) {
 	if !*fileutil.BoolPtr(true) {
 		t.Fatal("BoolPtr(true) returned false")
