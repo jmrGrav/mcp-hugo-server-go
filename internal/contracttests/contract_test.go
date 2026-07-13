@@ -978,13 +978,15 @@ func normalizeSourcePaths(v any) {
 	}
 }
 
+var contractGoldenNames = []string{
+	"get_page_hello",
+	"list_pages_page1",
+	"get_related_content_hello",
+}
+
 func TestContractGoldenFixturesExist(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{
-		"get_page_hello",
-		"list_pages_page1",
-		"get_related_content_hello",
-	} {
+	for _, name := range contractGoldenNames {
 		path := filepath.Join("testdata", "golden", name+".golden.json")
 		info, err := os.Stat(path)
 		if err != nil {
@@ -998,11 +1000,7 @@ func TestContractGoldenFixturesExist(t *testing.T) {
 
 func TestContractGoldenFilesAreValidJSON(t *testing.T) {
 	t.Helper()
-	for _, name := range []string{
-		"get_page_hello",
-		"list_pages_page1",
-		"get_related_content_hello",
-	} {
+	for _, name := range contractGoldenNames {
 		path := filepath.Join("testdata", "golden", name+".golden.json")
 		raw, err := os.ReadFile(path)
 		if err != nil {
