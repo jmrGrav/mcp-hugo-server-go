@@ -12,6 +12,11 @@ type TaxonomyTerm struct {
 // PageIdentity is the canonical cross-tool description of a page. It is a
 // shared model only; individual handlers may still project it into legacy
 // response DTOs while the wider contract migration is in progress.
+//
+// SourcePath and TranslationKey are intentional agent-visible fields:
+// #271 requires every tool to return a consistent source_path, and
+// #273 requires translation_key for separating translations from related pages.
+// Both are populated progressively as handlers migrate to this type.
 type PageIdentity struct {
 	Slug           string         `json:"slug"`
 	Lang           string         `json:"lang"`

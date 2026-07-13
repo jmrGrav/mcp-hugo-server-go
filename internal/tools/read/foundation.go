@@ -8,6 +8,10 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 )
 
+// legacyEnvelopeDTO preserves the existing JSON contract for tools not yet
+// migrated to ToolResponse. The Errors field carries only the human-readable
+// message; the machine-readable Code is intentionally dropped here to keep
+// backward compatibility. Migrate a tool to ToolResponse to expose Code.
 type legacyEnvelopeDTO[T any] struct {
 	Success     bool     `json:"success"`
 	Version     string   `json:"version"`
@@ -42,6 +46,9 @@ func legacyEnvelope[T any](data T, now time.Time) legacyEnvelopeDTO[T] {
 	}
 }
 
+// toContentmodelTerms converts site-package taxonomy terms to the contentmodel
+// equivalent. The two types are structurally identical; the conversion exists
+// to keep contentmodel free of site-package imports during the migration.
 func toContentmodelTerms(terms []site.TaxonomyTerm) []contentmodel.TaxonomyTerm {
 	out := make([]contentmodel.TaxonomyTerm, len(terms))
 	for i, t := range terms {
