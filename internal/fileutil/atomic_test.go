@@ -114,6 +114,55 @@ func TestAtomicWriteCheckedSucceedsNormalPath(t *testing.T) {
 	}
 }
 
+func TestAtomicCreateCheckedCreatesNewFile(t *testing.T) {
+	base := t.TempDir()
+	pg, err := security.New(base, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+
+	filePath := filepath.Join(base, "sub", "file.txt")
+	if err := fileutil.AtomicCreateChecked(filePath, "hello", pg); err != nil {
+		t.Fatalf("AtomicCreateChecked: %v", err)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("content = %q, want %q", string(data), "hello")
+	}
+}
+
+func TestAtomicCreateCheckedRefusesExistingFile(t *testing.T) {
+	base := t.TempDir()
+	pg, err := security.New(base, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+
+	filePath := filepath.Join(base, "sub", "file.txt")
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filePath, []byte("original"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if err := fileutil.AtomicCreateChecked(filePath, "replacement", pg); err == nil {
+		t.Fatal("expected AtomicCreateChecked to fail on existing file")
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "original" {
+		t.Fatalf("content = %q, want original", string(data))
+	}
+}
+
 func TestBoolPtr(t *testing.T) {
 	if !*fileutil.BoolPtr(true) {
 		t.Fatal("BoolPtr(true) returned false")

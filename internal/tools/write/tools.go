@@ -3,6 +3,7 @@ package write
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -152,7 +153,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create or replace a Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page. This operation is intentionally not idempotent because repeated calls regenerate time-based front matter such as `date`. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Use this when drafting a new page. This operation is intentionally not idempotent because repeated calls must fail once the page exists, while initial creation also generates time-based front matter such as `date`. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -188,6 +189,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			filePath = filepath.Join(dir, "index."+resolvedLang+".md")
 		}
 		content := buildFrontmatter(in.Title, in.Tags, in.Categories, in.Body)
+		alreadyExistsErr := func() error {
+			return fmt.Errorf("already_exists: page already exists; use update_page or choose another slug")
+		}
 
 		// Round-trip guard: verify the generated content parses correctly.
 		if err := validateFrontmatterRoundTrip(content); err != nil {
@@ -195,6 +199,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		if in.DryRun {
+			if _, err := os.Stat(filePath); err == nil {
+				return nil, createPageOutput{}, alreadyExistsErr()
+			} else if err != nil && !os.IsNotExist(err) {
+				slog.Error("create_page: stat failed", "slug", in.Slug, "error", err)
+				return nil, createPageOutput{}, fmt.Errorf("read_error: failed to inspect destination path")
+			}
 			return nil, createPageOutput{
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedLang,
@@ -226,7 +236,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Warn("create_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, fmt.Errorf("security_error: symlink detected in write path")
 		}
-		if err := fileutil.AtomicWriteChecked(filePath, content, pg); err != nil {
+		if err := fileutil.AtomicCreateChecked(filePath, content, pg); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				slog.Warn("create_page: duplicate slug refused", "slug", in.Slug, "path", filePath)
+				return nil, createPageOutput{}, alreadyExistsErr()
+			}
 			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, fmt.Errorf("write_error: failed to write page")
 		}

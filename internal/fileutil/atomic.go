@@ -1,6 +1,7 @@
 package fileutil
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -65,6 +66,45 @@ func AtomicWriteChecked(path, content string, pg *security.PathGuard) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// AtomicCreateChecked creates a brand-new file and writes content to it using
+// exclusive create semantics. If the target already exists, the original file
+// is left untouched and fs.ErrExist is returned.
+func AtomicCreateChecked(path, content string, pg *security.PathGuard) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	if err := pg.RevalidateForWrite(dir); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fsErrExist(path)
+		}
+		return err
+	}
+	writeOK := false
+	defer func() {
+		_ = f.Close()
+		if !writeOK {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := f.WriteString(content); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	writeOK = true
+	return nil
+}
+
+func fsErrExist(path string) error {
+	return &os.PathError{Op: "open", Path: path, Err: fs.ErrExist}
 }
 
 // AtomicWriteBytes writes data to path atomically using a unique temp file.

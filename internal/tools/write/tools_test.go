@@ -149,6 +149,96 @@ func TestCreatePage(t *testing.T) {
 	}
 }
 
+func TestCreatePageDuplicateSlugReturnsAlreadyExistsAndPreservesContent(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "dup-post",
+		"title":      "Original",
+		"body":       "Original body.",
+		"tags":       []any{"go"},
+		"categories": []any{"tutorials"},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial create_page failed: %s", raw)
+	}
+
+	second := callTool(t, session, "create_page", map[string]any{
+		"slug":       "dup-post",
+		"title":      "Replacement",
+		"body":       "Replacement body.",
+		"tags":       []any{"security"},
+		"categories": []any{"incidents"},
+	})
+	if !second.IsError {
+		raw, _ := json.Marshal(second.Content)
+		t.Fatalf("duplicate create_page should fail, got success: %s", raw)
+	}
+	raw, _ := json.Marshal(second.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("duplicate create_page must return already_exists, got: %s", raw)
+	}
+
+	data, err := os.ReadFile(filepath.Join(contentRoot, "dup-post", "index.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(original) error = %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Original") || !strings.Contains(content, "Original body.") {
+		t.Fatalf("duplicate create_page overwrote existing content: %s", content)
+	}
+	if strings.Contains(content, "Replacement") || strings.Contains(content, "Replacement body.") {
+		t.Fatalf("duplicate create_page leaked replacement content into existing file: %s", content)
+	}
+}
+
+func TestCreatePageDuplicateMultilingualSlugReturnsAlreadyExists(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/bonjour",
+		"lang":       "fr",
+		"title":      "Bonjour",
+		"body":       "Bonjour monde.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial multilingual create_page failed: %s", raw)
+	}
+
+	second := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/bonjour",
+		"lang":       "fr",
+		"title":      "Remplacement",
+		"body":       "Ne doit pas ecraser.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if !second.IsError {
+		raw, _ := json.Marshal(second.Content)
+		t.Fatalf("duplicate multilingual create_page should fail, got success: %s", raw)
+	}
+	raw, _ := json.Marshal(second.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("duplicate multilingual create_page must return already_exists, got: %s", raw)
+	}
+
+	data, err := os.ReadFile(filepath.Join(contentRoot, "posts", "bonjour", "index.fr.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(multilingual original) error = %v", err)
+	}
+	if strings.Contains(string(data), "Remplacement") || strings.Contains(string(data), "Ne doit pas ecraser.") {
+		t.Fatalf("duplicate multilingual create_page overwrote existing content: %s", data)
+	}
+}
+
 func TestCreatePageSymlinkBlocked(t *testing.T) {
 	contentRoot := t.TempDir()
 
