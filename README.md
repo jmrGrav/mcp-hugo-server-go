@@ -64,6 +64,8 @@ The repository is expected to pass:
 go test ./...
 go test -race ./...
 go vet ./...
+staticcheck ./...
+go build ./...
 govulncheck ./...
 gitleaks detect --no-banner --redact --source .
 ```
@@ -142,9 +144,13 @@ The POST to `/agent/identity/verify` requires operator authentication via the `A
 
 - [Operator guide](docs/operator-guide.md)
 - [AgentReady 100% HowTo](docs/agent-ready-howto.md)
+- [MCP contract](docs/mcp-contract.md)
+- [Agent tool matrix](docs/agent-tool-matrix.md)
 - [Invariant matrix](docs/invariant-matrix.md)
 - [Release checklist](docs/release-checklist.md)
 - [Staging runbook](docs/staging-runbook.md)
 - [Tool inventory](docs/tools.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Code of conduct](CODE_OF_CONDUCT.md)
 - [Security policy](SECURITY.md)
 - [Operations wiki](https://github.com/jmrGrav/mcp-hugo-server-go/wiki)

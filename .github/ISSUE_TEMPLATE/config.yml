@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability report
+    url: https://github.com/jmrGrav/mcp-hugo-server-go/security/advisories/new
+    about: Report vulnerabilities privately. Do not open a public issue for a potential security bug.
+  - name: Tool inventory and contract docs
+    url: https://github.com/jmrGrav/mcp-hugo-server-go/blob/main/docs/tools.md
+    about: Check the current tool inventory and scope model before opening a contract or tool-shape issue.

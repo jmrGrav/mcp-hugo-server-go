@@ -1,0 +1,81 @@
+name: Bug report
+description: Report a proven defect, regression, or contract mismatch
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report only proved bugs here. Remove or redact all secrets, tokens, cookies, and private config values.
+  - type: input
+    id: affected_version
+    attributes:
+      label: Affected version or commit
+      description: Release tag, deployed version, or current main commit
+      placeholder: v1.4.0 / main@<sha>
+    validations:
+      required: true
+  - type: input
+    id: surface
+    attributes:
+      label: Affected surface
+      description: Tool, endpoint, workflow, config area, or runtime component
+      placeholder: get_related_content / OAuth / deploy.yml / build_site
+    validations:
+      required: true
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Short factual description of the defect
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Exact steps, command, request, or test case
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Logs, failing tests, file paths, contract mismatch, screenshots, or sanitized responses
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Why this matters for users, operators, agents, security, or release quality
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing open and closed issues
+          required: true
+        - label: I confirmed the problem is still present on current main or the current deployment
+          required: true
+        - label: I removed secrets and private credentials from the report
+          required: true

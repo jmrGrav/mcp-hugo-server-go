@@ -1,0 +1,58 @@
+name: Enhancement request
+description: Request a concrete improvement with operator, agent, or maintainer value
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for real improvements, not vague ideas. Keep the problem, impact, and acceptance criteria concrete.
+  - type: input
+    id: area
+    attributes:
+      label: Area
+      description: Tool, contract, docs, workflow, CI, release, or runtime area
+      placeholder: search_content / PR workflow / release docs
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+      description: What is missing, confusing, slow, risky, or operationally weak
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed direction
+      description: Preferred solution direction, without needing a full implementation spec
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Bullet list of verifiable outcomes
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility or rollout risks
+      description: Backward compatibility, migration, docs, or operator concerns
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight checks
+      options:
+        - label: I searched existing open and closed issues
+          required: true
+        - label: This is not just a style preference or speculative idea
+          required: true
+        - label: I described concrete user, agent, or operator value
+          required: true
