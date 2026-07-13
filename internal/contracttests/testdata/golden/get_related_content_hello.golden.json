@@ -1,5 +1,7 @@
 {
+  "backlinks": [],
   "data": {
+    "backlinks": [],
     "related": [
       {
         "lang": "fr",
@@ -28,6 +30,18 @@
             "source": "Hugo"
           }
         ],
+        "shared_tags": [
+          "hugo"
+        ],
+        "slug": "/posts/bonjour/",
+        "title": "Bonjour",
+        "url": "https://example.test/posts/bonjour/"
+      }
+    ],
+    "suggested_links": [
+      {
+        "anchor_text": "Bonjour",
+        "score": 2,
         "shared_tags": [
           "hugo"
         ],
@@ -79,6 +93,18 @@
     }
   ],
   "success": true,
+  "suggested_links": [
+    {
+      "anchor_text": "Bonjour",
+      "score": 2,
+      "shared_tags": [
+        "hugo"
+      ],
+      "slug": "/posts/bonjour/",
+      "title": "Bonjour",
+      "url": "https://example.test/posts/bonjour/"
+    }
+  ],
   "translations": [],
   "version": "v1.0.0",
   "warnings": []

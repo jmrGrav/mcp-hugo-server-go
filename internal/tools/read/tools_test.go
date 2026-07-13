@@ -651,11 +651,22 @@ func TestGetRelatedContentSeparatesTranslations(t *testing.T) {
 	if !ok || len(relatedPages) == 0 {
 		t.Fatalf("related_pages = %#v, want at least one real related page", m["related_pages"])
 	}
+	backlinks, ok := m["backlinks"].([]any)
+	if !ok {
+		t.Fatalf("backlinks = %#v, want array field present", m["backlinks"])
+	}
+	if len(backlinks) != 0 {
+		t.Fatalf("backlinks = %#v, want empty array for fixture without inbound links", backlinks)
+	}
+	suggestedLinks, ok := m["suggested_links"].([]any)
+	if !ok || len(suggestedLinks) == 0 {
+		t.Fatalf("suggested_links = %#v, want populated editorial suggestions", m["suggested_links"])
+	}
 	legacyRelated, ok := m["related"].([]any)
 	if !ok || len(legacyRelated) == 0 {
 		t.Fatalf("related = %#v, want legacy compatibility alias", m["related"])
 	}
-	for _, raw := range append(relatedPages, legacyRelated...) {
+	for _, raw := range append(append(relatedPages, legacyRelated...), suggestedLinks...) {
 		related := raw.(map[string]any)
 		if got := related["slug"]; got == "/en/posts/hello/" {
 			t.Fatalf("translation leaked into related content: %#v", related)
@@ -663,6 +674,9 @@ func TestGetRelatedContentSeparatesTranslations(t *testing.T) {
 	}
 	if got := relatedPages[0].(map[string]any)["slug"]; got != "/posts/guide/" {
 		t.Fatalf("top related slug = %v, want /posts/guide/", got)
+	}
+	if got := suggestedLinks[0].(map[string]any)["slug"]; got != "/posts/guide/" {
+		t.Fatalf("top suggested link slug = %v, want /posts/guide/", got)
 	}
 }
 
