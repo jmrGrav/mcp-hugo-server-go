@@ -225,9 +225,11 @@ type linkSuggestionDTO struct {
 }
 
 type suggestInternalLinksData struct {
-	Slug        string              `json:"slug,omitempty"`
-	Total       int                 `json:"total"`
-	Suggestions []linkSuggestionDTO `json:"suggestions"`
+	Slug           string               `json:"slug,omitempty"`
+	Total          int                  `json:"total"`
+	Translations   []translationPageDTO `json:"translations"`
+	Suggestions    []linkSuggestionDTO  `json:"suggestions"`
+	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
 }
 
 type suggestInternalLinksOutput struct {
@@ -598,15 +600,23 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, suggestInternalLinksOutput{}, fmt.Errorf("invalid_params: provide at least one of slug, tags, or categories")
 			}
 
+			translations := []translationPageDTO{}
+			if resolvedSlug != "" {
+				if ref, ok := idx.GetBySlug(resolvedSlug); ok {
+					translations = collectTranslations(idx, *ref)
+				}
+			}
 			suggestions := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, limit)
 			return nil, suggestInternalLinksOutput{
 				Success:     true,
 				Version:     toolResultVersion,
 				GeneratedAt: time.Now().UTC().Format(time.RFC3339),
 				Data: suggestInternalLinksData{
-					Slug:        resolvedSlug,
-					Total:       len(suggestions),
-					Suggestions: suggestions,
+					Slug:           resolvedSlug,
+					Total:          len(suggestions),
+					Translations:   translations,
+					Suggestions:    suggestions,
+					SuggestedLinks: suggestions,
 				},
 				Warnings: warnings,
 				Errors:   []string{},
@@ -642,6 +652,7 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 	}
 	bodyLower := strings.ToLower(body)
 	classifier := site.NewClassifierFromPages(idx.Sitemap())
+	excludeTranslationKey := translationKey(excludeSlug)
 	var candidates []scored
 	for _, pg := range idx.Sitemap() {
 		// Skip taxonomy list pages, home page, and the source page itself (N1).
@@ -649,6 +660,9 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 			continue
 		}
 		if pg.Slug == excludeSlug {
+			continue
+		}
+		if isTranslationVariant(excludeTranslationKey, pg.Slug) {
 			continue
 		}
 		sharedTagTerms := taxonomy.SharedTerms(pg.Tags, refTags)
