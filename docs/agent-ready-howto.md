@@ -1,7 +1,8 @@
 # AgentReady 100% HowTo
 
 This page documents the working `www.arleo.eu` / `mcp.arleo.eu` setup that
-returned IsItAgentReady to 100/100 on 2026-07-05.
+returned IsItAgentReady to 100/100 on 2026-07-05 and was revalidated after the
+2026-07-13 public discovery regression.
 
 It is a recovery checklist and reference snapshot. Keep it practical: if a
 future change regresses AgentReady discovery, compare the live system with this
@@ -78,6 +79,11 @@ Key points:
 - `www.arleo.eu/.well-known/mcp/server-card.json` redirects to the canonical MCP server card on `mcp.arleo.eu`.
 - `mcp.arleo.eu` proxies all paths to `mcp-hugo-server-go` on the Hugo VM.
 
+Do not leave backup copies of active vhosts inside the include glob used by
+OpenResty. On the current host, `sites-enabled/*` is loaded verbatim, so a file
+such as `www.arleo.eu.bak-*` inside that directory can silently reintroduce an
+old server block and serve stale discovery behavior in production.
+
 ## Hugo VM Nginx
 
 Reference example:
@@ -129,13 +135,46 @@ Production source paths on `hugo-vm`:
 /home/jm/hugo-site/static/robots.txt
 ```
 
-After changing them, rebuild:
+After changing them, do not assume the documented Hugo service user can rebuild
+successfully. Validate the real ownership of `public/`, `static/`, and
+`/var/www/hugo` first:
+
+```bash
+ssh hugo-vm 'id hugo-mcp'
+ssh hugo-vm 'stat -c "%U:%G %a %n" /home/jm/hugo-site/static /home/jm/hugo-site/public /var/www/hugo'
+```
+
+Then rebuild:
 
 ```bash
 ssh hugo-vm 'sudo -u hugo-mcp sh -lc "cd /home/jm/hugo-site && hugo --destination /var/www/hugo --cleanDestinationDir"'
 ```
 
+If that fails with a filesystem error such as `chtimes ... operation not
+permitted`, fix the ownership or publish the exact static files intentionally;
+do not pretend the build succeeded.
+
 Then purge Cloudflare for the exact changed URLs. Never print tokens in logs.
+
+## 2026-07-13 Regression Notes
+
+The public regression that broke the `www.arleo.eu` discovery surface was not a
+Go runtime bug. The effective causes were:
+
+1. a stale backup vhost left inside the active OpenResty `sites-enabled/*`
+   include path, which caused conflicting `server_name` blocks and served the
+   wrong public discovery behavior;
+2. stale Hugo static discovery files on the VM, still advertising
+   `system.admin`;
+3. a rebuild command that looked valid in docs but failed in reality because
+   the Hugo output tree ownership did not match the `hugo-mcp` user.
+
+The shortest reliable recovery path was:
+
+1. remove the stale backup vhost from the active include path;
+2. update the Hugo static discovery source files;
+3. publish the corrected public files intentionally;
+4. revalidate `www.arleo.eu` and `mcp.arleo.eu` with curl before blaming cache.
 
 ## MCP Server Generator
 

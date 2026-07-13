@@ -56,6 +56,16 @@ The server card and OAuth discovery advertise canonical scopes only:
 - `content.write`
 - `site.admin`
 
+Public compatibility discovery for external scanners lives on the website
+surface as well:
+
+- `https://www.arleo.eu/auth.md`
+- `https://www.arleo.eu/.well-known/oauth-protected-resource`
+
+That `www` surface is served through Hugo static files plus OpenResty, not only
+through the Go MCP runtime. The operator recovery notes live in
+[docs/agent-ready-howto.md](docs/agent-ready-howto.md).
+
 ## Validation
 
 The repository is expected to pass:
