@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.1] - 2026-07-13
+
+### Added
+- **`get_related_content` four-way editorial response** (#273, PR #315): the tool now returns all four editorial surfaces — `related_pages`, `backlinks`, `suggested_links`, and `translations` — in a single response. A new `collectBacklinks` helper wraps `idx.GetBacklinks`; `scoreLinkSuggestions` is reused for link candidates. Golden contract fixture and unit tests updated.
+- **Explicit `Prompts` and `Resources` capability declarations** (#318, PR #321): `defaultServerCapabilities()` helper extracted from `server.New`; `Prompts{ListChanged:true}` and `Resources{ListChanged:true,Subscribe:true}` now match the capabilities the SDK was already advertising at runtime. Unit test and server-card contract test added.
+
+### Fixed
+- **Agent-ready smoke scripts required legacy `system.admin` scope** (#317, PR #319): `check-agent-ready.sh` was asserting `system.admin` must be present in `scopes_supported`, inverting the canonical contract. Added `expect_not_contains` helper and a 135-line regression harness (`test-check-agent-ready.sh`) wired into CI.
+- **Public `www.arleo.eu` discovery aliases returned 403** (#316, PR #320): `/.well-known/oauth-protected-resource/mcp` and `/.well-known/mcp/server-card.json` were missing from the OpenResty reference config. Added redirect `location` blocks in both HTTP and HTTPS server blocks. Removed `system.admin` from the static `oauth-protected-resource` artifact. CI lint (`test-agent-ready-www-surface.sh`) added to prevent future drift.
+
 ## [v1.4.0] - 2026-07-13
 
 ### Added
