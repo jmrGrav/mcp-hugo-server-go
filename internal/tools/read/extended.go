@@ -18,7 +18,6 @@ import (
 	"golang.org/x/net/html"
 )
 
-
 type searchContentInput struct {
 	Query    string `json:"query,omitempty"`
 	Type     string `json:"type,omitempty"`
