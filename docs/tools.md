@@ -66,6 +66,29 @@ Each term contains:
 
 Use `slug` for stable filtering/grouping and `label` for display. The original `source` value remains available for auditing content taxonomy drift.
 
+## Lifecycle State Fields
+
+Page-oriented read and mutation tools may also include a shared additive `state`
+object:
+
+```json
+{
+  "source_state": "present",
+  "build_state": "pending",
+  "public_state": "not_yet_available",
+  "index_state": "source_only"
+}
+```
+
+Meaning:
+
+- `source_state` - whether source markdown currently exists on disk
+- `build_state` - whether Hugo output is up to date with the source view
+- `public_state` - whether public HTML is currently available, stale, or removed
+- `index_state` - whether the read/index view is fresh, stale, source-only, or removed
+
+Use this instead of inferring lifecycle from empty `html`, `url`, or diff fields.
+
 ## Discovery
 
 - `/.well-known/agent.json` - A2A agent card for Google-compatible discovery

@@ -148,6 +148,7 @@ type pageDTO struct {
 	Lang               string              `json:"lang"`
 	ResolvedLang       string              `json:"resolved_lang"`
 	ResolvedSourcePath string              `json:"resolved_source_path"`
+	State              site.LifecycleState `json:"state"`
 	Snippet            string              `json:"snippet,omitempty"`
 }
 
@@ -312,7 +313,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					}
 					pages := sliceContentPages(ranked, offset, limit)
 					meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx)
+				dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx, cfg.SiteRoot)
 					return nil, newSearchContentEnvelope(searchContentData{
 						Pages:         dtos,
 						Total:         meta.Total,
@@ -356,7 +357,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			pages := sliceContentPages(filtered, offset, limit)
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			return nil, newSearchContentEnvelope(searchContentData{
-				Pages:         toPageDTOs(pages, aliases, srcIdx),
+				Pages:         toPageDTOs(pages, aliases, srcIdx, cfg.SiteRoot),
 				Total:         meta.Total,
 				Limit:         meta.Limit,
 				Offset:        meta.Offset,
@@ -401,7 +402,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Languages:   languages,
 				Tags:        tagCount,
 				Categories:  catCount,
-				RecentPages: toPageDTOsEnriched(recent, srcIdx, aliases),
+				RecentPages: toPageDTOsEnriched(recent, srcIdx, aliases, cfg.SiteRoot),
 				Notes: []string{
 					"Top-level sections are derived from page slugs.",
 					"Posts are detected from the /posts/ path prefix.",
@@ -1273,7 +1274,7 @@ func uniqueLanguages(pages []site.Page) []string {
 	return out
 }
 
-func toPageDTO(p site.Page, aliases map[string]string) pageDTO {
+func toPageDTO(p site.Page, aliases map[string]string, siteRoot string) pageDTO {
 	tags := taxonomy.ApplyAliases(nullsafeStrings(p.Tags), aliases)
 	cats := taxonomy.ApplyAliases(nullsafeStrings(p.Categories), aliases)
 	return pageDTO{
@@ -1287,15 +1288,16 @@ func toPageDTO(p site.Page, aliases map[string]string) pageDTO {
 		Date:          p.Date,
 		URL:           p.URL,
 		Lang:          p.Lang,
+		State:         site.StateForResolvedPage(site.ResolvedPage{Public: &p}, siteRoot),
 	}
 }
 
-func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.SourceIndex) []pageDTO {
+func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.SourceIndex, siteRoot string) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases)
+		dto := toPageDTO(p, aliases, siteRoot)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, siteRoot)
 		out[i] = dto
 	}
 	return out
@@ -1308,23 +1310,23 @@ func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.S
 // Language-prefixed slugs (e.g. /en/posts/foo/) are handled via
 // site.SourceSlugCandidates, which tries the bare slug then strips the lang
 // prefix to match the source-index key (posts/foo).
-func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string) []pageDTO {
+func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string, siteRoot string) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases)
+		dto := toPageDTO(p, aliases, siteRoot)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, siteRoot)
 		out[i] = dto
 	}
 	return out
 }
 
-func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string, srcIdx *hugosite.SourceIndex) []pageDTO {
+func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string, srcIdx *hugosite.SourceIndex, siteRoot string) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases)
+		dto := toPageDTO(p, aliases, siteRoot)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, siteRoot)
 		dto.Snippet = snippets[p.Slug]
 		out[i] = dto
 	}
@@ -1442,7 +1444,7 @@ func resolveSourceForPage(p site.Page, lookup *sourceLookup) (resolvedSourceMatc
 	return resolvedSourceMatch{}, false
 }
 
-func enrichPageDTOFromSource(dto *pageDTO, p site.Page, lookup *sourceLookup, aliases map[string]string) {
+func enrichPageDTOFromSource(dto *pageDTO, p site.Page, lookup *sourceLookup, aliases map[string]string, siteRoot string) {
 	if dto == nil || lookup == nil {
 		return
 	}
@@ -1452,6 +1454,11 @@ func enrichPageDTOFromSource(dto *pageDTO, p site.Page, lookup *sourceLookup, al
 		dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
 		dto.ResolvedLang = match.ResolvedLang
 		dto.ResolvedSourcePath = src.FilePath
+		dto.State = site.StateForResolvedPage(site.ResolvedPage{
+			Public:     &p,
+			Source:     &src,
+			SourcePath: src.FilePath,
+		}, siteRoot)
 	}
 }
 

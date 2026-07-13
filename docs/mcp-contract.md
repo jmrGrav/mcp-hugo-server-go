@@ -8,24 +8,37 @@ versioning. Agents may use this as a stable reference; deviations are bugs.
 
 ## 1. Response Envelopes
 
-v1.x now serves a single **canonical structured envelope** for read and
-discovery tools, while preserving the legacy top-level result fields as
-compatibility aliases. Write/admin tools remain unchanged unless documented
-otherwise.
+Two envelope shapes are in use. The shape each tool uses is listed in
+[Section 6](#6-tool-inventory). A future major version will standardize all
+tools on the structured envelope; flat envelopes are not changed in v1.x
+(breaking change — deferred to v2.0, tracked in #210).
 
-### 1.1 Canonical structured envelope
+### 1.1 Flat envelope
 
-This is the authoritative shape for read-style tool responses:
+Used by discovery and simple data tools. The top-level object **is** the
+result; field names are the natural nouns for that tool.
+
+```json
+{ "pages": [ ... ], "total": 42 }
+{ "page": { "slug": "/posts/hello/", ... } }
+{ "tags": ["go", "hugo"] }
+{ "entries": [ ... ] }
+{ "slug": "/posts/new/", "path": "content/posts/new/index.md" }
+```
+
+There are no `success`, `errors`, or `warnings` fields. Tool-level errors are
+reported as MCP protocol errors (non-zero result code), not inside the JSON.
+
+### 1.2 Structured envelope
+
+Used by tools that need richer output: diagnostics, pagination metadata,
+partial-success signalling, or forward-compatible extension.
 
 ```json
 {
   "success": true,
   "version": "v1.0.0",
   "generated_at": "2026-07-12T02:30:00Z",
-  "meta": {
-    "server_version": "v1.0.0",
-    "generated_at": "2026-07-12T02:30:00Z"
-  },
   "data": { ... },
   "warnings": [],
   "errors": []
@@ -39,49 +52,12 @@ Fields:
 | `success`      | bool     | yes           | `true` even when `errors` is non-empty if partial results are returned |
 | `version`      | string   | yes           | Schema version; currently `"v1.0.0"`               |
 | `generated_at` | string   | yes           | RFC 3339 UTC timestamp                             |
-| `meta`         | object   | yes           | Canonical metadata container (`server_version`, `generated_at`) |
 | `data`         | object   | yes           | Tool-specific payload                              |
 | `warnings`     | string[] | yes           | Non-fatal observations (empty array when none)     |
-| `errors`       | object[] | yes           | Structured tool errors or degradations (empty array when none) |
+| `errors`       | string[] | yes           | Problems that degraded the result (empty array when none) |
 
 `success: false` means the call produced no usable result. `success: true`
 with non-empty `errors` means a partial result was returned.
-
-### 1.2 Legacy top-level aliases
-
-For backward compatibility during v1.x, the server also mirrors legacy result
-fields at the top level for tools that historically returned a flat object.
-Examples:
-
-```json
-{
-  "success": true,
-  "data": { "page": { ... } },
-  "page": { ... }
-}
-```
-
-```json
-{
-  "success": true,
-  "data": { "pages": [ ... ], "total": 42 },
-  "pages": [ ... ],
-  "total": 42
-}
-```
-
-```json
-{
-  "success": true,
-  "data": { "pages": [ ... ], "total": 42 },
-  "export": { "pages": [ ... ], "total": 42 },
-  "pages": [ ... ],
-  "total": 42
-}
-```
-
-These aliases are compatibility affordances, not the canonical contract. New
-clients should read from `data` and `meta`.
 
 ---
 
@@ -99,13 +75,13 @@ cannot produce any result:
 
 ### In-band errors
 
-Structured-envelope tools may include degraded results with structured entries
-in `errors[]`.
+Structured-envelope tools may include degraded results with error strings in
+`errors[]`. Flat-envelope tools do not use in-band errors.
 
 ### Error codes
 
-Protocol-level error messages use a `snake_case_prefix:` convention for
-machine-parseable classification:
+Error strings use a `snake_case_prefix:` convention for machine-parseable
+classification:
 
 | Prefix               | Meaning                                        |
 |----------------------|------------------------------------------------|
@@ -121,9 +97,11 @@ machine-parseable classification:
 
 Tools that return lists support optional `limit` and `offset` parameters.
 Default and maximum limits vary per tool (see tool descriptions). The
-canonical envelope reflects applied pagination in `data.limit`,
-`data.offset`, `data.total`, `data.returned_count`, `data.has_more`, and
-`data.next_offset`.
+structured envelope reflects applied pagination in `data.limit`,
+`data.offset`, and `data.total`.
+
+Flat tools that support pagination include `total` at the top level of the
+nested result object (e.g., `export.total`).
 
 ---
 
@@ -155,11 +133,12 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 
 ## 5. Versioning
 
-- `version: "v1.0.0"` and `meta.server_version` refer to the **response schema
-  version**, not the release tag or binary version.
-- `generated_at` and `meta.generated_at` carry the same timestamp during the
-  v1.x compatibility window.
-- Individual tool responses do not expose the binary release version.
+- `version: "v1.0.0"` in structured envelopes refers to the **response schema
+  version**, not the server version.
+- The server version is not included in individual tool responses; it is
+  available via the MCP server metadata and `get_site_health`.
+- Flat envelope tools do not carry a `version` field; their schema is
+  implicitly v1.
 
 ---
 
@@ -167,35 +146,35 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 
 ### Anonymous (no auth required)
 
-| Tool                  | Envelope                    | Legacy alias(es)         |
-|-----------------------|-----------------------------|--------------------------|
-| `list_pages`          | structured + compat aliases | `pages`, pagination keys |
-| `get_page`            | structured + compat aliases | `page`                   |
-| `search_pages`        | structured + compat aliases | `pages`, pagination keys |
-| `get_recent_posts`    | structured + compat aliases | `pages`, pagination keys |
-| `list_tags`           | structured + compat aliases | `tags`                   |
-| `list_categories`     | structured + compat aliases | `categories`             |
-| `get_sitemap`         | structured + compat aliases | `entries`, pagination    |
-| `get_feed`            | structured + compat aliases | `items`, pagination      |
-| `get_site_information`| structured + compat aliases | `site`                   |
+| Tool                  | Envelope  | Top-level key(s)          |
+|-----------------------|-----------|---------------------------|
+| `list_pages`          | flat      | `pages`                   |
+| `get_page`            | flat      | `page`                    |
+| `search_pages`        | flat      | `pages`                   |
+| `get_recent_posts`    | flat      | `pages`                   |
+| `list_tags`           | flat      | `tags`                    |
+| `list_categories`     | flat      | `categories`              |
+| `get_sitemap`         | flat      | `entries`                 |
+| `get_feed`            | flat      | `items`                   |
+| `get_site_information`| flat      | `site`                    |
 
 ### `content.read`
 
-| Tool                    | Envelope                    | Legacy alias(es)                             |
-|-------------------------|-----------------------------|----------------------------------------------|
-| `get_full_page_markdown`| structured + compat aliases | `page`                                       |
-| `get_page_frontmatter`  | structured + compat aliases | `frontmatter`                                |
-| `get_related_content`   | structured + compat aliases | `translations`, `related_pages`, `related`   |
-| `build_agent_context`   | structured + compat aliases | `context`                                    |
-| `export_agent_context`  | structured + compat aliases | `export`, `pages`, pagination keys           |
-| `search_content`        | structured + compat aliases | `pages`, pagination and filter echo          |
-| `explain_site_structure`| structured + compat aliases | `sections`, `languages`, `summary`           |
-| `get_site_health`       | structured + compat aliases | `score`, `status`, counts                    |
-| `get_broken_links`      | structured + compat aliases | `links`, `broken_links`                      |
-| `get_backlinks`         | structured + compat aliases | `backlinks`, `count`, `slug`                 |
-| `diff_page`             | structured + compat aliases | diff fields mirrored at top level            |
-| `validate_front_matter` | structured + compat aliases | `pages`, `pages_checked`, `pages_passed`     |
-| `validate_site`         | structured + compat aliases | `pages`, `pages_checked`, `pages_passed`     |
+| Tool                    | Envelope    | Notes                                        |
+|-------------------------|-------------|----------------------------------------------|
+| `get_full_page_markdown`| flat        | `page` + `page.state`                        |
+| `get_page_frontmatter`  | flat        | `frontmatter` + `frontmatter.state`          |
+| `get_related_content`   | flat        | `related`                                    |
+| `build_agent_context`   | flat        | `context` + `context.state`                  |
+| `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`      |
+| `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
+| `explain_site_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
+| `get_site_health`       | structured  | `data.score`, `data.status`, counts          |
+| `get_broken_links`      | structured  | `data.links`, `data.broken_links`            |
+| `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
+| `diff_page`             | structured  | `data` (diff result) + `data.state`          |
+| `validate_front_matter` | structured  | `data.pages`, `data.pages_checked`           |
+| `validate_site`         | structured  | `data.pages`, `data.pages_checked`           |
 
 ### `content.write`
 
@@ -217,10 +196,6 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 
 ---
 
-## 7. Migration Note
+## 7. New tools (v1.3.8+)
 
-During v1.x:
-
-- `data` and `meta` are canonical for read/discovery tools.
-- legacy top-level aliases remain intentionally available for compatibility.
-- write/admin tools may still use flat result objects until explicitly migrated.
+New tools added in v1.3.8 use the **structured envelope** by default.
