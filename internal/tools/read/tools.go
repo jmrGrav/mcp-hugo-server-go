@@ -89,9 +89,11 @@ type translationPageDTO struct {
 }
 
 type getRelatedContentData struct {
-	Translations []translationPageDTO `json:"translations"`
-	RelatedPages []relatedPageDTO     `json:"related_pages"`
-	Related      []relatedPageDTO     `json:"related"`
+	Translations   []translationPageDTO `json:"translations"`
+	RelatedPages   []relatedPageDTO     `json:"related_pages"`
+	Backlinks      []backlinkDTO        `json:"backlinks"`
+	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
+	Related        []relatedPageDTO     `json:"related"`
 }
 
 type buildAgentContextInput struct {
@@ -147,9 +149,11 @@ type getPageFrontmatterOutput struct {
 
 type getRelatedContentOutput struct {
 	toolcontract.ToolResponse[getRelatedContentData]
-	Translations []translationPageDTO `json:"translations"`
-	RelatedPages []relatedPageDTO     `json:"related_pages"`
-	Related      []relatedPageDTO     `json:"related"`
+	Translations   []translationPageDTO `json:"translations"`
+	RelatedPages   []relatedPageDTO     `json:"related_pages"`
+	Backlinks      []backlinkDTO        `json:"backlinks"`
+	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
+	Related        []relatedPageDTO     `json:"related"`
 }
 
 type buildAgentContextOutput struct {
@@ -226,10 +230,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			translations := collectTranslations(idx, ref)
 			related := computeRelated(idx, ref, limit)
+			backlinks := collectBacklinks(idx, ref.Slug)
+			suggestedLinks := scoreLinkSuggestions(idx, ref.Slug, ref.Tags, ref.Categories, "", limit)
 			return nil, newGetRelatedContentOutput(getRelatedContentData{
-				Translations: translations,
-				RelatedPages: related,
-				Related:      related,
+				Translations:   translations,
+				RelatedPages:   related,
+				Backlinks:      backlinks,
+				SuggestedLinks: suggestedLinks,
+				Related:        related,
 			}, time.Now().UTC()), nil
 		})
 
@@ -349,10 +357,12 @@ func newGetPageFrontmatterOutput(data getPageFrontmatterData, now time.Time) get
 
 func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRelatedContentOutput {
 	return getRelatedContentOutput{
-		ToolResponse: successEnvelope(data, now),
-		Translations: data.Translations,
-		RelatedPages: data.RelatedPages,
-		Related:      data.Related,
+		ToolResponse:   successEnvelope(data, now),
+		Translations:   data.Translations,
+		RelatedPages:   data.RelatedPages,
+		Backlinks:      data.Backlinks,
+		SuggestedLinks: data.SuggestedLinks,
+		Related:        data.Related,
 	}
 }
 
@@ -554,6 +564,18 @@ func collectTranslations(idx *site.Index, ref site.Page) []translationPageDTO {
 		}
 		return out[i].Slug < out[j].Slug
 	})
+	return out
+}
+
+func collectBacklinks(idx *site.Index, slug string) []backlinkDTO {
+	if idx == nil || strings.TrimSpace(slug) == "" {
+		return []backlinkDTO{}
+	}
+	entries := idx.GetBacklinks(slug)
+	out := make([]backlinkDTO, len(entries))
+	for i, e := range entries {
+		out[i] = backlinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL}
+	}
 	return out
 }
 
