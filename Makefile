@@ -1,4 +1,4 @@
-.PHONY: build test lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core
+.PHONY: build test test-contracts lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
@@ -10,6 +10,9 @@ build:
 
 test:
 	go test ./internal/...
+
+test-contracts:
+	go test ./internal/... -run '^(TestContract|TestCrossTool)'
 
 race:
 	go test -race ./internal/...
