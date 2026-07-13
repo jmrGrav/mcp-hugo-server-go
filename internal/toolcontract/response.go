@@ -39,6 +39,25 @@ type PaginatedResponse[T any] struct {
 	NextOffset    *int `json:"next_offset,omitempty"`
 }
 
+type PaginationMeta struct {
+	Total         int
+	Limit         int
+	Offset        int
+	ReturnedCount int
+	HasMore       bool
+	NextOffset    *int
+}
+
+func ComputePagination(total, limit, offset, returned int) PaginationMeta {
+	m := PaginationMeta{Total: total, Limit: limit, Offset: offset, ReturnedCount: returned}
+	if offset+returned < total {
+		m.HasMore = true
+		next := offset + returned
+		m.NextOffset = &next
+	}
+	return m
+}
+
 func NewMeta(serverVersion string, generatedAt time.Time) ResponseMeta {
 	return ResponseMeta{
 		GeneratedAt:   generatedAt.UTC().Format(time.RFC3339),

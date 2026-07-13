@@ -11,6 +11,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -240,7 +241,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				offset = 0
 			}
 			if offset >= len(filtered) {
-				meta := paginationMeta(total, limit, offset, 0)
+				meta := toolcontract.ComputePagination(total, limit, offset, 0)
 				return nil, exportAgentContextOutput{Export: exportResultDTO{
 					Pages:         []pageExportDTO{},
 					Total:         meta.Total,
@@ -255,7 +256,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if len(slice) > limit {
 				slice = slice[:limit]
 			}
-			meta := paginationMeta(total, limit, offset, len(slice))
+			meta := toolcontract.ComputePagination(total, limit, offset, len(slice))
 			pages := make([]pageExportDTO, 0, len(slice))
 			for _, pg := range slice {
 				resolved, _ := resolver.Resolve(pg.Slug)
@@ -467,29 +468,6 @@ func clampLimit(v, defaultVal, maxVal int) int {
 	return v
 }
 
-type paginationResult struct {
-	Total         int
-	Limit         int
-	Offset        int
-	ReturnedCount int
-	HasMore       bool
-	NextOffset    *int
-}
-
-func paginationMeta(total, limit, offset, returned int) paginationResult {
-	meta := paginationResult{
-		Total:         total,
-		Limit:         limit,
-		Offset:        offset,
-		ReturnedCount: returned,
-	}
-	if offset+returned < total {
-		meta.HasMore = true
-		next := offset + returned
-		meta.NextOffset = &next
-	}
-	return meta
-}
 
 func nullsafeStrings(s []string) []string {
 	if s == nil {

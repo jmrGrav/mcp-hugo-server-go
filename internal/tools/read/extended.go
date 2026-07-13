@@ -13,6 +13,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
@@ -289,7 +290,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 						offset = 0
 					}
 					pages := sliceContentPages(ranked, offset, limit)
-					meta := paginationMeta(total, limit, offset, len(pages))
+					meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 					now := time.Now().UTC().Format(time.RFC3339)
 					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx)
 					return nil, searchContentEnvelope{
@@ -340,7 +341,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				offset = 0
 			}
 			pages := sliceContentPages(filtered, offset, limit)
-			meta := paginationMeta(total, limit, offset, len(pages))
+			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			now := time.Now().UTC().Format(time.RFC3339)
 			return nil, searchContentEnvelope{
 				Success:     true,

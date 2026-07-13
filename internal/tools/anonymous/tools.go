@@ -12,6 +12,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -185,14 +186,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			total := len(all)
 			if offset >= len(all) {
-				meta := paginationMeta(total, limit, offset, 0)
+				meta := toolcontract.ComputePagination(total, limit, offset, 0)
 				return nil, listPagesOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 			}
 			slice := all[offset:]
 			if len(slice) > limit {
 				slice = slice[:limit]
 			}
-			meta := paginationMeta(total, limit, offset, len(slice))
+			meta := toolcontract.ComputePagination(total, limit, offset, len(slice))
 			return nil, listPagesOutput{Pages: toPageDTOsEnriched(slice, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
@@ -255,14 +256,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			all := idx.Search(in.Query, 0)
 			total := len(all)
 			if offset >= total {
-				meta := paginationMeta(total, limit, offset, 0)
+				meta := toolcontract.ComputePagination(total, limit, offset, 0)
 				return nil, searchPagesOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 			}
 			pages := all[offset:]
 			if len(pages) > limit {
 				pages = pages[:limit]
 			}
-			meta := paginationMeta(total, limit, offset, len(pages))
+			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			return nil, searchPagesOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
@@ -279,14 +280,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			all := idx.RecentPosts(0)
 			total := len(all)
 			if offset >= total {
-				meta := paginationMeta(total, limit, offset, 0)
+				meta := toolcontract.ComputePagination(total, limit, offset, 0)
 				return nil, getRecentPostsOutput{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 			}
 			pages := all[offset:]
 			if len(pages) > limit {
 				pages = pages[:limit]
 			}
-			meta := paginationMeta(total, limit, offset, len(pages))
+			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			return nil, getRecentPostsOutput{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
@@ -347,7 +348,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			total := len(all)
 			if offset >= len(all) {
-				meta := paginationMeta(total, limit, offset, 0)
+				meta := toolcontract.ComputePagination(total, limit, offset, 0)
 				return nil, getSitemapOutput{Entries: []sitemapEntryDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 			}
 			slice := all[offset:]
@@ -358,7 +359,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			for i, p := range slice {
 				entries[i] = sitemapEntryDTO{Slug: p.Slug, URL: p.URL, Date: p.Date}
 			}
-			meta := paginationMeta(total, limit, offset, len(entries))
+			meta := toolcontract.ComputePagination(total, limit, offset, len(entries))
 			return nil, getSitemapOutput{Entries: entries, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
@@ -375,7 +376,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			all := idx.GetFeed(0)
 			total := len(all)
 			if offset >= total {
-				meta := paginationMeta(total, limit, offset, 0)
+				meta := toolcontract.ComputePagination(total, limit, offset, 0)
 				return nil, getFeedOutput{Items: []feedItemDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 			}
 			pages := all[offset:]
@@ -386,7 +387,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			for i, p := range pages {
 				items[i] = feedItemDTO{Slug: p.Slug, Title: p.Title, Summary: p.Summary, Date: p.Date, URL: p.URL}
 			}
-			meta := paginationMeta(total, limit, offset, len(items))
+			meta := toolcontract.ComputePagination(total, limit, offset, len(items))
 			return nil, getFeedOutput{Items: items, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}, nil
 		})
 
@@ -432,29 +433,6 @@ func clampLimit(v, defaultVal, maxVal int) int {
 	return v
 }
 
-type paginationResult struct {
-	Total         int
-	Limit         int
-	Offset        int
-	ReturnedCount int
-	HasMore       bool
-	NextOffset    *int
-}
-
-func paginationMeta(total, limit, offset, returned int) paginationResult {
-	meta := paginationResult{
-		Total:         total,
-		Limit:         limit,
-		Offset:        offset,
-		ReturnedCount: returned,
-	}
-	if offset+returned < total {
-		meta.HasMore = true
-		next := offset + returned
-		meta.NextOffset = &next
-	}
-	return meta
-}
 
 func toPageDTO(p site.Page) pageDTO {
 	tags := p.Tags
