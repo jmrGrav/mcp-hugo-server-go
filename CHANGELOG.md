@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.0] - 2026-07-13
+
+### Added
+- **Shared contentmodel and toolcontract foundations** (#276, PR #289): extracted `contentmodel.PageIdentity`, `toolcontract.ToolResponse[T]`, and `toolcontract.NewMeta` into dedicated packages; all read tools now emit versioned structured envelopes with canonical `success/data/errors/warnings/meta` fields.
+- **Canonical page identity across all tools** (#271 #272, PR #291): every page read tool now returns `resolved_source_path`, `resolved_lang`, and `State` (lifecycle state) consistently. The page resolver uses a 3-tier source lookup: slug+lang → default-lang → any-slug.
+- **Self-descriptive pagination metadata** (#295): all list responses include `returned_count`, `has_more`, and `next_offset` to remove the need for clients to compute pagination state.
+- **Lifecycle state for page reads and writes** (#296): `source_state`, `build_state`, `public_state`, and `index_state` exposed on all page reads (`get_page`, `get_full_page_markdown`, `get_page_frontmatter`, `diff_page`, `get_related_content`) and populated by write operations.
+- **`diff_page` explicit fallback state** (#287, PR #294): when git is unavailable the tool now returns a structured `git_unavailable` state rather than propagating an error, matching the production-VM scenario.
+- **Translations separated from editorial relations** (#273, PR #301): `translations` field carries same-content/different-language variants; `related_pages`, `backlinks`, and `suggested_links` are distinct editorial/structural surfaces.
+- **MCP schema resources published** (#299, PR #307): the server exposes a `mcp://schemas/` resource prefix with machine-readable JSON Schema for each tool's input and output.
+- **Write tool idempotency annotations** (#298, PR #303): `create_page`, `update_page`, and `delete_page` carry `idempotent`/`non-idempotent` annotations in their MCP descriptions for agent-side retry safety.
+- **Structured agent-readable tool errors** (PR #309): all tool errors include a machine-readable error code prefix (`content_not_found:`, `invalid_params:`, etc.) before the human-readable message.
+- **Unified read tool envelopes with v1 aliases** (#278, PR #310): `searchContentEnvelope`, `brokenLinkOutput`, `getBacklinksOutput`, and `suggestInternalLinksOutput` all embed `toolcontract.ToolResponse[T]` and expose top-level v1 compatibility aliases for smooth client migration.
+- **Lifecycle state across rich read tools** (#290, PR #311): `explain_site_structure`, `search_content`, `list_pages`, `get_recent_posts`, `get_related_content` all populate `State` via `site.StateForResolvedPage`.
+- **Golden contract fixtures** (#277, PR #312): `assertGoldenJSON` test harness validates `get_page`, `list_pages`, and `get_related_content` output stability across refactors.
+
+### Fixed
+- **`get_sitemap` taxonomy exclusion** (#208, PR #292): `exclude_taxonomies` option now correctly omits taxonomy list pages from the sitemap output.
+- **Two-space YAML list indentation in `update_page`** (#288, PR #293): front matter tags/categories lists are now written with the Hugo-standard `  - value` style instead of `- value`.
+- **Multilingual source resolution across read tools** (PR #300): `list_pages`, `get_recent_posts`, `search_content`, and `explain_site_structure` now pass `siteRoot` to source enrichment so multilingual bundle pages receive correct lifecycle state and source paths.
+- **Sitemap taxonomy exclusion correctness** (PR #302): `IsContent` classifier now correctly excludes taxonomy term list pages (e.g. `/tags/go/`) from content counts and broken-link scans.
+- **Preferred language source variant** (#271 #272, PR #313): `source_index.rebuildMaps` now maintains a dedicated `bySlugLang` map so the resolver picks the language-specific bundle (`index.fr.md`) over the default-language fallback when both exist.
+
+### Changed
+- `pageDTO` gains `resolved_lang`, `resolved_source_path`, and `state` fields (all tools).
+- `RegisterWithSourceIndex` accepts a variadic `dbs ...*db.DB` parameter for the optional SQLite index.
+- `write.Register` accepts `siteDB *db.DB` for write-triggered DB invalidation.
+
 ## [v1.3.9] - 2026-07-13
 
 ### Added
