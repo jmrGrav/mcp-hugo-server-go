@@ -460,23 +460,22 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 // (e.g. /tags/hugo/, /categories/infrastructure/, /tags/, /categories/).
 // It matches the default Hugo taxonomy URL structure; custom taxonomies may need
 // to be excluded manually.
-func isTaxonomyURL(url string) bool {
-	if parsed, err := neturl.Parse(url); err == nil && parsed.Path != "" {
-		url = parsed.Path
+func isTaxonomyURL(rawURL string) bool {
+	path := rawURL
+	if parsed, err := neturl.Parse(rawURL); err == nil && parsed.Path != "" {
+		path = parsed.Path
 	}
 	taxPrefixes := []string{"/tags/", "/categories/", "/authors/"}
-	if parts := strings.Split(strings.Trim(url, "/"), "/"); len(parts) >= 2 {
-		first := parts[0]
-		second := "/" + parts[1] + "/"
-		if looksLikeLanguageCode(first) && slices.Contains(taxPrefixes, second) {
-			url = "/" + strings.Join(parts[1:], "/")
-			if !strings.HasSuffix(url, "/") {
-				url += "/"
+	if parts := strings.Split(strings.Trim(path, "/"), "/"); len(parts) >= 2 {
+		if looksLikeLanguageCode(parts[0]) && slices.Contains(taxPrefixes, "/"+parts[1]+"/") {
+			path = "/" + strings.Join(parts[1:], "/")
+			if !strings.HasSuffix(path, "/") {
+				path += "/"
 			}
 		}
 	}
 	for _, prefix := range taxPrefixes {
-		if strings.HasPrefix(url, prefix) || url == strings.TrimSuffix(prefix, "/") {
+		if strings.HasPrefix(path, prefix) || path == strings.TrimSuffix(prefix, "/") {
 			return true
 		}
 	}
