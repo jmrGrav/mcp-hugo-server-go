@@ -180,9 +180,9 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 
 | Tool          | Envelope | Top-level key(s)                            |
 |---------------|----------|---------------------------------------------|
-| `create_page` | flat     | `slug`, `path`, `dry_run?`, `content?`      |
-| `update_page` | flat     | `slug`, `dry_run?`, `diff?`                 |
-| `delete_page` | flat     | `slug`                                      |
+| `create_page` | flat     | `status`, `slug`, `path`, `dry_run?`, `content?`, `warning?`      |
+| `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`                 |
+| `delete_page` | flat     | `status`, `slug`, `warning?`                                      |
 
 ### `site.admin`
 
