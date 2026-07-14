@@ -160,8 +160,8 @@ func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerF
 	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
 		res, out, err := handler(ctx, req, in)
 		if err != nil {
-			var zero Out
-			return ErrorResult(err, NewMeta(ToolResultVersion, time.Now())), zero, nil
+			meta := NewMeta(ToolResultVersion, time.Now())
+			return ErrorResult(err, meta), errorOutput[Out](meta, ParseToolError(err)), nil
 		}
 		return res, out, nil
 	}
@@ -170,14 +170,21 @@ func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerF
 func ErrorResult(err error, meta ResponseMeta) *mcp.CallToolResult {
 	toolErr := ParseToolError(err)
 	payload := Failure(meta, toolErr)
-	text := fmt.Sprintf("%s: %s", toolErr.Code, toolErr.Message)
-	if raw, marshalErr := json.Marshal(payload); marshalErr == nil {
-		text = string(raw)
-	}
 	return &mcp.CallToolResult{
-		Content: []mcp.Content{&mcp.TextContent{Text: text}},
-		IsError: true,
+		Content:           []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%s: %s", toolErr.Code, toolErr.Message)}},
+		StructuredContent: payload,
+		IsError:           true,
 	}
+}
+
+func errorOutput[Out any](meta ResponseMeta, toolErr ToolError) Out {
+	var out Out
+	raw, err := json.Marshal(Failure(meta, toolErr))
+	if err != nil {
+		return out
+	}
+	_ = json.Unmarshal(raw, &out)
+	return out
 }
 
 func splitErrorPrefix(raw string) (string, string) {

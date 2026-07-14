@@ -97,6 +97,19 @@ func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return m
 }
 
+func decodeErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	if res.StructuredContent != nil {
+		return decodeContent(t, res)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	return m
+}
+
 func TestListPages(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -450,11 +463,7 @@ func TestSearchPagesMinLength(t *testing.T) {
 	if !strings.Contains(string(raw), "missing_required_parameter") {
 		t.Fatalf("search_pages empty query error missing 'missing_required_parameter': %s", raw)
 	}
-	text := res.Content[0].(*mcp.TextContent).Text
-	var m map[string]any
-	if err := json.Unmarshal([]byte(text), &m); err != nil {
-		t.Fatalf("unmarshal error payload: %v", err)
-	}
+	m := decodeErrorEnvelope(t, res)
 	if m["success"] != false {
 		t.Fatalf("search_pages error success = %v, want false", m["success"])
 	}
