@@ -80,6 +80,7 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		args := buildCommandArgs(cacheDir, true)
 		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
+		cmd.Env = boundedCommandEnv()
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		// Kill the whole process group on timeout/cancellation (#240/#243).
 		cmd.Cancel = func() error {

@@ -93,7 +93,7 @@ tool returns `write_error`, verify:
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
 | `build_timeout_seconds` | int | `120` | Maximum time (in seconds) to wait for Hugo build to complete. |
-| `post_build_hooks` | array of strings | (empty) | URLs to POST a `{"event":"post_build"}` webhook to after successful site build. Only HTTPS endpoints and public DNS hostnames are allowed (SSRF protected). |
+| `post_build_hooks` | array of strings | (empty) | URLs to POST a `{"event":"post_build"}` webhook to after successful site build. Only HTTPS endpoints and public DNS hostnames are allowed (SSRF protected); redirects are not followed and response bodies are bounded. |
 
 ### Rate Limiting
 

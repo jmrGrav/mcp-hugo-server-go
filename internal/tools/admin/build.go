@@ -204,6 +204,26 @@ func currentUserForLog() string {
 	return u.Username
 }
 
+func boundedCommandEnv() []string {
+	env := make([]string, 0, 5)
+	if path := os.Getenv("PATH"); path != "" {
+		env = append(env, "PATH="+path)
+	}
+	if home := os.Getenv("HOME"); home != "" {
+		env = append(env, "HOME="+home)
+	}
+	if lang := os.Getenv("LANG"); lang != "" {
+		env = append(env, "LANG="+lang)
+	}
+	if lcAll := os.Getenv("LC_ALL"); lcAll != "" {
+		env = append(env, "LC_ALL="+lcAll)
+	}
+	if tmp := os.Getenv("TMPDIR"); tmp != "" {
+		env = append(env, "TMPDIR="+tmp)
+	}
+	return env
+}
+
 func classifyBuildFailure(ctx context.Context, summary string) string {
 	switch {
 	case ctx.Err() != nil:
@@ -263,6 +283,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 		args := buildCommandArgs(cacheDir, false)
 		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
+		cmd.Env = boundedCommandEnv()
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		// Kill the whole process group on timeout/cancellation so that shell
 		// wrappers and any children spawned by hugo are also terminated (#240/#243).
