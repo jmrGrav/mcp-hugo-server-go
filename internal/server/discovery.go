@@ -363,7 +363,7 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"Token endpoint: `%s/token`\n"+
 				"Protected resource metadata: %s/.well-known/oauth-protected-resource\n"+
 				"MCP endpoint: `%s/mcp`\n"+
-				"Scopes: `content.read`, `content.write`, `site.admin`\n\n"+
+				"Scopes: `reader`, `content.read`, `content.write`, `site.admin`\n\n"+
 				"```json\n"+
 				"{\n"+
 				"  \"registration_flow\": {\n"+
@@ -373,6 +373,7 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"    \"protected_resource_metadata\": \"%s/.well-known/oauth-protected-resource\",\n"+
 				"    \"mcp_endpoint\": \"%s/mcp\",\n"+
 				"    \"scopes\": [\n"+
+				"      \"reader\",\n"+
 				"      \"content.read\",\n"+
 				"      \"content.write\",\n"+
 				"      \"site.admin\"\n"+
