@@ -95,6 +95,31 @@ tool returns `write_error`, verify:
 | `build_timeout_seconds` | int | `120` | Maximum time (in seconds) to wait for Hugo build to complete. |
 | `post_build_hooks` | array of strings | (empty) | URLs to POST a `{"event":"post_build"}` webhook to after successful site build. Only HTTPS endpoints and public DNS hostnames are allowed (SSRF protected). |
 
+### Git Baseline Configuration
+
+The `git_baseline` section defines the **local Git checkout** used as the
+trusted baseline for `diff_page`, future runtime Git diagnostics, and later
+publication verification.
+
+| Field | Type | Default | Purpose |
+|-------|------|---------|---------|
+| `git_baseline.mode` | string | `auto` | Baseline resolution mode: `auto`, `configured`, or `disabled`. |
+| `git_baseline.repo_path` | string | (empty) | Absolute path to the local Git checkout when `mode: configured`. |
+| `git_baseline.branch` | string | `main` | Expected branch name for diagnostics. |
+| `git_baseline.remote` | string | `origin` | Expected remote name for diagnostics. |
+
+Semantics:
+
+- `auto`: current/runtime Git consumers may auto-detect a repository from
+  `content_root`.
+- `configured`: the server should use the explicit local checkout at
+  `repo_path`.
+- `disabled`: Git-backed diff/runtime features should degrade explicitly rather
+  than probing the host.
+
+See [docs/git-baseline-model.md](git-baseline-model.md) for the trust model,
+state vocabulary, and non-goals.
+
 ### Rate Limiting
 
 The `rate_limit` section controls per-scope logical MCP `tools/call` rates
@@ -237,6 +262,22 @@ sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go
 Do **not** add a directory to `ReadOnlyPaths` if it already appears in
 `ReadWritePaths` — `ReadOnlyPaths` takes precedence and will silently undo the
 write permission.
+
+### Git Baseline Permissions
+
+The Git baseline checkout used for `diff_page` and future runtime/publication
+diagnostics is **read-only** in the current design.
+
+The MCP service user must be able to read:
+
+- the checkout directory configured by `git_baseline.repo_path` (or the
+  auto-detected repository in `auto` mode);
+- the `.git` directory or worktree metadata needed by `git -C <repo> ...`;
+- the tracked source files used for diff inspection.
+
+Do **not** add the Git baseline checkout to `ReadWritePaths` for this design.
+If Git metadata is inaccessible, later runtime surfaces should report a degraded
+state rather than broadening filesystem permissions silently.
 
 ### Known Pitfalls
 

@@ -19,6 +19,15 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Transport != "stdio" {
 		t.Fatalf("want stdio, got %s", cfg.Transport)
 	}
+	if cfg.GitBaseline.Remote != "origin" {
+		t.Fatalf("want default git baseline remote origin, got %q", cfg.GitBaseline.Remote)
+	}
+	if cfg.GitBaseline.Branch != "main" {
+		t.Fatalf("want default git baseline branch main, got %q", cfg.GitBaseline.Branch)
+	}
+	if cfg.GitBaseline.Mode != "auto" {
+		t.Fatalf("want default git baseline mode auto, got %q", cfg.GitBaseline.Mode)
+	}
 }
 
 func TestLoadConfig(t *testing.T) {
@@ -47,6 +56,58 @@ func TestLoadConfigContentRoot(t *testing.T) {
 	}
 	if cfg.ContentRoot != "/tmp/content" {
 		t.Fatalf("want /tmp/content, got %s", cfg.ContentRoot)
+	}
+}
+
+func TestLoadConfigGitBaseline(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("git_baseline:\n  mode: configured\n  repo_path: /srv/hugo-arleo.eu\n  branch: release\n  remote: backup\n")
+	f.Close()
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitBaseline.Mode != "configured" {
+		t.Fatalf("want git baseline mode configured, got %q", cfg.GitBaseline.Mode)
+	}
+	if cfg.GitBaseline.RepoPath != "/srv/hugo-arleo.eu" {
+		t.Fatalf("want git baseline repo_path /srv/hugo-arleo.eu, got %q", cfg.GitBaseline.RepoPath)
+	}
+	if cfg.GitBaseline.Branch != "release" {
+		t.Fatalf("want git baseline branch release, got %q", cfg.GitBaseline.Branch)
+	}
+	if cfg.GitBaseline.Remote != "backup" {
+		t.Fatalf("want git baseline remote backup, got %q", cfg.GitBaseline.Remote)
+	}
+}
+
+func TestLoadConfigGitBaselineValidation(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "invalid mode",
+			yaml: "git_baseline:\n  mode: maybe\n",
+		},
+		{
+			name: "configured without repo_path",
+			yaml: "git_baseline:\n  mode: configured\n",
+		},
+		{
+			name: "configured with relative repo_path",
+			yaml: "git_baseline:\n  mode: configured\n  repo_path: backups/hugo-arleo.eu\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+			f.WriteString(tc.yaml)
+			f.Close()
+			if _, err := config.Load(f.Name()); err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+		})
 	}
 }
 

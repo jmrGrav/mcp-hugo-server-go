@@ -58,6 +58,14 @@ ReadWritePaths=/var/lib/mcp-hugo-server-go-staging \
                /var/lib/mcp-hugo-server-go-staging/site/public
 ```
 
+The staging config now also pins the Git diff baseline to the local checkout at:
+
+- `/var/lib/mcp-hugo-server-go-staging/site`
+
+That path only needs to remain **readable** by the service user. Do not add it
+to `ReadWritePaths` unless a later audited issue explicitly broadens Git
+mutation capabilities.
+
 6. Restart the service and verify:
 
 ```bash

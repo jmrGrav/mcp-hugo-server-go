@@ -14,6 +14,7 @@ type Config struct {
 	SiteRoot            string            `yaml:"site_root"`
 	HugoRoot            string            `yaml:"hugo_root"`
 	ContentRoot         string            `yaml:"content_root"`
+	GitBaseline         GitBaselineConfig `yaml:"git_baseline"`
 	SiteURL             string            `yaml:"site_url"`
 	SiteName            string            `yaml:"site_name"`
 	DefaultLanguage     string            `yaml:"language_default"`
@@ -38,6 +39,17 @@ type Config struct {
 	GoogleIndex         GoogleIndexConfig `yaml:"google_indexing"`
 	OAuth               OAuthConfig       `yaml:"oauth"`
 	RateLimit           RateLimitConfig   `yaml:"rate_limit"`
+}
+
+// GitBaselineConfig defines the local Git checkout model used as the trusted
+// baseline for diff/runtime diagnostics. It is intentionally configuration-only
+// at this stage: runtime consumers can adopt it incrementally without guessing
+// paths or remotes from host layout.
+type GitBaselineConfig struct {
+	Mode     string `yaml:"mode"`      // auto, configured, or disabled
+	RepoPath string `yaml:"repo_path"` // absolute local checkout path when mode=configured
+	Branch   string `yaml:"branch"`    // expected branch name for diagnostics
+	Remote   string `yaml:"remote"`    // expected remote name for diagnostics
 }
 
 // CloudflareConfig holds credentials for Cloudflare cache purge. Zero value
@@ -104,11 +116,16 @@ type OAuthConfig struct {
 
 func Default() Config {
 	return Config{
-		Transport:           "stdio",
-		HTTPBindAddr:        "127.0.0.1",
-		HTTPBindPort:        8088,
-		StreamingEnabled:    true,
-		DefaultLanguage:     "en",
+		Transport:        "stdio",
+		HTTPBindAddr:     "127.0.0.1",
+		HTTPBindPort:     8088,
+		StreamingEnabled: true,
+		DefaultLanguage:  "en",
+		GitBaseline: GitBaselineConfig{
+			Mode:   "auto",
+			Branch: "main",
+			Remote: "origin",
+		},
 		MaxIndexEntries:     5000,
 		MaxResultItems:      50,
 		MaxRequestBytes:     1 << 20,
@@ -153,6 +170,19 @@ func Load(path string) (Config, error) {
 
 // validate performs fail-fast checks on cross-field invariants.
 func (c *Config) validate() error {
+	switch c.GitBaseline.Mode {
+	case "", "auto", "configured", "disabled":
+	default:
+		return fmt.Errorf("config: git_baseline.mode %q must be one of auto, configured, disabled", c.GitBaseline.Mode)
+	}
+	if c.GitBaseline.Mode == "configured" {
+		if strings.TrimSpace(c.GitBaseline.RepoPath) == "" {
+			return fmt.Errorf("config: git_baseline.repo_path is required when git_baseline.mode is configured")
+		}
+		if !strings.HasPrefix(c.GitBaseline.RepoPath, "/") {
+			return fmt.Errorf("config: git_baseline.repo_path must be an absolute path")
+		}
+	}
 	if c.OAuth.Enabled {
 		if strings.TrimSpace(c.OAuth.Issuer) == "" {
 			return fmt.Errorf("config: oauth.issuer is required when oauth.enabled is true")
