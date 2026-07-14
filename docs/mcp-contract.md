@@ -188,7 +188,7 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 
 | Tool                      | Envelope | Top-level key(s)                     |
 |---------------------------|----------|--------------------------------------|
-| `build_site`              | flat     | `status`, `duration_ms`              |
+| `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready` |
 | `preview_build`           | flat     | (build result)                       |
 | `run_post_build_hooks`    | flat     | (hook result)                        |
 | `generate_featured_image` | flat     | `path`                               |

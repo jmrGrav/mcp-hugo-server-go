@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -25,9 +28,12 @@ import (
 type buildSiteInput struct{}
 
 type buildSiteOutput struct {
-	Status     string `json:"status"`
-	DurationMs int64  `json:"duration_ms"`
-	Warning    string `json:"warning,omitempty"`
+	Status         string `json:"status"`
+	DurationMs     int64  `json:"duration_ms"`
+	BuildID        string `json:"build_id"`
+	OutputRevision string `json:"output_revision,omitempty"`
+	PublishReady   bool   `json:"publish_ready"`
+	Warning        string `json:"warning,omitempty"`
 }
 
 // buildErrorPayload is the structured JSON returned on Hugo failure.
@@ -204,6 +210,46 @@ func currentUserForLog() string {
 	return u.Username
 }
 
+func hashTree(root string) (string, error) {
+	h := sha256.New()
+	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "." {
+			rel = ""
+		}
+		if _, err := io.WriteString(h, rel); err != nil {
+			return err
+		}
+		if info.IsDir() {
+			_, err = io.WriteString(h, "\nD\n")
+			return err
+		}
+		if _, err := io.WriteString(h, "\nF\n"); err != nil {
+			return err
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		if _, err := io.Copy(h, f); err != nil {
+			return err
+		}
+		_, err = io.WriteString(h, "\n")
+		return err
+	}); err != nil {
+		return "", err
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
 func classifyBuildFailure(ctx context.Context, summary string) string {
 	switch {
 	case ctx.Err() != nil:
@@ -362,6 +408,17 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 		if cbWarning != "" {
 			status = "partial_success"
 		}
+		outputRevision, hashErr := hashTree(cfg.SiteRoot)
+		if hashErr != nil {
+			slog.Warn("build_site: failed to hash output tree", "error", hashErr)
+			if cbWarning == "" {
+				cbWarning = "output revision unavailable after build"
+			} else {
+				cbWarning += "; output revision unavailable after build"
+			}
+			status = "partial_success"
+		}
+		publishReady := status == "ok"
 		slog.Info("build_site completed",
 			"build_id", runID,
 			"tool", "build_site",
@@ -372,7 +429,15 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			"duration_ms", durationMs,
 			"exit_code", exitCode,
 			"status", status,
+			"publish_ready", publishReady,
 		)
-		return nil, buildSiteOutput{Status: status, DurationMs: durationMs, Warning: cbWarning}, nil
+		return nil, buildSiteOutput{
+			Status:         status,
+			DurationMs:     durationMs,
+			BuildID:        runID,
+			OutputRevision: outputRevision,
+			PublishReady:   publishReady,
+			Warning:        cbWarning,
+		}, nil
 	})
 }
