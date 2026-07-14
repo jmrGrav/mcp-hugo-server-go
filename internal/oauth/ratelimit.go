@@ -106,7 +106,7 @@ func (rl *RateLimiter) evictOldest() {
 
 func (rl *RateLimiter) perMinFor(scope string) int {
 	switch scope {
-	case "content.read":
+	case "content.read", "reader":
 		return rl.cfg.ContentReadPerMin
 	case "content.write":
 		return rl.cfg.ContentWritePerMin

@@ -1,7 +1,7 @@
 package tools
 
 // KnownScopes lists every scope this server may issue or enforce.
-var KnownScopes = []string{"content.read", "content.write", "site.admin"}
+var KnownScopes = []string{"reader", "content.read", "content.write", "site.admin"}
 
 type ToolDef struct {
 	Name          string

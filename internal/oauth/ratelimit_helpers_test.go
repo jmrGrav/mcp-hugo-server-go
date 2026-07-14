@@ -27,6 +27,9 @@ func TestRateLimiterHelperBranches(t *testing.T) {
 	if got := rl.perMinFor("content.read"); got != 22 {
 		t.Fatalf("perMinFor(content.read) = %d", got)
 	}
+	if got := rl.perMinFor("reader"); got != 22 {
+		t.Fatalf("perMinFor(reader) = %d", got)
+	}
 	if got := rl.perMinFor("content.write"); got != 33 {
 		t.Fatalf("perMinFor(content.write) = %d", got)
 	}
