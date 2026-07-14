@@ -55,6 +55,9 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	if _, ok := got["agent_auth"]; !ok {
 		t.Fatal("response missing agent_auth field")
 	}
+	if _, ok := got["access_profiles"]; !ok {
+		t.Fatal("response missing access_profiles field")
+	}
 	if _, ok := got["issuer"]; !ok {
 		t.Fatal("response missing issuer field")
 	}
@@ -146,6 +149,45 @@ func TestWellKnownOAuthServer(t *testing.T) {
 		}
 		if !found {
 			t.Errorf("grant_types_supported missing %q", g)
+		}
+	}
+
+	var accessProfiles map[string]struct {
+		Description    string   `json:"description"`
+		Acquisition    string   `json:"acquisition"`
+		InternalScopes []string `json:"internal_scopes"`
+	}
+	if err := json.Unmarshal(got["access_profiles"], &accessProfiles); err != nil {
+		t.Fatalf("access_profiles is not an object: %v", err)
+	}
+	reader, ok := accessProfiles["reader"]
+	if !ok {
+		t.Fatal("access_profiles.reader missing")
+	}
+	if reader.Acquisition == "" || len(reader.InternalScopes) == 0 {
+		t.Fatalf("access_profiles.reader = %#v, want acquisition and internal_scopes", reader)
+	}
+	operator, ok := accessProfiles["operator"]
+	if !ok {
+		t.Fatal("access_profiles.operator missing")
+	}
+	if operator.Acquisition == "" || len(operator.InternalScopes) == 0 {
+		t.Fatalf("access_profiles.operator = %#v, want acquisition and internal_scopes", operator)
+	}
+	if len(reader.InternalScopes) != 1 || reader.InternalScopes[0] != "content.read" {
+		t.Fatalf("reader internal_scopes = %v, want [content.read]", reader.InternalScopes)
+	}
+	wantOperatorScopes := []string{"content.read", "content.write", "site.admin"}
+	for _, want := range wantOperatorScopes {
+		found := false
+		for _, got := range operator.InternalScopes {
+			if got == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("operator internal_scopes missing %q: %v", want, operator.InternalScopes)
 		}
 	}
 }
@@ -344,6 +386,11 @@ func TestWellKnownProtectedResource(t *testing.T) {
 		AuthorizationServers  []string `json:"authorization_servers"`
 		ScopesSupported       []string `json:"scopes_supported"`
 		ResourceDocumentation string   `json:"resource_documentation"`
+		AccessProfiles        map[string]struct {
+			Description    string   `json:"description"`
+			Acquisition    string   `json:"acquisition"`
+			InternalScopes []string `json:"internal_scopes"`
+		} `json:"access_profiles"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
@@ -386,6 +433,12 @@ func TestWellKnownProtectedResource(t *testing.T) {
 				t.Errorf("scopes_supported must not contain removed scope %q", bad)
 			}
 		}
+	}
+	if _, ok := meta.AccessProfiles["reader"]; !ok {
+		t.Fatalf("access_profiles.reader missing from protected resource metadata: %#v", meta.AccessProfiles)
+	}
+	if _, ok := meta.AccessProfiles["operator"]; !ok {
+		t.Fatalf("access_profiles.operator missing from protected resource metadata: %#v", meta.AccessProfiles)
 	}
 }
 
@@ -507,6 +560,12 @@ func TestAuthMdContainsRegistrationFlow(t *testing.T) {
 	if !strings.Contains(body, "agent_auth_metadata") {
 		t.Error("auth.md must contain 'agent_auth_metadata' for agent-readiness scanners")
 	}
+	if !strings.Contains(body, "access_profiles") {
+		t.Error("auth.md must contain access_profiles for the reader/operator contract")
+	}
+	if !strings.Contains(body, "\"reader\"") || !strings.Contains(body, "\"operator\"") {
+		t.Error("auth.md must document reader/operator access profiles")
+	}
 	if !strings.Contains(body, "credential_types_supported") {
 		t.Error("auth.md must document anonymous.credential_types_supported")
 	}
@@ -551,6 +610,9 @@ func TestAuthMdAppendsCanonicalRegistrationBlockWhenMissing(t *testing.T) {
 	}
 	if !strings.Contains(body, "agent_auth_metadata") {
 		t.Fatal("auth.md response must append agent_auth_metadata")
+	}
+	if !strings.Contains(body, "access_profiles") {
+		t.Fatal("auth.md response must append access_profiles")
 	}
 	if !strings.Contains(body, "registration_endpoint") {
 		t.Fatal("auth.md response must mention registration_endpoint")

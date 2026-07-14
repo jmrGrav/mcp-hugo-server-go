@@ -2,6 +2,16 @@
 
 This document reflects the current MCP registry. Tool IDs are stable; titles and descriptions are tuned for Claude and other MCP clients.
 
+## External access profiles
+
+Public documentation uses two external profiles:
+
+- `reader`: all public-safe read-only tools
+- `operator`: reader tools plus write and site operations
+
+The registry below still lists the current internal scope tiers enforced by the
+runtime during v1.x so the mapping stays explicit and auditable.
+
 ## Anonymous
 
 - `list_pages` - Browse pages
