@@ -1,6 +1,8 @@
 package fileutil_test
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -111,6 +113,30 @@ func TestAtomicWriteCheckedSucceedsNormalPath(t *testing.T) {
 	}
 	if string(data) != "hello" {
 		t.Fatalf("content = %q, want %q", string(data), "hello")
+	}
+}
+
+func TestAtomicCreateCheckedRejectsExistingFile(t *testing.T) {
+	base := t.TempDir()
+	pg, err := security.New(base, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+
+	filePath := filepath.Join(base, "sub", "file.txt")
+	if err := fileutil.AtomicCreateChecked(filePath, "first", pg); err != nil {
+		t.Fatalf("AtomicCreateChecked(first): %v", err)
+	}
+	if err := fileutil.AtomicCreateChecked(filePath, "second", pg); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("AtomicCreateChecked(second) error = %v, want fs.ErrExist", err)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != "first" {
+		t.Fatalf("content = %q, want first", string(data))
 	}
 }
 
