@@ -1719,10 +1719,11 @@ func TestUpdatePageDBWarning(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("create_page setup failed: %s", raw)
 	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "update-db-warning", "index.md"))
 	siteDB.Close()
 
 	res = callTool(t, session, "update_page", map[string]any{
-		"slug": "posts/update-db-warning", "title": "Updated",
+		"slug": "posts/update-db-warning", "title": "Updated", "expected_revision": expected,
 	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
