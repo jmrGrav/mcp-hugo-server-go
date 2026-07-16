@@ -87,6 +87,7 @@ func Defs() []tools.ToolDef {
 		{Name: "get_runtime_status", RequiredScope: "site.admin"},
 		{Name: "get_theme_status", RequiredScope: "site.admin"},
 		{Name: "verify_publication", RequiredScope: "site.admin"},
+		{Name: "create_preview", RequiredScope: "site.admin"},
 	}
 }
 

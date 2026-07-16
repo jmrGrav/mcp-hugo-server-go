@@ -203,6 +203,7 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 | `get_runtime_status`      | structured | `data.server_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
 | `verify_publication`      | structured | `data.source/build/public/index`, `data.http_status`, `data.status`, `data.explanation` |
+| `create_preview`          | flat     | `preview_id`, `url`, `expires_at`, `build` |
 
 ---
 
