@@ -144,6 +144,10 @@ Today this flow still yields the internal `content.read` capability. The
 published `reader` / `operator` profile language is an external contract layer,
 not yet a replacement for the underlying scope strings.
 
+Today this flow still yields the internal `content.read` capability. The
+published `reader` / `operator` profile language is an external contract layer,
+not yet a replacement for the underlying scope strings.
+
 The POST to `/agent/identity/verify` requires operator authentication via the `Authorization: Bearer <admin-token>` header (or `admin_token` form field for browser submissions).
 
 ## API reference

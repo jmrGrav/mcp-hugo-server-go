@@ -37,7 +37,7 @@ runtime during v1.x so the mapping stays explicit and auditable.
 - `get_broken_links` - Get broken links
 - `get_backlinks` - Get backlinks
 - `suggest_internal_links` - Suggest internal links
-- `diff_page` - Diff page
+- `diff_page` - Diff page (depends on a readable local Git baseline; see `docs/git-baseline-model.md`)
 - `validate_front_matter` - Validate front matter
 - `validate_site` - Validate site
 
