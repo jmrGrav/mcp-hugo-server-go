@@ -52,15 +52,16 @@ type createPageOutput struct {
 }
 
 type updatePageInput struct {
-	Slug        string   `json:"slug"`
-	Lang        string   `json:"lang,omitempty"`
-	Title       string   `json:"title,omitempty"`
-	Body        string   `json:"body,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Categories  []string `json:"categories,omitempty"`
-	Draft       *bool    `json:"draft,omitempty"`
-	Description string   `json:"description,omitempty"`
-	DryRun      bool     `json:"dry_run,omitempty"`
+	Slug             string   `json:"slug"`
+	Lang             string   `json:"lang,omitempty"`
+	Title            string   `json:"title,omitempty"`
+	Body             string   `json:"body,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
+	Categories       []string `json:"categories,omitempty"`
+	Draft            *bool    `json:"draft,omitempty"`
+	Description      string   `json:"description,omitempty"`
+	ExpectedRevision string   `json:"expected_revision,omitempty"`
+	DryRun           bool     `json:"dry_run,omitempty"`
 }
 
 type updatePageOutput struct {
@@ -73,8 +74,9 @@ type updatePageOutput struct {
 }
 
 type deletePageInput struct {
-	Slug   string `json:"slug"`
-	DryRun bool   `json:"dry_run,omitempty"`
+	Slug             string `json:"slug"`
+	ExpectedRevision string `json:"expected_revision,omitempty"`
+	DryRun           bool   `json:"dry_run,omitempty"`
 }
 
 type deletePageBacklinkDTO struct {
@@ -280,6 +282,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			"Use title/body to revise content. Use tags/categories/draft/description to update front matter fields. " +
 			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
+			"Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); " +
+			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state.",
 		InputSchema:  tools.MustSchema[updatePageInput](),
 		OutputSchema: tools.MustSchema[updatePageOutput](),
@@ -337,6 +341,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if err != nil {
 			slog.Error("update_page: read failed", "slug", in.Slug, "path", filePath, "error", err)
 			return nil, updatePageOutput{}, fmt.Errorf("read_error: failed to read page")
+		}
+		currentRevision := contentmodel.SourceRevisionBytes(raw)
+		if !in.DryRun {
+			if strings.TrimSpace(in.ExpectedRevision) == "" {
+				return nil, updatePageOutput{}, fmt.Errorf("invalid_params: expected_revision is required for non-dry-run update_page")
+			}
+			if in.ExpectedRevision != currentRevision {
+				return nil, updatePageOutput{}, fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")
+			}
 		}
 		opts := pageUpdateOpts{
 			Tags:        in.Tags,
@@ -431,7 +444,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -482,6 +495,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Backlinks:          &bls,
 			}, nil
 		}
+		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
+			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page")
+		}
 
 		callerKey := deleteCallerKey(ctx)
 		if !deleteCallerLimiter(&deleteMu, deleteLimiters, callerKey).Allow() {
@@ -505,6 +521,18 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			hugosite.ContentMu.Unlock()
 			slog.Debug("delete_page: lock_released")
 		}()
+
+		currentRevision := ""
+		if resolvedSource.SourcePath != "" {
+			currentRevision, err = contentmodel.SourceRevision(resolvedSource.SourcePath)
+			if err != nil {
+				slog.Error("delete_page: read revision failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
+				return nil, deletePageOutput{}, fmt.Errorf("read_error: failed to read page revision")
+			}
+		}
+		if in.ExpectedRevision != currentRevision {
+			return nil, deletePageOutput{}, fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")
+		}
 
 		if err := os.RemoveAll(dir); err != nil {
 			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)

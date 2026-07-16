@@ -33,6 +33,7 @@ type pageMarkdownDTO struct {
 	Lang               string              `json:"lang"`
 	ResolvedLang       string              `json:"resolved_lang"`
 	ResolvedSourcePath string              `json:"resolved_source_path"`
+	Revision           string              `json:"revision,omitempty"`
 	State              site.LifecycleState `json:"state"`
 	Markdown           string              `json:"markdown"`
 }
@@ -57,6 +58,7 @@ type frontmatterDTO struct {
 	Lang               string                      `json:"lang"`
 	ResolvedLang       string                      `json:"resolved_lang"`
 	ResolvedSourcePath string                      `json:"resolved_source_path"`
+	Revision           string                      `json:"revision,omitempty"`
 	State              site.LifecycleState         `json:"state"`
 	ReadingTimeMin     int                         `json:"reading_time_minutes"`
 }
@@ -384,7 +386,7 @@ func newExportAgentContextOutput(data exportAgentContextData, now time.Time) exp
 	}
 }
 
-func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang string, state site.LifecycleState) pageMarkdownDTO {
+func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revision string, state site.LifecycleState) pageMarkdownDTO {
 	return pageMarkdownDTO{
 		Slug:               p.Slug,
 		Title:              p.Title,
@@ -397,6 +399,7 @@ func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang string,
 		Lang:               p.Lang,
 		ResolvedLang:       resolvedLang,
 		ResolvedSourcePath: resolvedSourcePath,
+		Revision:           revision,
 		State:              state,
 		Markdown:           md,
 	}
@@ -404,7 +407,7 @@ func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang string,
 
 func toResolvedPageMarkdownDTO(resolved site.ResolvedPage, siteRoot string) pageMarkdownDTO {
 	p := resolvedPublicPage(resolved)
-	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), resolved.SourcePath, resolvedLang(resolved), resolvedState(resolved, siteRoot))
+	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), resolved.SourcePath, resolvedLang(resolved), resolvedRevision(resolved), resolvedState(resolved, siteRoot))
 }
 
 func resolvedMarkdown(resolved site.ResolvedPage) string {
@@ -443,7 +446,7 @@ func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
 }
 
 func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, siteRoot string, readingTimeMin int) frontmatterDTO {
-	identity := pageIdentityFromPage(p, resolved.SourcePath, readingTimeMin)
+	identity := pageIdentityFromPage(p, resolved.SourcePath, resolvedRevision(resolved), readingTimeMin)
 	return frontmatterDTO{
 		Slug:               identity.Slug,
 		Title:              identity.Title,
@@ -456,6 +459,7 @@ func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, siteRoot string, 
 		Lang:               identity.Lang,
 		ResolvedLang:       resolvedLang(resolved),
 		ResolvedSourcePath: identity.SourcePath,
+		Revision:           identity.Revision,
 		State:              resolvedState(resolved, siteRoot),
 		ReadingTimeMin:     identity.ReadingTime,
 	}
@@ -473,6 +477,17 @@ func resolvedLang(resolved site.ResolvedPage) string {
 		return resolved.Public.Lang
 	}
 	return ""
+}
+
+func resolvedRevision(resolved site.ResolvedPage) string {
+	if resolved.SourcePath == "" {
+		return ""
+	}
+	rev, err := contentmodel.SourceRevision(resolved.SourcePath)
+	if err != nil {
+		return ""
+	}
+	return rev
 }
 
 func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO {

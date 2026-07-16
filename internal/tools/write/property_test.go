@@ -225,11 +225,12 @@ func applyScenarioOp(t *testing.T, session *mcp.ClientSession, contentRoot strin
 		}
 	case "update":
 		res := callTool(t, session, "update_page", map[string]any{
-			"slug":       op.Slug,
-			"title":      op.Title,
-			"body":       op.Body,
-			"tags":       toAnySlice(op.Tags),
-			"categories": toAnySlice(op.Categories),
+			"slug":              op.Slug,
+			"title":             op.Title,
+			"body":              op.Body,
+			"tags":              toAnySlice(op.Tags),
+			"categories":        toAnySlice(op.Categories),
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, filepath.FromSlash(op.Slug), "index.md")),
 		})
 		mustToolSucceed(t, res, op, trace)
 		model[op.Slug] = expectedPage{Title: op.Title, Body: op.Body, Tags: slices.Clone(op.Tags), Categories: slices.Clone(op.Categories)}
@@ -250,7 +251,8 @@ func applyScenarioOp(t *testing.T, session *mcp.ClientSession, contentRoot strin
 		}
 	case "delete":
 		res := callTool(t, session, "delete_page", map[string]any{
-			"slug": op.Slug,
+			"slug":              op.Slug,
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, filepath.FromSlash(op.Slug), "index.md")),
 		})
 		mustToolSucceed(t, res, op, trace)
 		delete(model, op.Slug)
