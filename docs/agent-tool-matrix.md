@@ -4,6 +4,14 @@ This document maps common editorial agent scenarios to the right tool.
 Use it to choose the correct tool on the first call rather than exploring
 by trial and error.
 
+Access terminology in this document:
+
+- `reader` = public-safe read-only access profile
+- `operator` = reader profile plus write and site operations
+
+The per-tool notes below still reference the current internal scopes where that
+detail matters for runtime setup.
+
 ---
 
 ## Quick-reference: scenario → tool
