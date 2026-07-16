@@ -257,6 +257,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			return nil
 		},
 	)
+	admin.RegisterVerifyPublication(siteAdminServer, idx, srcIdx, cfg)
 
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,
