@@ -60,13 +60,35 @@ jobs:
           REPO: ${{ github.repository }}
           BUILD_SHA: ${{ steps.meta.outputs.build_sha }}
         run: |
-          DEPLOYMENTS_JSON="$(gh api "repos/${REPO}/deployments?environment=production&per_page=20")"
+          # gh api occasionally hits a transient 5xx on GitHub's side (observed
+          # repeatedly on this exact deployments-listing call). Retry with
+          # backoff instead of failing the whole release on a blip — this is a
+          # read-only status check, safe to retry.
+          gh_api_retry() {
+            local attempt=1 max_attempts=5 delay=5
+            while true; do
+              if out="$(gh api "$1" 2>&1)"; then
+                printf '%s' "$out"
+                return 0
+              fi
+              if [[ $attempt -ge $max_attempts ]]; then
+                echo "gh api $1 failed after ${max_attempts} attempts: $out" >&2
+                return 1
+              fi
+              echo "gh api $1 failed (attempt ${attempt}/${max_attempts}), retrying in ${delay}s..." >&2
+              sleep "$delay"
+              delay=$((delay * 2))
+              attempt=$((attempt + 1))
+            done
+          }
+
+          DEPLOYMENTS_JSON="$(gh_api_retry "repos/${REPO}/deployments?environment=production&per_page=20")"
           export DEPLOYMENTS_JSON
           DEPLOY_ID="$(python3 -c 'import json, os, sys; build_sha = os.environ["BUILD_SHA"]; deployments = json.loads(os.environ["DEPLOYMENTS_JSON"]); match = next((dep["id"] for dep in deployments if dep.get("sha") == build_sha), None); print(match or ""); sys.exit(0 if match else 1)')" || {
             echo "No production deployment found for ${BUILD_SHA}. Run Deploy to Production first." >&2
             exit 1
           }
-          STATUSES_JSON="$(gh api "repos/${REPO}/deployments/${DEPLOY_ID}/statuses?per_page=20")"
+          STATUSES_JSON="$(gh_api_retry "repos/${REPO}/deployments/${DEPLOY_ID}/statuses?per_page=20")"
           export STATUSES_JSON
           python3 -c 'import json, os, sys; statuses = json.loads(os.environ["STATUSES_JSON"]); ok = any(status.get("state") == "success" for status in statuses); print("" if ok else "Production deployment exists but has no success status.", file=sys.stderr); sys.exit(0 if ok else 1)'
 
