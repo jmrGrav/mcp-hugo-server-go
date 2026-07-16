@@ -33,6 +33,7 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"get_backlinks":           "content.read",
 		"suggest_internal_links":  "content.read",
 		"diff_page":               "content.read",
+		"inspect_rendered_page":   "content.read",
 		"validate_front_matter":   "content.read",
 		"validate_site":           "content.read",
 		"create_page":             "content.write",
@@ -69,8 +70,8 @@ func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
 	if got := len(anonpkg.Defs()); got != 9 {
 		t.Fatalf("anonymous tool count = %d, want 9", got)
 	}
-	if got := len(readpkg.Defs()); got != 14 {
-		t.Fatalf("content.read tool count = %d, want 14", got)
+	if got := len(readpkg.Defs()); got != 15 {
+		t.Fatalf("content.read tool count = %d, want 15", got)
 	}
 	if got := len(writepkg.Defs()); got != 3 {
 		t.Fatalf("content.write tool count = %d, want 3", got)

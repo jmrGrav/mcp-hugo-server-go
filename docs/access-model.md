@@ -92,6 +92,7 @@ Legend used in `MCP annotations`:
 | `get_backlinks` | Backlink analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `suggest_internal_links` | Link suggestion analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `diff_page` | Source vs Git diff | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
+| `inspect_rendered_page` | Rendered-HTML/SEO/link validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `validate_front_matter` | Source validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `validate_site` | Full-site source validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `create_page` | Create source content | `content.write` | `operator` | high | `OPEN` |

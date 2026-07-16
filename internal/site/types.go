@@ -10,4 +10,9 @@ type Page struct {
 	URL        string
 	Lang       string
 	RawHTML    string
+	// OutputPath is the rendered HTML file's path relative to cfg.SiteRoot
+	// (forward-slash separated), e.g. "en/posts/foo/index.html". Populated
+	// during index construction from the same file walk that produced
+	// RawHTML; empty for synthetic/zero-value Pages.
+	OutputPath string
 }
