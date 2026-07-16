@@ -21,6 +21,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/indexnow"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/observability"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
@@ -251,6 +252,10 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			return nil
 		},
 	)
+	previews := previewstore.New()
+	previewHandler := previews.HTTPHandler()
+	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	admin.RegisterCreatePreview(siteAdminServer, cfg, previews, previewBaseURL)
 
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,
@@ -484,6 +489,13 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			w.Header().Set("Vary", "Authorization")
 			rateLimitedStreaming.ServeHTTP(w, r)
 		default:
+			// /preview/{id}/{token}/... (#345) isn't a fixed path, so it can't
+			// be a switch case above — the store itself enforces the token
+			// and TTL gate on every request.
+			if strings.HasPrefix(r.URL.Path, "/preview/") {
+				previewHandler.ServeHTTP(w, r)
+				return
+			}
 			http.NotFound(w, r)
 		}
 	})

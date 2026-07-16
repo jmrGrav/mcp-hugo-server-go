@@ -61,6 +61,7 @@ input returns a structured `idempotency_conflict` error.
 - `check_sri_versions` - Verify SRI integrity
 - `get_runtime_status` - Get runtime status (server version/commit, hugo/git availability, source/public revision hashes)
 - `get_theme_status` - Get theme status (active theme/module name, on-disk presence, Git commit/dirty state for classic themes)
+- `create_preview` - Create preview (builds source, optionally including drafts, into an isolated directory exposed at a temporary token-gated, non-indexable URL; see `docs/preview-workflow.md`)
 
 `system.admin` is accepted as a legacy compatibility alias for `site.admin`, but it is not advertised as a canonical tool tier.
 

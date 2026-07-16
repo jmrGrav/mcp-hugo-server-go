@@ -163,3 +163,37 @@ func TestNewLoggerAndRequestMiddleware(t *testing.T) {
 		t.Fatal("NewLogger() returned nil")
 	}
 }
+
+// TestRequestMiddlewareRedactsPreviewToken proves the #345 preview token
+// (the sole confidentiality boundary for a draft preview build) never
+// appears in cleartext in the request log — logging it would let anyone
+// with log-read access lift a preview URL and view unpublished drafts for
+// the rest of its TTL.
+func TestRequestMiddlewareRedactsPreviewToken(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+	h := RequestMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), log)
+
+	const secretToken = "super-secret-preview-token-abc123"
+	req := httptest.NewRequest(http.MethodGet, "https://example.test/preview/abc123/"+secretToken+"/index.html", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	logged := buf.String()
+	if strings.Contains(logged, secretToken) {
+		t.Fatalf("preview token leaked into request log: %s", logged)
+	}
+	if !strings.Contains(logged, `"path":"/preview/abc123/[redacted]/index.html"`) {
+		t.Fatalf("expected redacted path in log, got: %s", logged)
+	}
+}
+
+func TestRedactRequestPathLeavesNonPreviewPathsUnchanged(t *testing.T) {
+	for _, p := range []string{"/mcp", "/.well-known/agent.json", "/preview/", "/preview/onlyid"} {
+		if got := redactRequestPath(p); got != p {
+			t.Fatalf("redactRequestPath(%q) = %q, want unchanged", p, got)
+		}
+	}
+}

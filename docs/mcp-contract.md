@@ -201,6 +201,7 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 | `check_sri_versions`      | flat     | (SRI result)                         |
 | `get_runtime_status`      | structured | `data.server_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
+| `create_preview`          | flat     | `preview_id`, `url`, `expires_at`, `build` |
 
 ---
 

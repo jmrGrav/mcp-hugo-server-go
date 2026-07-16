@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,12 +27,34 @@ func RequestMiddleware(next http.Handler, log *slog.Logger) http.Handler {
 		next.ServeHTTP(rw, r)
 		log.Info("request",
 			"method", r.Method,
-			"path", r.URL.Path,
+			"path", redactRequestPath(r.URL.Path),
 			"status", rw.status,
 			"duration_ms", time.Since(start).Milliseconds(),
 			"remote_addr", r.RemoteAddr,
 		)
 	})
+}
+
+// redactRequestPath strips the confidentiality token out of preview URLs
+// (/preview/{id}/{token}/...) before logging (#345). A preview token gates
+// access to a build that may include unpublished drafts — logging it in
+// cleartext on every request would defeat the point of a token-gated,
+// time-limited surface, since anyone with log-read access could lift it and
+// view the preview for the rest of its TTL.
+func redactRequestPath(path string) string {
+	if !strings.HasPrefix(path, "/preview/") {
+		return path
+	}
+	rest := strings.TrimPrefix(path, "/preview/")
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) < 2 {
+		return path
+	}
+	redacted := "/preview/" + parts[0] + "/[redacted]"
+	if len(parts) == 3 {
+		redacted += "/" + parts[2]
+	}
+	return redacted
 }
 
 // NewToolCallMiddleware returns an MCP server middleware that emits one structured
