@@ -86,6 +86,19 @@ func decodeWriteContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return m
 }
 
+func decodeWriteErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	if res.StructuredContent != nil {
+		return decodeWriteContent(t, res)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	return m
+}
+
 func assertWritePageState(t *testing.T, raw any, source, build, public, index string) {
 	t.Helper()
 	state, ok := raw.(map[string]any)
@@ -1060,11 +1073,7 @@ func TestUpdatePageAmbiguousLanguageStructuredError(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("update_page on multilingual page without lang should return error result")
 	}
-	text := res.Content[0].(*mcp.TextContent).Text
-	var m map[string]any
-	if err := json.Unmarshal([]byte(text), &m); err != nil {
-		t.Fatalf("unmarshal error payload: %v", err)
-	}
+	m := decodeWriteErrorEnvelope(t, res)
 	errors, ok := m["errors"].([]any)
 	if !ok || len(errors) != 1 {
 		t.Fatalf("update_page errors = %#v", m["errors"])

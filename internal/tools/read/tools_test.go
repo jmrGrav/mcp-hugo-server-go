@@ -113,6 +113,19 @@ func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return m
 }
 
+func decodeErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	if res.StructuredContent != nil {
+		return decodeContent(t, res)
+	}
+	text := res.Content[0].(*mcp.TextContent).Text
+	var m map[string]any
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		t.Fatalf("unmarshal error payload: %v", err)
+	}
+	return m
+}
+
 func TestGetFullPageMarkdown(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -841,11 +854,7 @@ func TestSearchContentInvalidTypeStructuredError(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("search_content with invalid type should return error result")
 	}
-	text := res.Content[0].(*mcp.TextContent).Text
-	var m map[string]any
-	if err := json.Unmarshal([]byte(text), &m); err != nil {
-		t.Fatalf("unmarshal error payload: %v", err)
-	}
+	m := decodeErrorEnvelope(t, res)
 	if m["success"] != false {
 		t.Fatalf("search_content error success = %v, want false", m["success"])
 	}

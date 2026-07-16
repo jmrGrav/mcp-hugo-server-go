@@ -43,6 +43,7 @@ type createPageInput struct {
 }
 
 type createPageOutput struct {
+	toolcontract.ToolResponse[map[string]any]
 	Status             string               `json:"status,omitempty"`
 	Slug               string               `json:"slug"`
 	Path               string               `json:"path,omitempty"`
@@ -69,6 +70,7 @@ type updatePageInput struct {
 }
 
 type updatePageOutput struct {
+	toolcontract.ToolResponse[map[string]any]
 	Status             string               `json:"status,omitempty"`
 	Slug               string               `json:"slug"`
 	ResolvedLang       string               `json:"resolved_lang"`
@@ -93,6 +95,7 @@ type deletePageBacklinkDTO struct {
 }
 
 type deletePageOutput struct {
+	toolcontract.ToolResponse[map[string]any]
 	Status             string                   `json:"status,omitempty"`
 	Slug               string                   `json:"slug"`
 	ResolvedLang       string                   `json:"resolved_lang"`
@@ -102,6 +105,10 @@ type deletePageOutput struct {
 	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
 	Warning            string                   `json:"warning,omitempty"`
 	State              *site.LifecycleState     `json:"state,omitempty"`
+}
+
+func writeSuccessEnvelope() toolcontract.ToolResponse[map[string]any] {
+	return toolcontract.Success(map[string]any{}, toolcontract.NewMeta(toolcontract.ToolResultVersion, time.Now().UTC()))
 }
 
 // normalizeInputSlug strips leading and trailing slashes so agents that pass
@@ -216,6 +223,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, createPageOutput{
+				ToolResponse:       writeSuccessEnvelope(),
 				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedLang,
@@ -320,6 +328,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		state := createPageState()
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := createPageOutput{
+			ToolResponse:       writeSuccessEnvelope(),
 			Status:             status,
 			Slug:               in.Slug,
 			Path:               logicalPath,
@@ -479,6 +488,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			diff := simpleDiff(diffLabel, string(raw), content)
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, updatePageOutput{
+				ToolResponse:       writeSuccessEnvelope(),
 				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedSource.Lang,
@@ -546,6 +556,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		state := updatePageState(siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := updatePageOutput{
+			ToolResponse:       writeSuccessEnvelope(),
 			Status:             status,
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
@@ -607,6 +618,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				}
 			}
 			return nil, deletePageOutput{
+				ToolResponse:       writeSuccessEnvelope(),
 				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedSource.Lang,
@@ -748,6 +760,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			status = "partial_success"
 		}
 		out := deletePageOutput{
+			ToolResponse:       writeSuccessEnvelope(),
 			Status:             status,
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,

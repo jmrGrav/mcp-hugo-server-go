@@ -53,6 +53,19 @@ func resultText(res *mcp.CallToolResult) string {
 	return string(b)
 }
 
+func decodeStructuredResult(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		t.Fatalf("unmarshal structured content: %v", err)
+	}
+	return out
+}
+
 func TestGenerateFeaturedImage_Success(t *testing.T) {
 	fakeBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -310,10 +323,7 @@ func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
 	if !strings.Contains(text, "invalid_params") {
 		t.Fatalf("error text %q does not contain 'invalid_params'", text)
 	}
-	var m map[string]any
-	if err := json.Unmarshal([]byte(text), &m); err != nil {
-		t.Fatalf("Unmarshal error payload: %v", err)
-	}
+	m := decodeStructuredResult(t, res)
 	errors, ok := m["errors"].([]any)
 	if !ok || len(errors) != 1 {
 		t.Fatalf("structured errors = %#v", m["errors"])
