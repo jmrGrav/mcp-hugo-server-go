@@ -106,9 +106,10 @@ Follow-up issue mapping:
 - `git_untracked` — a Git baseline was found, but the specific source file is not yet tracked in
   `HEAD` (e.g. immediately after `create_page`, before any commit). `diff_available` is `false`,
   `fallback_mode` is `source_content`, and the warning explicitly says the file is new.
-- `git_no_changes` / `modified` / `deleted` — a Git baseline and a tracked version of the file were
-  both found; `diff_available` is `true` and `diff` carries a real unified diff (empty for
-  `git_no_changes`).
+- `unchanged` / `modified` / `deleted` — a Git baseline and a tracked version of the file were both
+  found; `diff_available` is `true` and `diff` carries a real unified diff (empty for `unchanged`).
+  These were never ambiguous — the issue's complaint was specifically about `git_not_available` — so
+  they keep their pre-existing names rather than gaining a `git_` prefix.
 
 This is deliberately narrower than full `git_baseline.mode: configured` wiring (a separate baseline
 `repo_path` distinct from `content_root`): `diff_page` currently only respects `mode: disabled` to

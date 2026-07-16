@@ -196,8 +196,8 @@ func TestReadHelperBranches(t *testing.T) {
 }
 
 func TestDiffHelperBranches(t *testing.T) {
-	if got := diffStatus(true, []byte("same"), []byte("same")); got != "git_no_changes" {
-		t.Fatalf("diffStatus(git_no_changes) = %q", got)
+	if got := diffStatus(true, []byte("same"), []byte("same")); got != "unchanged" {
+		t.Fatalf("diffStatus(unchanged) = %q", got)
 	}
 	if got := diffStatus(true, []byte("new"), []byte("old")); got != "modified" {
 		t.Fatalf("diffStatus(modified) = %q", got)

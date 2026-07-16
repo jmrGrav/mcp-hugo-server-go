@@ -179,6 +179,11 @@ func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
 	if len(warnings) == 0 {
 		t.Fatal("expected warning explaining git is unavailable")
 	}
+	// git_unavailable now surfaces the underlying probe error (acceptance
+	// criterion of #322); it must never leak the absolute content_root path.
+	if strings.Contains(warnings[0].(string), contentRoot) {
+		t.Fatalf("warning leaks absolute content_root path: %v", warnings[0])
+	}
 }
 
 func TestDiffPageUntrackedFileReturnsGitUntrackedStatus(t *testing.T) {

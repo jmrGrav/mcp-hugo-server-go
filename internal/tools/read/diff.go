@@ -237,7 +237,7 @@ func isGitPathMissing(err error) bool {
 func diffStatus(baseExists bool, current, base []byte) string {
 	switch {
 	case baseExists && bytes.Equal(current, base):
-		return "git_no_changes"
+		return "unchanged"
 	case baseExists:
 		return "modified"
 	case len(current) == 0:
