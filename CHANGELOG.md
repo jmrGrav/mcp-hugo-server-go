@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.3] - 2026-07-16
+
+### Fixed
+- **`meta.server_version` reported a hardcoded schema constant instead of the deployed build version** (#323, PR #361): extracted `internal/buildinfo` to separate the response schema version (`ToolResultVersion`, a stable constant) from the runtime build version (`buildinfo.Version`, set via `-ldflags`). `meta.server_version` now carries the real deployed build; the envelope `version` field is pinned to the schema version. ldflags wiring updated across CI, deploy workflow, Makefile, and local scripts.
+- **Tool responses exposed absolute host filesystem paths** (#334, PR #362): added `fileutil.LogicalContentPath` to project resolved source paths to `content/...` at the DTO boundary, applied consistently across anonymous, read, write, and diff tool responses. Internal I/O still uses real paths; only client-facing fields are projected.
+
+### Added
+- **Access model design anchor** (#352, PR #364): `docs/access-model.md` documents the verified 31-tool scope matrix, the target `reader`/`operator` external model, and migration decisions for `site.admin`/`system.admin` aliases. Matrix is checked against the real tool registry by `TestVerifiedToolScopeMatrix`, not just prose.
+- **Discovery metadata for reader/operator profiles** (#357, PR #383): `access_profiles` (`reader`/`operator`) added additively to both OAuth authorization-server and protected-resource discovery documents, alongside the existing real `scopes_supported`. No authorization or token-issuance logic changed.
+
+## [v1.4.2] - 2026-07-16
+
+### Fixed
+- **`create_page` silently overwrote existing content on duplicate slug** (#330, PR #367): switched to an atomic exclusive-create primitive (temp file + `os.Link`, which fails if the destination exists) instead of a stat-then-write path. Duplicate creates now fail with `already_exists`. Also fixed `dry_run` mode, which previously reported a false-positive "would succeed" preview for slugs that already existed.
+- **Write mutations had no optimistic-concurrency protection** (#335, PR #359): added a stable `sha256` `revision` to all page-oriented read surfaces; `update_page` and `delete_page` now require `expected_revision` and reject stale values with `revision_conflict`. `delete_page` recomputes the revision under the content lock (not before it) to close a race window while waiting for the lock.
+
+### Added
+- **`idempotency_key` replay safety for write mutations** (#336, PR #360): `create_page`, `update_page`, and `delete_page` accept an optional `idempotency_key`; replaying the same request returns the original result without reapplying the mutation, and reusing the key with different input returns `idempotency_conflict`. The replay check runs under the content lock so genuinely concurrent retries can't both miss the cache.
+
 ## [v1.4.1] - 2026-07-13
 
 ### Added
