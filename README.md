@@ -35,7 +35,8 @@ The external access story is intentionally converging toward two profiles:
 The runtime still enforces the current internal capability scopes during v1.x:
 
 - `anonymous`: public, safe, read-only discovery
-- `content.read`: richer read-only access
+- `reader`: self-service safe read-only access for agent registrations
+- `content.read`: richer approved read-only access
 - `content.write`: create, update, and delete operations
 - `site.admin`: build, site-management, integrity, and diagnostic operations
 
@@ -60,6 +61,7 @@ Claude Desktop and Claude.ai can connect directly to the public MCP endpoint abo
 
 The server card and OAuth discovery advertise canonical internal scopes only:
 
+- `reader`
 - `content.read`
 - `content.write`
 - `site.admin`
@@ -117,7 +119,8 @@ Production promotion is intentionally split into three explicit stages:
 ```
 mcp.arleo.eu
 ├── anonymous       public discovery and safe read-only tools
-├── content.read    richer read-only content access
+├── reader          self-service safe read-only tokens
+├── content.read    richer approved read-only content access
 ├── content.write   content creation and editing
 └── site.admin      build, site, integrity, and diagnostic operations
 ```
@@ -130,12 +133,12 @@ To report a vulnerability, set `security_contact` in your server config (e.g., `
 
 ## Agent identity flow
 
-Agents authenticate via the device-flow-like endpoint at `/agent/identity/verify`:
+Agents authenticate via the identity assertion flow:
 
-1. Agent POSTs to `/agent/identity` with `{"type":"anonymous"}` → receives `claim_token` + `verification_uri`.
-2. Agent POSTs to `/agent/identity/claim` with the `claim_token` → initiates claim.
-3. Operator visits the `verification_uri` (or POSTs to `/agent/identity/verify`) with a `site.admin` Bearer token and the `claim_token` to approve.
-4. Agent exchanges its `identity_assertion` at `/token` (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) → receives a `content.read` Bearer token.
+1. Agent POSTs to `/agent/identity` with `{"type":"anonymous"}`.
+2. If `oauth.allow_reader_self_registration` is enabled, the response is immediately exchangeable at `/token` (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) for a `reader` Bearer token.
+3. If self-registration is disabled, the response includes `claim_token` + `verification_uri`; the agent POSTs to `/agent/identity/claim`, then an operator visits the `verification_uri` (or POSTs to `/agent/identity/verify`) with a `site.admin` Bearer token and the `claim_token` to approve.
+4. The approved assertion then exchanges at `/token` for the configured read token.
 
 Today this flow still yields the internal `content.read` capability. The
 published `reader` / `operator` profile language is an external contract layer,

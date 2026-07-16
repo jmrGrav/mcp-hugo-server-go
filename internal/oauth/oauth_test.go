@@ -37,6 +37,25 @@ func newTestService(t *testing.T, cidrs ...string) (*oauth.Service, storage.Stor
 	return svc, store
 }
 
+func newTestServiceWithConfig(t *testing.T, cfg config.OAuthConfig) (*oauth.Service, storage.Store) {
+	t.Helper()
+	if len(cfg.TrustedAuthorizeCIDRs) == 0 {
+		cfg.TrustedAuthorizeCIDRs = []string{"127.0.0.1/32", "::1/128"}
+	}
+	if cfg.Issuer == "" {
+		cfg.Issuer = "https://mcp.test"
+	}
+	if cfg.Resource == "" {
+		cfg.Resource = "https://mcp.test/mcp"
+	}
+	if cfg.AccessTokenTTLSeconds == 0 {
+		cfg.AccessTokenTTLSeconds = 3600
+	}
+	store := storage.NewMemory()
+	svc := oauth.NewService(cfg, store)
+	return svc, store
+}
+
 func registerClient(t *testing.T, svc *oauth.Service, redirectURIs []string) string {
 	t.Helper()
 	body, _ := json.Marshal(map[string]any{"redirect_uris": redirectURIs})
@@ -727,6 +746,80 @@ func TestAgentTokenExchangeRequiresClaim(t *testing.T) {
 	_ = json.Unmarshal(tokenRec.Body.Bytes(), &errBody)
 	if errBody.Error != "invalid_grant" {
 		t.Fatalf("expected invalid_grant error, got: %q", errBody.Error)
+	}
+}
+
+func TestAgentTokenExchangeAllowsReaderSelfRegistrationWhenEnabled(t *testing.T) {
+	svc, store := newTestServiceWithConfig(t, config.OAuthConfig{
+		Enabled:                     true,
+		Issuer:                      "https://mcp.test",
+		Resource:                    "https://mcp.test/mcp",
+		DynamicClientEnabled:        true,
+		TrustedAuthorizeCIDRs:       []string{"127.0.0.1/32", "::1/128"},
+		AuthCodeTTLSeconds:          300,
+		AccessTokenTTLSeconds:       3600,
+		AllowReaderSelfRegistration: true,
+	})
+
+	identityBody := []byte(`{"type":"anonymous"}`)
+	identityReq := httptest.NewRequest(http.MethodPost, "/agent/identity", bytes.NewReader(identityBody))
+	identityReq.Header.Set("Content-Type", "application/json")
+	identityRec := httptest.NewRecorder()
+	svc.HandleAgentIdentity(identityRec, identityReq)
+	if identityRec.Code != http.StatusOK {
+		t.Fatalf("identity: status = %d body = %q", identityRec.Code, identityRec.Body.String())
+	}
+	var identity oauth.AgentIdentityResponse
+	if err := json.Unmarshal(identityRec.Body.Bytes(), &identity); err != nil {
+		t.Fatalf("identity: decode: %v", err)
+	}
+	if len(identity.PreClaimScopes) != 1 || identity.PreClaimScopes[0] != "reader" {
+		t.Fatalf("identity pre_claim_scopes = %#v want [reader]", identity.PreClaimScopes)
+	}
+	if len(identity.PostClaimScopes) != 1 || identity.PostClaimScopes[0] != "reader" {
+		t.Fatalf("identity post_claim_scopes = %#v want [reader]", identity.PostClaimScopes)
+	}
+	if identity.ClaimToken != "" || identity.ClaimURL != "" || identity.Claim != nil {
+		t.Fatalf("reader self-registration must not advertise claim flow: %#v", identity)
+	}
+
+	tokenForm := url.Values{
+		"grant_type": {"urn:ietf:params:oauth:grant-type:jwt-bearer"},
+		"assertion":  {identity.IdentityAssertion},
+		"scope":      {"site.admin"},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("reader self-registration token exchange: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("token: decode: %v", err)
+	}
+	if tokenResp.Scope != "reader" {
+		t.Fatalf("token scope = %q want reader", tokenResp.Scope)
+	}
+
+	scope, legacy, ok := svc.ValidateBearerDetails(tokenResp.AccessToken)
+	if !ok {
+		t.Fatal("reader token must validate")
+	}
+	if scope != "reader" || legacy {
+		t.Fatalf("ValidateBearerDetails returned scope=%q legacy=%v; want reader false", scope, legacy)
+	}
+
+	storedScope, ok := store.ValidateAccessToken(oauth.HashToken(tokenResp.AccessToken))
+	if !ok {
+		t.Fatal("reader token missing from store")
+	}
+	if storedScope != "reader" {
+		t.Fatalf("stored scope = %q want reader", storedScope)
 	}
 }
 

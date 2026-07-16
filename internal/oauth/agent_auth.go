@@ -16,6 +16,7 @@ import (
 type agentRegistration struct {
 	RegistrationID   string
 	AssertionToken   string
+	IssuedScope      string
 	ClaimToken       string
 	AssertionExpires time.Time
 	ClaimExpires     time.Time
@@ -62,38 +63,56 @@ func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 	issuer := s.cfg.Issuer
 	regID := "reg_" + randomString(20)
 	assertion := "arleo_assert_" + randomString(32)
-	claimToken := "clm_" + randomString(24)
 	now := time.Now()
 	assertionExpires := now.Add(time.Hour)
-	claimExpires := now.Add(10 * time.Minute)
+	issuedScope := "content.read"
+	claimed := false
+	claimToken := ""
+	claimExpires := time.Time{}
+	if s.cfg.AllowReaderSelfRegistration {
+		issuedScope = "reader"
+		claimed = true
+	} else {
+		claimToken = "clm_" + randomString(24)
+		claimExpires = now.Add(10 * time.Minute)
+	}
 
 	s.mu.Lock()
 	s.agentRegs[assertion] = agentRegistration{
 		RegistrationID:   regID,
 		AssertionToken:   assertion,
+		IssuedScope:      issuedScope,
 		ClaimToken:       claimToken,
 		AssertionExpires: assertionExpires,
 		ClaimExpires:     claimExpires,
+		Claimed:          claimed,
 	}
-	s.agentClaimTokens[claimToken] = assertion
+	if claimToken != "" {
+		s.agentClaimTokens[claimToken] = assertion
+	}
 	s.mu.Unlock()
 
-	return &AgentIdentityResponse{
+	resp := &AgentIdentityResponse{
 		RegistrationID:    regID,
 		RegistrationType:  "anonymous",
 		IdentityAssertion: assertion,
 		AssertionExpires:  assertionExpires.UTC().Format(time.RFC3339Nano),
 		PreClaimScopes:    []string{},
-		ClaimURL:          issuer + "/agent/identity/claim",
-		ClaimToken:        claimToken,
-		ClaimTokenExpires: claimExpires.UTC().Format(time.RFC3339Nano),
-		PostClaimScopes:   []string{"content.read"},
-		Claim: &AgentClaimInfo{
-			ExpiresIn:       600,
-			VerificationURI: issuer + "/agent/identity/verify",
-			Interval:        5,
-		},
-	}, nil
+		PostClaimScopes:   []string{issuedScope},
+	}
+	if issuedScope == "reader" {
+		resp.PreClaimScopes = []string{"reader"}
+		return resp, nil
+	}
+	resp.ClaimURL = issuer + "/agent/identity/claim"
+	resp.ClaimToken = claimToken
+	resp.ClaimTokenExpires = claimExpires.UTC().Format(time.RFC3339Nano)
+	resp.Claim = &AgentClaimInfo{
+		ExpiresIn:       600,
+		VerificationURI: issuer + "/agent/identity/verify",
+		Interval:        5,
+	}
+	return resp, nil
 }
 
 func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, error) {
@@ -114,7 +133,10 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	if err := s.store.AddAccessToken(HashToken(token), "content.read", time.Now().Add(ttl)); err != nil {
+	if reg.IssuedScope == "" {
+		reg.IssuedScope = "content.read"
+	}
+	if err := s.store.AddAccessToken(HashToken(token), reg.IssuedScope, time.Now().Add(ttl)); err != nil {
 		return nil, fmt.Errorf("server_error: store token: %w", err)
 	}
 
@@ -122,6 +144,7 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 		AccessToken: token,
 		TokenType:   "Bearer",
 		ExpiresIn:   s.cfg.AccessTokenTTLSeconds,
+		Scope:       reg.IssuedScope,
 	}, nil
 }
 
