@@ -258,6 +258,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			return nil
 		},
 	)
+	admin.RegisterVerifyPublication(siteAdminServer, idx, srcIdx, cfg)
 	previews := previewstore.New()
 	previewHandler := previews.HTTPHandler()
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")

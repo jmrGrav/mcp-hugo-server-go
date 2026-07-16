@@ -105,6 +105,7 @@ Legend used in `MCP annotations`:
 | `check_sri_versions` | Live SRI verification against remote assets | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
 | `get_runtime_status` | Runtime/build/git/site status surface | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
 | `get_theme_status` | Active theme/module presence + Git commit/dirty state | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
+| `verify_publication` | Source/build/public/index freshness + live HTTP check | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
 | `create_preview` | Build source (optionally with drafts) to an isolated, token-gated preview URL | `site.admin` | `operator` | high | `OPEN` |
 
 ## Why `check_sri_versions` stays operator-only
