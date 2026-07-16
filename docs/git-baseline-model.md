@@ -96,6 +96,26 @@ Follow-up issue mapping:
 - `#344` should expose the same model in `get_runtime_status`.
 - `#346` should reuse the same trust model when proving publication freshness.
 
+### `diff_page` status vocabulary (landed via #322)
+
+`diff_page`'s per-call `status` field now distinguishes:
+
+- `git_unavailable` — no usable Git baseline was reachable at all (`git_baseline.mode: disabled`,
+  no `.git` found from `content_root`, or the `git` binary/HEAD could not be read). `diff_available`
+  is `false`, `fallback_mode` is `source_content`, and the warning surfaces the underlying reason.
+- `git_untracked` — a Git baseline was found, but the specific source file is not yet tracked in
+  `HEAD` (e.g. immediately after `create_page`, before any commit). `diff_available` is `false`,
+  `fallback_mode` is `source_content`, and the warning explicitly says the file is new.
+- `unchanged` / `modified` / `deleted` — a Git baseline and a tracked version of the file were both
+  found; `diff_available` is `true` and `diff` carries a real unified diff (empty for `unchanged`).
+  These were never ambiguous — the issue's complaint was specifically about `git_not_available` — so
+  they keep their pre-existing names rather than gaining a `git_` prefix.
+
+This is deliberately narrower than full `git_baseline.mode: configured` wiring (a separate baseline
+`repo_path` distinct from `content_root`): `diff_page` currently only respects `mode: disabled` to
+skip host probing outright. Using a configured `repo_path` as the diff baseline is left to a
+follow-up (`#346`) since it requires the baseline checkout to mirror `content_root`'s layout.
+
 ### `get_runtime_status` (landed via #344)
 
 `get_runtime_status` (`site.admin`) reports a `git` sub-object that honors

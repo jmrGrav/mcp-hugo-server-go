@@ -77,8 +77,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			if contentRoot == "" {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: content root not configured")
 			}
-			gitRoot, err := findGitRoot(ctx, contentRoot)
-			if err != nil {
+			unavailableFallback := func(reason string) diffPageOutput {
 				relPath := resolved.Source.Slug
 				if resolved.SourcePath != "" {
 					if rel, relErr := filepath.Rel(contentRoot, resolved.SourcePath); relErr == nil {
@@ -91,14 +90,21 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 					ResolvedLang:  resolved.Source.Lang,
 					ResolvedPath:  resolvedLogicalPath(contentRoot, resolved.SourcePath, relPath),
 					State:         resolvedState(resolved, cfg.SiteRoot),
-					Status:        "git_not_available",
+					Status:        "git_unavailable",
 					DiffAvailable: false,
 					FallbackMode:  "source_content",
 					HeadCommit:    "working-tree",
 					SourceContent: resolved.Source.Body,
 				}, time.Now().UTC())
-				resp.Warnings = []string{"Git repository metadata is unavailable; returning source content without a diff."}
-				return nil, resp, nil
+				resp.Warnings = []string{fmt.Sprintf("Git repository metadata is unavailable (%s); returning source content without a diff.", reason)}
+				return resp
+			}
+			if cfg.GitBaseline.Mode == "disabled" {
+				return nil, unavailableFallback("git baseline is disabled by configuration"), nil
+			}
+			gitRoot, err := findGitRoot(ctx, contentRoot)
+			if err != nil {
+				return nil, unavailableFallback(strings.TrimSpace(err.Error())), nil
 			}
 			absPath := resolved.SourcePath
 			if absPath == "" {
@@ -128,6 +134,23 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				return nil, diffPageOutput{}, fmt.Errorf("content_not_found: page not readable for slug %q", in.Slug)
 			}
 			status := diffStatus(baseExists, currentContent, baseContent)
+			if status == "git_untracked" {
+				resp := newDiffPageOutput(diffPageData{
+					Slug:          resolved.Source.Slug,
+					Path:          relPath,
+					ResolvedLang:  resolved.Source.Lang,
+					ResolvedPath:  resolvedLogicalPath(contentRoot, absPath, relPath),
+					State:         resolvedState(resolved, cfg.SiteRoot),
+					Status:        status,
+					DiffAvailable: false,
+					FallbackMode:  "source_content",
+					BaseCommit:    strings.TrimSpace(headCommit),
+					HeadCommit:    "working-tree",
+					SourceContent: string(currentContent),
+				}, time.Now().UTC())
+				resp.Warnings = []string{"File is new and not yet tracked by git — showing full source instead of diff."}
+				return nil, resp, nil
+			}
 			diffText, err := unifiedDiff(relPath, baseContent, currentContent)
 			if err != nil {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: unable to compute diff")
@@ -220,7 +243,7 @@ func diffStatus(baseExists bool, current, base []byte) string {
 	case len(current) == 0:
 		return "deleted"
 	default:
-		return "added"
+		return "git_untracked"
 	}
 }
 

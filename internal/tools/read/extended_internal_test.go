@@ -205,8 +205,8 @@ func TestDiffHelperBranches(t *testing.T) {
 	if got := diffStatus(false, []byte{}, nil); got != "deleted" {
 		t.Fatalf("diffStatus(deleted) = %q", got)
 	}
-	if got := diffStatus(false, []byte("new"), nil); got != "added" {
-		t.Fatalf("diffStatus(added) = %q", got)
+	if got := diffStatus(false, []byte("new"), nil); got != "git_untracked" {
+		t.Fatalf("diffStatus(git_untracked) = %q", got)
 	}
 	cmd128 := exec.Command("bash", "-c", "exit 128")
 	err128 := cmd128.Run()
