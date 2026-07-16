@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestNewError(t *testing.T) {
@@ -89,5 +91,59 @@ func TestParseToolErrorRejectsNonMachinePrefix(t *testing.T) {
 	}
 	if got.Message != "unexpected content-type: text/html" {
 		t.Fatalf("Message = %q", got.Message)
+	}
+}
+
+func TestErrorResultPopulatesStructuredContent(t *testing.T) {
+	meta := NewMeta("1.4.0", time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC))
+	res := ErrorResult(fmt.Errorf("invalid_params: slug must not be empty"), meta)
+	if res == nil {
+		t.Fatal("ErrorResult() = nil")
+	}
+	if !res.IsError {
+		t.Fatal("IsError = false, want true")
+	}
+	if res.StructuredContent == nil {
+		t.Fatal("StructuredContent = nil, want structured error envelope")
+	}
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal StructuredContent: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal StructuredContent: %v", err)
+	}
+	if got := decoded["success"]; got != false {
+		t.Fatalf("structured success = %v, want false", got)
+	}
+	errors, ok := decoded["errors"].([]any)
+	if !ok || len(errors) == 0 {
+		t.Fatalf("structured errors = %#v, want non-empty []any", decoded["errors"])
+	}
+	first, ok := errors[0].(map[string]any)
+	if !ok {
+		t.Fatalf("structured errors[0] type = %T", errors[0])
+	}
+	if got := first["code"]; got != "missing_required_parameter" {
+		t.Fatalf("structured errors[0].code = %v, want missing_required_parameter", got)
+	}
+}
+
+func TestErrorResultUsesHumanReadableTextContent(t *testing.T) {
+	meta := NewMeta("1.4.0", time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC))
+	res := ErrorResult(fmt.Errorf("not_found: page not found"), meta)
+	if len(res.Content) != 1 {
+		t.Fatalf("len(Content) = %d, want 1", len(res.Content))
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("Content[0] type = %T, want *mcp.TextContent", res.Content[0])
+	}
+	if text.Text != "not_found: page not found" {
+		t.Fatalf("text = %q, want concise human-readable error", text.Text)
+	}
+	if json.Valid([]byte(text.Text)) {
+		t.Fatalf("text = %q, want human-readable text not serialized JSON blob", text.Text)
 	}
 }

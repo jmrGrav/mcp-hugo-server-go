@@ -874,6 +874,17 @@ func assertToolResponseEnvelope(t *testing.T, tool string, m map[string]any) {
 
 func decodeErrorContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	t.Helper()
+	if res.StructuredContent != nil {
+		raw, err := json.Marshal(res.StructuredContent)
+		if err != nil {
+			t.Fatalf("marshal structured error content: %v", err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(raw, &m); err != nil {
+			t.Fatalf("unmarshal structured error content: %v\nraw: %s", err, raw)
+		}
+		return m
+	}
 	if len(res.Content) == 0 {
 		t.Fatal("error result content is empty")
 	}
