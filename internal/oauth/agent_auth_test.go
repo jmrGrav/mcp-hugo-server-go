@@ -3,14 +3,29 @@ package oauth_test
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 )
+
+// withDefaultAuditLogger temporarily replaces the process-wide default slog
+// logger so audit.Info/Warn calls (which always log through slog.Default())
+// can be captured and asserted on. Global process state — do not run in
+// parallel with other tests that also swap the default logger.
+func withDefaultAuditLogger(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
 
 func registerAgentAnonymous(t *testing.T, svc *oauth.Service) *agentIdentityResp {
 	t.Helper()
@@ -82,6 +97,7 @@ func TestHandleAgentVerifyGETEscapesClaimToken(t *testing.T) {
 
 func TestHandleAgentVerifyPOST(t *testing.T) {
 	svc, store := newTestService(t)
+	logBuf := withDefaultAuditLogger(t)
 	resp := registerAgentAnonymous(t, svc)
 
 	// Operator must authenticate with a site.admin token.
@@ -97,6 +113,59 @@ func TestHandleAgentVerifyPOST(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST verify: status = %d body = %q", rec.Code, rec.Body.String())
+	}
+
+	// #371: a successful operator claim approval must be a distinguishable
+	// audit milestone, and must never leak the raw admin bearer token.
+	raw := logBuf.String()
+	if !strings.Contains(raw, `"event_type":"operator_milestone"`) {
+		t.Fatalf("missing operator_milestone audit event: %s", raw)
+	}
+	if !strings.Contains(raw, `"result":"claim_approved"`) {
+		t.Fatalf("missing claim_approved result: %s", raw)
+	}
+	if strings.Contains(raw, adminRaw) {
+		t.Fatalf("audit log must never contain the raw operator bearer token: %s", raw)
+	}
+}
+
+// TestRegisterAgentAnonymousEmitsOperatorMilestone proves #371's requirement
+// that reader self-registration and pending-claim registration are each a
+// distinguishable operator_milestone audit event.
+func TestRegisterAgentAnonymousEmitsOperatorMilestone(t *testing.T) {
+	svc, _ := newTestService(t)
+	logBuf := withDefaultAuditLogger(t)
+
+	registerAgentAnonymous(t, svc)
+
+	raw := logBuf.String()
+	if !strings.Contains(raw, `"event_type":"operator_milestone"`) {
+		t.Fatalf("missing operator_milestone audit event: %s", raw)
+	}
+	if !strings.Contains(raw, `"result":"pending_operator_claim"`) {
+		t.Fatalf("missing pending_operator_claim result (default config requires operator approval): %s", raw)
+	}
+}
+
+func TestRegisterAgentAnonymousReaderSelfRegistrationEmitsDistinctMilestone(t *testing.T) {
+	cfg := config.OAuthConfig{
+		Enabled:                     true,
+		Issuer:                      "https://mcp.test",
+		Resource:                    "https://mcp.test/mcp",
+		AllowReaderSelfRegistration: true,
+		AccessTokenTTLSeconds:       3600,
+	}
+	svc, _ := newTestServiceWithConfig(t, cfg)
+	logBuf := withDefaultAuditLogger(t)
+
+	registerAgentAnonymous(t, svc)
+
+	raw := logBuf.String()
+	if !strings.Contains(raw, `"result":"reader_self_registered"`) {
+		t.Fatalf("missing reader_self_registered result: %s", raw)
+	}
+	if strings.Contains(raw, `"result":"pending_operator_claim"`) {
+		t.Fatalf("reader self-registration must not also report pending_operator_claim: %s", raw)
 	}
 }
 
