@@ -131,11 +131,24 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 
 ## Tool Access Scopes
 
-The server exposes tools across anonymous, read, write, and admin tiers. Each tier is a superset of lower tiers: agents with `content.write` access can call all `content.read` tools, and so on.
+Externally, operators should think in two profiles:
+
+- `reader`: public-safe read-only tooling
+- `operator`: reader tooling plus mutations and site operations
+
+Internally, the server still enforces anonymous, `content.read`,
+`content.write`, and `site.admin` tiers during v1.x. Each tier is a superset of
+lower tiers: agents with `content.write` access can call all `content.read`
+tools, and so on.
 
 Legacy clients may still send `mcp` as a scope. It is accepted as a deprecated alias for `content.read` for backward compatibility, but it is not advertised as a canonical scope and should not be used by new clients.
 
 Legacy clients may still send `system.admin`; it is accepted as a compatibility alias for `site.admin`, but it is not advertised as canonical.
+
+Published discovery metadata now carries both:
+
+- canonical internal scope strings in `scopes_supported`
+- additive `access_profiles.reader` / `access_profiles.operator` metadata for the simplified external model
 
 To enable confidential OAuth clients for `content.write` or `site.admin`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
 

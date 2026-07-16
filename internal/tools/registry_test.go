@@ -88,6 +88,28 @@ func TestContentReadScopeSeesReadTools(t *testing.T) {
 	}
 }
 
+func TestReaderScopeSeesReadTools(t *testing.T) {
+	r := tools.NewRegistry()
+	populateRegistry(r)
+
+	got := r.ForScope("reader")
+	names := toolNames(got)
+
+	if len(got) != 20 {
+		t.Fatalf("ForScope(\"reader\") = %d tools, want 20; names: %v", len(got), names)
+	}
+	for _, name := range anonymousToolNames {
+		if !containsName(names, name) {
+			t.Fatalf("ForScope(\"reader\") missing anonymous tool %q", name)
+		}
+	}
+	for _, name := range readToolNames {
+		if !containsName(names, name) {
+			t.Fatalf("ForScope(\"reader\") missing content.read tool %q", name)
+		}
+	}
+}
+
 func TestScopeInclusion(t *testing.T) {
 	r := tools.NewRegistry()
 	r.Register(tools.ToolDef{Name: "list_pages", RequiredScope: ""})
@@ -111,6 +133,7 @@ func TestScopeRank(t *testing.T) {
 	}{
 		{"", 0},
 		{"content.read", 1},
+		{"reader", 1},
 		{"content.write", 2},
 		{"site.admin", 3},
 		{"system.admin", 0},

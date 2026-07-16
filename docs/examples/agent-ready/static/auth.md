@@ -10,6 +10,14 @@ token with `content.read` scope for read-only access. OAuth 2.0 unlocks richer t
 
 ## Agent registration
 
+External access profiles:
+
+- `reader`: public-safe read-only access
+- `operator`: reader access plus write and site operations
+
+The OAuth scopes below are the current internal capability strings accepted by
+the server during v1.x.
+
 - **Registration endpoint**: https://mcp.arleo.eu/register
 - **Authorization server**: https://mcp.arleo.eu
 - **Authorization endpoint**: https://mcp.arleo.eu/authorize
@@ -93,7 +101,19 @@ token with `content.read` scope for read-only access. OAuth 2.0 unlocks richer t
     "token_endpoint": "https://mcp.arleo.eu/token",
     "mcp_endpoint": "https://mcp.arleo.eu/mcp"
   },
-  "scopes": ["content.read", "content.write", "site.admin"]
+  "scopes": ["content.read", "content.write", "site.admin"],
+  "access_profiles": {
+    "reader": {
+      "description": "Public-safe read-only access profile for discovery and content inspection.",
+      "acquisition": "anonymous or self-serve registration",
+      "internal_scopes": ["content.read"]
+    },
+    "operator": {
+      "description": "Approved operator profile that bundles read, write, and site operation capabilities.",
+      "acquisition": "approved token present in the server registry",
+      "internal_scopes": ["content.read", "content.write", "site.admin"]
+    }
+  }
 }
 ```
 

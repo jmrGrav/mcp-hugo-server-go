@@ -66,8 +66,8 @@ func runWriteScenarioProperty(t *testing.T, seeds int) {
 }
 
 // TestWriteErrorPaths verifies that the tools return errors for invalid
-// operations: empty/reserved slug, update/delete on missing slug.
-// Note: create_page on an existing slug is intentionally an upsert (not an error).
+// operations: empty/reserved slug, duplicate create, update/delete on missing
+// slug.
 func TestWriteErrorPaths(t *testing.T) {
 	t.Parallel()
 
@@ -92,6 +92,14 @@ func TestWriteErrorPaths(t *testing.T) {
 	mustError(t, callTool(t, session, "create_page", map[string]any{
 		"slug": "_index", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
 	}), "create_page with reserved slug _index")
+
+	// Duplicate create must fail instead of overwriting the original page.
+	mustToolSucceed(t, callTool(t, session, "create_page", map[string]any{
+		"slug": "err/duplicate", "title": "Original", "body": "Body", "tags": []any{}, "categories": []any{},
+	}), scenarioOp{Kind: "create", Slug: "err/duplicate"}, nil)
+	mustError(t, callTool(t, session, "create_page", map[string]any{
+		"slug": "err/duplicate", "title": "Overwrite", "body": "Overwrite", "tags": []any{}, "categories": []any{},
+	}), "create_page with duplicate slug")
 
 	// update on missing slug must fail (not_found).
 	mustError(t, callTool(t, session, "update_page", map[string]any{
@@ -217,11 +225,12 @@ func applyScenarioOp(t *testing.T, session *mcp.ClientSession, contentRoot strin
 		}
 	case "update":
 		res := callTool(t, session, "update_page", map[string]any{
-			"slug":       op.Slug,
-			"title":      op.Title,
-			"body":       op.Body,
-			"tags":       toAnySlice(op.Tags),
-			"categories": toAnySlice(op.Categories),
+			"slug":              op.Slug,
+			"title":             op.Title,
+			"body":              op.Body,
+			"tags":              toAnySlice(op.Tags),
+			"categories":        toAnySlice(op.Categories),
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, filepath.FromSlash(op.Slug), "index.md")),
 		})
 		mustToolSucceed(t, res, op, trace)
 		model[op.Slug] = expectedPage{Title: op.Title, Body: op.Body, Tags: slices.Clone(op.Tags), Categories: slices.Clone(op.Categories)}
@@ -242,7 +251,8 @@ func applyScenarioOp(t *testing.T, session *mcp.ClientSession, contentRoot strin
 		}
 	case "delete":
 		res := callTool(t, session, "delete_page", map[string]any{
-			"slug": op.Slug,
+			"slug":              op.Slug,
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, filepath.FromSlash(op.Slug), "index.md")),
 		})
 		mustToolSucceed(t, res, op, trace)
 		delete(model, op.Slug)

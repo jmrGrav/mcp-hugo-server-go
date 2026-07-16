@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
@@ -33,6 +34,7 @@ type pageMarkdownDTO struct {
 	Lang               string              `json:"lang"`
 	ResolvedLang       string              `json:"resolved_lang"`
 	ResolvedSourcePath string              `json:"resolved_source_path"`
+	Revision           string              `json:"revision,omitempty"`
 	State              site.LifecycleState `json:"state"`
 	Markdown           string              `json:"markdown"`
 }
@@ -57,6 +59,7 @@ type frontmatterDTO struct {
 	Lang               string                      `json:"lang"`
 	ResolvedLang       string                      `json:"resolved_lang"`
 	ResolvedSourcePath string                      `json:"resolved_source_path"`
+	Revision           string                      `json:"revision,omitempty"`
 	State              site.LifecycleState         `json:"state"`
 	ReadingTimeMin     int                         `json:"reading_time_minutes"`
 }
@@ -186,7 +189,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 	addReadOnlyTool(s, "get_full_page_markdown", "Read page Markdown",
 		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. The response includes a `state` object so agents can tell whether they are reading built public content, source-only content, or stale source ahead of the last build. Input: indexed slug only.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in getFullPageMarkdownInput) (*mcp.CallToolResult, getFullPageMarkdownOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getFullPageMarkdownInput) (*mcp.CallToolResult, getFullPageMarkdownOutput, error) {
 			if idx == nil && srcIdx == nil {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -194,12 +197,16 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if !ok {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			return nil, newGetFullPageMarkdownOutput(getFullPageMarkdownData{Page: toResolvedPageMarkdownDTO(resolved, cfg.SiteRoot)}, time.Now().UTC()), nil
+			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			if err != nil {
+				return nil, getFullPageMarkdownOutput{}, err
+			}
+			return nil, newGetFullPageMarkdownOutput(getFullPageMarkdownData{Page: toResolvedPageMarkdownDTO(resolved, cfg.ContentRoot, cfg.SiteRoot)}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_page_frontmatter", "Read page metadata",
 		"Read structured metadata for a published page, including title, tags, categories, date, URL, estimated reading time, and a `state` object describing source/build/public/index freshness. Input: indexed slug only.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in getPageFrontmatterInput) (*mcp.CallToolResult, getPageFrontmatterOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageFrontmatterInput) (*mcp.CallToolResult, getPageFrontmatterOutput, error) {
 			if idx == nil {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -207,21 +214,29 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if !ok {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
+			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			if err != nil {
+				return nil, getPageFrontmatterOutput{}, err
+			}
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			return nil, newGetPageFrontmatterOutput(getPageFrontmatterData{Frontmatter: toFrontmatterDTO(p, resolved, cfg.SiteRoot, rt)}, time.Now().UTC()), nil
+			return nil, newGetPageFrontmatterOutput(getPageFrontmatterData{Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
 		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. Input: indexed slug only.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in getRelatedContentInput) (*mcp.CallToolResult, getRelatedContentOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getRelatedContentInput) (*mcp.CallToolResult, getRelatedContentOutput, error) {
 			if idx == nil {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("index not initialized")
 			}
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+			}
+			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			if err != nil {
+				return nil, getRelatedContentOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 5, 20)
 			ref := resolvedPublicPage(resolved)
@@ -243,7 +258,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
 		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or editing a page. Input: indexed slug only.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in buildAgentContextInput) (*mcp.CallToolResult, buildAgentContextOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in buildAgentContextInput) (*mcp.CallToolResult, buildAgentContextOutput, error) {
 			if idx == nil {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -251,10 +266,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if !ok {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
+			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			if err != nil {
+				return nil, buildAgentContextOutput{}, err
+			}
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			fm := toFrontmatterDTO(p, resolved, cfg.SiteRoot, rt)
+			fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)
 			ref := p
 			if resolved.Public != nil {
 				ref = *resolved.Public
@@ -273,10 +292,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 	addReadOnlyTool(s, "export_agent_context", "Export agent context",
 		"Paginated export of page context bundles filtered by tag or category. Each page includes front matter, reading time, full Markdown content, and lifecycle `state` so bulk consumers can distinguish built pages from source-only or stale content. Use this for bulk analysis or migration work.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in exportAgentContextInput) (*mcp.CallToolResult, exportAgentContextOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in exportAgentContextInput) (*mcp.CallToolResult, exportAgentContextOutput, error) {
 			if idx == nil {
 				return nil, exportAgentContextOutput{}, fmt.Errorf("index not initialized")
 			}
+			readerSafe := site.IsReaderProfile(ctx)
 			limit := clampLimit(in.Limit, 10, 50)
 			all := idx.ContentPages()
 			var filtered []site.Page
@@ -288,7 +308,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				}
 				if in.Category != "" {
 					pgCats := pg.Categories
-					if len(pgCats) == 0 && srcIdx != nil {
+					if len(pgCats) == 0 && srcIdx != nil && !readerSafe {
 						if src, ok := srcIdx.GetBySlug(strings.Trim(pg.Slug, "/")); ok {
 							pgCats = src.Categories
 						}
@@ -325,11 +345,15 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			pages := make([]pageExportDTO, 0, len(slice))
 			for _, pg := range slice {
 				resolved, _ := resolver.Resolve(pg.Slug)
+				resolved, err := readerSafeResolvedPage(ctx, resolved, pg.Slug)
+				if err != nil {
+					continue
+				}
 				p := resolvedPublicPage(resolved)
 				md := resolvedMarkdown(resolved)
 				rt := readingTimeMinutes(md)
 				pages = append(pages, pageExportDTO{
-					Frontmatter: toFrontmatterDTO(p, resolved, cfg.SiteRoot, rt),
+					Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt),
 					State:       resolvedState(resolved, cfg.SiteRoot),
 					Markdown:    md,
 				})
@@ -384,7 +408,7 @@ func newExportAgentContextOutput(data exportAgentContextData, now time.Time) exp
 	}
 }
 
-func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang string, state site.LifecycleState) pageMarkdownDTO {
+func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revision string, state site.LifecycleState) pageMarkdownDTO {
 	return pageMarkdownDTO{
 		Slug:               p.Slug,
 		Title:              p.Title,
@@ -397,14 +421,26 @@ func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang string,
 		Lang:               p.Lang,
 		ResolvedLang:       resolvedLang,
 		ResolvedSourcePath: resolvedSourcePath,
+		Revision:           revision,
 		State:              state,
 		Markdown:           md,
 	}
 }
 
-func toResolvedPageMarkdownDTO(resolved site.ResolvedPage, siteRoot string) pageMarkdownDTO {
+func toResolvedPageMarkdownDTO(resolved site.ResolvedPage, contentRoot, siteRoot string) pageMarkdownDTO {
 	p := resolvedPublicPage(resolved)
-	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), resolved.SourcePath, resolvedLang(resolved), resolvedState(resolved, siteRoot))
+	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), fileutil.LogicalContentPath(contentRoot, resolved.SourcePath), resolvedLang(resolved), resolvedRevision(resolved), resolvedState(resolved, siteRoot))
+}
+
+func readerSafeResolvedPage(ctx context.Context, resolved site.ResolvedPage, slug string) (site.ResolvedPage, error) {
+	if !site.IsReaderProfile(ctx) {
+		return resolved, nil
+	}
+	publicOnly, ok := site.ReaderSafeResolvedPage(resolved)
+	if !ok {
+		return site.ResolvedPage{}, fmt.Errorf("content_not_public: page is not publicly available for slug %q", slug)
+	}
+	return publicOnly, nil
 }
 
 func resolvedMarkdown(resolved site.ResolvedPage) string {
@@ -442,8 +478,8 @@ func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
 	}
 }
 
-func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, siteRoot string, readingTimeMin int) frontmatterDTO {
-	identity := pageIdentityFromPage(p, resolved.SourcePath, readingTimeMin)
+func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, contentRoot, siteRoot string, readingTimeMin int) frontmatterDTO {
+	identity := pageIdentityFromPage(p, fileutil.LogicalContentPath(contentRoot, resolved.SourcePath), resolvedRevision(resolved), readingTimeMin)
 	return frontmatterDTO{
 		Slug:               identity.Slug,
 		Title:              identity.Title,
@@ -456,6 +492,7 @@ func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, siteRoot string, 
 		Lang:               identity.Lang,
 		ResolvedLang:       resolvedLang(resolved),
 		ResolvedSourcePath: identity.SourcePath,
+		Revision:           identity.Revision,
 		State:              resolvedState(resolved, siteRoot),
 		ReadingTimeMin:     identity.ReadingTime,
 	}
@@ -473,6 +510,17 @@ func resolvedLang(resolved site.ResolvedPage) string {
 		return resolved.Public.Lang
 	}
 	return ""
+}
+
+func resolvedRevision(resolved site.ResolvedPage) string {
+	if resolved.SourcePath == "" {
+		return ""
+	}
+	rev, err := contentmodel.SourceRevision(resolved.SourcePath)
+	if err != nil {
+		return ""
+	}
+	return rev
 }
 
 func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO {

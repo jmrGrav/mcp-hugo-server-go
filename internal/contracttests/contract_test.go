@@ -9,10 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	toolsanon "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	toolsread "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	toolswrite "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
@@ -25,6 +27,7 @@ type identity struct {
 	URL                string
 	ResolvedLang       string
 	ResolvedSourcePath string
+	Revision           string
 	TagSlugs           []string
 	CategorySlugs      []string
 }
@@ -128,7 +131,7 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 	defer readDone()
 
 	const slug = "/posts/hello/"
-	wantSourceSuffix := filepath.ToSlash("testdata/fixtures/content/posts/hello.md")
+	wantSourcePath := "content/posts/hello.md"
 	want := identity{
 		Slug:          "/posts/hello/",
 		Lang:          "en",
@@ -159,8 +162,11 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 		if actual.ResolvedLang != want.ResolvedLang {
 			t.Fatalf("%s resolved_lang = %q, want %q", tool, actual.ResolvedLang, want.ResolvedLang)
 		}
-		if actual.ResolvedSourcePath == "" || !strings.HasSuffix(filepath.ToSlash(actual.ResolvedSourcePath), wantSourceSuffix) {
-			t.Fatalf("%s resolved_source_path = %q, want suffix %q", tool, actual.ResolvedSourcePath, wantSourceSuffix)
+		if actual.ResolvedSourcePath != wantSourcePath {
+			t.Fatalf("%s resolved_source_path = %q, want %q", tool, actual.ResolvedSourcePath, wantSourcePath)
+		}
+		if actual.Revision == "" {
+			t.Fatalf("%s revision = empty, want stable source revision", tool)
 		}
 		if !slices.Equal(actual.TagSlugs, want.TagSlugs) {
 			t.Fatalf("%s tag slugs = %v, want %v", tool, actual.TagSlugs, want.TagSlugs)
@@ -170,6 +176,9 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 		}
 		if tool != "get_page" && actual.ResolvedSourcePath != ref.ResolvedSourcePath {
 			t.Fatalf("%s resolved_source_path = %q, want same path as get_page %q", tool, actual.ResolvedSourcePath, ref.ResolvedSourcePath)
+		}
+		if tool != "get_page" && actual.Revision != ref.Revision {
+			t.Fatalf("%s revision = %q, want same revision as get_page %q", tool, actual.Revision, ref.Revision)
 		}
 	}
 }
@@ -253,8 +262,9 @@ func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *test
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
 
-	frSource := filepath.Join(contentRoot, "posts", "bonjour", "index.fr.md")
-	writeFile(t, frSource, "---\ntitle: Bonjour\ndate: 2026-07-13\ncategories:\n  - Infra\n---\nBonjour monde.\n")
+	frSourcePath := filepath.Join(contentRoot, "posts", "bonjour", "index.fr.md")
+	frSource := "content/posts/bonjour/index.fr.md"
+	writeFile(t, frSourcePath, "---\ntitle: Bonjour\ndate: 2026-07-13\ncategories:\n  - Infra\n---\nBonjour monde.\n")
 	writeFile(t, filepath.Join(publicRoot, "posts", "bonjour", "index.fr.html"), "<html><body><article><h1>Bonjour</h1><p>Bonjour monde.</p></article></body></html>")
 
 	cfg := fixtureConfig()
@@ -604,6 +614,7 @@ func newWriteSession(t *testing.T, contentRoot string, cfg config.Config, siteId
 func connectClient(t *testing.T, s *mcp.Server) (*mcp.ClientSession, func()) {
 	t.Helper()
 	ctx := context.Background()
+	buildinfo.Version = "test-server-version"
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := s.Connect(ctx, t1, nil); err != nil {
 		t.Fatalf("server connect: %v", err)
@@ -656,6 +667,7 @@ func identityFromGetPage(t *testing.T, res *mcp.CallToolResult) identity {
 		URL:                asString(page["url"]),
 		ResolvedLang:       asString(page["resolved_lang"]),
 		ResolvedSourcePath: asString(page["resolved_source_path"]),
+		Revision:           asString(page["revision"]),
 		TagSlugs:           termSlugs(page["tag_terms"]),
 		CategorySlugs:      termSlugs(page["category_terms"]),
 	}
@@ -670,6 +682,7 @@ func identityFromFrontmatter(t *testing.T, res *mcp.CallToolResult) identity {
 		URL:                asString(fm["url"]),
 		ResolvedLang:       asString(fm["resolved_lang"]),
 		ResolvedSourcePath: asString(fm["resolved_source_path"]),
+		Revision:           asString(fm["revision"]),
 		TagSlugs:           termSlugs(fm["tag_terms"]),
 		CategorySlugs:      termSlugs(fm["category_terms"]),
 	}
@@ -684,6 +697,7 @@ func identityFromMarkdownPage(t *testing.T, res *mcp.CallToolResult) identity {
 		URL:                asString(page["url"]),
 		ResolvedLang:       asString(page["resolved_lang"]),
 		ResolvedSourcePath: asString(page["resolved_source_path"]),
+		Revision:           asString(page["revision"]),
 		TagSlugs:           termSlugs(page["tag_terms"]),
 		CategorySlugs:      termSlugs(page["category_terms"]),
 	}
@@ -699,6 +713,7 @@ func identityFromAgentContext(t *testing.T, res *mcp.CallToolResult) identity {
 		URL:                asString(fm["url"]),
 		ResolvedLang:       asString(fm["resolved_lang"]),
 		ResolvedSourcePath: asString(fm["resolved_source_path"]),
+		Revision:           asString(fm["revision"]),
 		TagSlugs:           termSlugs(fm["tag_terms"]),
 		CategorySlugs:      termSlugs(fm["category_terms"]),
 	}
@@ -710,6 +725,7 @@ func identityFromDiffPage(t *testing.T, res *mcp.CallToolResult) identity {
 	return identity{
 		ResolvedLang:       asString(data["resolved_lang"]),
 		ResolvedSourcePath: asString(data["resolved_source_path"]),
+		Revision:           asString(data["revision"]),
 	}
 }
 
@@ -911,8 +927,8 @@ func assertToolResponseEnvelopeMeta(t *testing.T, tool string, m map[string]any)
 	if !ok || metaGeneratedAt == "" {
 		t.Fatalf("%s meta.generated_at = %v, want non-empty string", tool, meta["generated_at"])
 	}
-	if got := asString(m["version"]); got != metaVersion {
-		t.Fatalf("%s version = %q, want meta.server_version %q", tool, got, metaVersion)
+	if got := asString(m["version"]); got != toolcontract.ToolResultVersion {
+		t.Fatalf("%s version = %q, want schema version %q", tool, got, toolcontract.ToolResultVersion)
 	}
 	if got := asString(m["generated_at"]); got != metaGeneratedAt {
 		t.Fatalf("%s generated_at = %q, want meta.generated_at %q", tool, got, metaGeneratedAt)

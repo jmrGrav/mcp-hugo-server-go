@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
@@ -37,26 +38,49 @@ type discoveryAgentAuth struct {
 	EventsSupported        []string                   `json:"events_supported"`
 }
 
+type discoveryAccessProfile struct {
+	Description    string   `json:"description"`
+	Acquisition    string   `json:"acquisition"`
+	InternalScopes []string `json:"internal_scopes"`
+}
+
 type authServerMeta struct {
-	Issuer                            string             `json:"issuer"`
-	AuthorizationEndpoint             string             `json:"authorization_endpoint"`
-	TokenEndpoint                     string             `json:"token_endpoint"`
-	RegistrationEndpoint              string             `json:"registration_endpoint,omitempty"`
-	ResponseTypesSupported            []string           `json:"response_types_supported"`
-	GrantTypesSupported               []string           `json:"grant_types_supported"`
-	CodeChallengeMethodsSupported     []string           `json:"code_challenge_methods_supported"`
-	TokenEndpointAuthMethodsSupported []string           `json:"token_endpoint_auth_methods_supported"`
-	ScopesSupported                   []string           `json:"scopes_supported"`
-	ServiceDocumentation              string             `json:"service_documentation"`
-	AgentAuth                         discoveryAgentAuth `json:"agent_auth"`
+	Issuer                            string                            `json:"issuer"`
+	AuthorizationEndpoint             string                            `json:"authorization_endpoint"`
+	TokenEndpoint                     string                            `json:"token_endpoint"`
+	RegistrationEndpoint              string                            `json:"registration_endpoint,omitempty"`
+	ResponseTypesSupported            []string                          `json:"response_types_supported"`
+	GrantTypesSupported               []string                          `json:"grant_types_supported"`
+	CodeChallengeMethodsSupported     []string                          `json:"code_challenge_methods_supported"`
+	TokenEndpointAuthMethodsSupported []string                          `json:"token_endpoint_auth_methods_supported"`
+	ScopesSupported                   []string                          `json:"scopes_supported"`
+	AccessProfiles                    map[string]discoveryAccessProfile `json:"access_profiles"`
+	ServiceDocumentation              string                            `json:"service_documentation"`
+	AgentAuth                         discoveryAgentAuth                `json:"agent_auth"`
 }
 
 type protectedResourceMeta struct {
-	Resource               string   `json:"resource"`
-	AuthorizationServers   []string `json:"authorization_servers"`
-	BearerMethodsSupported []string `json:"bearer_methods_supported"`
-	ScopesSupported        []string `json:"scopes_supported"`
-	ResourceDocumentation  string   `json:"resource_documentation"`
+	Resource               string                            `json:"resource"`
+	AuthorizationServers   []string                          `json:"authorization_servers"`
+	BearerMethodsSupported []string                          `json:"bearer_methods_supported"`
+	ScopesSupported        []string                          `json:"scopes_supported"`
+	AccessProfiles         map[string]discoveryAccessProfile `json:"access_profiles"`
+	ResourceDocumentation  string                            `json:"resource_documentation"`
+}
+
+func discoveryAccessProfiles() map[string]discoveryAccessProfile {
+	return map[string]discoveryAccessProfile{
+		"reader": {
+			Description:    "Public-safe read-only access profile for discovery and content inspection.",
+			Acquisition:    "anonymous or self-serve registration",
+			InternalScopes: []string{"content.read"},
+		},
+		"operator": {
+			Description:    "Approved operator profile that bundles read, write, and site operation capabilities.",
+			Acquisition:    "approved token present in the server registry",
+			InternalScopes: []string{"content.read", "content.write", "site.admin"},
+		},
+	}
 }
 
 func buildAuthServerMeta(cfg config.Config) authServerMeta {
@@ -80,6 +104,7 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: tokenEndpointAuthMethods(cfg),
 		ScopesSupported:                   tools.KnownScopes,
+		AccessProfiles:                    discoveryAccessProfiles(),
 		ServiceDocumentation:              resource,
 		AgentAuth: discoveryAgentAuth{
 			Skill:                  issuer + "/auth.md",
@@ -127,6 +152,7 @@ func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
 		AuthorizationServers:   []string{issuer},
 		BearerMethodsSupported: []string{"header"},
 		ScopesSupported:        tools.KnownScopes,
+		AccessProfiles:         discoveryAccessProfiles(),
 		ResourceDocumentation:  issuer + "/auth.md",
 	}
 }
@@ -201,7 +227,7 @@ func buildMCPServerCard(cfg config.Config) mcpServerCard {
 		ServerInfo: mcpServerInfo{
 			Name:    "mcp-hugo-server-go",
 			Title:   title,
-			Version: Version,
+			Version: buildinfo.Version,
 		},
 		Description: description + " — a Hugo-published site available via MCP.",
 		Transport: mcpTransport{
@@ -342,7 +368,8 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 	lower := bytes.ToLower(data)
 	hasRegistrationFlow := bytes.Contains(lower, []byte("registration_flow"))
 	hasAgentAuthMetadata := bytes.Contains(lower, []byte("agent_auth_metadata"))
-	if hasRegistrationFlow && hasAgentAuthMetadata {
+	hasAccessProfiles := bytes.Contains(lower, []byte("access_profiles"))
+	if hasRegistrationFlow && hasAgentAuthMetadata && hasAccessProfiles {
 		return data
 	}
 
@@ -358,12 +385,15 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 	if !hasRegistrationFlow {
 		block.WriteString(fmt.Sprintf(
 			"## Agent registration\n\n"+
+				"External access profiles: `reader` and `operator`.\n"+
+				"`reader` is the public-safe read-only profile; `operator` bundles read, write, and site operations.\n"+
+				"The OAuth scopes below remain the internal capability strings accepted by the server during v1.x.\n\n"+
 				"Registration endpoint: `%s/register`\n"+
 				"Authorization endpoint: `%s/authorize`\n"+
 				"Token endpoint: `%s/token`\n"+
 				"Protected resource metadata: %s/.well-known/oauth-protected-resource\n"+
 				"MCP endpoint: `%s/mcp`\n"+
-				"Scopes: `content.read`, `content.write`, `site.admin`\n\n"+
+				"Scopes: `reader`, `content.read`, `content.write`, `site.admin`\n\n"+
 				"```json\n"+
 				"{\n"+
 				"  \"registration_flow\": {\n"+
@@ -373,6 +403,7 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"    \"protected_resource_metadata\": \"%s/.well-known/oauth-protected-resource\",\n"+
 				"    \"mcp_endpoint\": \"%s/mcp\",\n"+
 				"    \"scopes\": [\n"+
+				"      \"reader\",\n"+
 				"      \"content.read\",\n"+
 				"      \"content.write\",\n"+
 				"      \"site.admin\"\n"+
@@ -382,6 +413,31 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"```\n",
 			issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer, issuer,
 		))
+	}
+	if !hasAccessProfiles {
+		if block.Len() > 0 {
+			block.WriteByte('\n')
+		}
+		block.WriteString(
+			"### Access profiles\n\n" +
+				"These profiles are the public access story. The OAuth scopes remain the internal capability strings accepted by the server during v1.x.\n\n" +
+				"```json\n" +
+				"{\n" +
+				"  \"access_profiles\": {\n" +
+				"    \"reader\": {\n" +
+				"      \"description\": \"Public-safe read-only access profile for discovery and content inspection.\",\n" +
+				"      \"acquisition\": \"anonymous or self-serve registration\",\n" +
+				"      \"internal_scopes\": [\"content.read\"]\n" +
+				"    },\n" +
+				"    \"operator\": {\n" +
+				"      \"description\": \"Approved operator profile that bundles read, write, and site operation capabilities.\",\n" +
+				"      \"acquisition\": \"approved token present in the server registry\",\n" +
+				"      \"internal_scopes\": [\"content.read\", \"content.write\", \"site.admin\"]\n" +
+				"    }\n" +
+				"  }\n" +
+				"}\n" +
+				"```\n",
+		)
 	}
 	if !hasAgentAuthMetadata {
 		if block.Len() > 0 {

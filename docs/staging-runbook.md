@@ -39,7 +39,7 @@ issues, comments, or docs.
 
 ```bash
 GOOS=linux GOARCH=amd64 \
-go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=staging-$(git rev-parse --short HEAD)" \
+go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=staging-$(git rev-parse --short HEAD)" \
   -o /tmp/mcp-hugo-server-go-staging ./cmd/mcp-hugo-server-go
 ```
 

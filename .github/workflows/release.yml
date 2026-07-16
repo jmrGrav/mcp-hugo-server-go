@@ -90,6 +90,8 @@ jobs:
             echo "Tag ${VERSION} already exists on the correct commit; skipping tag creation."
             exit 0
           fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "${VERSION}" "${BUILD_SHA}" -m "${VERSION}"
           git push origin "refs/tags/${VERSION}"
 

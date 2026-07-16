@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
@@ -58,6 +59,9 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 	}
 	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository, a configured content root, and content.read. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. Use this before editing or reviewing a page.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in diffPageInput) (*mcp.CallToolResult, diffPageOutput, error) {
+			if site.IsReaderProfile(ctx) {
+				return nil, diffPageOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source git diagnostics")
+			}
 			if srcIdx == nil {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: source index not initialized")
 			}
@@ -85,7 +89,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 					Slug:          resolved.Source.Slug,
 					Path:          relPath,
 					ResolvedLang:  resolved.Source.Lang,
-					ResolvedPath:  absPathOrResolved(resolved.SourcePath, relPath),
+					ResolvedPath:  resolvedLogicalPath(contentRoot, resolved.SourcePath, relPath),
 					State:         resolvedState(resolved, cfg.SiteRoot),
 					Status:        "git_not_available",
 					DiffAvailable: false,
@@ -132,7 +136,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				Slug:          resolved.Source.Slug,
 				Path:          relPath,
 				ResolvedLang:  resolved.Source.Lang,
-				ResolvedPath:  absPathOrResolved(absPath, relPath),
+				ResolvedPath:  resolvedLogicalPath(contentRoot, absPath, relPath),
 				State:         resolvedState(resolved, cfg.SiteRoot),
 				Status:        status,
 				DiffAvailable: true,
@@ -160,11 +164,11 @@ func newDiffPageOutput(data diffPageData, now time.Time) diffPageOutput {
 	}
 }
 
-func absPathOrResolved(absPath, relPath string) string {
-	if strings.TrimSpace(absPath) != "" {
-		return absPath
+func resolvedLogicalPath(contentRoot, absPath, relPath string) string {
+	if logical := fileutil.LogicalContentPath(contentRoot, absPath); logical != "" {
+		return logical
 	}
-	return filepath.ToSlash(relPath)
+	return filepath.ToSlash(filepath.Join("content", relPath))
 }
 
 func findGitRoot(ctx context.Context, start string) (string, error) {
