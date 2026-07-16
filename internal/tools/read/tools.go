@@ -9,6 +9,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
@@ -196,7 +197,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if !ok {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			return nil, newGetFullPageMarkdownOutput(getFullPageMarkdownData{Page: toResolvedPageMarkdownDTO(resolved, cfg.SiteRoot)}, time.Now().UTC()), nil
+			return nil, newGetFullPageMarkdownOutput(getFullPageMarkdownData{Page: toResolvedPageMarkdownDTO(resolved, cfg.ContentRoot, cfg.SiteRoot)}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_page_frontmatter", "Read page metadata",
@@ -212,7 +213,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			return nil, newGetPageFrontmatterOutput(getPageFrontmatterData{Frontmatter: toFrontmatterDTO(p, resolved, cfg.SiteRoot, rt)}, time.Now().UTC()), nil
+			return nil, newGetPageFrontmatterOutput(getPageFrontmatterData{Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
@@ -256,7 +257,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			fm := toFrontmatterDTO(p, resolved, cfg.SiteRoot, rt)
+			fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)
 			ref := p
 			if resolved.Public != nil {
 				ref = *resolved.Public
@@ -331,7 +332,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				md := resolvedMarkdown(resolved)
 				rt := readingTimeMinutes(md)
 				pages = append(pages, pageExportDTO{
-					Frontmatter: toFrontmatterDTO(p, resolved, cfg.SiteRoot, rt),
+					Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt),
 					State:       resolvedState(resolved, cfg.SiteRoot),
 					Markdown:    md,
 				})
@@ -405,9 +406,9 @@ func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revisi
 	}
 }
 
-func toResolvedPageMarkdownDTO(resolved site.ResolvedPage, siteRoot string) pageMarkdownDTO {
+func toResolvedPageMarkdownDTO(resolved site.ResolvedPage, contentRoot, siteRoot string) pageMarkdownDTO {
 	p := resolvedPublicPage(resolved)
-	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), resolved.SourcePath, resolvedLang(resolved), resolvedRevision(resolved), resolvedState(resolved, siteRoot))
+	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), fileutil.LogicalContentPath(contentRoot, resolved.SourcePath), resolvedLang(resolved), resolvedRevision(resolved), resolvedState(resolved, siteRoot))
 }
 
 func resolvedMarkdown(resolved site.ResolvedPage) string {
@@ -445,8 +446,8 @@ func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
 	}
 }
 
-func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, siteRoot string, readingTimeMin int) frontmatterDTO {
-	identity := pageIdentityFromPage(p, resolved.SourcePath, resolvedRevision(resolved), readingTimeMin)
+func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, contentRoot, siteRoot string, readingTimeMin int) frontmatterDTO {
+	identity := pageIdentityFromPage(p, fileutil.LogicalContentPath(contentRoot, resolved.SourcePath), resolvedRevision(resolved), readingTimeMin)
 	return frontmatterDTO{
 		Slug:               identity.Slug,
 		Title:              identity.Title,

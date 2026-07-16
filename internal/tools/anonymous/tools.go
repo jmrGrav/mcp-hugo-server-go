@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
@@ -310,7 +311,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					}
 				}
 			}
-			dto := toResolvedPageDetailDTO(resolved)
+			dto := toResolvedPageDetailDTO(resolved, cfg.ContentRoot)
 			dto.State = site.StateForResolvedPage(resolved, cfg.SiteRoot)
 			if in.ContentOnly && resolved.Public != nil {
 				dto.HTML = site.ExtractArticleHTML(dto.HTML)
@@ -627,7 +628,7 @@ func toPageDetailDTO(p site.Page) pageDetailDTO {
 	}
 }
 
-func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
+func toResolvedPageDetailDTO(resolved site.ResolvedPage, contentRoot string) pageDetailDTO {
 	if resolved.Public != nil {
 		page := *resolved.Public
 		if resolved.Source != nil {
@@ -637,7 +638,7 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		dto := toPageDetailDTO(page)
 		if resolved.Source != nil {
 			dto.ResolvedLang = resolved.Source.Lang
-			dto.ResolvedSourcePath = resolved.SourcePath
+			dto.ResolvedSourcePath = fileutil.LogicalContentPath(contentRoot, resolved.SourcePath)
 			dto.Revision = resolvedSourceRevision(resolved.SourcePath)
 		}
 		return dto
@@ -663,7 +664,7 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		CategoryTerms:      taxonomy.Normalize(cats),
 		Date:               src.Date,
 		ResolvedLang:       src.Lang,
-		ResolvedSourcePath: resolved.SourcePath,
+		ResolvedSourcePath: fileutil.LogicalContentPath(contentRoot, resolved.SourcePath),
 		Revision:           resolvedSourceRevision(resolved.SourcePath),
 		HTML:               src.Body,
 	}

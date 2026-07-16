@@ -209,10 +209,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				slog.Error("create_page: dry-run stat failed", "slug", in.Slug, "error", err)
 				return nil, createPageOutput{}, fmt.Errorf("read_error: failed to inspect destination path")
 			}
+			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, createPageOutput{
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedLang,
-				ResolvedSourcePath: filePath,
+				ResolvedSourcePath: logicalPath,
 				DryRun:             true,
 				Content:            content,
 			}, nil
@@ -307,11 +308,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		state := createPageState()
+		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := createPageOutput{
 			Slug:               in.Slug,
-			Path:               filePath,
+			Path:               logicalPath,
 			ResolvedLang:       resolvedLang,
-			ResolvedSourcePath: filePath,
+			ResolvedSourcePath: logicalPath,
 			State:              &state,
 		}
 		if idemHash != "" {
@@ -463,10 +465,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			// matches the file that a real write would touch.
 			diffLabel := in.Slug + "/" + filepath.Base(filePath)
 			diff := simpleDiff(diffLabel, string(raw), content)
+			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, updatePageOutput{
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedSource.Lang,
-				ResolvedSourcePath: filePath,
+				ResolvedSourcePath: logicalPath,
 				DryRun:             true,
 				Diff:               diff,
 			}, nil
@@ -524,10 +527,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		state := updatePageState(siteIdx != nil, hadPublic)
+		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := updatePageOutput{
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
-			ResolvedSourcePath: filePath,
+			ResolvedSourcePath: logicalPath,
 			State:              &state,
 		}
 		if idemHash != "" {
@@ -586,7 +590,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedSource.Lang,
-				ResolvedSourcePath: resolvedSource.SourcePath,
+				ResolvedSourcePath: fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath),
 				DryRun:             true,
 				Content:            content,
 				Backlinks:          &bls,
@@ -722,7 +726,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		out := deletePageOutput{
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
-			ResolvedSourcePath: resolvedSource.SourcePath,
+			ResolvedSourcePath: fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath),
 			Warning:            deleteWarning,
 			State:              &state,
 		}
