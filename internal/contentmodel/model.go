@@ -22,6 +22,7 @@ type PageIdentity struct {
 	Lang           string         `json:"lang"`
 	URL            string         `json:"url"`
 	SourcePath     string         `json:"source_path"`
+	Revision       string         `json:"revision,omitempty"`
 	TranslationKey string         `json:"translation_key,omitempty"`
 	Title          string         `json:"title"`
 	Tags           []TaxonomyTerm `json:"tags"`

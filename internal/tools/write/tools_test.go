@@ -7,9 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
@@ -103,6 +106,24 @@ func assertWritePageState(t *testing.T, raw any, source, build, public, index st
 	}
 }
 
+func currentRevision(t *testing.T, path string) string {
+	t.Helper()
+	rev, err := contentmodel.SourceRevision(path)
+	if err != nil {
+		t.Fatalf("SourceRevision(%s): %v", path, err)
+	}
+	return rev
+}
+
+func marshalContent(t *testing.T, res *mcp.CallToolResult) string {
+	t.Helper()
+	raw, err := json.Marshal(res.Content)
+	if err != nil {
+		t.Fatalf("json.Marshal(content): %v", err)
+	}
+	return string(raw)
+}
+
 func TestCreatePage(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
@@ -141,11 +162,99 @@ func TestCreatePage(t *testing.T) {
 		t.Errorf("frontmatter missing draft field: %s", content)
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != path {
-		t.Fatalf("create_page resolved_source_path = %v, want %s", got, path)
+	if got := decoded["resolved_source_path"]; got != "content/my-post/index.md" {
+		t.Fatalf("create_page resolved_source_path = %v, want content/my-post/index.md", got)
 	}
 	if got := decoded["resolved_lang"]; got != "" {
 		t.Fatalf("create_page resolved_lang = %v, want empty default lang", got)
+	}
+}
+
+func TestCreatePageRejectsDuplicateSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/duplicate",
+		"title":      "Original",
+		"body":       "Long original body",
+		"tags":       []any{"first"},
+		"categories": []any{"tests"},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial create_page failed: %s", raw)
+	}
+
+	second := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/duplicate",
+		"title":      "Overwrite attempt",
+		"body":       "This must not replace the original content.",
+		"tags":       []any{"second"},
+		"categories": []any{"tests"},
+	})
+	if !second.IsError {
+		raw, _ := json.Marshal(second.Content)
+		t.Fatalf("duplicate create_page should fail: %s", raw)
+	}
+	raw, _ := json.Marshal(second.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("duplicate create_page must return already_exists, got: %s", raw)
+	}
+
+	path := filepath.Join(contentRoot, "posts", "duplicate", "index.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Original") || strings.Contains(content, "Overwrite attempt") {
+		t.Fatalf("duplicate create_page must preserve original content, got:\n%s", content)
+	}
+}
+
+func TestCreatePageDryRunRejectsDuplicateSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/dry-run-duplicate",
+		"title":      "Original",
+		"body":       "Long original body",
+		"tags":       []any{"first"},
+		"categories": []any{"tests"},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial create_page failed: %s", raw)
+	}
+
+	preview := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/dry-run-duplicate",
+		"title":      "Overwrite attempt",
+		"body":       "This must not be previewed as creatable.",
+		"tags":       []any{"second"},
+		"categories": []any{"tests"},
+		"dry_run":    true,
+	})
+	if !preview.IsError {
+		raw, _ := json.Marshal(preview.Content)
+		t.Fatalf("dry-run create_page on existing slug should fail: %s", raw)
+	}
+	raw, _ := json.Marshal(preview.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("dry-run create_page on existing slug must return already_exists, got: %s", raw)
+	}
+
+	path := filepath.Join(contentRoot, "posts", "dry-run-duplicate", "index.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	if !strings.Contains(string(data), "Original") {
+		t.Fatalf("dry-run must not touch original content, got:\n%s", string(data))
 	}
 }
 
@@ -202,14 +311,21 @@ func TestDeletePageRateLimit(t *testing.T) {
 		}
 	}
 	for i := 0; i < 5; i++ {
-		res := callTool(t, session, "delete_page", map[string]any{"slug": fmt.Sprintf("rate-post-%d", i)})
+		slug := fmt.Sprintf("rate-post-%d", i)
+		res := callTool(t, session, "delete_page", map[string]any{
+			"slug":              slug,
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, slug, "index.md")),
+		})
 		if res.IsError {
 			raw, _ := json.Marshal(res.Content)
 			t.Fatalf("delete %d expected success, got error: %s", i+1, raw)
 		}
 	}
 
-	res := callTool(t, session, "delete_page", map[string]any{"slug": "rate-post-5"})
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "rate-post-5",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "rate-post-5", "index.md")),
+	})
 	if !res.IsError {
 		t.Fatal("expected rate_limit_exceeded on 6th delete, got success")
 	}
@@ -240,7 +356,10 @@ func TestDeletePageExposesLifecycleState(t *testing.T) {
 		t.Fatalf("create_page setup failed: %s", raw)
 	}
 
-	res := callTool(t, session, "delete_page", map[string]any{"slug": "to-delete"})
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "to-delete",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "to-delete", "index.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page failed: %s", raw)
@@ -264,6 +383,407 @@ func TestUpdatePageNotFound(t *testing.T) {
 	raw, _ := json.Marshal(res.Content)
 	if !strings.Contains(string(raw), "not_found") {
 		t.Errorf("expected not_found error, got: %s", raw)
+	}
+}
+
+func TestCreatePageIdempotencyKeyReturnsOriginalResultWithoutRewriting(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	args := map[string]any{
+		"slug":            "idem-create",
+		"title":           "Original",
+		"body":            "Body",
+		"tags":            []any{},
+		"categories":      []any{},
+		"idempotency_key": "idem-create-1",
+	}
+	first := callTool(t, session, "create_page", args)
+	if first.IsError {
+		t.Fatalf("first create_page failed: %s", marshalContent(t, first))
+	}
+
+	path := filepath.Join(contentRoot, "idem-create", "index.md")
+	if err := os.WriteFile(path, []byte("tampered"), 0o644); err != nil {
+		t.Fatalf("WriteFile tampered: %v", err)
+	}
+
+	second := callTool(t, session, "create_page", args)
+	if second.IsError {
+		t.Fatalf("second create_page replay failed: %s", marshalContent(t, second))
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile after replay: %v", err)
+	}
+	if string(raw) != "tampered" {
+		t.Fatalf("create_page replay should not rewrite file, got %q", string(raw))
+	}
+}
+
+// TestCreatePageIdempotencyKeyRaceOnConcurrentRetries proves the idempotency
+// replay check happens under the content lock. If the check ran before the
+// lock, two truly concurrent retries with the same key — the exact
+// uncertain-delivery scenario idempotency_key exists to protect — could both
+// miss the cache and race: the loser would see already_exists instead of the
+// intended idempotent replay.
+func TestCreatePageIdempotencyKeyRaceOnConcurrentRetries(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	args := map[string]any{
+		"slug":            "idem-race",
+		"title":           "Original",
+		"body":            "Body",
+		"tags":            []any{},
+		"categories":      []any{},
+		"idempotency_key": "idem-race-1",
+	}
+
+	hugosite.ContentMu.Lock()
+
+	results := make(chan *mcp.CallToolResult, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- callTool(t, session, "create_page", args)
+		}()
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	close(results)
+
+	for res := range results {
+		if res.IsError {
+			t.Fatalf("concurrent create_page retry with same idempotency_key should not fail: %s", marshalContent(t, res))
+		}
+	}
+}
+
+func TestUpdatePageIdempotencyKeyReturnsOriginalResultWithoutReapplying(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "idem-update",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	args := map[string]any{
+		"slug":              "idem-update",
+		"title":             "Updated",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "idem-update", "index.md")),
+		"idempotency_key":   "idem-update-1",
+	}
+	first := callTool(t, session, "update_page", args)
+	if first.IsError {
+		t.Fatalf("first update_page failed: %s", marshalContent(t, first))
+	}
+
+	path := filepath.Join(contentRoot, "idem-update", "index.md")
+	if err := os.WriteFile(path, []byte("---\ntitle: Mutated\n---\nMutated"), 0o644); err != nil {
+		t.Fatalf("WriteFile mutated: %v", err)
+	}
+
+	second := callTool(t, session, "update_page", args)
+	if second.IsError {
+		t.Fatalf("second update_page replay failed: %s", marshalContent(t, second))
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile after replay: %v", err)
+	}
+	if !strings.Contains(string(raw), "title: Mutated") {
+		t.Fatalf("update_page replay should not reapply update, got %q", string(raw))
+	}
+}
+
+func TestDeletePageIdempotencyKeyReturnsOriginalResultWithoutReapplying(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "idem-delete",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	args := map[string]any{
+		"slug":              "idem-delete",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "idem-delete", "index.md")),
+		"idempotency_key":   "idem-delete-1",
+	}
+	first := callTool(t, session, "delete_page", args)
+	if first.IsError {
+		t.Fatalf("first delete_page failed: %s", marshalContent(t, first))
+	}
+
+	dir := filepath.Join(contentRoot, "idem-delete")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll recreated dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte("recreated"), 0o644); err != nil {
+		t.Fatalf("WriteFile recreated: %v", err)
+	}
+
+	second := callTool(t, session, "delete_page", args)
+	if second.IsError {
+		t.Fatalf("second delete_page replay failed: %s", marshalContent(t, second))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "index.md")); err != nil {
+		t.Fatalf("replayed delete_page should not re-delete recreated file: %v", err)
+	}
+}
+
+func TestUpdatePageIdempotencyKeyRejectsDivergentReuse(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "idem-conflict",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	key := "idem-conflict-1"
+	first := callTool(t, session, "update_page", map[string]any{
+		"slug":              "idem-conflict",
+		"title":             "Changed",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "idem-conflict", "index.md")),
+		"idempotency_key":   key,
+	})
+	if first.IsError {
+		t.Fatalf("first update_page failed: %s", marshalContent(t, first))
+	}
+
+	second := callTool(t, session, "update_page", map[string]any{
+		"slug":              "idem-conflict",
+		"title":             "Changed again",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "idem-conflict", "index.md")),
+		"idempotency_key":   key,
+	})
+	if !second.IsError {
+		t.Fatal("reusing idempotency_key with different update input should fail")
+	}
+	if raw := marshalContent(t, second); !strings.Contains(raw, "idempotency_conflict") {
+		t.Fatalf("divergent idempotency reuse error = %s", raw)
+	}
+}
+
+func TestUpdatePageRequiresExpectedRevisionForWrite(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "needs-revision",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":  "needs-revision",
+		"title": "Changed",
+	})
+	if !res.IsError {
+		t.Fatal("update_page without expected_revision should fail")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "expected_revision is required") {
+		t.Fatalf("update_page missing expected_revision error = %s", raw)
+	}
+}
+
+func TestUpdatePageRejectsStaleExpectedRevision(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "stale-update",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":              "stale-update",
+		"title":             "Changed",
+		"expected_revision": "sha256:stale",
+	})
+	if !res.IsError {
+		t.Fatal("update_page with stale expected_revision should fail")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "revision_conflict") {
+		t.Fatalf("update_page stale revision error = %s", raw)
+	}
+}
+
+func TestDeletePageRequiresExpectedRevisionForWrite(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "needs-delete-revision",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{"slug": "needs-delete-revision"})
+	if !res.IsError {
+		t.Fatal("delete_page without expected_revision should fail")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "expected_revision is required") {
+		t.Fatalf("delete_page missing expected_revision error = %s", raw)
+	}
+}
+
+func TestDeletePageWithoutSourceFileDoesNotRequireExpectedRevision(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// A bundle directory with no index*.md source file (e.g. assets-only,
+	// or left behind by a partial/failed write). There is no revision to
+	// protect, so delete_page must not demand expected_revision here —
+	// otherwise such a directory could never be deleted again.
+	dir := filepath.Join(contentRoot, "orphan-bundle")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "photo.jpg"), []byte("fake"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{"slug": "orphan-bundle"})
+	if res.IsError {
+		t.Fatalf("delete_page on sourceless bundle should succeed: %s", marshalContent(t, res))
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("orphan bundle directory should be removed, stat err = %v", err)
+	}
+}
+
+func TestDeletePageRejectsStaleExpectedRevision(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "stale-delete",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "stale-delete",
+		"expected_revision": "sha256:stale",
+	})
+	if !res.IsError {
+		t.Fatal("delete_page with stale expected_revision should fail")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "revision_conflict") {
+		t.Fatalf("delete_page stale revision error = %s", raw)
+	}
+}
+
+func TestDeletePageDetectsRevisionChangeWhileWaitingForLock(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	const slug = "lock-race-delete"
+	filePath := filepath.Join(contentRoot, slug, "index.md")
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       slug,
+		"title":      "Race Target",
+		"body":       "initial body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+	expected := currentRevision(t, filePath)
+
+	hugosite.ContentMu.Lock()
+	defer hugosite.ContentMu.Unlock()
+
+	resultCh := make(chan *mcp.CallToolResult, 1)
+	go func() {
+		resultCh <- callTool(t, session, "delete_page", map[string]any{
+			"slug":              slug,
+			"expected_revision": expected,
+		})
+	}()
+
+	time.Sleep(150 * time.Millisecond)
+	if err := os.WriteFile(filePath, []byte("---\ntitle: Race Target\n---\nchanged while waiting"), 0o644); err != nil {
+		t.Fatalf("WriteFile while lock held: %v", err)
+	}
+
+	hugosite.ContentMu.Unlock()
+	res := <-resultCh
+	hugosite.ContentMu.Lock()
+
+	if !res.IsError {
+		t.Fatal("delete_page should reject when revision changes while waiting for lock")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "revision_conflict") {
+		t.Fatalf("delete_page waiting-lock revision error = %s", raw)
+	}
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatalf("page should remain on disk after revision conflict: %v", err)
 	}
 }
 
@@ -296,8 +816,9 @@ func TestUpdatePageExposesLifecycleState(t *testing.T) {
 	}
 
 	res := callTool(t, session, "update_page", map[string]any{
-		"slug":  "my-post",
-		"title": "New Title",
+		"slug":              "my-post",
+		"title":             "New Title",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "my-post", "index.md")),
 	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
@@ -371,8 +892,9 @@ func TestUpdatePageSuccess(t *testing.T) {
 
 	// update title only
 	res = callTool(t, session, "update_page", map[string]any{
-		"slug":  "update-me",
-		"title": "New Title",
+		"slug":              "update-me",
+		"title":             "New Title",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "update-me", "index.md")),
 	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
@@ -387,8 +909,8 @@ func TestUpdatePageSuccess(t *testing.T) {
 		t.Errorf("updated file missing new title: %s", data)
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != filepath.Join(contentRoot, "update-me", "index.md") {
-		t.Fatalf("update_page resolved_source_path = %v, want %s", got, filepath.Join(contentRoot, "update-me", "index.md"))
+	if got := decoded["resolved_source_path"]; got != "content/update-me/index.md" {
+		t.Fatalf("update_page resolved_source_path = %v, want content/update-me/index.md", got)
 	}
 }
 
@@ -409,7 +931,10 @@ func TestDeletePageSuccess(t *testing.T) {
 		t.Fatalf("create_page failed: %s", raw)
 	}
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "to-delete"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "to-delete",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "to-delete", "index.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page failed: %s", raw)
@@ -420,8 +945,8 @@ func TestDeletePageSuccess(t *testing.T) {
 		t.Error("expected page directory to be fully removed")
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != filepath.Join(contentRoot, "to-delete", "index.md") {
-		t.Fatalf("delete_page resolved_source_path = %v, want %s", got, filepath.Join(contentRoot, "to-delete", "index.md"))
+	if got := decoded["resolved_source_path"]; got != "content/to-delete/index.md" {
+		t.Fatalf("delete_page resolved_source_path = %v, want content/to-delete/index.md", got)
 	}
 }
 
@@ -448,7 +973,10 @@ func TestDeletePageRemovesWholeDirectory(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "extra-files"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "extra-files",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "extra-files", "index.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page failed: %s", raw)
@@ -477,10 +1005,12 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 
 	session, _, done := newTestServer(t, contentRoot)
 	defer done()
+	expected := currentRevision(t, frFile)
 
 	res := callTool(t, session, "update_page", map[string]any{
-		"slug":  "posts/csp-nonce",
-		"title": "Nouveau titre",
+		"slug":              "posts/csp-nonce",
+		"title":             "Nouveau titre",
+		"expected_revision": expected,
 	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
@@ -499,8 +1029,8 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 		t.Error("update_page must not create index.md when only index.fr.md exists")
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != frFile {
-		t.Fatalf("update_page multilingual resolved_source_path = %v, want %s", got, frFile)
+	if got := decoded["resolved_source_path"]; got != "content/posts/csp-nonce/index.fr.md" {
+		t.Fatalf("update_page multilingual resolved_source_path = %v, want content/posts/csp-nonce/index.fr.md", got)
 	}
 	if got := decoded["resolved_lang"]; got != "fr" {
 		t.Fatalf("update_page multilingual resolved_lang = %v, want fr", got)
@@ -582,11 +1112,57 @@ func TestCreatePageAcceptsExplicitLang(t *testing.T) {
 		t.Fatal("create_page with explicit lang must not create default index.md")
 	}
 	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != frPath {
-		t.Fatalf("create_page resolved_source_path = %v, want %s", got, frPath)
+	if got := decoded["resolved_source_path"]; got != "content/posts/bilingual/index.fr.md" {
+		t.Fatalf("create_page resolved_source_path = %v, want content/posts/bilingual/index.fr.md", got)
 	}
 	if got := decoded["resolved_lang"]; got != "fr" {
 		t.Fatalf("create_page resolved_lang = %v, want fr", got)
+	}
+}
+
+func TestCreatePageRejectsDuplicateExplicitLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/bilingual-duplicate",
+		"lang":       "fr",
+		"title":      "Bonjour",
+		"body":       "Version initiale",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial multilingual create_page failed: %s", raw)
+	}
+
+	second := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/bilingual-duplicate",
+		"lang":       "fr",
+		"title":      "Remplacement",
+		"body":       "Ce contenu ne doit pas écraser le fichier français existant.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if !second.IsError {
+		raw, _ := json.Marshal(second.Content)
+		t.Fatalf("duplicate multilingual create_page should fail: %s", raw)
+	}
+	raw, _ := json.Marshal(second.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("duplicate multilingual create_page must return already_exists, got: %s", raw)
+	}
+
+	frPath := filepath.Join(contentRoot, "posts", "bilingual-duplicate", "index.fr.md")
+	data, err := os.ReadFile(frPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", frPath, err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Bonjour") || strings.Contains(content, "Remplacement") {
+		t.Fatalf("duplicate multilingual create_page must preserve original fr file, got:\n%s", content)
 	}
 }
 
@@ -630,7 +1206,10 @@ func TestDeletePageMultilingualBundleStillSucceeds(t *testing.T) {
 	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
-	res := callTool(t, session, "delete_page", map[string]any{"slug": "posts/bilingual-delete"})
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/bilingual-delete",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.en.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page on multilingual bundle failed: %s", raw)
@@ -708,7 +1287,10 @@ func TestDeletePageCleansPublicDir(t *testing.T) {
 		t.Fatalf("WriteFile public html: %v", err)
 	}
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/zombie-test"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/zombie-test",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "zombie-test", "index.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page failed: %s", raw)
@@ -760,7 +1342,9 @@ func TestUpdatePageSlugNormalization(t *testing.T) {
 	}
 
 	res = callTool(t, session, "update_page", map[string]any{
-		"slug": "/posts/update-me/", "title": "Updated",
+		"slug":              "/posts/update-me/",
+		"title":             "Updated",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "update-me", "index.md")),
 	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
@@ -784,7 +1368,10 @@ func TestDeletePageSlugNormalization(t *testing.T) {
 		t.Fatalf("create_page failed: %s", raw)
 	}
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "/posts/slash-test/"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "/posts/slash-test/",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "slash-test", "index.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page with leading/trailing slashes failed: %s", raw)
@@ -810,7 +1397,10 @@ func TestDeletePageNotFoundOnDoubleDeletion(t *testing.T) {
 		t.Fatalf("create_page failed: %s", raw)
 	}
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/double-delete"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/double-delete",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "double-delete", "index.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("first delete_page failed: %s", raw)
@@ -909,7 +1499,10 @@ func TestDeletePageSlugNormalizationSourceIndex(t *testing.T) {
 		t.Fatal("source index should contain page after create_page")
 	}
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "/posts/norm-idx-test/"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "/posts/norm-idx-test/",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "norm-idx-test", "index.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page with slashed slug failed: %s", raw)
@@ -1013,7 +1606,10 @@ func TestDeletePagePublicCleanupWarning(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(postsDir, 0o755) })
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/read-only-zombie"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/read-only-zombie",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "read-only-zombie", "index.md")),
+	})
 
 	// Must restore before any further assertions so t.TempDir cleanup can proceed.
 	_ = os.Chmod(postsDir, 0o755)
@@ -1053,7 +1649,10 @@ func TestDeletePageDBWarning(t *testing.T) {
 		t.Fatalf("create_page failed: %s", raw)
 	}
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "posts/db-warning-test"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/db-warning-test",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "db-warning-test", "index.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page must not hard-fail on DB error: %s", raw)
@@ -1189,8 +1788,9 @@ func TestUpdatePageAtomicWriteCheckedRejectsSymlink(t *testing.T) {
 
 	// Confirm update succeeds before swapping.
 	res := callTool(t, session, "update_page", map[string]any{
-		"slug":  "symlink-me",
-		"title": "Updated",
+		"slug":              "symlink-me",
+		"title":             "Updated",
+		"expected_revision": currentRevision(t, filepath.Join(realDir, "index.md")),
 	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
@@ -1255,7 +1855,10 @@ func TestDeletePageAuditLogErrorSurfacedAsWarning(t *testing.T) {
 		t.Fatalf("MkdirAll audit log dir: %v", err)
 	}
 
-	res = callTool(t, session, "delete_page", map[string]any{"slug": "audit-test-page"})
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "audit-test-page",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "audit-test-page", "index.md")),
+	})
 
 	// Must NOT return an error — deletion is committed.
 	if res.IsError {
