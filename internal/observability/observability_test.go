@@ -143,6 +143,99 @@ func TestClassifyToolResult(t *testing.T) {
 	}
 }
 
+// TestToolCallMiddlewareTagsMutationAndAdminEventTypes proves the #371
+// security-audit-trail wiring: content.write/site.admin tool calls carry an
+// event_type field distinguishing them as mutation/admin_operation, while
+// content.read calls are left untagged (avoiding audit-volume noise for
+// ordinary reads).
+func TestToolCallMiddlewareTagsMutationAndAdminEventTypes(t *testing.T) {
+	knownTools := map[string]bool{"create_page": true, "build_site": true, "get_page": true}
+	inner := mcp.MethodHandler(func(_ context.Context, _ string, _ mcp.Request) (mcp.Result, error) {
+		return &mcp.CallToolResult{}, nil
+	})
+	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{Params: &mcp.CallToolParamsRaw{Name: "create_page"}}
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+	mw := NewToolCallMiddleware(log, NewMetrics(), "content.write", knownTools)
+	_, _ = mw(inner)(context.Background(), "tools/call", req)
+	if !strings.Contains(buf.String(), `"event_type":"mutation"`) {
+		t.Fatalf("content.write call missing event_type=mutation: %s", buf.String())
+	}
+
+	buf.Reset()
+	adminReq := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{Params: &mcp.CallToolParamsRaw{Name: "build_site"}}
+	mwAdmin := NewToolCallMiddleware(log, NewMetrics(), "site.admin", knownTools)
+	_, _ = mwAdmin(inner)(context.Background(), "tools/call", adminReq)
+	if !strings.Contains(buf.String(), `"event_type":"admin_operation"`) {
+		t.Fatalf("site.admin call missing event_type=admin_operation: %s", buf.String())
+	}
+
+	buf.Reset()
+	readReq := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{Params: &mcp.CallToolParamsRaw{Name: "get_page"}}
+	mwRead := NewToolCallMiddleware(log, NewMetrics(), "content.read", knownTools)
+	_, _ = mwRead(inner)(context.Background(), "tools/call", readReq)
+	if strings.Contains(buf.String(), "event_type") {
+		t.Fatalf("content.read call must not be tagged with an audit event_type: %s", buf.String())
+	}
+}
+
+// TestToolCallMiddlewareFlagsDegradedResults proves that a successful
+// (non-IsError) result whose StructuredContent carries status:
+// "partial_success" (e.g. build_site) is flagged degraded:true in the audit
+// trail, distinguishing "succeeded cleanly" from "succeeded with a warning".
+func TestToolCallMiddlewareFlagsDegradedResults(t *testing.T) {
+	knownTools := map[string]bool{"build_site": true}
+	degradedInner := mcp.MethodHandler(func(_ context.Context, _ string, _ mcp.Request) (mcp.Result, error) {
+		return &mcp.CallToolResult{StructuredContent: map[string]any{"status": "partial_success"}}, nil
+	})
+	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{Params: &mcp.CallToolParamsRaw{Name: "build_site"}}
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+	mw := NewToolCallMiddleware(log, NewMetrics(), "site.admin", knownTools)
+	_, _ = mw(degradedInner)(context.Background(), "tools/call", req)
+	if !strings.Contains(buf.String(), `"degraded":true`) {
+		t.Fatalf("partial_success result must be flagged degraded: %s", buf.String())
+	}
+
+	buf.Reset()
+	okInner := mcp.MethodHandler(func(_ context.Context, _ string, _ mcp.Request) (mcp.Result, error) {
+		return &mcp.CallToolResult{StructuredContent: map[string]any{"status": "ok"}}, nil
+	})
+	_, _ = mw(okInner)(context.Background(), "tools/call", req)
+	if strings.Contains(buf.String(), "degraded") {
+		t.Fatalf("clean success must not be flagged degraded: %s", buf.String())
+	}
+}
+
+// TestAuditStreamUnifiedByEventType proves the #371 acceptance criterion
+// that operators can filter the entire audit stream on a single field.
+// mutation/admin_operation events are tagged onto the existing tool_call
+// line (msg differs from the audit package's own "msg":"audit" lines), so
+// event_type — not msg — must be the documented, working discriminator,
+// and both paths must carry the same result field.
+func TestAuditStreamUnifiedByEventType(t *testing.T) {
+	knownTools := map[string]bool{"create_page": true}
+	inner := mcp.MethodHandler(func(_ context.Context, _ string, _ mcp.Request) (mcp.Result, error) {
+		return &mcp.CallToolResult{}, nil
+	})
+	req := &mcp.ServerRequest[*mcp.CallToolParamsRaw]{Params: &mcp.CallToolParamsRaw{Name: "create_page"}}
+
+	var buf bytes.Buffer
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+	mw := NewToolCallMiddleware(log, NewMetrics(), "content.write", knownTools)
+	_, _ = mw(inner)(context.Background(), "tools/call", req)
+
+	line := buf.String()
+	if !strings.Contains(line, `"event_type":"mutation"`) {
+		t.Fatalf("mutation event missing event_type: %s", line)
+	}
+	if !strings.Contains(line, `"result":"success"`) {
+		t.Fatalf("mutation event missing result field alongside event_type: %s", line)
+	}
+}
+
 func TestNewLoggerAndRequestMiddleware(t *testing.T) {
 	var buf bytes.Buffer
 	log := slog.New(slog.NewJSONHandler(&buf, nil))

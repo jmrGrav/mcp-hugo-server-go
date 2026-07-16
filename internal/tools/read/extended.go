@@ -275,6 +275,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 
 	RegisterDiffPage(s, idx, srcIdx, cfg)
+	RegisterInspectRenderedPage(s, idx, srcIdx, cfg)
 
 	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Requires content.read. For a simple unauthenticated keyword search use search_pages.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {

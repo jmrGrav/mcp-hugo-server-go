@@ -192,6 +192,7 @@ func NewIndex(cfg config.Config) (*Index, error) {
 		if pg.Slug == "" {
 			return nil
 		}
+		pg.OutputPath = rel
 		if _, exists := idx.bySlug[pg.Slug]; exists {
 			slog.Warn("site index: duplicate slug detected, skipping", "slug", pg.Slug, "path", p)
 			return nil
