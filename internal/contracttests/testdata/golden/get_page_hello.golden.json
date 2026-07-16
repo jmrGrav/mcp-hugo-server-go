@@ -47,7 +47,7 @@
   },
   "errors": [],
   "meta": {
-    "server_version": "v1.0.0"
+    "server_version": "test-server-version"
   },
   "page": {
     "categories": [

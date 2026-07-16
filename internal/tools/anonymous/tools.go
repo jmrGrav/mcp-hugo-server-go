@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
@@ -505,7 +506,7 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 func boolPtr(v bool) *bool { return &v }
 
 func success[T any](data T) toolcontract.ToolResponse[T] {
-	return toolcontract.Success(data, toolcontract.NewMeta(toolcontract.ToolResultVersion, time.Now().UTC()))
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
 func newListPagesOutput(data listPagesData) listPagesOutput {

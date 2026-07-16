@@ -43,7 +43,7 @@
   "has_more": false,
   "limit": 2,
   "meta": {
-    "server_version": "v1.0.0"
+    "server_version": "test-server-version"
   },
   "offset": 0,
   "pages": [

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 )
@@ -41,6 +42,7 @@ func TestPageIdentityFromPage(t *testing.T) {
 
 func TestSuccessEnvelopePopulatesCompatibilityFields(t *testing.T) {
 	now := time.Date(2026, 7, 13, 8, 30, 0, 0, time.UTC)
+	buildinfo.Version = "v1.4.3-test"
 	got := successEnvelope(getBacklinksData{Slug: "/posts/hello/"}, now)
 
 	if got.Success != true {
@@ -48,6 +50,9 @@ func TestSuccessEnvelopePopulatesCompatibilityFields(t *testing.T) {
 	}
 	if got.Version != toolcontract.ToolResultVersion {
 		t.Fatalf("successEnvelope().Version = %q, want %q", got.Version, toolcontract.ToolResultVersion)
+	}
+	if got.Meta.ServerVersion != buildinfo.Version {
+		t.Fatalf("successEnvelope().Meta.ServerVersion = %q, want %q", got.Meta.ServerVersion, buildinfo.Version)
 	}
 	if got.GeneratedAt != now.Format(time.RFC3339) {
 		t.Fatalf("successEnvelope().GeneratedAt = %q", got.GeneratedAt)

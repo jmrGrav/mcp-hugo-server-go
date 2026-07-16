@@ -3,6 +3,7 @@ package read
 import (
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
@@ -23,7 +24,7 @@ func pageIdentityFromPage(p site.Page, sourcePath, revision string, readingTime 
 }
 
 func successEnvelope[T any](data T, now time.Time) toolcontract.ToolResponse[T] {
-	return toolcontract.Success(data, toolcontract.NewMeta(toolcontract.ToolResultVersion, now))
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, now))
 }
 
 // toContentmodelTerms converts site-package taxonomy terms to the contentmodel

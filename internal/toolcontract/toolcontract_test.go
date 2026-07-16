@@ -48,6 +48,9 @@ func TestSuccessInitializesSlicesAndMeta(t *testing.T) {
 	if metaMap["server_version"] != "1.4.0" {
 		t.Fatalf("meta.server_version = %v, want 1.4.0", metaMap["server_version"])
 	}
+	if decoded["version"] != ToolResultVersion {
+		t.Fatalf("version = %v, want schema version %q", decoded["version"], ToolResultVersion)
+	}
 }
 
 func TestParseToolErrorAmbiguousLanguage(t *testing.T) {

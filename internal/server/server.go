@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
@@ -32,9 +33,6 @@ import (
 )
 
 const Name = "mcp-hugo-server-go"
-
-// Version is set at build time via -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=..."
-var Version = "dev"
 
 type Server struct {
 	cfg           config.Config
@@ -115,7 +113,7 @@ func openStore(cfg config.OAuthConfig) (storage.Store, error) {
 type ScopeExtension func(scopeName string, s *mcp.Server)
 
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
-	impl := &mcp.Implementation{Name: Name, Version: Version}
+	impl := &mcp.Implementation{Name: Name, Version: buildinfo.Version}
 	serverCaps := defaultServerCapabilities()
 	// Explicitly declare capabilities so static scanners (mcpscan.dev) can
 	// inspect them. The SDK merges these with auto-detected tool/resource caps.

@@ -8,7 +8,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 VERSION=$(git describe --tags --always 2>/dev/null || echo dev)
 GOOS=linux GOARCH=amd64 go build \
-  -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=${VERSION}" \
+  -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=${VERSION}" \
   -o "$BINARY" ./cmd/mcp-hugo-server-go/
 
 scp "$BINARY" "$REMOTE:/tmp/$BINARY"

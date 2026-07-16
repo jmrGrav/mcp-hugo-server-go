@@ -9,10 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	toolsanon "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	toolsread "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	toolswrite "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
@@ -612,6 +614,7 @@ func newWriteSession(t *testing.T, contentRoot string, cfg config.Config, siteId
 func connectClient(t *testing.T, s *mcp.Server) (*mcp.ClientSession, func()) {
 	t.Helper()
 	ctx := context.Background()
+	buildinfo.Version = "test-server-version"
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := s.Connect(ctx, t1, nil); err != nil {
 		t.Fatalf("server connect: %v", err)
@@ -924,8 +927,8 @@ func assertToolResponseEnvelopeMeta(t *testing.T, tool string, m map[string]any)
 	if !ok || metaGeneratedAt == "" {
 		t.Fatalf("%s meta.generated_at = %v, want non-empty string", tool, meta["generated_at"])
 	}
-	if got := asString(m["version"]); got != metaVersion {
-		t.Fatalf("%s version = %q, want meta.server_version %q", tool, got, metaVersion)
+	if got := asString(m["version"]); got != toolcontract.ToolResultVersion {
+		t.Fatalf("%s version = %q, want schema version %q", tool, got, toolcontract.ToolResultVersion)
 	}
 	if got := asString(m["generated_at"]); got != metaGeneratedAt {
 		t.Fatalf("%s generated_at = %q, want meta.generated_at %q", tool, got, metaGeneratedAt)
