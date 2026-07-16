@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/server"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
@@ -185,6 +186,54 @@ func TestMCPEndpointResponds(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "tools") {
 		t.Fatalf("body missing tools: %q", rec.Body.String())
+	}
+}
+
+// TestInitializeExposesRuntimeBuildVersion proves mcp.Implementation.Version
+// (surfaced in the initialize response's serverInfo.version) tracks
+// buildinfo.Version — the actual deployed build/release identifier injected
+// via -ldflags — rather than silently reporting the "dev" placeholder on a
+// release build (#327).
+func TestInitializeExposesRuntimeBuildVersion(t *testing.T) {
+	orig := buildinfo.Version
+	buildinfo.Version = "v1.4.7-runtime-test"
+	defer func() { buildinfo.Version = orig }()
+
+	srv := mustTestServer(t)
+	body := []byte(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.0.1"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initialize status = %d body = %q", rec.Code, rec.Body.String())
+	}
+
+	var result struct {
+		Result struct {
+			ServerInfo struct {
+				Version string `json:"version"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+	}
+	found := false
+	for _, line := range strings.Split(rec.Body.String(), "\n") {
+		line = strings.TrimSpace(line)
+		data := strings.TrimPrefix(line, "data: ")
+		if err := json.Unmarshal([]byte(data), &result); err == nil && result.Result.ServerInfo.Version != "" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("initialize response did not contain a parseable serverInfo.version: %q", rec.Body.String())
+	}
+	if result.Result.ServerInfo.Version != "v1.4.7-runtime-test" {
+		t.Fatalf("serverInfo.version = %q, want buildinfo.Version %q", result.Result.ServerInfo.Version, "v1.4.7-runtime-test")
+	}
+	if result.Result.ServerInfo.Version == "dev" {
+		t.Fatal("serverInfo.version must not fall back to the dev placeholder once buildinfo.Version is set")
 	}
 }
 
