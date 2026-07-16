@@ -19,12 +19,15 @@ func TestPageIdentityFromPage(t *testing.T) {
 		Categories: []string{"tutorials"},
 	}
 
-	got := pageIdentityFromPage(page, "content/posts/hello.md", 7)
+	got := pageIdentityFromPage(page, "content/posts/hello.md", "sha256:test", 7)
 	if got.Slug != "/posts/hello/" {
 		t.Fatalf("pageIdentityFromPage().Slug = %q", got.Slug)
 	}
 	if got.SourcePath != "content/posts/hello.md" {
 		t.Fatalf("pageIdentityFromPage().SourcePath = %q", got.SourcePath)
+	}
+	if got.Revision != "sha256:test" {
+		t.Fatalf("pageIdentityFromPage().Revision = %q", got.Revision)
 	}
 	if got.ReadingTime != 7 {
 		t.Fatalf("pageIdentityFromPage().ReadingTime = %d", got.ReadingTime)

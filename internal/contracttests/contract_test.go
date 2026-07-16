@@ -27,6 +27,7 @@ type identity struct {
 	URL                string
 	ResolvedLang       string
 	ResolvedSourcePath string
+	Revision           string
 	TagSlugs           []string
 	CategorySlugs      []string
 }
@@ -130,7 +131,7 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 	defer readDone()
 
 	const slug = "/posts/hello/"
-	wantSourceSuffix := filepath.ToSlash("testdata/fixtures/content/posts/hello.md")
+	wantSourcePath := "content/posts/hello.md"
 	want := identity{
 		Slug:          "/posts/hello/",
 		Lang:          "en",
@@ -161,8 +162,11 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 		if actual.ResolvedLang != want.ResolvedLang {
 			t.Fatalf("%s resolved_lang = %q, want %q", tool, actual.ResolvedLang, want.ResolvedLang)
 		}
-		if actual.ResolvedSourcePath == "" || !strings.HasSuffix(filepath.ToSlash(actual.ResolvedSourcePath), wantSourceSuffix) {
-			t.Fatalf("%s resolved_source_path = %q, want suffix %q", tool, actual.ResolvedSourcePath, wantSourceSuffix)
+		if actual.ResolvedSourcePath != wantSourcePath {
+			t.Fatalf("%s resolved_source_path = %q, want %q", tool, actual.ResolvedSourcePath, wantSourcePath)
+		}
+		if actual.Revision == "" {
+			t.Fatalf("%s revision = empty, want stable source revision", tool)
 		}
 		if !slices.Equal(actual.TagSlugs, want.TagSlugs) {
 			t.Fatalf("%s tag slugs = %v, want %v", tool, actual.TagSlugs, want.TagSlugs)
@@ -172,6 +176,9 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 		}
 		if tool != "get_page" && actual.ResolvedSourcePath != ref.ResolvedSourcePath {
 			t.Fatalf("%s resolved_source_path = %q, want same path as get_page %q", tool, actual.ResolvedSourcePath, ref.ResolvedSourcePath)
+		}
+		if tool != "get_page" && actual.Revision != ref.Revision {
+			t.Fatalf("%s revision = %q, want same revision as get_page %q", tool, actual.Revision, ref.Revision)
 		}
 	}
 }
@@ -255,8 +262,9 @@ func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *test
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
 
-	frSource := filepath.Join(contentRoot, "posts", "bonjour", "index.fr.md")
-	writeFile(t, frSource, "---\ntitle: Bonjour\ndate: 2026-07-13\ncategories:\n  - Infra\n---\nBonjour monde.\n")
+	frSourcePath := filepath.Join(contentRoot, "posts", "bonjour", "index.fr.md")
+	frSource := "content/posts/bonjour/index.fr.md"
+	writeFile(t, frSourcePath, "---\ntitle: Bonjour\ndate: 2026-07-13\ncategories:\n  - Infra\n---\nBonjour monde.\n")
 	writeFile(t, filepath.Join(publicRoot, "posts", "bonjour", "index.fr.html"), "<html><body><article><h1>Bonjour</h1><p>Bonjour monde.</p></article></body></html>")
 
 	cfg := fixtureConfig()
@@ -659,6 +667,7 @@ func identityFromGetPage(t *testing.T, res *mcp.CallToolResult) identity {
 		URL:                asString(page["url"]),
 		ResolvedLang:       asString(page["resolved_lang"]),
 		ResolvedSourcePath: asString(page["resolved_source_path"]),
+		Revision:           asString(page["revision"]),
 		TagSlugs:           termSlugs(page["tag_terms"]),
 		CategorySlugs:      termSlugs(page["category_terms"]),
 	}
@@ -673,6 +682,7 @@ func identityFromFrontmatter(t *testing.T, res *mcp.CallToolResult) identity {
 		URL:                asString(fm["url"]),
 		ResolvedLang:       asString(fm["resolved_lang"]),
 		ResolvedSourcePath: asString(fm["resolved_source_path"]),
+		Revision:           asString(fm["revision"]),
 		TagSlugs:           termSlugs(fm["tag_terms"]),
 		CategorySlugs:      termSlugs(fm["category_terms"]),
 	}
@@ -687,6 +697,7 @@ func identityFromMarkdownPage(t *testing.T, res *mcp.CallToolResult) identity {
 		URL:                asString(page["url"]),
 		ResolvedLang:       asString(page["resolved_lang"]),
 		ResolvedSourcePath: asString(page["resolved_source_path"]),
+		Revision:           asString(page["revision"]),
 		TagSlugs:           termSlugs(page["tag_terms"]),
 		CategorySlugs:      termSlugs(page["category_terms"]),
 	}
@@ -702,6 +713,7 @@ func identityFromAgentContext(t *testing.T, res *mcp.CallToolResult) identity {
 		URL:                asString(fm["url"]),
 		ResolvedLang:       asString(fm["resolved_lang"]),
 		ResolvedSourcePath: asString(fm["resolved_source_path"]),
+		Revision:           asString(fm["revision"]),
 		TagSlugs:           termSlugs(fm["tag_terms"]),
 		CategorySlugs:      termSlugs(fm["category_terms"]),
 	}
@@ -713,6 +725,7 @@ func identityFromDiffPage(t *testing.T, res *mcp.CallToolResult) identity {
 	return identity{
 		ResolvedLang:       asString(data["resolved_lang"]),
 		ResolvedSourcePath: asString(data["resolved_source_path"]),
+		Revision:           asString(data["revision"]),
 	}
 }
 

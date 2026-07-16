@@ -47,8 +47,10 @@ func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	srcIdx := mustTestSourceIndex(t)
-	read.Register(s, idx, config.Default(), srcIdx)
-	read.RegisterWithSourceIndex(s, idx, srcIdx, config.Default())
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
+	read.Register(s, idx, cfg, srcIdx)
+	read.RegisterWithSourceIndex(s, idx, srcIdx, cfg)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -65,9 +67,16 @@ func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 
 func newTestClientWithSourceIndex(t *testing.T, idx *site.Index, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
 	t.Helper()
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
+func newTestClientWithCfg(t *testing.T, idx *site.Index, cfg config.Config, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
+	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	read.Register(s, idx, config.Default(), srcIdx)
-	read.RegisterWithSourceIndex(s, idx, srcIdx, config.Default())
+	read.Register(s, idx, cfg, srcIdx)
+	read.RegisterWithSourceIndex(s, idx, srcIdx, cfg)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -133,9 +142,8 @@ func TestGetFullPageMarkdown(t *testing.T) {
 	if markdown != "This is the hello world post body." {
 		t.Fatalf("get_full_page_markdown markdown = %q, want source body", markdown)
 	}
-	if got := page["resolved_source_path"]; got != "testdata/fixtures/content/posts/hello.md" &&
-		!strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
-		t.Fatalf("get_full_page_markdown resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
+	if got := page["resolved_source_path"]; got != "content/posts/hello.md" {
+		t.Fatalf("get_full_page_markdown resolved_source_path = %v, want content/posts/hello.md", got)
 	}
 	assertReadPageState(t, page["state"], "present", "built", "available", "fresh")
 }
@@ -218,8 +226,8 @@ func TestGetPageFrontmatterExposesStableMetadataContract(t *testing.T) {
 	if got := fm["resolved_lang"]; got != "" {
 		t.Fatalf("get_page_frontmatter resolved_lang = %v, want empty default lang for hello.md fixture", got)
 	}
-	if got := fm["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
-		t.Fatalf("get_page_frontmatter resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
+	if got := fm["resolved_source_path"]; got != "content/posts/hello.md" {
+		t.Fatalf("get_page_frontmatter resolved_source_path = %v, want content/posts/hello.md", got)
 	}
 }
 
@@ -268,8 +276,8 @@ func TestBuildAgentContext(t *testing.T) {
 		t.Fatal("build_agent_context: missing 'frontmatter' in context")
 	}
 	fm := ctx["frontmatter"].(map[string]any)
-	if got := fm["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
-		t.Fatalf("build_agent_context resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
+	if got := fm["resolved_source_path"]; got != "content/posts/hello.md" {
+		t.Fatalf("build_agent_context resolved_source_path = %v, want content/posts/hello.md", got)
 	}
 	assertReadPageState(t, fm["state"], "present", "built", "available", "fresh")
 	assertReadPageState(t, ctx["state"], "present", "built", "available", "fresh")
@@ -443,7 +451,8 @@ func newMultilingualHelloReadSession(t *testing.T) (*mcp.ClientSession, func()) 
 		t.Fatalf("NewSourceIndex: %v", err)
 	}
 
-	return newTestClientWithSourceIndex(t, idx, srcIdx)
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
 }
 
 func newEditorialGraphSession(t *testing.T) (*mcp.ClientSession, func()) {
@@ -511,7 +520,8 @@ func newEditorialGraphSession(t *testing.T) (*mcp.ClientSession, func()) {
 		t.Fatalf("NewSourceIndex: %v", err)
 	}
 
-	return newTestClientWithSourceIndex(t, idx, srcIdx)
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
 }
 
 func TestExportAgentContextPrefersMatchingLanguageSource(t *testing.T) {
@@ -545,8 +555,8 @@ func TestExportAgentContextPrefersMatchingLanguageSource(t *testing.T) {
 	if got := fm["resolved_lang"]; got != "en" {
 		t.Fatalf("frontmatter.resolved_lang = %v, want en", got)
 	}
-	if got := asString(t, fm["resolved_source_path"]); !strings.HasSuffix(got, filepath.ToSlash("posts/hello/index.en.md")) {
-		t.Fatalf("frontmatter.resolved_source_path = %q, want suffix posts/hello/index.en.md", got)
+	if got := asString(t, fm["resolved_source_path"]); got != "content/posts/hello/index.en.md" {
+		t.Fatalf("frontmatter.resolved_source_path = %q, want content/posts/hello/index.en.md", got)
 	}
 	md, _ := page["markdown"].(string)
 	if !strings.Contains(md, "Hello from the English source.") {
@@ -569,8 +579,8 @@ func TestRichReadToolsPreferMatchingLanguageSource(t *testing.T) {
 		if got := fm["resolved_lang"]; got != "en" {
 			t.Fatalf("resolved_lang = %v, want en", got)
 		}
-		if got := asString(t, fm["resolved_source_path"]); !strings.HasSuffix(got, filepath.ToSlash("posts/hello/index.en.md")) {
-			t.Fatalf("resolved_source_path = %q, want suffix posts/hello/index.en.md", got)
+		if got := asString(t, fm["resolved_source_path"]); got != "content/posts/hello/index.en.md" {
+			t.Fatalf("resolved_source_path = %q, want content/posts/hello/index.en.md", got)
 		}
 	}
 
@@ -791,8 +801,8 @@ func TestSearchContent(t *testing.T) {
 	if got := hello["resolved_lang"]; got != "" {
 		t.Fatalf("search_content resolved_lang = %v, want empty default source lang for hello.md fixture", got)
 	}
-	if got := hello["resolved_source_path"]; !strings.HasSuffix(asString(t, got), filepath.ToSlash("testdata/fixtures/content/posts/hello.md")) {
-		t.Fatalf("search_content resolved_source_path = %v, want suffix testdata/fixtures/content/posts/hello.md", got)
+	if got := hello["resolved_source_path"]; got != "content/posts/hello.md" {
+		t.Fatalf("search_content resolved_source_path = %v, want content/posts/hello.md", got)
 	}
 	assertReadPageState(t, hello["state"], "present", "built", "available", "fresh")
 }

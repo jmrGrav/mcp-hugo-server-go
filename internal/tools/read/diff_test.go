@@ -80,8 +80,8 @@ func TestDiffPage(t *testing.T) {
 	if got := data["path"]; got != "posts/hello/index.md" {
 		t.Fatalf("diff_page path = %v, want posts/hello/index.md", got)
 	}
-	if got := data["resolved_source_path"]; got != pagePath {
-		t.Fatalf("diff_page resolved_source_path = %v, want %s", got, pagePath)
+	if got := data["resolved_source_path"]; got != "content/posts/hello/index.md" {
+		t.Fatalf("diff_page resolved_source_path = %v, want content/posts/hello/index.md", got)
 	}
 	if got := data["resolved_lang"]; got != "" {
 		t.Fatalf("diff_page resolved_lang = %v, want empty default lang", got)
@@ -130,8 +130,8 @@ func TestDiffPageResolvesMultilingualBundleFromSourceIndex(t *testing.T) {
 	if got := data["path"]; got != "posts/bonjour/index.fr.md" {
 		t.Fatalf("diff_page multilingual path = %v, want posts/bonjour/index.fr.md", got)
 	}
-	if got := data["resolved_source_path"]; got != pagePath {
-		t.Fatalf("diff_page multilingual resolved_source_path = %v, want %s", got, pagePath)
+	if got := data["resolved_source_path"]; got != "content/posts/bonjour/index.fr.md" {
+		t.Fatalf("diff_page multilingual resolved_source_path = %v, want content/posts/bonjour/index.fr.md", got)
 	}
 	if got := data["resolved_lang"]; got != "fr" {
 		t.Fatalf("diff_page multilingual resolved_lang = %v, want fr", got)
@@ -171,8 +171,8 @@ func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
 	if got := data["source_content"]; got != "No git source body." {
 		t.Fatalf("source_content = %q, want source body", got)
 	}
-	if got := data["resolved_source_path"]; got != pagePath {
-		t.Fatalf("diff_page no-git resolved_source_path = %v, want %s", got, pagePath)
+	if got := data["resolved_source_path"]; got != "content/posts/nogit/index.md" {
+		t.Fatalf("diff_page no-git resolved_source_path = %v, want content/posts/nogit/index.md", got)
 	}
 	assertReadPageState(t, data["state"], "present", "pending", "not_yet_available", "source_only")
 	warnings := m["warnings"].([]any)

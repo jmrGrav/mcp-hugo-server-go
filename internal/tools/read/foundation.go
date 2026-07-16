@@ -9,12 +9,13 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 )
 
-func pageIdentityFromPage(p site.Page, sourcePath string, readingTime int) contentmodel.PageIdentity {
+func pageIdentityFromPage(p site.Page, sourcePath, revision string, readingTime int) contentmodel.PageIdentity {
 	return contentmodel.PageIdentity{
 		Slug:        p.Slug,
 		Lang:        p.Lang,
 		URL:         p.URL,
 		SourcePath:  sourcePath,
+		Revision:    revision,
 		Title:       p.Title,
 		Tags:        toContentmodelTerms(site.NormalizeTaxonomyTerms(p.Tags)),
 		Categories:  toContentmodelTerms(site.NormalizeTaxonomyTerms(p.Categories)),
