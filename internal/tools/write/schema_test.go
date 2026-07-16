@@ -50,8 +50,11 @@ func TestWriteToolAnnotationsDescribeIdempotency(t *testing.T) {
 	if createTool.Annotations.IdempotentHint {
 		t.Fatalf("create_page IdempotentHint = true, want false because repeated calls rewrite date/frontmatter")
 	}
-	if !strings.Contains(createTool.Description, "not idempotent") {
-		t.Fatalf("create_page description = %q, want explicit non-idempotent rationale", createTool.Description)
+	if !strings.Contains(createTool.Description, "already_exists") {
+		t.Fatalf("create_page description = %q, want duplicate-create behavior explained", createTool.Description)
+	}
+	if !strings.Contains(createTool.Description, "idempotency_key") {
+		t.Fatalf("create_page description = %q, want idempotency_key replay guidance", createTool.Description)
 	}
 
 	updateTool := got["update_page"]

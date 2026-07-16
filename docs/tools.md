@@ -37,6 +37,11 @@ This document reflects the current MCP registry. Tool IDs are stable; titles and
 - `update_page` - Update page
 - `delete_page` - Delete page
 
+Write tools also accept an optional `idempotency_key` on non-dry-run calls.
+Replaying the exact same mutation with the same key returns the original result
+without applying the write again. Reusing the same key for materially different
+input returns a structured `idempotency_conflict` error.
+
 ## `site.admin`
 
 - `build_site` - Build website
