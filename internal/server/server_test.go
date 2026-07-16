@@ -577,10 +577,13 @@ func TestInSessionMissingBearerEmitsStructuredLog(t *testing.T) {
 		t.Fatalf("status = %d want 401", rec.Code)
 	}
 	raw := logBuf.String()
-	if !strings.Contains(raw, `"msg":"mcp: auth rejected"`) {
-		t.Fatalf("missing auth rejection log: %s", raw)
+	if !strings.Contains(raw, `"msg":"audit"`) {
+		t.Fatalf("missing audit log: %s", raw)
 	}
-	if !strings.Contains(raw, `"reason":"missing_bearer"`) {
+	if !strings.Contains(raw, `"event_type":"auth_rejected"`) {
+		t.Fatalf("missing event_type=auth_rejected in log: %s", raw)
+	}
+	if !strings.Contains(raw, `"result":"missing_bearer"`) {
 		t.Fatalf("missing rejection reason in log: %s", raw)
 	}
 	if !strings.Contains(raw, `"has_session":true`) {
@@ -606,14 +609,49 @@ func TestInSessionInvalidBearerEmitsStructuredLog(t *testing.T) {
 		t.Fatalf("status = %d want 401", rec.Code)
 	}
 	raw := logBuf.String()
-	if !strings.Contains(raw, `"msg":"mcp: auth rejected"`) {
-		t.Fatalf("missing auth rejection log: %s", raw)
+	if !strings.Contains(raw, `"msg":"audit"`) {
+		t.Fatalf("missing audit log: %s", raw)
 	}
-	if !strings.Contains(raw, `"reason":"invalid_token"`) {
+	if !strings.Contains(raw, `"event_type":"auth_rejected"`) {
+		t.Fatalf("missing event_type=auth_rejected in log: %s", raw)
+	}
+	if !strings.Contains(raw, `"result":"invalid_token"`) {
 		t.Fatalf("missing invalid_token reason in log: %s", raw)
 	}
 	if !strings.Contains(raw, `"has_session":true`) {
 		t.Fatalf("missing has_session=true in log: %s", raw)
+	}
+}
+
+// TestScopeDeniedToolCallEmitsStructuredAuditLog proves the security audit
+// trail (#371) acceptance criteria for insufficient-scope denials: a
+// content.read token attempting a content.write tool must produce a
+// distinguishable event_type=scope_denied audit line (not just a generic
+// tool_error), and that line must never contain the caller's raw bearer
+// token.
+func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
+	srv := mustOAuthServer(t)
+	logBuf := withDefaultLogger(t)
+	bearer := obtainBearerToken(t, srv)
+
+	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page"}}`)
+	rec := doMCPCall(t, srv, bearer, payload)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+
+	raw := logBuf.String()
+	if !strings.Contains(raw, `"msg":"audit"`) {
+		t.Fatalf("missing audit log: %s", raw)
+	}
+	if !strings.Contains(raw, `"event_type":"scope_denied"`) {
+		t.Fatalf("missing event_type=scope_denied in log: %s", raw)
+	}
+	if !strings.Contains(raw, `"scope":"content.read"`) {
+		t.Fatalf("missing caller scope in log: %s", raw)
+	}
+	if strings.Contains(raw, bearer) {
+		t.Fatalf("audit log must never contain the raw bearer token: %s", raw)
 	}
 }
 

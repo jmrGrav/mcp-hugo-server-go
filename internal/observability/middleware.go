@@ -2,10 +2,12 @@ package observability
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/audit"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -69,14 +71,30 @@ func NewToolCallMiddleware(log *slog.Logger, m *Metrics, scope string, knownTool
 
 			resultClass := classifyToolResult(result, err)
 			responseBytes := estimateResultBytes(result)
+			degraded := isDegradedResult(result)
 
-			log.Info("tool_call",
+			attrs := []any{
 				"tool_name", toolName,
 				"scope", scope,
 				"duration_ms", durationMs,
 				"result_class", resultClass,
 				"response_bytes", responseBytes,
-			)
+			}
+			// Security audit trail (#371): content.write/site.admin tool calls are
+			// additionally tagged with event_type + result (the same two fields
+			// audit.Log uses), so operators can filter mutation/admin outcomes on
+			// a single consistent shape across the whole audit stream, without
+			// parsing tool_name or result_class separately. Reads are deliberately
+			// left untagged — logging every read as an "audit" event would be
+			// high-volume noise for no forensic benefit (see docs/
+			// security-audit-trail.md).
+			if eventType := auditEventTypeForScope(scope); eventType != "" {
+				attrs = append(attrs, "event_type", eventType, "result", resultClass)
+				if degraded {
+					attrs = append(attrs, "degraded", true)
+				}
+			}
+			log.Info("tool_call", attrs...)
 			if m != nil {
 				m.RecordToolCall(toolName, scope, resultClass, durationMs)
 			}
@@ -109,4 +127,41 @@ func estimateResultBytes(result mcp.Result) int {
 		}
 	}
 	return n
+}
+
+// auditEventTypeForScope maps an OAuth scope tier to a security-audit-trail
+// (#371) event type. Returns "" for scopes that should not be tagged as
+// audit events (anonymous, content.read) — see the comment at the call site.
+func auditEventTypeForScope(scope string) string {
+	switch scope {
+	case "content.write":
+		return audit.EventMutation
+	case "site.admin", "system.admin":
+		return audit.EventAdminOperation
+	default:
+		return ""
+	}
+}
+
+// isDegradedResult reports whether a successful (non-IsError) tool result's
+// StructuredContent carries a "status" field indicating a degraded outcome
+// (e.g. build_site's "partial_success"), so the audit trail can distinguish
+// "succeeded cleanly" from "succeeded with a warning" without every caller
+// having to know each tool's own status vocabulary.
+func isDegradedResult(result mcp.Result) bool {
+	r, ok := result.(*mcp.CallToolResult)
+	if !ok || r == nil || r.IsError || r.StructuredContent == nil {
+		return false
+	}
+	raw, err := json.Marshal(r.StructuredContent)
+	if err != nil {
+		return false
+	}
+	var probe struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	return probe.Status == "partial_success"
 }
