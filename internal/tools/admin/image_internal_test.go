@@ -11,8 +11,8 @@ import (
 
 func TestDefs(t *testing.T) {
 	defs := Defs()
-	if len(defs) != 7 {
-		t.Fatalf("Defs() = %d, want 7", len(defs))
+	if len(defs) != 8 {
+		t.Fatalf("Defs() = %d, want 8", len(defs))
 	}
 	if defs[0].RequiredScope != "site.admin" {
 		t.Fatalf("Defs() first scope = %q", defs[0].RequiredScope)
