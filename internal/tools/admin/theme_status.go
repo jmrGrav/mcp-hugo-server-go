@@ -75,7 +75,7 @@ func RegisterThemeStatus(s *mcp.Server, cfg config.Config) {
 			data.Hugo.Error = cfgErr
 		}
 		for _, name := range names {
-			data.Themes = append(data.Themes, themeStatusFor(cfg, name, source))
+			data.Themes = append(data.Themes, themeStatusFor(ctx, cfg, name, source))
 		}
 
 		meta := toolcontract.NewMeta(buildinfo.Version, time.Now())
@@ -154,7 +154,7 @@ func resolveThemeNames(ctx context.Context, cfg config.Config) (names []string, 
 // state can be reliably reported for them without duplicating Hugo's module
 // resolution logic — that is intentionally left as "present: true" (Hugo
 // itself already resolved and is using it) with no commit/dirty fields.
-func themeStatusFor(cfg config.Config, name, source string) themeInfo {
+func themeStatusFor(ctx context.Context, cfg config.Config, name, source string) themeInfo {
 	info := themeInfo{Name: name, Source: source}
 	if source != "themes_dir" {
 		info.Present = true
@@ -168,14 +168,17 @@ func themeStatusFor(cfg config.Config, name, source string) themeInfo {
 	}
 	info.Present = true
 
-	commit, err := gitStatusOutput(context.Background(), themeDir, "rev-parse", "--short", "HEAD")
+	tctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
+
+	commit, err := gitStatusOutput(tctx, themeDir, "rev-parse", "--short", "HEAD")
 	if err != nil {
 		info.Error = sanitiseGitError(err, cfg, themeDir)
 		return info
 	}
 	info.Commit = commit
 
-	porcelain, err := gitStatusOutput(context.Background(), themeDir, "status", "--porcelain")
+	porcelain, err := gitStatusOutput(tctx, themeDir, "status", "--porcelain")
 	if err == nil {
 		info.Dirty = strings.TrimSpace(porcelain) != ""
 	}
