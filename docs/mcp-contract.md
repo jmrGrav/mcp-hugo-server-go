@@ -200,6 +200,7 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 | `generate_featured_image` | flat     | `path`                               |
 | `check_sri_versions`      | flat     | (SRI result)                         |
 | `get_runtime_status`      | structured | `data.server_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
+| `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
 
 ---
 
