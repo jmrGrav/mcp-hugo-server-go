@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -382,6 +383,215 @@ func TestUpdatePageNotFound(t *testing.T) {
 	raw, _ := json.Marshal(res.Content)
 	if !strings.Contains(string(raw), "not_found") {
 		t.Errorf("expected not_found error, got: %s", raw)
+	}
+}
+
+func TestCreatePageIdempotencyKeyReturnsOriginalResultWithoutRewriting(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	args := map[string]any{
+		"slug":            "idem-create",
+		"title":           "Original",
+		"body":            "Body",
+		"tags":            []any{},
+		"categories":      []any{},
+		"idempotency_key": "idem-create-1",
+	}
+	first := callTool(t, session, "create_page", args)
+	if first.IsError {
+		t.Fatalf("first create_page failed: %s", marshalContent(t, first))
+	}
+
+	path := filepath.Join(contentRoot, "idem-create", "index.md")
+	if err := os.WriteFile(path, []byte("tampered"), 0o644); err != nil {
+		t.Fatalf("WriteFile tampered: %v", err)
+	}
+
+	second := callTool(t, session, "create_page", args)
+	if second.IsError {
+		t.Fatalf("second create_page replay failed: %s", marshalContent(t, second))
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile after replay: %v", err)
+	}
+	if string(raw) != "tampered" {
+		t.Fatalf("create_page replay should not rewrite file, got %q", string(raw))
+	}
+}
+
+// TestCreatePageIdempotencyKeyRaceOnConcurrentRetries proves the idempotency
+// replay check happens under the content lock. If the check ran before the
+// lock, two truly concurrent retries with the same key — the exact
+// uncertain-delivery scenario idempotency_key exists to protect — could both
+// miss the cache and race: the loser would see already_exists instead of the
+// intended idempotent replay.
+func TestCreatePageIdempotencyKeyRaceOnConcurrentRetries(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	args := map[string]any{
+		"slug":            "idem-race",
+		"title":           "Original",
+		"body":            "Body",
+		"tags":            []any{},
+		"categories":      []any{},
+		"idempotency_key": "idem-race-1",
+	}
+
+	hugosite.ContentMu.Lock()
+
+	results := make(chan *mcp.CallToolResult, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- callTool(t, session, "create_page", args)
+		}()
+	}
+
+	time.Sleep(150 * time.Millisecond)
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	close(results)
+
+	for res := range results {
+		if res.IsError {
+			t.Fatalf("concurrent create_page retry with same idempotency_key should not fail: %s", marshalContent(t, res))
+		}
+	}
+}
+
+func TestUpdatePageIdempotencyKeyReturnsOriginalResultWithoutReapplying(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "idem-update",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	args := map[string]any{
+		"slug":              "idem-update",
+		"title":             "Updated",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "idem-update", "index.md")),
+		"idempotency_key":   "idem-update-1",
+	}
+	first := callTool(t, session, "update_page", args)
+	if first.IsError {
+		t.Fatalf("first update_page failed: %s", marshalContent(t, first))
+	}
+
+	path := filepath.Join(contentRoot, "idem-update", "index.md")
+	if err := os.WriteFile(path, []byte("---\ntitle: Mutated\n---\nMutated"), 0o644); err != nil {
+		t.Fatalf("WriteFile mutated: %v", err)
+	}
+
+	second := callTool(t, session, "update_page", args)
+	if second.IsError {
+		t.Fatalf("second update_page replay failed: %s", marshalContent(t, second))
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile after replay: %v", err)
+	}
+	if !strings.Contains(string(raw), "title: Mutated") {
+		t.Fatalf("update_page replay should not reapply update, got %q", string(raw))
+	}
+}
+
+func TestDeletePageIdempotencyKeyReturnsOriginalResultWithoutReapplying(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "idem-delete",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	args := map[string]any{
+		"slug":              "idem-delete",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "idem-delete", "index.md")),
+		"idempotency_key":   "idem-delete-1",
+	}
+	first := callTool(t, session, "delete_page", args)
+	if first.IsError {
+		t.Fatalf("first delete_page failed: %s", marshalContent(t, first))
+	}
+
+	dir := filepath.Join(contentRoot, "idem-delete")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll recreated dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte("recreated"), 0o644); err != nil {
+		t.Fatalf("WriteFile recreated: %v", err)
+	}
+
+	second := callTool(t, session, "delete_page", args)
+	if second.IsError {
+		t.Fatalf("second delete_page replay failed: %s", marshalContent(t, second))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "index.md")); err != nil {
+		t.Fatalf("replayed delete_page should not re-delete recreated file: %v", err)
+	}
+}
+
+func TestUpdatePageIdempotencyKeyRejectsDivergentReuse(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "idem-conflict",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	key := "idem-conflict-1"
+	first := callTool(t, session, "update_page", map[string]any{
+		"slug":              "idem-conflict",
+		"title":             "Changed",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "idem-conflict", "index.md")),
+		"idempotency_key":   key,
+	})
+	if first.IsError {
+		t.Fatalf("first update_page failed: %s", marshalContent(t, first))
+	}
+
+	second := callTool(t, session, "update_page", map[string]any{
+		"slug":              "idem-conflict",
+		"title":             "Changed again",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "idem-conflict", "index.md")),
+		"idempotency_key":   key,
+	})
+	if !second.IsError {
+		t.Fatal("reusing idempotency_key with different update input should fail")
+	}
+	if raw := marshalContent(t, second); !strings.Contains(raw, "idempotency_conflict") {
+		t.Fatalf("divergent idempotency reuse error = %s", raw)
 	}
 }
 

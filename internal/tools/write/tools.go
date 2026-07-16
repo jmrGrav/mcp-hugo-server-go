@@ -32,13 +32,14 @@ import (
 )
 
 type createPageInput struct {
-	Slug       string   `json:"slug"`
-	Lang       string   `json:"lang,omitempty"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Tags       []string `json:"tags"`
-	Categories []string `json:"categories"`
-	DryRun     bool     `json:"dry_run,omitempty"`
+	Slug           string   `json:"slug"`
+	Lang           string   `json:"lang,omitempty"`
+	Title          string   `json:"title"`
+	Body           string   `json:"body"`
+	Tags           []string `json:"tags"`
+	Categories     []string `json:"categories"`
+	IdempotencyKey string   `json:"idempotency_key,omitempty"`
+	DryRun         bool     `json:"dry_run,omitempty"`
 }
 
 type createPageOutput struct {
@@ -61,6 +62,7 @@ type updatePageInput struct {
 	Draft            *bool    `json:"draft,omitempty"`
 	Description      string   `json:"description,omitempty"`
 	ExpectedRevision string   `json:"expected_revision,omitempty"`
+	IdempotencyKey   string   `json:"idempotency_key,omitempty"`
 	DryRun           bool     `json:"dry_run,omitempty"`
 }
 
@@ -76,6 +78,7 @@ type updatePageOutput struct {
 type deletePageInput struct {
 	Slug             string `json:"slug"`
 	ExpectedRevision string `json:"expected_revision,omitempty"`
+	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	DryRun           bool   `json:"dry_run,omitempty"`
 }
 
@@ -152,11 +155,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 	var deleteMu sync.Mutex
 	deleteLimiters := make(map[string]*rate.Limiter)
+	idem := newIdempotencyStore(15*time.Minute, 256)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. This operation is intentionally not idempotent because repeated calls do not converge: the first call writes a new page and later duplicate calls fail instead of replacing it. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -232,6 +236,43 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Debug("create_page: lock_released")
 		}()
 
+		// Idempotency replay check must happen under the content lock: two
+		// genuinely concurrent retries with the same key (the exact
+		// uncertain-delivery scenario this feature protects against) would
+		// otherwise both miss the cache before either has a chance to
+		// remember its result, and the loser would see already_exists
+		// instead of the intended idempotent replay.
+		idemHash := ""
+		if strings.TrimSpace(in.IdempotencyKey) != "" {
+			hash, hashErr := requestHash(struct {
+				Slug       string   `json:"slug"`
+				Lang       string   `json:"lang,omitempty"`
+				Title      string   `json:"title"`
+				Body       string   `json:"body"`
+				Tags       []string `json:"tags"`
+				Categories []string `json:"categories"`
+			}{
+				Slug:       in.Slug,
+				Lang:       resolvedLang,
+				Title:      in.Title,
+				Body:       in.Body,
+				Tags:       in.Tags,
+				Categories: in.Categories,
+			})
+			if hashErr != nil {
+				return nil, createPageOutput{}, fmt.Errorf("internal_error: failed to hash idempotency request")
+			}
+			idemHash = hash
+			var cached createPageOutput
+			hit, replayErr := idem.replay("create_page", in.IdempotencyKey, idemHash, &cached)
+			if replayErr != nil {
+				return nil, createPageOutput{}, replayErr
+			}
+			if hit {
+				return nil, cached, nil
+			}
+		}
+
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("create_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, fmt.Errorf("security_error: symlink detected in write path")
@@ -266,13 +307,19 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		state := createPageState()
-		return nil, createPageOutput{
+		out := createPageOutput{
 			Slug:               in.Slug,
 			Path:               filePath,
 			ResolvedLang:       resolvedLang,
 			ResolvedSourcePath: filePath,
 			State:              &state,
-		}, nil
+		}
+		if idemHash != "" {
+			if err := idem.remember("create_page", in.IdempotencyKey, idemHash, out); err != nil {
+				slog.Warn("create_page: could not persist idempotency result", "slug", in.Slug, "error", err)
+			}
+		}
+		return nil, out, nil
 	}))
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -284,6 +331,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
 			"Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); " +
 			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. " +
+			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state.",
 		InputSchema:  tools.MustSchema[updatePageInput](),
 		OutputSchema: tools.MustSchema[updatePageOutput](),
@@ -336,6 +384,49 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, updatePageOutput{}, langErr
 		}
 		filePath := resolvedSource.SourcePath
+
+		// Idempotency replay must be checked before the expected_revision
+		// staleness check: a true replay of an already-applied mutation is
+		// not "the page changed" — it's the same logical request arriving
+		// twice, and must return the original result regardless of what
+		// happened to the file afterward. Checking revision first would
+		// wrongly turn a safe replay into a revision_conflict.
+		idemHash := ""
+		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+			hash, hashErr := requestHash(struct {
+				Slug             string   `json:"slug"`
+				Lang             string   `json:"lang,omitempty"`
+				Title            string   `json:"title,omitempty"`
+				Body             string   `json:"body,omitempty"`
+				Tags             []string `json:"tags,omitempty"`
+				Categories       []string `json:"categories,omitempty"`
+				Draft            *bool    `json:"draft,omitempty"`
+				Description      string   `json:"description,omitempty"`
+				ExpectedRevision string   `json:"expected_revision,omitempty"`
+			}{
+				Slug:             in.Slug,
+				Lang:             lang,
+				Title:            in.Title,
+				Body:             in.Body,
+				Tags:             in.Tags,
+				Categories:       in.Categories,
+				Draft:            in.Draft,
+				Description:      in.Description,
+				ExpectedRevision: in.ExpectedRevision,
+			})
+			if hashErr != nil {
+				return nil, updatePageOutput{}, fmt.Errorf("internal_error: failed to hash idempotency request")
+			}
+			idemHash = hash
+			var cached updatePageOutput
+			hit, replayErr := idem.replay("update_page", in.IdempotencyKey, idemHash, &cached)
+			if replayErr != nil {
+				return nil, updatePageOutput{}, replayErr
+			}
+			if hit {
+				return nil, cached, nil
+			}
+		}
 
 		raw, err := os.ReadFile(filePath)
 		if err != nil {
@@ -433,18 +524,24 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		state := updatePageState(siteIdx != nil, hadPublic)
-		return nil, updatePageOutput{
+		out := updatePageOutput{
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
 			ResolvedSourcePath: filePath,
 			State:              &state,
-		}, nil
+		}
+		if idemHash != "" {
+			if err := idem.remember("update_page", in.IdempotencyKey, idemHash, out); err != nil {
+				slog.Warn("update_page: could not persist idempotency result", "slug", in.Slug, "error", err)
+			}
+		}
+		return nil, out, nil
 	}))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -522,6 +619,35 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Debug("delete_page: lock_released")
 		}()
 
+		// Idempotency replay check must happen under the content lock: two
+		// genuinely concurrent retries with the same key (the exact
+		// uncertain-delivery scenario this feature protects against) would
+		// otherwise both miss the cache before either has a chance to
+		// remember its result, and the loser would see an unwanted second
+		// delete attempt instead of the intended idempotent replay.
+		idemHash := ""
+		if strings.TrimSpace(in.IdempotencyKey) != "" {
+			hash, hashErr := requestHash(struct {
+				Slug             string `json:"slug"`
+				ExpectedRevision string `json:"expected_revision,omitempty"`
+			}{
+				Slug:             in.Slug,
+				ExpectedRevision: in.ExpectedRevision,
+			})
+			if hashErr != nil {
+				return nil, deletePageOutput{}, fmt.Errorf("internal_error: failed to hash idempotency request")
+			}
+			idemHash = hash
+			var cached deletePageOutput
+			hit, replayErr := idem.replay("delete_page", in.IdempotencyKey, idemHash, &cached)
+			if replayErr != nil {
+				return nil, deletePageOutput{}, replayErr
+			}
+			if hit {
+				return nil, cached, nil
+			}
+		}
+
 		currentRevision := ""
 		if resolvedSource.SourcePath != "" {
 			currentRevision, err = contentmodel.SourceRevision(resolvedSource.SourcePath)
@@ -593,13 +719,19 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
-		return nil, deletePageOutput{
+		out := deletePageOutput{
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
 			ResolvedSourcePath: resolvedSource.SourcePath,
 			Warning:            deleteWarning,
 			State:              &state,
-		}, nil
+		}
+		if idemHash != "" {
+			if err := idem.remember("delete_page", in.IdempotencyKey, idemHash, out); err != nil {
+				slog.Warn("delete_page: could not persist idempotency result", "slug", in.Slug, "error", err)
+			}
+		}
+		return nil, out, nil
 	}))
 }
 
