@@ -624,8 +624,8 @@ func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 23 {
-		t.Fatalf("authenticated tools/list = %d tools, want 23; got %v", len(names), names)
+	if len(names) != 24 {
+		t.Fatalf("authenticated tools/list = %d tools, want 24; got %v", len(names), names)
 	}
 	for _, name := range []string{"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_site_structure", "get_site_health", "diff_page", "validate_front_matter", "validate_site", "suggest_internal_links"} {
 		found := false
@@ -649,8 +649,8 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	addBearerToken(t, storePath, bearer, "reader")
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 23 {
-		t.Fatalf("reader tools/list = %d tools, want 23; got %v", len(names), names)
+	if len(names) != 24 {
+		t.Fatalf("reader tools/list = %d tools, want 24; got %v", len(names), names)
 	}
 	for _, name := range []string{
 		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
@@ -899,8 +899,8 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	rewriteTokenScopeToLegacyMCP(t, storePath, bearer)
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 23 {
-		t.Fatalf("legacy mcp tools/list = %d tools, want 23; got %v", len(names), names)
+	if len(names) != 24 {
+		t.Fatalf("legacy mcp tools/list = %d tools, want 24; got %v", len(names), names)
 	}
 	for _, bad := range []string{"create_page", "update_page", "delete_page", "build_site"} {
 		for _, n := range names {

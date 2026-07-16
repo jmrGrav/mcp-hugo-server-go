@@ -704,6 +704,7 @@ func Defs() []tools.ToolDef {
 		{Name: "explain_site_structure", RequiredScope: "content.read"},
 		{Name: "get_site_health", RequiredScope: "content.read"},
 		{Name: "get_broken_links", RequiredScope: "content.read"},
+		{Name: "inspect_rendered_page", RequiredScope: "content.read"},
 		{Name: "get_backlinks", RequiredScope: "content.read"},
 		{Name: "suggest_internal_links", RequiredScope: "content.read"},
 		{Name: "diff_page", RequiredScope: "content.read"},
