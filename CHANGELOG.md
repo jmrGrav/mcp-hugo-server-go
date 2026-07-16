@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.4] - 2026-07-16
+
+### Added
+- **Reader-safe read policy for all read-only tools** (#354, PR #365): introduced `site.AccessProfile` context propagation and `ReaderSafeResolvedPage`, which projects `Source`/`SourcePath` out of resolved pages for the `reader` scope while preserving the full response for `content.read`/`operator`/`site.admin`. Applied consistently at the DTO boundary across all read tools.
+- **Self-service reader registration** (#353, PR #366): `registerAgentAnonymous` issues the `reader` scope directly (bypassing the manual claim/approval flow) when `AllowReaderSelfRegistration` is enabled in config. Scope is always server-determined — the client cannot request a higher scope via the exchange request (regression-tested by attempting to inject `scope=site.admin`). `reader` shares `content.read`'s OAuth rate-limit bucket.
+- **Operator tool parity tests across clients** (#355, PR #369): added contract tests asserting the same `operator`-scoped tool set is exposed consistently regardless of which MCP client surface (ChatGPT, Claude.ai, Gemini, Le Chat, generic MCP) is negotiating capabilities.
+
+### Fixed
+- **Runtime `mcp.Implementation.version` regression coverage** (#327, PR #387): the underlying fix (wiring `internal/buildinfo.Version` into both `serverInfo.version` and `meta.server_version`) shipped in #361/v1.4.3; this closes the issue with the regression test (`TestInitializeExposesRuntimeBuildVersion`) and doc note that #361 had deliberately left out of scope.
+
 ## [v1.4.3] - 2026-07-16
 
 ### Fixed
