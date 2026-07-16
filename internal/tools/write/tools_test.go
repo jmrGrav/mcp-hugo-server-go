@@ -149,6 +149,94 @@ func TestCreatePage(t *testing.T) {
 	}
 }
 
+func TestCreatePageRejectsDuplicateSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/duplicate",
+		"title":      "Original",
+		"body":       "Long original body",
+		"tags":       []any{"first"},
+		"categories": []any{"tests"},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial create_page failed: %s", raw)
+	}
+
+	second := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/duplicate",
+		"title":      "Overwrite attempt",
+		"body":       "This must not replace the original content.",
+		"tags":       []any{"second"},
+		"categories": []any{"tests"},
+	})
+	if !second.IsError {
+		raw, _ := json.Marshal(second.Content)
+		t.Fatalf("duplicate create_page should fail: %s", raw)
+	}
+	raw, _ := json.Marshal(second.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("duplicate create_page must return already_exists, got: %s", raw)
+	}
+
+	path := filepath.Join(contentRoot, "posts", "duplicate", "index.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Original") || strings.Contains(content, "Overwrite attempt") {
+		t.Fatalf("duplicate create_page must preserve original content, got:\n%s", content)
+	}
+}
+
+func TestCreatePageDryRunRejectsDuplicateSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/dry-run-duplicate",
+		"title":      "Original",
+		"body":       "Long original body",
+		"tags":       []any{"first"},
+		"categories": []any{"tests"},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial create_page failed: %s", raw)
+	}
+
+	preview := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/dry-run-duplicate",
+		"title":      "Overwrite attempt",
+		"body":       "This must not be previewed as creatable.",
+		"tags":       []any{"second"},
+		"categories": []any{"tests"},
+		"dry_run":    true,
+	})
+	if !preview.IsError {
+		raw, _ := json.Marshal(preview.Content)
+		t.Fatalf("dry-run create_page on existing slug should fail: %s", raw)
+	}
+	raw, _ := json.Marshal(preview.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("dry-run create_page on existing slug must return already_exists, got: %s", raw)
+	}
+
+	path := filepath.Join(contentRoot, "posts", "dry-run-duplicate", "index.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	if !strings.Contains(string(data), "Original") {
+		t.Fatalf("dry-run must not touch original content, got:\n%s", string(data))
+	}
+}
+
 func TestCreatePageSymlinkBlocked(t *testing.T) {
 	contentRoot := t.TempDir()
 
@@ -587,6 +675,52 @@ func TestCreatePageAcceptsExplicitLang(t *testing.T) {
 	}
 	if got := decoded["resolved_lang"]; got != "fr" {
 		t.Fatalf("create_page resolved_lang = %v, want fr", got)
+	}
+}
+
+func TestCreatePageRejectsDuplicateExplicitLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/bilingual-duplicate",
+		"lang":       "fr",
+		"title":      "Bonjour",
+		"body":       "Version initiale",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial multilingual create_page failed: %s", raw)
+	}
+
+	second := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/bilingual-duplicate",
+		"lang":       "fr",
+		"title":      "Remplacement",
+		"body":       "Ce contenu ne doit pas écraser le fichier français existant.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if !second.IsError {
+		raw, _ := json.Marshal(second.Content)
+		t.Fatalf("duplicate multilingual create_page should fail: %s", raw)
+	}
+	raw, _ := json.Marshal(second.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("duplicate multilingual create_page must return already_exists, got: %s", raw)
+	}
+
+	frPath := filepath.Join(contentRoot, "posts", "bilingual-duplicate", "index.fr.md")
+	data, err := os.ReadFile(frPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", frPath, err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Bonjour") || strings.Contains(content, "Remplacement") {
+		t.Fatalf("duplicate multilingual create_page must preserve original fr file, got:\n%s", content)
 	}
 }
 
