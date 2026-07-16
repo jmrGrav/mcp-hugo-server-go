@@ -470,6 +470,32 @@ func TestDeletePageRequiresExpectedRevisionForWrite(t *testing.T) {
 	}
 }
 
+func TestDeletePageWithoutSourceFileDoesNotRequireExpectedRevision(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// A bundle directory with no index*.md source file (e.g. assets-only,
+	// or left behind by a partial/failed write). There is no revision to
+	// protect, so delete_page must not demand expected_revision here —
+	// otherwise such a directory could never be deleted again.
+	dir := filepath.Join(contentRoot, "orphan-bundle")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "photo.jpg"), []byte("fake"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{"slug": "orphan-bundle"})
+	if res.IsError {
+		t.Fatalf("delete_page on sourceless bundle should succeed: %s", marshalContent(t, res))
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("orphan bundle directory should be removed, stat err = %v", err)
+	}
+}
+
 func TestDeletePageRejectsStaleExpectedRevision(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
