@@ -60,6 +60,7 @@ input returns a structured `idempotency_conflict` error.
 - `generate_featured_image` - Generate featured image
 - `check_sri_versions` - Verify SRI integrity
 - `get_runtime_status` - Get runtime status (server version/commit, hugo/git availability, source/public revision hashes)
+- `get_theme_status` - Get theme status (active theme/module name, on-disk presence, Git commit/dirty state for classic themes)
 
 `system.admin` is accepted as a legacy compatibility alias for `site.admin`, but it is not advertised as a canonical tool tier.
 
