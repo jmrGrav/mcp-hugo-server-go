@@ -129,7 +129,7 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 	defer readDone()
 
 	const slug = "/posts/hello/"
-	wantSourceSuffix := filepath.ToSlash("testdata/fixtures/content/posts/hello.md")
+	wantSourcePath := "content/posts/hello.md"
 	want := identity{
 		Slug:          "/posts/hello/",
 		Lang:          "en",
@@ -160,8 +160,8 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 		if actual.ResolvedLang != want.ResolvedLang {
 			t.Fatalf("%s resolved_lang = %q, want %q", tool, actual.ResolvedLang, want.ResolvedLang)
 		}
-		if actual.ResolvedSourcePath == "" || !strings.HasSuffix(filepath.ToSlash(actual.ResolvedSourcePath), wantSourceSuffix) {
-			t.Fatalf("%s resolved_source_path = %q, want suffix %q", tool, actual.ResolvedSourcePath, wantSourceSuffix)
+		if actual.ResolvedSourcePath != wantSourcePath {
+			t.Fatalf("%s resolved_source_path = %q, want %q", tool, actual.ResolvedSourcePath, wantSourcePath)
 		}
 		if actual.Revision == "" {
 			t.Fatalf("%s revision = empty, want stable source revision", tool)
@@ -260,8 +260,9 @@ func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *test
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
 
-	frSource := filepath.Join(contentRoot, "posts", "bonjour", "index.fr.md")
-	writeFile(t, frSource, "---\ntitle: Bonjour\ndate: 2026-07-13\ncategories:\n  - Infra\n---\nBonjour monde.\n")
+	frSourcePath := filepath.Join(contentRoot, "posts", "bonjour", "index.fr.md")
+	frSource := "content/posts/bonjour/index.fr.md"
+	writeFile(t, frSourcePath, "---\ntitle: Bonjour\ndate: 2026-07-13\ncategories:\n  - Infra\n---\nBonjour monde.\n")
 	writeFile(t, filepath.Join(publicRoot, "posts", "bonjour", "index.fr.html"), "<html><body><article><h1>Bonjour</h1><p>Bonjour monde.</p></article></body></html>")
 
 	cfg := fixtureConfig()
