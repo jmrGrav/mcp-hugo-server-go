@@ -277,10 +277,11 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	RegisterDiffPage(s, idx, srcIdx, cfg)
 
 	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Requires content.read. For a simple unauthenticated keyword search use search_pages.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {
 			if idx == nil {
 				return nil, searchContentEnvelope{}, fmt.Errorf("index not initialized")
 			}
+			readerSafe := site.IsReaderProfile(ctx)
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
 				return nil, searchContentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
 			}
@@ -314,7 +315,11 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					}
 					pages := sliceContentPages(ranked, offset, limit)
 					meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, srcIdx, cfg.ContentRoot, cfg.SiteRoot)
+					lookup := srcIdx
+					if readerSafe {
+						lookup = nil
+					}
+					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, lookup, cfg.ContentRoot, cfg.SiteRoot)
 					return nil, newSearchContentEnvelope(searchContentData{
 						Pages:         dtos,
 						Total:         meta.Total,
@@ -336,7 +341,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 
 			// In-memory fallback path (db_path unset or FTS returned no results).
 			sitemap := idx.Sitemap()
-			if srcIdx != nil && in.Category != "" {
+			if srcIdx != nil && in.Category != "" && !readerSafe {
 				enriched := make([]site.Page, len(sitemap))
 				copy(enriched, sitemap)
 				for i, pg := range enriched {
@@ -358,7 +363,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			pages := sliceContentPages(filtered, offset, limit)
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			return nil, newSearchContentEnvelope(searchContentData{
-				Pages:         toPageDTOs(pages, aliases, srcIdx, cfg.ContentRoot, cfg.SiteRoot),
+				Pages:         toPageDTOs(pages, aliases, sourceIndexForProfile(srcIdx, readerSafe), cfg.ContentRoot, cfg.SiteRoot),
 				Total:         meta.Total,
 				Limit:         meta.Limit,
 				Offset:        meta.Offset,
@@ -376,10 +381,11 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		})
 
 	addReadOnlyTool(s, "explain_site_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Requires content.read.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
+			readerSafe := site.IsReaderProfile(ctx)
 			contentPages := idx.ContentPages()
 			sections := countSections(contentPages)
 			languages := uniqueLanguages(contentPages)
@@ -389,7 +395,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}
 			rawTags := idx.AllTags()
 			rawCats := idx.AllCategories()
-			if srcIdx != nil {
+			if srcIdx != nil && !readerSafe {
 				rawTags = srcIdx.AllTags()
 				rawCats = srcIdx.AllCategories()
 			}
@@ -403,7 +409,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Languages:   languages,
 				Tags:        tagCount,
 				Categories:  catCount,
-				RecentPages: toPageDTOsEnriched(recent, srcIdx, aliases, cfg.ContentRoot, cfg.SiteRoot),
+				RecentPages: toPageDTOsEnriched(recent, sourceIndexForProfile(srcIdx, readerSafe), aliases, cfg.ContentRoot, cfg.SiteRoot),
 				Notes: []string{
 					"Top-level sections are derived from page slugs.",
 					"Posts are detected from the /posts/ path prefix.",
@@ -412,11 +418,11 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		})
 
 	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. Use this before publishing or reviewing content. Requires content.read.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
-			health := buildSiteHealth(idx, srcIdx, aliases)
+			health := buildSiteHealth(idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases)
 			return nil, newContentEnvelope(contentEnvelopeData{
 				Status:                  health.Status,
 				Score:                   health.Score,
@@ -433,7 +439,10 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		})
 
 	addReadOnlyTool(s, "validate_front_matter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. Requires content.read.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
+			if site.IsReaderProfile(ctx) {
+				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
+			}
 			if srcIdx == nil {
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
@@ -445,7 +454,10 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		})
 
 	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_front_matter with no slug filter. Requires content.read.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, validateOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, validateOutput, error) {
+			if site.IsReaderProfile(ctx) {
+				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
+			}
 			if srcIdx == nil {
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
@@ -499,7 +511,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		})
 
 	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). Requires content.read.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
 			if idx == nil {
 				return nil, getBacklinksOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -511,6 +523,10 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getBacklinksOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+			}
+			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			if err != nil {
+				return nil, getBacklinksOutput{}, err
 			}
 			var targetSlug string
 			if resolved.Public != nil {
@@ -536,7 +552,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			"Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. "+
 			"Optionally include body to detect pages whose titles already appear in the text (body_mention: true). "+
 			"Returns ranked suggestions with anchor_text and shared taxonomy context. Requires content.read.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in suggestInternalLinksInput) (*mcp.CallToolResult, suggestInternalLinksOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in suggestInternalLinksInput) (*mcp.CallToolResult, suggestInternalLinksOutput, error) {
 			if idx == nil {
 				return nil, suggestInternalLinksOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -558,6 +574,10 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				if !ok {
 					warnings = append(warnings, fmt.Sprintf("slug %q not found in index; using only provided tags/categories", in.Slug))
 				} else {
+					resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+					if err != nil {
+						return nil, suggestInternalLinksOutput{}, err
+					}
 					if resolved.Public != nil {
 						resolvedSlug = resolved.Public.Slug
 						refTags = append(refTags, resolved.Public.Tags...)
@@ -679,6 +699,13 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 		out[i] = c.dto
 	}
 	return out
+}
+
+func sourceIndexForProfile(srcIdx *hugosite.SourceIndex, readerSafe bool) *hugosite.SourceIndex {
+	if readerSafe {
+		return nil
+	}
+	return srcIdx
 }
 
 func filterContentPages(pages []site.Page, in searchContentInput, aliases map[string]string) []site.Page {

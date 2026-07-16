@@ -1,7 +1,5 @@
 package tools
 
-var scopeOrder = []string{"", "content.read", "content.write", "site.admin"}
-
 // KnownScopes lists every scope this server may issue or enforce.
 var KnownScopes = []string{"content.read", "content.write", "site.admin"}
 
@@ -53,12 +51,18 @@ func (r *Registry) ForScope(scope string) []ToolDef {
 }
 
 func scopeRank(scope string) int {
-	for i, s := range scopeOrder {
-		if s == scope {
-			return i
-		}
+	switch scope {
+	case "":
+		return 0
+	case "content.read", "reader":
+		return 1
+	case "content.write":
+		return 2
+	case "site.admin":
+		return 3
+	default:
+		return -1
 	}
-	return -1
 }
 
 // ScopeRank returns the integer rank of a known scope:
