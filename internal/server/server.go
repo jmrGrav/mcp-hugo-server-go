@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/audit"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -66,9 +67,7 @@ func logMCPAuthRejection(r *http.Request, reason string) {
 	if r == nil {
 		return
 	}
-	slog.Warn(
-		"mcp: auth rejected",
-		"reason", reason,
+	audit.Warn(audit.EventAuthRejected, reason,
 		"method", r.Method,
 		"path", r.URL.Path,
 		"has_session", strings.TrimSpace(r.Header.Get("Mcp-Session-Id")) != "",
@@ -121,6 +120,13 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		Capabilities: serverCaps,
 	}
 	logger := observability.NewLogger()
+	// Unify every package-level slog.Info/Warn/Error call (agent_auth.go,
+	// build.go, hooks.go, the audit package, ...) onto the same structured
+	// JSON handler as the request/tool-call logs above, instead of Go's
+	// plain-text default. This is what makes the security audit trail
+	// (#371) durable and uniformly parseable without touching every
+	// individual call site.
+	slog.SetDefault(logger)
 	metrics := observability.NewMetrics()
 
 	reg := buildRegistry()
@@ -465,6 +471,12 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 					}
 					if !scopePolicy.AllowRequest(body, callerScope) {
 						reason := scopePolicy.DenyReason(body, callerScope)
+						audit.Warn(audit.EventScopeDenied, "denied",
+							"scope", callerScope,
+							"reason", reason,
+							"path", r.URL.Path,
+							"remote_addr", r.RemoteAddr,
+						)
 						w.Header().Set("Content-Type", "application/json; charset=utf-8")
 						w.WriteHeader(http.StatusForbidden)
 						_ = json.NewEncoder(w).Encode(map[string]any{

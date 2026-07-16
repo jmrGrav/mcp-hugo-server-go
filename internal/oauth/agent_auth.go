@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/audit"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
@@ -91,6 +92,12 @@ func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 		s.agentClaimTokens[claimToken] = assertion
 	}
 	s.mu.Unlock()
+
+	if claimed {
+		audit.Info(audit.EventOperatorMilestone, "reader_self_registered", "registration_id", regID, "issued_scope", issuedScope)
+	} else {
+		audit.Info(audit.EventOperatorMilestone, "pending_operator_claim", "registration_id", regID)
+	}
 
 	resp := &AgentIdentityResponse{
 		RegistrationID:    regID,
@@ -289,12 +296,14 @@ func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 			adminToken = r.FormValue("admin_token")
 		}
 		if adminToken == "" {
+			audit.Warn(audit.EventAuthRejected, "missing_bearer", "context", "agent_claim_verify")
 			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-verify"`)
 			http.Error(w, "operator authentication required", http.StatusUnauthorized)
 			return
 		}
 		scope, _, ok := s.ValidateBearerDetails(adminToken)
 		if !ok || !tools.IsAdminScope(scope) {
+			audit.Warn(audit.EventScopeDenied, "denied", "context", "agent_claim_verify", "scope", scope)
 			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-verify", error="insufficient_scope"`)
 			http.Error(w, "forbidden: site.admin or system.admin scope required", http.StatusForbidden)
 			return
@@ -306,9 +315,11 @@ func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := s.verifyAgentClaim(claimToken); err != nil {
+			audit.Warn(audit.EventOperatorMilestone, "claim_failed", "operator_scope", scope, "error", err.Error())
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		audit.Info(audit.EventOperatorMilestone, "claim_approved", "operator_scope", scope)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.WriteHeader(http.StatusOK)

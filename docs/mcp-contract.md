@@ -179,6 +179,7 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`            |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
 | `diff_page`             | structured  | `data` (diff result) + `data.state`          |
+| `inspect_rendered_page` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state` |
 | `validate_front_matter` | structured  | `data.pages`, `data.pages_checked`           |
 | `validate_site`         | structured  | `data.pages`, `data.pages_checked`           |
 

@@ -38,6 +38,7 @@ runtime during v1.x so the mapping stays explicit and auditable.
 - `get_backlinks` - Get backlinks
 - `suggest_internal_links` - Suggest internal links
 - `diff_page` - Diff page (depends on a readable local Git baseline; see `docs/git-baseline-model.md`)
+- `inspect_rendered_page` - Inspect rendered page (title/meta description/canonical/hreflang/internal links/missing images/render-error checks against the current public build output)
 - `validate_front_matter` - Validate front matter
 - `validate_site` - Validate site
 
