@@ -58,6 +58,15 @@ func TestBuildSiteSucceeds(t *testing.T) {
 	if _, ok := out["duration_ms"]; !ok {
 		t.Fatal("response missing duration_ms")
 	}
+	if buildID, _ := out["build_id"].(string); !matchesBuildIDPattern(buildID) {
+		t.Fatalf("response build_id = %q, want YYYYMMDD-HHMMSS-xxxx", buildID)
+	}
+	if outputRevision, _ := out["output_revision"].(string); !strings.HasPrefix(outputRevision, "sha256:") {
+		t.Fatalf("response output_revision = %q, want sha256:*", outputRevision)
+	}
+	if publishReady, ok := out["publish_ready"].(bool); !ok || !publishReady {
+		t.Fatalf("response publish_ready = %v, want true", out["publish_ready"])
+	}
 }
 
 func TestBuildSiteConcurrentReject(t *testing.T) {
@@ -468,6 +477,15 @@ func TestBuildSiteCallbackTimeout(t *testing.T) {
 	if out["status"] != "partial_success" {
 		t.Errorf("status: want partial_success, got %v", out["status"])
 	}
+	if publishReady, ok := out["publish_ready"].(bool); !ok || publishReady {
+		t.Fatalf("response publish_ready = %v, want false on partial_success", out["publish_ready"])
+	}
+	if buildID, _ := out["build_id"].(string); !matchesBuildIDPattern(buildID) {
+		t.Fatalf("response build_id = %q, want YYYYMMDD-HHMMSS-xxxx", buildID)
+	}
+	if outputRevision, _ := out["output_revision"].(string); !strings.HasPrefix(outputRevision, "sha256:") {
+		t.Fatalf("response output_revision = %q, want sha256:*", outputRevision)
+	}
 	warning, _ := out["warning"].(string)
 	if warning == "" {
 		t.Error("expected non-empty warning when callback times out")
@@ -523,6 +541,9 @@ func TestBuildSiteCallbackFailurePartialSuccess(t *testing.T) {
 	}
 	if out["status"] != "partial_success" {
 		t.Errorf("status: want partial_success, got %v", out["status"])
+	}
+	if publishReady, ok := out["publish_ready"].(bool); !ok || publishReady {
+		t.Fatalf("response publish_ready = %v, want false on partial_success", out["publish_ready"])
 	}
 	if warning, _ := out["warning"].(string); !strings.Contains(warning, "connection refused") {
 		t.Errorf("warning %q should contain callback error detail", warning)
