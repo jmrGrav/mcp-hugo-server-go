@@ -197,6 +197,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		if in.DryRun {
+			if _, err := os.Stat(filePath); err == nil {
+				return nil, createPageOutput{}, fmt.Errorf("already_exists: page already exists at slug %q", in.Slug)
+			} else if !os.IsNotExist(err) {
+				slog.Error("create_page: dry-run stat failed", "slug", in.Slug, "error", err)
+				return nil, createPageOutput{}, fmt.Errorf("read_error: failed to inspect destination path")
+			}
 			return nil, createPageOutput{
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedLang,

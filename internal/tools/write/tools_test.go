@@ -193,6 +193,50 @@ func TestCreatePageRejectsDuplicateSlug(t *testing.T) {
 	}
 }
 
+func TestCreatePageDryRunRejectsDuplicateSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/dry-run-duplicate",
+		"title":      "Original",
+		"body":       "Long original body",
+		"tags":       []any{"first"},
+		"categories": []any{"tests"},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial create_page failed: %s", raw)
+	}
+
+	preview := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/dry-run-duplicate",
+		"title":      "Overwrite attempt",
+		"body":       "This must not be previewed as creatable.",
+		"tags":       []any{"second"},
+		"categories": []any{"tests"},
+		"dry_run":    true,
+	})
+	if !preview.IsError {
+		raw, _ := json.Marshal(preview.Content)
+		t.Fatalf("dry-run create_page on existing slug should fail: %s", raw)
+	}
+	raw, _ := json.Marshal(preview.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("dry-run create_page on existing slug must return already_exists, got: %s", raw)
+	}
+
+	path := filepath.Join(contentRoot, "posts", "dry-run-duplicate", "index.md")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", path, err)
+	}
+	if !strings.Contains(string(data), "Original") {
+		t.Fatalf("dry-run must not touch original content, got:\n%s", string(data))
+	}
+}
+
 func TestCreatePageSymlinkBlocked(t *testing.T) {
 	contentRoot := t.TempDir()
 
