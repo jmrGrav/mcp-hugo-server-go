@@ -139,6 +139,12 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
   `meta.server_version` inside structured tool responses.
 - Flat envelope tools do not carry a `version` field; their schema is
   implicitly v1.
+- `meta.server_version` and the MCP `initialize` response's `serverInfo.version`
+  both come from `internal/buildinfo.Version`, injected at build time via
+  `-ldflags`. It defaults to the placeholder `"dev"` when a binary is built
+  without that flag (e.g. `go run`/`go build` during local development). CI,
+  the deploy workflow, and the Makefile all set it to the real git tag or
+  commit; a release or production build should never report `"dev"`.
 
 ---
 
