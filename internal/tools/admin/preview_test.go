@@ -97,6 +97,28 @@ func TestPreviewBuildFailureStructuredError(t *testing.T) {
 	}
 }
 
+func TestPreviewBuildDoesNotInheritArbitraryEnvironment(t *testing.T) {
+	wantRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\n[ -z \"$SECRET_TOKEN_FOR_PREVIEW\" ] || exit 97\n[ \"$(pwd)\" = \""+wantRoot+"\" ] || exit 42\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	t.Setenv("SECRET_TOKEN_FOR_PREVIEW", "should-not-leak")
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = wantRoot
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "preview_build", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("preview_build leaked process env or failed unexpectedly: %s", resultText(res))
+	}
+}
+
 func TestPreviewBuildFailureUsesStdoutWhenStderrEmpty(t *testing.T) {
 	dir := writeMockHugo(t, "#!/bin/sh\necho 'Error: template failed'\nexit 1\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
