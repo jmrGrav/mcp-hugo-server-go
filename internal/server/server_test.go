@@ -17,10 +17,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/server"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 	_ "modernc.org/sqlite"
 )
 
@@ -133,6 +135,41 @@ func mustOAuthSQLiteServer(t *testing.T, storePath string) *server.Server {
 	return srv
 }
 
+func mustOAuthSQLiteServerWithConfig(t *testing.T, cfg config.Config, storePath string) *server.Server {
+	t.Helper()
+	cfg.OAuth = config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		DynamicClientEnabled:  true,
+		AuthCodeTTLSeconds:    300,
+		AccessTokenTTLSeconds: 3600,
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32", "::1/128"},
+		StorageBackend:        "sqlite",
+		StoragePath:           storePath,
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	return srv
+}
+
+func addBearerToken(t *testing.T, storePath, rawToken, scope string) {
+	t.Helper()
+	store, err := storage.NewSQLite(storePath)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer store.Close()
+	if err := store.AddAccessToken(oauthHashForTest(rawToken), scope, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
+	}
+}
+
 func TestMCPEndpointResponds(t *testing.T) {
 	srv := mustTestServer(t)
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
@@ -243,6 +280,31 @@ func toolsListNames(t *testing.T, body string) []string {
 	return nil
 }
 
+func toolsListPayload(t *testing.T, body string) string {
+	t.Helper()
+	var result struct {
+		Result struct {
+			Tools []any `json:"tools"`
+		} `json:"result"`
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		data := line
+		if strings.HasPrefix(line, "data: ") {
+			data = strings.TrimPrefix(line, "data: ")
+		}
+		if err := json.Unmarshal([]byte(data), &result); err == nil && len(result.Result.Tools) > 0 {
+			normalized, err := json.Marshal(result.Result.Tools)
+			if err != nil {
+				t.Fatalf("marshal normalized tools payload: %v", err)
+			}
+			return string(normalized)
+		}
+	}
+	t.Fatalf("tools/list response did not contain a parseable tools payload: %q", body)
+	return ""
+}
+
 // initMCPSession sends an initialize request and returns the session ID.
 // Required in stateful mode: without initialize, the session is uninitialized
 // and tools/list returns an empty list.
@@ -269,6 +331,12 @@ func initMCPSession(t *testing.T, srv *server.Server, bearer string) string {
 
 func doMCPToolsList(t *testing.T, srv *server.Server, bearer string) []string {
 	t.Helper()
+	body := doMCPToolsListBody(t, srv, bearer, nil)
+	return toolsListNames(t, body)
+}
+
+func doMCPToolsListBody(t *testing.T, srv *server.Server, bearer string, extraHeaders map[string]string) string {
+	t.Helper()
 	sessionID := initMCPSession(t, srv, bearer)
 	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
@@ -278,12 +346,15 @@ func doMCPToolsList(t *testing.T, srv *server.Server, bearer string) []string {
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
+	for k, v := range extraHeaders {
+		req.Header.Set(k, v)
+	}
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("tools/list status = %d body = %q", rec.Code, rec.Body.String())
 	}
-	return toolsListNames(t, rec.Body.String())
+	return rec.Body.String()
 }
 
 func doMCPCall(t *testing.T, srv *server.Server, bearer string, payload []byte) *httptest.ResponseRecorder {
@@ -518,6 +589,257 @@ func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
 		if !found {
 			t.Fatalf("authenticated tools/list missing %q; got %v", name, names)
 		}
+	}
+}
+
+func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	srv := mustOAuthSQLiteServer(t, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	names := doMCPToolsList(t, srv, bearer)
+	if len(names) != 23 {
+		t.Fatalf("reader tools/list = %d tools, want 23; got %v", len(names), names)
+	}
+	for _, name := range []string{
+		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
+		"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context",
+		"search_content", "explain_site_structure", "get_site_health", "diff_page", "validate_front_matter", "validate_site",
+		"get_broken_links", "get_backlinks", "suggest_internal_links",
+	} {
+		found := false
+		for _, got := range names {
+			if got == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("reader tools/list missing %q; got %v", name, names)
+		}
+	}
+	for _, forbidden := range []string{"create_page", "update_page", "delete_page", "build_site", "preview_build", "run_post_build_hooks"} {
+		for _, got := range names {
+			if got == forbidden {
+				t.Fatalf("reader tools/list must not include %q; got %v", forbidden, names)
+			}
+		}
+	}
+}
+
+func TestReaderTokenGetPageRejectsSourceOnlyFallback(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "drafts", "fresh"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "drafts", "fresh", "index.md"), []byte("---\ntitle: Fresh\n---\nFresh body\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.MkdirAll(publicRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(public) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page","arguments":{"slug":"/drafts/fresh/","allow_source_fallback":true}}}`)
+	rec := doMCPCall(t, srv, bearer, payload)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader get_page status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "content_not_public") {
+		t.Fatalf("reader get_page must reject source-only fallback with content_not_public; body = %q", rec.Body.String())
+	}
+}
+
+func TestReaderTokenListPagesUsesPublicMetadataOnly(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(content) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "demo", "index.md"), []byte("---\ntitle: Demo\ntags:\n  - SourceTag\ncategories:\n  - SourceCat\n---\nSource body\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(publicRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(public page) error = %v", err)
+	}
+	publicHTML := `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Demo</title>
+  <meta name="description" content="Rendered summary">
+  <link rel="canonical" href="https://example.test/posts/demo/">
+</head>
+<body><main><article><h1>Demo</h1><p>Rendered body.</p></article></main></body>
+</html>`
+	if err := os.WriteFile(filepath.Join(publicRoot, "posts", "demo", "index.html"), []byte(publicHTML), 0o644); err != nil {
+		t.Fatalf("WriteFile(public html) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_pages","arguments":{"limit":10,"offset":0}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader list_pages status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "SourceCat") || strings.Contains(rec.Body.String(), "SourceTag") {
+		t.Fatalf("reader list_pages must not expose source-only taxonomy; body = %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "\"slug\":\"/posts/demo/\"") {
+		t.Fatalf("reader list_pages missing public page slug; body = %q", rec.Body.String())
+	}
+}
+
+func TestReaderTokenGetFullPageMarkdownUsesPublicContentOnly(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(content) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "demo", "index.md"), []byte("---\ntitle: Demo\ncategories:\n  - SecretCat\n---\nSource-only body that should stay hidden.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(publicRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(public page) error = %v", err)
+	}
+	publicHTML := `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Demo</title>
+  <meta name="description" content="Rendered summary">
+  <link rel="canonical" href="https://example.test/posts/demo/">
+</head>
+<body><main><article><h1>Demo</h1><p>Rendered public body.</p></article></main></body>
+</html>`
+	if err := os.WriteFile(filepath.Join(publicRoot, "posts", "demo", "index.html"), []byte(publicHTML), 0o644); err != nil {
+		t.Fatalf("WriteFile(public html) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_full_page_markdown","arguments":{"slug":"/posts/demo/"}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader get_full_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "Source-only body that should stay hidden.") || strings.Contains(body, "SecretCat") {
+		t.Fatalf("reader get_full_page_markdown must not expose source content; body = %q", body)
+	}
+	if !strings.Contains(body, "Rendered public body.") {
+		t.Fatalf("reader get_full_page_markdown missing rendered public body; body = %q", body)
+	}
+}
+
+func TestReaderTokenGetFullPageMarkdownRejectsSourceOnlyPage(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "drafts", "fresh"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "drafts", "fresh", "index.md"), []byte("---\ntitle: Fresh\n---\nFresh body\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.MkdirAll(publicRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(public) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_full_page_markdown","arguments":{"slug":"/drafts/fresh/"}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader get_full_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "content_not_public") {
+		t.Fatalf("reader get_full_page_markdown must reject source-only page with content_not_public; body = %q", rec.Body.String())
+	}
+}
+
+func TestReaderTokenValidateSiteRejectsSourceDiagnostics(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	srv := mustOAuthSQLiteServer(t, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validate_site","arguments":{}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader validate_site status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "content_not_public") {
+		t.Fatalf("reader validate_site must reject source diagnostics with content_not_public; body = %q", rec.Body.String())
 	}
 }
 
@@ -1148,4 +1470,120 @@ func containsToolName(names []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestOperatorTokenToolCatalogIgnoresClientBranding(t *testing.T) {
+	mockDir := t.TempDir()
+	mockHugo := filepath.Join(mockDir, "hugo")
+	if err := os.WriteFile(mockHugo, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write mock hugo: %v", err)
+	}
+	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
+
+	registryPath := filepath.Join(t.TempDir(), "oauth-clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(`
+clients:
+  - client_id: parity-admin
+    client_secret: parity-secret
+    redirect_uris:
+      - https://claude.ai/oauth/callback
+    scope: site.admin
+`), 0o600); err != nil {
+		t.Fatalf("write registry: %v", err)
+	}
+
+	srv := mustOAuthServerWithRegistry(t, registryPath)
+
+	verifier := "verifier-operator-parity-000000000000"
+	sum := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
+
+	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
+		"response_type":         {"code"},
+		"client_id":             {"parity-admin"},
+		"redirect_uri":          {"https://claude.ai/oauth/callback"},
+		"state":                 {"operator-parity"},
+		"scope":                 {"content.read content.write site.admin"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode(), nil)
+	authReq.RemoteAddr = "127.0.0.1:1234"
+	authRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("parse redirect: %v", err)
+	}
+	code := loc.Query().Get("code")
+	if code == "" {
+		t.Fatal("authorize missing code")
+	}
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {"parity-admin"},
+		"client_secret": {"parity-secret"},
+		"redirect_uri":  {"https://claude.ai/oauth/callback"},
+		"code":          {code},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("decode token: %v", err)
+	}
+	if tokenResp.Scope != "site.admin" {
+		t.Fatalf("token scope = %q want site.admin", tokenResp.Scope)
+	}
+
+	cases := []struct {
+		name    string
+		headers map[string]string
+	}{
+		{
+			name: "claude-like",
+			headers: map[string]string{
+				"User-Agent":    "Claude/1.0",
+				"X-Client-Name": "claude.ai",
+			},
+		},
+		{
+			name: "chatgpt-like",
+			headers: map[string]string{
+				"User-Agent":    "ChatGPT/1.0",
+				"X-Client-Name": "chatgpt",
+			},
+		},
+		{
+			name: "generic-mcp",
+			headers: map[string]string{
+				"User-Agent":    "GenericMCP/1.0",
+				"X-Client-Name": "generic",
+			},
+		},
+	}
+
+	var want string
+	for i, tc := range cases {
+		got := toolsListPayload(t, doMCPToolsListBody(t, srv, tokenResp.AccessToken, tc.headers))
+		if i == 0 {
+			want = got
+			continue
+		}
+		if got != want {
+			t.Fatalf("%s tools/list body differed for same operator token\nwant: %s\n\ngot: %s", tc.name, want, got)
+		}
+	}
 }

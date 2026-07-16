@@ -2,7 +2,7 @@
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
-LDFLAGS := -X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=$(VERSION)
+LDFLAGS := -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=$(VERSION)
 BIN := mcp-hugo-server-go
 
 build:

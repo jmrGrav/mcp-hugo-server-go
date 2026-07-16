@@ -15,7 +15,8 @@
       "html": "\n  \u003carticle\u003e\n    \u003ch1\u003eHello\u003c/h1\u003e\n    \u003cp\u003eMinimal English content.\u003c/p\u003e\n  \u003c/article\u003e\n\n\n",
       "lang": "en",
       "resolved_lang": "",
-      "resolved_source_path": "testdata/fixtures/content/posts/hello.md",
+      "resolved_source_path": "content/posts/hello.md",
+      "revision": "sha256:cd389cff5937b3567f228eca770c7b9b1b48cbf24400a913dd56fda01b165ad1",
       "slug": "/posts/hello/",
       "state": {
         "build_state": "built",
@@ -46,7 +47,7 @@
   },
   "errors": [],
   "meta": {
-    "server_version": "v1.0.0"
+    "server_version": "test-server-version"
   },
   "page": {
     "categories": [
@@ -63,7 +64,8 @@
     "html": "\n  \u003carticle\u003e\n    \u003ch1\u003eHello\u003c/h1\u003e\n    \u003cp\u003eMinimal English content.\u003c/p\u003e\n  \u003c/article\u003e\n\n\n",
     "lang": "en",
     "resolved_lang": "",
-    "resolved_source_path": "testdata/fixtures/content/posts/hello.md",
+    "resolved_source_path": "content/posts/hello.md",
+    "revision": "sha256:cd389cff5937b3567f228eca770c7b9b1b48cbf24400a913dd56fda01b165ad1",
     "slug": "/posts/hello/",
     "state": {
       "build_state": "built",

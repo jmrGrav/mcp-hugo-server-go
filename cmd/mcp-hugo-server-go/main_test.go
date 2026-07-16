@@ -6,17 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/server"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 )
 
 func TestRunVersionAndMissingSiteRoot(t *testing.T) {
 	origArgs := os.Args
 	origStdout := os.Stdout
-	origVersion := server.Version
+	origVersion := buildinfo.Version
 	defer func() {
 		os.Args = origArgs
 		os.Stdout = origStdout
-		server.Version = origVersion
+		buildinfo.Version = origVersion
 	}()
 
 	r, w, err := os.Pipe()
@@ -24,7 +24,7 @@ func TestRunVersionAndMissingSiteRoot(t *testing.T) {
 		t.Fatalf("os.Pipe() error = %v", err)
 	}
 	os.Stdout = w
-	server.Version = "test-version"
+	buildinfo.Version = "test-version"
 	os.Args = []string{"mcp-hugo-server-go", "--version"}
 	if err := run(); err != nil {
 		t.Fatalf("run(--version) error = %v", err)

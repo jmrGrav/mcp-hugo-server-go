@@ -73,7 +73,7 @@ jobs:
       - name: Build binary (linux/amd64)
         run: |
           GOOS=linux GOARCH=amd64 go build \
-            -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=${{ steps.meta.outputs.build_version }}" \
+            -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=${{ steps.meta.outputs.build_version }}" \
             -o mcp-hugo-server-go \
             ./cmd/mcp-hugo-server-go/
 

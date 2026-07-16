@@ -8,7 +8,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
@@ -68,6 +71,7 @@ type pageDetailDTO struct {
 	Lang               string                  `json:"lang"`
 	ResolvedLang       string                  `json:"resolved_lang"`
 	ResolvedSourcePath string                  `json:"resolved_source_path"`
+	Revision           string                  `json:"revision,omitempty"`
 	HTML               string                  `json:"html"`
 	State              site.LifecycleState     `json:"state"`
 }
@@ -250,7 +254,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published content pages (articles and pages, not taxonomy list pages) with pagination. Returns slug, title, summary, tags, categories, date, URL. Does not require authentication. For the full URL inventory including taxonomy pages use get_sitemap.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
 				return nil, listPagesOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -270,7 +274,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				slice = slice[:limit]
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(slice))
-			return nil, newListPagesOutput(listPagesData{Pages: toPageDTOsEnriched(slice, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
+			return nil, newListPagesOutput(listPagesData{Pages: toPageDTOsForProfile(slice, srcIdx, aliases, site.IsReaderProfile(ctx)), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "get_page", "Read page",
@@ -283,7 +287,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
 			"For the raw Markdown source, use get_full_page_markdown (requires content.read). "+
 			"Does not require authentication.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
 			if idx == nil && srcIdx == nil {
 				return nil, getPageOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -293,6 +297,13 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+			}
+			if site.IsReaderProfile(ctx) {
+				publicOnly, ok := site.ReaderSafeResolvedPage(resolved)
+				if !ok {
+					return nil, getPageOutput{}, fmt.Errorf("content_not_public: page is not publicly available for slug %q", in.Slug)
+				}
+				resolved = publicOnly
 			}
 			if resolved.Public == nil {
 				// Source-only: require explicit opt-in; drafts, future, and expired pages are blocked.
@@ -308,7 +319,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					}
 				}
 			}
-			dto := toResolvedPageDetailDTO(resolved)
+			dto := toResolvedPageDetailDTO(resolved, cfg.ContentRoot)
 			dto.State = site.StateForResolvedPage(resolved, cfg.SiteRoot)
 			if in.ContentOnly && resolved.Public != nil {
 				dto.HTML = site.ExtractArticleHTML(dto.HTML)
@@ -319,7 +330,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. For filtered search with type, language, sort, pagination, or to search source-only content use search_content (requires content.read).",
-		func(_ context.Context, _ *mcp.CallToolRequest, in searchPagesInput) (*mcp.CallToolResult, searchPagesOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in searchPagesInput) (*mcp.CallToolResult, searchPagesOutput, error) {
 			if idx == nil {
 				return nil, searchPagesOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -342,11 +353,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				pages = pages[:limit]
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-			return nil, newSearchPagesOutput(searchPagesData{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
+			return nil, newSearchPagesOutput(searchPagesData{Pages: toPageDTOsForProfile(pages, srcIdx, aliases, site.IsReaderProfile(ctx)), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
-		func(_ context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
 			if idx == nil {
 				return nil, getRecentPostsOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -366,16 +377,16 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				pages = pages[:limit]
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-			return nil, newGetRecentPostsOutput(getRecentPostsData{Pages: toPageDTOsEnriched(pages, srcIdx, aliases), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
+			return nil, newGetRecentPostsOutput(getRecentPostsData{Pages: toPageDTOsForProfile(pages, srcIdx, aliases, site.IsReaderProfile(ctx)), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listTagsOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listTagsOutput, error) {
 			if idx == nil {
 				return nil, listTagsOutput{}, fmt.Errorf("index not initialized")
 			}
 			tags := idx.AllTags()
-			if srcIdx != nil {
+			if srcIdx != nil && !site.IsReaderProfile(ctx) {
 				tags = srcIdx.AllTags()
 			}
 			if tags == nil {
@@ -386,12 +397,12 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "list_categories", "Browse categories", "List the categories discovered from the index. Returns a sorted category list and does not require authentication.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listCategoriesOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listCategoriesOutput, error) {
 			if idx == nil {
 				return nil, listCategoriesOutput{}, fmt.Errorf("index not initialized")
 			}
 			cats := idx.AllCategories()
-			if srcIdx != nil {
+			if srcIdx != nil && !site.IsReaderProfile(ctx) {
 				cats = srcIdx.AllCategories()
 			}
 			if cats == nil {
@@ -502,7 +513,7 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 func boolPtr(v bool) *bool { return &v }
 
 func success[T any](data T) toolcontract.ToolResponse[T] {
-	return toolcontract.Success(data, toolcontract.NewMeta(toolcontract.ToolResultVersion, time.Now().UTC()))
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
 func newListPagesOutput(data listPagesData) listPagesOutput {
@@ -601,6 +612,22 @@ func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases
 	return out
 }
 
+func toPageDTOsForProfile(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string, readerSafe bool) []pageDTO {
+	if readerSafe {
+		out := make([]pageDTO, len(pages))
+		for i, p := range pages {
+			dto := toPageDTO(p)
+			if len(aliases) > 0 {
+				dto.Tags = taxonomy.ApplyAliases(dto.Tags, aliases)
+				dto.Categories = taxonomy.ApplyAliases(dto.Categories, aliases)
+			}
+			out[i] = dto
+		}
+		return out
+	}
+	return toPageDTOsEnriched(pages, srcIdx, aliases)
+}
+
 func toPageDetailDTO(p site.Page) pageDetailDTO {
 	tags := p.Tags
 	if tags == nil {
@@ -625,7 +652,7 @@ func toPageDetailDTO(p site.Page) pageDetailDTO {
 	}
 }
 
-func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
+func toResolvedPageDetailDTO(resolved site.ResolvedPage, contentRoot string) pageDetailDTO {
 	if resolved.Public != nil {
 		page := *resolved.Public
 		if resolved.Source != nil {
@@ -635,7 +662,8 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		dto := toPageDetailDTO(page)
 		if resolved.Source != nil {
 			dto.ResolvedLang = resolved.Source.Lang
-			dto.ResolvedSourcePath = resolved.SourcePath
+			dto.ResolvedSourcePath = fileutil.LogicalContentPath(contentRoot, resolved.SourcePath)
+			dto.Revision = resolvedSourceRevision(resolved.SourcePath)
 		}
 		return dto
 	}
@@ -660,9 +688,21 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage) pageDetailDTO {
 		CategoryTerms:      taxonomy.Normalize(cats),
 		Date:               src.Date,
 		ResolvedLang:       src.Lang,
-		ResolvedSourcePath: resolved.SourcePath,
+		ResolvedSourcePath: fileutil.LogicalContentPath(contentRoot, resolved.SourcePath),
+		Revision:           resolvedSourceRevision(resolved.SourcePath),
 		HTML:               src.Body,
 	}
+}
+
+func resolvedSourceRevision(path string) string {
+	if path == "" {
+		return ""
+	}
+	rev, err := contentmodel.SourceRevision(path)
+	if err != nil {
+		return ""
+	}
+	return rev
 }
 
 // isTaxonomyURL returns true if the URL belongs to a Hugo taxonomy listing page

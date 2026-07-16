@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/server"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
@@ -24,7 +25,7 @@ func run() error {
 	args := os.Args[1:]
 	for _, a := range args {
 		if a == "--version" || a == "-version" || a == "version" {
-			fmt.Printf("mcp-hugo-server-go %s\n", server.Version)
+			fmt.Printf("mcp-hugo-server-go %s\n", buildinfo.Version)
 			return nil
 		}
 	}

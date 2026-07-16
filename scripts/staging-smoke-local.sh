@@ -36,7 +36,7 @@ trap cleanup EXIT
 
 if [[ -z "$BINARY" ]]; then
   BINARY="$TMPDIR/mcp-hugo-server-go"
-  go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/server.Version=staging-local" -o "$BINARY" ./cmd/mcp-hugo-server-go
+  go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=staging-local" -o "$BINARY" ./cmd/mcp-hugo-server-go
 fi
 
 mkdir -p "$TMPDIR/site"
