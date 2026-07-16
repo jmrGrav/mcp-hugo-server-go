@@ -1,6 +1,11 @@
 site_root: /var/lib/mcp-hugo-server-go-staging/site/public
 hugo_root: /var/lib/mcp-hugo-server-go-staging/site
 content_root: /var/lib/mcp-hugo-server-go-staging/site/content
+git_baseline:
+  mode: configured
+  repo_path: /var/lib/mcp-hugo-server-go-staging/site
+  branch: main
+  remote: origin
 site_url: https://staging.example.invalid
 site_name: mcp-hugo-server-go staging
 language_default: fr
