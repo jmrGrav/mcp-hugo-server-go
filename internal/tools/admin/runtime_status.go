@@ -20,7 +20,14 @@ import (
 // this tool shells out to, so a hung or missing binary can't stall the call.
 const probeTimeout = 5 * time.Second
 
-type getRuntimeStatusInput struct{}
+type getRuntimeStatusInput struct {
+	// IncludeRevisions opts into hashing the full content_root/site_root trees
+	// for source_revision/public_revision. Off by default: hashing a large
+	// public/ output tree on every call would make this "compact status"
+	// tool expensive to poll. build_site already emits output_revision once
+	// per build; prefer that for the public tree when it's available.
+	IncludeRevisions bool `json:"include_revisions,omitempty"`
+}
 
 type hugoRuntimeStatus struct {
 	Available bool   `json:"available"`
@@ -72,9 +79,10 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
 		Name:  "get_runtime_status",
 		Title: "Get runtime status",
 		Description: "Report the actual runtime/build/git/site status of this server in one compact structured surface: " +
-			"server version and build commit, whether the hugo and git binaries are usable, and best-effort source/public " +
-			"revision hashes. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring " +
-			"environment health from error messages on other tools.",
+			"server version and build commit, whether the hugo and git binaries are usable, and (opt-in via " +
+			"include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. " +
+			"Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment " +
+			"health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -83,7 +91,7 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ getRuntimeStatusInput) (*mcp.CallToolResult, getRuntimeStatusOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in getRuntimeStatusInput) (*mcp.CallToolResult, getRuntimeStatusOutput, error) {
 		data := runtimeStatusData{
 			ServerVersion: buildinfo.Version,
 			SchemaVersion: buildinfo.SchemaVersion,
@@ -99,22 +107,24 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
 		data.Hugo = probeHugo(ctx, cfg)
 		data.Git = probeGitBaseline(ctx, cfg)
 
-		if strings.TrimSpace(cfg.ContentRoot) != "" {
-			if rev, err := hashTree(cfg.ContentRoot); err == nil {
-				data.Site.SourceRevision = rev
-			}
-		}
-		if strings.TrimSpace(cfg.SiteRoot) != "" {
-			if rev, err := hashTree(cfg.SiteRoot); err == nil {
-				data.Site.PublicRevision = rev
-			}
-		}
-
 		if !data.Hugo.Available {
 			data.Degraded = append(data.Degraded, "build_site/preview_build: hugo binary is unavailable — "+data.Hugo.Error)
 		}
 		if !data.Git.Available {
 			data.Degraded = append(data.Degraded, "diff_page: git-backed source diffs are unavailable — "+data.Git.Error)
+		}
+
+		if in.IncludeRevisions {
+			if strings.TrimSpace(cfg.ContentRoot) != "" {
+				if rev, err := hashTree(cfg.ContentRoot); err == nil {
+					data.Site.SourceRevision = rev
+				}
+			}
+			if strings.TrimSpace(cfg.SiteRoot) != "" {
+				if rev, err := hashTree(cfg.SiteRoot); err == nil {
+					data.Site.PublicRevision = rev
+				}
+			}
 		}
 
 		meta := toolcontract.NewMeta(buildinfo.Version, time.Now())
@@ -172,7 +182,7 @@ func probeGitBaseline(ctx context.Context, cfg config.Config) gitRuntimeStatus {
 	defer cancel()
 	gitRoot, err := gitStatusOutput(tctx, root, "rev-parse", "--show-toplevel")
 	if err != nil {
-		status.Error = sanitiseStderr([]byte(err.Error()), cfg.HugoRoot, cfg.SiteRoot)
+		status.Error = sanitiseGitError(err, cfg, root, gitRoot)
 		return status
 	}
 
@@ -182,7 +192,7 @@ func probeGitBaseline(ctx context.Context, cfg config.Config) gitRuntimeStatus {
 	}
 	head, err := gitStatusOutput(tctx, gitRoot, "rev-parse", "--short", "HEAD")
 	if err != nil {
-		status.Error = sanitiseStderr([]byte(err.Error()), cfg.HugoRoot, cfg.SiteRoot)
+		status.Error = sanitiseGitError(err, cfg, root, gitRoot)
 		return status
 	}
 	status.HeadCommit = head
@@ -194,6 +204,21 @@ func probeGitBaseline(ctx context.Context, cfg config.Config) gitRuntimeStatus {
 
 	status.Available = true
 	return status
+}
+
+// sanitiseGitError redacts every absolute host path this probe might have
+// touched (hugo_root, site_root, the resolved baseline root, and the
+// discovered git toplevel) before an error reaches the response, so a git
+// error message echoing its working directory can't leak host filesystem
+// layout the way sanitiseStderr alone (hugo_root/site_root only) would miss.
+func sanitiseGitError(err error, cfg config.Config, roots ...string) string {
+	msg := err.Error()
+	for _, root := range roots {
+		if root != "" {
+			msg = strings.ReplaceAll(msg, root, "<git_root>")
+		}
+	}
+	return sanitiseStderr([]byte(msg), cfg.HugoRoot, cfg.SiteRoot)
 }
 
 func gitStatusOutput(ctx context.Context, dir string, args ...string) (string, error) {

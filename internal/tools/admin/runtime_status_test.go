@@ -43,7 +43,7 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{"include_revisions": true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -104,6 +104,48 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 
 	if degraded, present := out["data"].(map[string]any)["degraded"]; present {
 		t.Fatalf("expected no degraded surfaces when hugo+git are both available, got %v", degraded)
+	}
+}
+
+func TestGetRuntimeStatusOmitsRevisionsByDefault(t *testing.T) {
+	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0 linux/amd64'\n")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	if err := os.MkdirAll(contentRoot, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "page.md"), []byte("content"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = hugoDir
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	// No include_revisions arg at all: hashing the full content/public
+	// trees on every poll would make this "compact status" tool expensive,
+	// so it must be opt-in.
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	site := data["site"].(map[string]any)
+	if _, present := site["source_revision"]; present {
+		t.Fatalf("source_revision must be omitted unless include_revisions is set, got %v", site["source_revision"])
+	}
+	if _, present := site["public_revision"]; present {
+		t.Fatalf("public_revision must be omitted unless include_revisions is set, got %v", site["public_revision"])
 	}
 }
 
