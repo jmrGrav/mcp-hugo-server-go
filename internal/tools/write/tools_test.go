@@ -1667,6 +1667,75 @@ func TestDeletePageDBWarning(t *testing.T) {
 	if !strings.Contains(string(raw), "warning") {
 		t.Errorf("expected a warning in response when DB delete fails, got: %s", raw)
 	}
+	if got := decodeWriteContent(t, res)["status"]; got != "partial_success" {
+		t.Errorf("expected partial_success status when DB delete fails, got: %v", got)
+	}
+}
+
+func TestCreatePageDBWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	siteDB, err := db.Open(filepath.Join(t.TempDir(), "test.sqlite"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	siteDB.Close()
+
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/create-db-warning", "title": "DB Warning",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page must not hard-fail on DB sync error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "warning") {
+		t.Fatalf("expected warning when create DB sync fails, got: %s", raw)
+	}
+	if got := decodeWriteContent(t, res)["status"]; got != "partial_success" {
+		t.Fatalf("expected partial_success status when create DB sync fails, got: %v", got)
+	}
+}
+
+func TestUpdatePageDBWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	siteDB, err := db.Open(filepath.Join(t.TempDir(), "test.sqlite"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/update-db-warning", "title": "DB Warning",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "update-db-warning", "index.md"))
+	siteDB.Close()
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/update-db-warning", "title": "Updated", "expected_revision": expected,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page must not hard-fail on DB sync error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "warning") {
+		t.Fatalf("expected warning when update DB sync fails, got: %s", raw)
+	}
+	if got := decodeWriteContent(t, res)["status"]; got != "partial_success" {
+		t.Fatalf("expected partial_success status when update DB sync fails, got: %v", got)
+	}
 }
 
 func TestCreatePageDryRun(t *testing.T) {

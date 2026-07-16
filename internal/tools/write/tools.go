@@ -43,12 +43,14 @@ type createPageInput struct {
 }
 
 type createPageOutput struct {
+	Status             string               `json:"status,omitempty"`
 	Slug               string               `json:"slug"`
 	Path               string               `json:"path,omitempty"`
 	ResolvedLang       string               `json:"resolved_lang"`
 	ResolvedSourcePath string               `json:"resolved_source_path"`
 	DryRun             bool                 `json:"dry_run,omitempty"`
 	Content            string               `json:"content,omitempty"`
+	Warning            string               `json:"warning,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
 }
 
@@ -67,11 +69,13 @@ type updatePageInput struct {
 }
 
 type updatePageOutput struct {
+	Status             string               `json:"status,omitempty"`
 	Slug               string               `json:"slug"`
 	ResolvedLang       string               `json:"resolved_lang"`
 	ResolvedSourcePath string               `json:"resolved_source_path"`
 	DryRun             bool                 `json:"dry_run,omitempty"`
 	Diff               string               `json:"diff,omitempty"`
+	Warning            string               `json:"warning,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
 }
 
@@ -89,6 +93,7 @@ type deletePageBacklinkDTO struct {
 }
 
 type deletePageOutput struct {
+	Status             string                   `json:"status,omitempty"`
 	Slug               string                   `json:"slug"`
 	ResolvedLang       string                   `json:"resolved_lang"`
 	ResolvedSourcePath string                   `json:"resolved_source_path"`
@@ -211,6 +216,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, createPageOutput{
+				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedLang,
 				ResolvedSourcePath: logicalPath,
@@ -301,19 +307,25 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		idx.Upsert(created)
 		// Do NOT insert into the public site index — the page is source-only until
 		// Hugo builds it. UpsertPage here would break allow_source_fallback detection.
+		status := "ok"
+		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(created); err != nil {
 				slog.Warn("create_page: db sync failed", "slug", in.Slug, "error", err)
+				status = "partial_success"
+				warning = fmt.Sprintf("source created but derived DB could not be updated: %v", err)
 			}
 		}
 
 		state := createPageState()
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := createPageOutput{
+			Status:             status,
 			Slug:               in.Slug,
 			Path:               logicalPath,
 			ResolvedLang:       resolvedLang,
 			ResolvedSourcePath: logicalPath,
+			Warning:            warning,
 			State:              &state,
 		}
 		if idemHash != "" {
@@ -467,6 +479,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			diff := simpleDiff(diffLabel, string(raw), content)
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, updatePageOutput{
+				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedSource.Lang,
 				ResolvedSourcePath: logicalPath,
@@ -520,18 +533,24 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				siteIdx.UpsertPage(pubUpdated)
 			}
 		}
+		status := "ok"
+		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {
 				slog.Warn("update_page: db sync failed", "slug", in.Slug, "error", err)
+				status = "partial_success"
+				warning = fmt.Sprintf("source updated but derived DB could not be updated: %v", err)
 			}
 		}
 
 		state := updatePageState(siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := updatePageOutput{
+			Status:             status,
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
 			ResolvedSourcePath: logicalPath,
+			Warning:            warning,
 			State:              &state,
 		}
 		if idemHash != "" {
@@ -588,6 +607,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				}
 			}
 			return nil, deletePageOutput{
+				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       resolvedSource.Lang,
 				ResolvedSourcePath: fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath),
@@ -723,7 +743,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
+		status := "ok"
+		if deleteWarning != "" {
+			status = "partial_success"
+		}
 		out := deletePageOutput{
+			Status:             status,
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
 			ResolvedSourcePath: fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath),
