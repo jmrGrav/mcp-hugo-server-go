@@ -3,10 +3,10 @@ package tools_test
 import (
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	adminpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	anonpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	readpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	writepkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 )
 
