@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.6] - 2026-07-17
+
+### Added
+- **`get_theme_status` read-only theme diagnostic** (#350, PR #390): reports the active Hugo theme(s)/module imports, on-disk presence, and (for classic `themes/` installs) pinned Git commit + dirty state via `hugo config --format json` and bounded git probes. Read-only — never installs, updates, or fetches theme code.
+- **Mutation coordination model documented and regression-tested** (#374, PR #391): `docs/mutation-coordination-model.md` formalizes the existing `hugosite.ContentMu` lock model (write-lock vs read-lock per tool, retry/timeout behavior, the `build_in_progress:` error convention, interaction with `expected_revision`). No production code changes were needed — the existing model already satisfied the acceptance criteria; four new concurrency regression tests (`internal/tools/write/mutation_coordination_test.go`) prove it under `-race`.
+- **Structured security audit event trail** (#371, PR #392): new `internal/audit` package layers a consistent `event_type`/`result` vocabulary onto the existing `log/slog` pipeline (no new logging stack). Covers `auth_rejected`, `scope_denied`, `operator_milestone`, `mutation`, and `admin_operation` events; the latter two ride on the existing per-call `tool_call` log line rather than duplicating it. Design and event-shape reference in `docs/security-audit-trail.md`.
+- **`inspect_rendered_page` rendered HTML/SEO/link validation** (#351, PR #393): validates a page's *rendered* public output — title/meta-description length, canonical URL (checked against an independently-derived expected URL, not the canonical tag itself), hreflang presence on multilingual sites, internal links, missing local images, and a heuristic scan for Hugo shortcode/render-error markers. Complements `validate_front_matter` (source-only) and `get_broken_links` (site-wide, not per-page).
+- **`verify_publication` source/build/public/index freshness + live HTTP check** (#346, PR #394): proves a page's source, build, public output, and index all agree on the same revision, and that the public HTTP surface is actually serving it — without requiring SSH access. The HTTP probe always targets `cfg.SiteURL` + the page's own slug, never the page's own `<link rel="canonical">` tag, to avoid a lower-privileged `content.write` actor being able to steer the probe at an arbitrary host.
+- **`create_preview` temporary token-gated preview surface** (#345, PR #395): builds source (optionally including drafts) into an isolated directory — never `cfg.SiteRoot` — and exposes it at `{issuer}/preview/{preview_id}/{token}/`. `preview_id` is opaque, the 192-bit `token` is the sole confidentiality boundary (constant-time compared, enforced on every access), the URL expires after `ttl_seconds` (default 900s, max 3600s), and every response carries `X-Robots-Tag: noindex`. New `internal/previewstore` package; design in `docs/preview-workflow.md`. The preview build passes `--baseURL` pointed at its own mount so assets resolve correctly, and the request-logging middleware redacts the token from logged paths.
+
 ## [v1.4.5] - 2026-07-16
 
 ### Added
