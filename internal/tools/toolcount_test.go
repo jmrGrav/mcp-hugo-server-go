@@ -21,9 +21,9 @@ import (
 //	                            get_backlinks, suggest_internal_links, diff_page,
 //	                            validate_front_matter, validate_site
 //	content.write:        3  — create_page, update_page, delete_page
-//	site.admin:           5  — build_site, preview_build, run_post_build_hooks,
-//	                            generate_featured_image, check_sri_versions
-const expectedToolCount = 31
+//	site.admin:           6  — build_site, preview_build, run_post_build_hooks,
+//	                            generate_featured_image, check_sri_versions, get_runtime_status
+const expectedToolCount = 32
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())

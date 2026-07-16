@@ -67,6 +67,7 @@ func Register(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
 	RegisterHooks(s, cfg)
 	registerGenerateFeaturedImage(s, cfg)
 	RegisterSRI(s, cfg)
+	RegisterRuntimeStatus(s, cfg)
 }
 
 // RegisterSiteAdmin is an alias for Register kept for compatibility.
@@ -82,6 +83,7 @@ func Defs() []tools.ToolDef {
 		{Name: "run_post_build_hooks", RequiredScope: "site.admin"},
 		{Name: "generate_featured_image", RequiredScope: "site.admin"},
 		{Name: "check_sri_versions", RequiredScope: "site.admin"},
+		{Name: "get_runtime_status", RequiredScope: "site.admin"},
 	}
 }
 
