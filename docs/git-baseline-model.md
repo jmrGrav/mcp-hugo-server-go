@@ -116,6 +116,23 @@ This is deliberately narrower than full `git_baseline.mode: configured` wiring (
 skip host probing outright. Using a configured `repo_path` as the diff baseline is left to a
 follow-up (`#346`) since it requires the baseline checkout to mirror `content_root`'s layout.
 
+### `get_runtime_status` (landed via #344)
+
+`get_runtime_status` (`site.admin`) reports a `git` sub-object that honors
+`git_baseline.mode`:
+
+- `mode: disabled` short-circuits before any host probing; `available` is
+  `false` and `error` explains the baseline is disabled by configuration.
+- `mode: configured` uses `git_baseline.repo_path` as the baseline root.
+- `mode: auto` (default) auto-detects a Git root from `content_root`, same as
+  `diff_page`.
+
+Only `branch`, `head_commit`, and `dirty` are exposed — never an absolute host
+path — so the tool cannot be used to enumerate host filesystem layout. The
+same probe also backs a `degraded` list on the response explaining which other
+tools (`build_site`, `diff_page`) are affected when `hugo` or the Git baseline
+is unavailable.
+
 ## Service and filesystem requirements
 
 The MCP service only needs **read-only** access to the baseline checkout for the

@@ -43,6 +43,7 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"run_post_build_hooks":    "site.admin",
 		"generate_featured_image": "site.admin",
 		"check_sri_versions":      "site.admin",
+		"get_runtime_status":      "site.admin",
 	}
 
 	got := make(map[string]string, len(want))
@@ -73,8 +74,8 @@ func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
 	if got := len(writepkg.Defs()); got != 3 {
 		t.Fatalf("content.write tool count = %d, want 3", got)
 	}
-	if got := len(adminpkg.Defs()); got != 5 {
-		t.Fatalf("site.admin tool count = %d, want 5", got)
+	if got := len(adminpkg.Defs()); got != 6 {
+		t.Fatalf("site.admin tool count = %d, want 6", got)
 	}
 
 	if got := tools.ScopeRank(""); got != 0 {

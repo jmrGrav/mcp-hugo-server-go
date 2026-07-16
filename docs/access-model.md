@@ -8,14 +8,14 @@ invariants before follow-up implementation issues widen any visibility.
 
 ## Current verified internal model
 
-The repository currently exposes 31 tools across four internal scope tiers:
+The repository currently exposes 32 tools across four internal scope tiers:
 
 | Internal scope | Count | Notes |
 | --- | ---: | --- |
 | `anonymous` | 9 | Public browse/read surfaces |
 | `content.read` | 14 | Source-aware read and validation surfaces |
 | `content.write` | 3 | Source mutations |
-| `site.admin` | 5 | Build, hook, image, and SRI operations |
+| `site.admin` | 6 | Build, hook, image, SRI, and runtime status operations |
 
 Compatibility aliases that still exist today:
 
@@ -102,6 +102,7 @@ Legend used in `MCP annotations`:
 | `run_post_build_hooks` | Outbound post-build webhooks | `site.admin` | `operator` | high | `OPEN` |
 | `generate_featured_image` | Generate/write image asset | `site.admin` | `operator` | high | `CLOSED` |
 | `check_sri_versions` | Live SRI verification against remote assets | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
+| `get_runtime_status` | Runtime/build/git/site status surface | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
 
 ## Why `check_sri_versions` stays operator-only
 
