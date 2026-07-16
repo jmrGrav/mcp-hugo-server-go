@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.5] - 2026-07-16
+
+### Added
+- **`build_site` validation-oriented safety signals** (#343, PR #377): `build_site` now hashes the output tree (`output_revision`) and reports `publish_ready`/`partial_success` status distinctly from a hard failure, so agents can tell a successful-but-degraded build (e.g. a post-build callback failure) from one that's actually safe to publish.
+- **Local Git baseline model design anchor** (#356, PR #375): `docs/git-baseline-model.md` defines the `git_baseline` config section (`mode: auto|configured|disabled`, `repo_path`, `branch`, `remote`) and the baseline-state vocabulary later issues build on.
+- **`get_runtime_status` compact runtime/build/git/site status surface** (#344, PR #389): a single `site.admin` tool reporting server version/commit (via Go's embedded VCS build info, no new `-ldflags` needed), hugo/git availability, and a `degraded` list explaining why other tools (`build_site`, `diff_page`) may be failing — instead of agents having to infer environment health from scattered error messages. Revision hashes are opt-in via `include_revisions` to keep the common case cheap to poll.
+
+### Fixed
+- **Partial-failure semantics normalized across write/build/reindex/publication paths** (#372, PR #382): mutation tools now consistently distinguish full success, full failure, and partial success, per `docs/partial-failure-matrix.md`.
+- **Build and post-build hook execution isolated** (#373, PR #381): `build_site`/hooks now run with a bounded environment (`boundedCommandEnv`), redirect-rejecting HTTP client for webhooks, and proper child-process group cleanup on timeout.
+- **`diff_page` ambiguous `git_not_available` status** (#322, PR #388): now distinguishes `git_unavailable` (no usable Git baseline at all — surfaces the real underlying error) from `git_untracked` (file just isn't committed yet, e.g. right after `create_page`) from `unchanged`/`modified`/`deleted` (a real diff was computed). Also wires `git_baseline.mode: disabled` into `diff_page` so it actually short-circuits instead of always probing the host.
+
 ## [v1.4.4] - 2026-07-16
 
 ### Added
