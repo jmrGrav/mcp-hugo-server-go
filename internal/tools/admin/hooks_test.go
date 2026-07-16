@@ -2,8 +2,10 @@ package admin
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,5 +65,49 @@ func TestHookTimeout(t *testing.T) {
 	}
 	if results[0].Error == "" {
 		t.Error("expected non-empty error on timeout")
+	}
+}
+
+func TestHookRedirectRejected(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("redirect target must not be requested")
+	}))
+	defer target.Close()
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	cfg := config.Config{PostBuildHooks: []string{redirector.URL}}
+	results := fireHooks(context.Background(), cfg, newHookHTTPClient(5*time.Second))
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != 0 {
+		t.Fatalf("redirected hook status = %d, want 0", results[0].Status)
+	}
+	if !strings.Contains(results[0].Error, "redirect") {
+		t.Fatalf("redirected hook error = %q, want redirect detail", results[0].Error)
+	}
+}
+
+func TestHookResponseTooLarge(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprint(w, strings.Repeat("x", maxHookResponseBytes+1024))
+	}))
+	defer srv.Close()
+
+	cfg := config.Config{PostBuildHooks: []string{srv.URL}}
+	results := fireHooks(context.Background(), cfg, newHookHTTPClient(5*time.Second))
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	if results[0].Status != 0 {
+		t.Fatalf("oversized hook status = %d, want 0", results[0].Status)
+	}
+	if !strings.Contains(results[0].Error, "response_too_large") {
+		t.Fatalf("oversized hook error = %q, want response_too_large", results[0].Error)
 	}
 }

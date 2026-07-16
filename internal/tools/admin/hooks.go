@@ -3,6 +3,8 @@ package admin
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -13,7 +15,18 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-var hookClient = &http.Client{Timeout: 10 * time.Second}
+const maxHookResponseBytes = 1 << 20
+
+func newHookHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return errors.New("redirects are not allowed for post-build hooks")
+		},
+	}
+}
+
+var hookClient = newHookHTTPClient(10 * time.Second)
 
 type runPostBuildHooksInput struct{}
 
@@ -72,8 +85,14 @@ func fireHook(ctx context.Context, client *http.Client, url string, body []byte)
 	if err != nil {
 		return hookResult{URL: url, Error: err.Error()}
 	}
-	_, _ = io.Copy(io.Discard, resp.Body)
 	defer resp.Body.Close()
+	n, copyErr := io.Copy(io.Discard, io.LimitReader(resp.Body, maxHookResponseBytes+1))
+	if copyErr != nil {
+		return hookResult{URL: url, Error: copyErr.Error()}
+	}
+	if n > maxHookResponseBytes {
+		return hookResult{URL: url, Error: fmt.Sprintf("response_too_large: response body exceeded %d bytes", maxHookResponseBytes)}
+	}
 
 	return hookResult{URL: url, Status: resp.StatusCode}
 }
