@@ -351,3 +351,100 @@ func TestDetectTaxonomyInconsistencies(t *testing.T) {
 		t.Fatalf("detectTaxonomyInconsistencies() pages_with_term_a = %v, want [posts/a] (#324)", match.PagesWithTermA)
 	}
 }
+
+// TestDetectTaxonomyInconsistenciesTranslationPairNotFlaggedAsDuplicate
+// covers #183: security (EN) and sécurité (FR) tagged on the same Hugo page
+// bundle (index.en.md/index.fr.md sharing one Slug per hugosite.SlugFromRel)
+// must be classified as a translation_pair, not a possible_duplicate,
+// reproducing the exact pair ChatGPT's live audit (2026-07-17) flagged.
+func TestDetectTaxonomyInconsistenciesTranslationPairNotFlaggedAsDuplicate(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Same bundle (posts/csp), two languages, same concept tagged in each language.
+	write("posts/csp/index.en.md", "---\ntitle: CSP\ntags: [security]\n---\n")
+	write("posts/csp/index.fr.md", "---\ntitle: CSP\ntags: [sécurité]\n---\n")
+	// A genuinely different page pair with a similar-looking spelling typo,
+	// unrelated to any bundle/translation relationship.
+	write("posts/one/index.md", "---\ntitle: One\ntags: [postmortem]\n---\n")
+	write("posts/two/index.md", "---\ntitle: Two\ntags: [post-mortems]\n---\n")
+
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	issues := detectTaxonomyInconsistencies(src, nil)
+
+	var translationPair, possibleDup *taxonomyInconsistencyDTO
+	for i := range issues {
+		switch {
+		case issues[i].TermA == "security" || issues[i].TermB == "security":
+			translationPair = &issues[i]
+		case issues[i].TermA == "postmortem" || issues[i].TermB == "postmortem":
+			possibleDup = &issues[i]
+		}
+	}
+	if translationPair == nil {
+		t.Fatalf("expected a security/sécurité finding, got %#v", issues)
+	}
+	if translationPair.Kind != "translation_pair" {
+		t.Fatalf("security/sécurité Kind = %q, want translation_pair", translationPair.Kind)
+	}
+	if strings.Contains(translationPair.Message, "may be duplicates") {
+		t.Fatalf("security/sécurité message should not read as a possible-duplicate finding: %q", translationPair.Message)
+	}
+
+	if possibleDup == nil {
+		t.Fatalf("expected a postmortem/post-mortems finding, got %#v", issues)
+	}
+	if possibleDup.Kind != "possible_duplicate" {
+		t.Fatalf("postmortem/post-mortems Kind = %q, want possible_duplicate (different pages, not a translation pair)", possibleDup.Kind)
+	}
+}
+
+// TestDetectTaxonomyInconsistenciesSamePageBothSpellingsIsNotATranslation
+// covers the failure mode a same-slug-set-only check misses: a single
+// monolingual page tagged with BOTH spelling variants directly (e.g. a
+// copy-paste typo) hits the same set of page slugs on both sides — the
+// naive proxy would wrongly call this a translation_pair. It must still be
+// possible_duplicate, since it's the exact case this detector exists for.
+func TestDetectTaxonomyInconsistenciesSamePageBothSpellingsIsNotATranslation(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/x/index.md", "---\ntitle: X\ntags: [postmortem, post-mortems]\n---\n")
+
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	issues := detectTaxonomyInconsistencies(src, nil)
+
+	var match *taxonomyInconsistencyDTO
+	for i := range issues {
+		if issues[i].TermA == "postmortem" || issues[i].TermB == "postmortem" {
+			match = &issues[i]
+			break
+		}
+	}
+	if match == nil {
+		t.Fatalf("expected a postmortem/post-mortems finding, got %#v", issues)
+	}
+	if match.Kind != "possible_duplicate" {
+		t.Fatalf("Kind = %q, want possible_duplicate (same page, same language, both spelling variants — a real typo, not a translation)", match.Kind)
+	}
+}
