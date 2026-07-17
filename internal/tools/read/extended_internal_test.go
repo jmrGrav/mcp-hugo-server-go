@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 )
@@ -229,8 +230,8 @@ func TestDiffHelperBranches(t *testing.T) {
 		t.Fatalf("unifiedDiff() = %q, %v", diff, err)
 	}
 
-	if out, err := gitBytes(context.Background(), root, "--version"); err != nil || !strings.Contains(string(out), "git version") {
-		t.Fatalf("gitBytes() = %q, %v", out, err)
+	if out, err := gitutil.Bytes(context.Background(), root, "--version"); err != nil || !strings.Contains(string(out), "git version") {
+		t.Fatalf("gitutil.Bytes() = %q, %v", out, err)
 	}
 }
 
