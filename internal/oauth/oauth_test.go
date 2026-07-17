@@ -3,6 +3,7 @@ package oauth_test
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -16,6 +17,15 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 )
+
+func withDefaultLogger(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	return &buf
+}
 
 func newTestService(t *testing.T, cidrs ...string) (*oauth.Service, storage.Store) {
 	t.Helper()
@@ -314,6 +324,120 @@ func TestPKCEFlow(t *testing.T) {
 	}
 	if tokenResp.RefreshToken == "" {
 		t.Fatal("token: empty refresh_token")
+	}
+}
+
+func TestPKCEFlowIsObservableInLogs(t *testing.T) {
+	// #378/OAuth-observability follow-up: the user needs to reconstruct which
+	// OAuth path a live client (Gemini, Le Chat, ...) actually took by
+	// grepping server logs after a real connection attempt. Confirm the full
+	// DCR + authorize + token sequence is logged, correlatable by client_id,
+	// and never leaks the client secret, auth code, PKCE verifier, or issued
+	// tokens into the log stream.
+	logBuf := withDefaultLogger(t)
+	svc, _ := newTestService(t)
+	clientID := registerClient(t, svc, []string{"https://client.test/callback"})
+
+	verifier := "test-verifier-test-verifier-test-verifier-test"
+	challenge := oauth.CodeChallengeS256(verifier)
+
+	authURL := "/authorize?" + url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://client.test/callback"},
+		"state":                 {"state-xyz"},
+		"scope":                 {"content.read"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	location, _ := url.Parse(authRec.Header().Get("Location"))
+	code := location.Query().Get("code")
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {clientID},
+		"code":          {code},
+		"redirect_uri":  {"https://client.test/callback"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("token: decode: %v", err)
+	}
+
+	logs := logBuf.String()
+	for _, want := range []string{
+		`"msg":"oauth_register"`, `"outcome":"success"`,
+		`"msg":"oauth_authorize"`, `"pkce_used":true`,
+		`"msg":"oauth_token"`, `"grant_type":"authorization_code"`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("oauth flow logs missing %q; logs = %s", want, logs)
+		}
+	}
+	// All three events (register, authorize, token) must be correlatable by
+	// client_id — register is the bridge line tying pre-registration
+	// (which has no client_id yet) to the client_id used by every
+	// subsequent call in this client's flow.
+	if got := strings.Count(logs, `"client_id":"`+clientID+`"`); got < 3 {
+		t.Fatalf("expected client_id %q to appear in register+authorize+token log lines, got %d occurrences; logs = %s", clientID, got, logs)
+	}
+	// Secrets must never reach the log stream.
+	for _, secret := range []string{code, verifier, tokenResp.AccessToken, tokenResp.RefreshToken} {
+		if secret == "" {
+			t.Fatal("test setup produced an empty secret value, assertion would be vacuous")
+		}
+		if strings.Contains(logs, secret) {
+			t.Fatalf("oauth flow logs leaked a secret value %q; logs = %s", secret, logs)
+		}
+	}
+}
+
+func TestAuthorizeRedirectMismatchIsObservableInLogs(t *testing.T) {
+	// Redirect-URI mismatch is the most common real-world DCR failure and,
+	// before this fix, left no diagnostic log line at all — only a generic
+	// 400 in the request log. Confirm the failure is now attributable to a
+	// client_id and an attempted host without echoing the raw rejected URI.
+	logBuf := withDefaultLogger(t)
+	svc, _ := newTestService(t)
+	clientID := registerClient(t, svc, []string{"https://client.test/callback"})
+
+	authURL := "/authorize?" + url.Values{
+		"response_type": {"code"},
+		"client_id":     {clientID},
+		"redirect_uri":  {"https://attacker.test/callback"},
+		"state":         {"state-xyz"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusBadRequest {
+		t.Fatalf("authorize: status = %d, want 400", authRec.Code)
+	}
+
+	logs := logBuf.String()
+	for _, want := range []string{
+		`"msg":"oauth_authorize"`, `"outcome":"error"`,
+		`"client_id":"` + clientID + `"`, `"attempted_redirect_uri_host":"attacker.test"`,
+	} {
+		if !strings.Contains(logs, want) {
+			t.Fatalf("redirect-mismatch logs missing %q; logs = %s", want, logs)
+		}
 	}
 }
 

@@ -527,12 +527,40 @@ func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := s.registerClient(req)
 	if err != nil {
+		slog.Info("oauth_register", "outcome", "error", "error", oauthRegisterErrorCode(err))
 		writeOAuthError(w, oauthRegisterErrorCode(err), http.StatusBadRequest)
 		return
 	}
+	slog.Info("oauth_register", "outcome", "success", "client_id", resp.ClientID,
+		"redirect_uri_hosts", redirectURIHosts(resp.RedirectURIs), "scope", resp.Scope)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// bestEffortHost extracts a URI's host for logging an unvalidated/rejected
+// redirect_uri without echoing the full (possibly attacker-influenced)
+// value. Returns "unparseable" rather than propagating a parse error, since
+// this only feeds a diagnostic log line.
+func bestEffortHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return "unparseable"
+	}
+	return u.Host
+}
+
+// redirectURIHosts extracts the host component of each redirect URI for
+// logging (#OAuth flow observability): enough to distinguish which client
+// integration registered without logging full callback URLs/paths.
+func redirectURIHosts(uris []string) []string {
+	hosts := make([]string, 0, len(uris))
+	for _, raw := range uris {
+		if u, err := url.Parse(raw); err == nil && u.Host != "" {
+			hosts = append(hosts, u.Host)
+		}
+	}
+	return hosts
 }
 
 func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
@@ -549,9 +577,17 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 	rawRedirectURI := r.Form.Get("redirect_uri")
 	safeRedirectURI, err := s.validateClientRedirectURL(clientID, rawRedirectURI)
 	if err != nil {
+		// Redirect-URI mismatch is the most common real-world DCR failure
+		// (e.g. a client registered one callback but authorizes against a
+		// different one). Log it explicitly — without this, a failed
+		// connection attempt leaves only a generic 400 in the request log,
+		// with no way to diagnose which client/host was rejected or why.
+		slog.Info("oauth_authorize", "outcome", "error", "client_id", clientID,
+			"attempted_redirect_uri_host", bestEffortHost(rawRedirectURI), "error", err.Error())
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	pkceUsed := r.Form.Get("code_challenge") != ""
 	code, err := s.issueAuthCode(
 		requestSourceIP(r),
 		r.Form.Get("response_type"),
@@ -563,6 +599,9 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		r.Form.Get("code_challenge_method"),
 	)
 	if err != nil {
+		slog.Info("oauth_authorize", "outcome", "error", "client_id", clientID,
+			"redirect_uri_host", safeRedirectURI.Hostname(), "pkce_used", pkceUsed,
+			"error", oauthAuthorizeErrorCode(err))
 		status := oauthAuthorizeErrorStatus(err)
 		if strings.Contains(err.Error(), "unauthorized_client") || strings.Contains(err.Error(), "access_denied") {
 			http.Error(w, oauthAuthorizeErrorCode(err), status)
@@ -576,6 +615,9 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 		redirectToRegisteredClient(w, r, safeRedirectURI, params)
 		return
 	}
+	slog.Info("oauth_authorize", "outcome", "success", "client_id", clientID,
+		"redirect_uri_host", safeRedirectURI.Hostname(), "pkce_used", pkceUsed,
+		"scope_requested", r.Form.Get("scope"), "response_type", r.Form.Get("response_type"))
 	params := url.Values{"code": {code}}
 	if state := r.Form.Get("state"); state != "" {
 		params.Set("state", state)
@@ -598,6 +640,7 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		resp, err := s.exchangeAgentAssertion(r.FormValue("assertion"))
 		if err != nil {
 			errCode := oauthTokenErrorCode(err)
+			slog.Info("oauth_token", "grant_type", grantType, "outcome", "error", "error", errCode)
 			if strings.Contains(err.Error(), "assertion_not_found") {
 				// In-memory assertion state was lost (server restart). Signal
 				// that the client should re-register immediately.
@@ -606,6 +649,7 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 			writeOAuthError(w, errCode, http.StatusBadRequest)
 			return
 		}
+		slog.Info("oauth_token", "grant_type", grantType, "outcome", "success", "scope", resp.Scope)
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -616,6 +660,7 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		resp *TokenResponse
 		err  error
 	)
+	pkceUsed := grantType == "authorization_code" && r.FormValue("code_verifier") != ""
 	switch grantType {
 	case "refresh_token":
 		resp, err = s.exchangeRefreshToken(clientID, clientSecret, r.FormValue("refresh_token"))
@@ -623,13 +668,19 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 		resp, err = s.exchangeAuthorizationCode(clientID, clientSecret,
 			r.FormValue("redirect_uri"), r.FormValue("code"), r.FormValue("code_verifier"))
 	default:
+		slog.Info("oauth_token", "grant_type", grantType, "outcome", "error",
+			"client_id", clientID, "error", "unsupported_grant_type")
 		writeOAuthError(w, "unsupported_grant_type", http.StatusBadRequest)
 		return
 	}
 	if err != nil {
+		slog.Info("oauth_token", "grant_type", grantType, "outcome", "error",
+			"client_id", clientID, "pkce_used", pkceUsed, "error", oauthTokenErrorCode(err))
 		writeOAuthError(w, oauthTokenErrorCode(err), oauthTokenErrorStatus(err))
 		return
 	}
+	slog.Info("oauth_token", "grant_type", grantType, "outcome", "success",
+		"client_id", clientID, "pkce_used", pkceUsed, "scope", resp.Scope)
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(resp)
