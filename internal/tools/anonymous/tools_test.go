@@ -639,6 +639,89 @@ func mapKeys(m map[string]any) []string {
 	return keys
 }
 
+func TestSearchPagesResultsExposeScore(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_pages", map[string]any{"query": "hello", "limit": 5})
+	if res.IsError {
+		t.Fatalf("search_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	pages, _ := m["pages"].([]any)
+	if len(pages) == 0 {
+		t.Fatal("search_pages('hello'): expected results, got 0")
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("search_pages: page = %T, want map", pages[0])
+	}
+	score, ok := page["score"].(float64)
+	if !ok {
+		t.Fatalf("search_pages: missing/invalid 'score' field, got %v", page["score"])
+	}
+	if score < 1 {
+		t.Fatalf("search_pages('hello'): score = %v, want >= 1 for a matching result", score)
+	}
+}
+
+func TestSearchPagesMatchTitleExact(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_pages", map[string]any{"query": "Hello", "match": "title_exact"})
+	if res.IsError {
+		t.Fatalf("search_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	pages, _ := m["pages"].([]any)
+	if len(pages) != 1 {
+		t.Fatalf("search_pages(match=title_exact, 'Hello'): got %d results, want exactly 1", len(pages))
+	}
+}
+
+func TestSearchPagesMatchTitleExactNoFalsePositives(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	// A distinctive query that would return broad, loosely related hits
+	// under the default "any" match mode (partial term overlap with real
+	// fixture content) must return zero results under title_exact, since
+	// no page has this as its exact title. This is the #332 reproduction:
+	// verifying a page doesn't exist shouldn't surface unrelated matches.
+	broad := callTool(t, session, "search_pages", map[string]any{"query": "hello temporary audit page"})
+	if broad.IsError {
+		t.Fatalf("search_pages returned error: %v", broad.Content)
+	}
+	broadPages, _ := decodeContent(t, broad)["pages"].([]any)
+	if len(broadPages) == 0 {
+		t.Fatal("search_pages('hello temporary audit page'): expected the broad default mode to still return loosely related hits (test setup assumption)")
+	}
+
+	exact := callTool(t, session, "search_pages", map[string]any{"query": "hello temporary audit page", "match": "title_exact"})
+	if exact.IsError {
+		t.Fatalf("search_pages returned error: %v", exact.Content)
+	}
+	exactPages, _ := decodeContent(t, exact)["pages"].([]any)
+	if len(exactPages) != 0 {
+		t.Fatalf("search_pages(match=title_exact, no exact title match): got %d results, want 0", len(exactPages))
+	}
+}
+
+func TestSearchPagesMatchInvalidRejected(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_pages", map[string]any{"query": "hello", "match": "bogus"})
+	if !res.IsError {
+		t.Fatal("search_pages match=bogus: expected error")
+	}
+}
+
 func TestSearchPagesLimitCap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
