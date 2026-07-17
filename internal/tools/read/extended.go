@@ -153,6 +153,12 @@ type pageDTO struct {
 	Snippet            string              `json:"snippet,omitempty"`
 }
 
+// validateOutputData separates two distinct counters that #333 found
+// conflated: pages_checked (the full scan scope — every matched page is
+// always validated, regardless of limit/offset) versus the returned_count/
+// has_more/next_offset pagination of the *detail rows* in pages. A caller
+// must be able to tell "all 80 pages were scanned, only 5 detail rows came
+// back, and there are more" without guessing at what pages_checked means.
 type validateOutputData struct {
 	PagesChecked int                   `json:"pages_checked"`
 	PagesPassed  int                   `json:"pages_passed"`
@@ -160,6 +166,8 @@ type validateOutputData struct {
 	Returned     int                   `json:"returned_count,omitempty"`
 	Limit        int                   `json:"limit,omitempty"`
 	Offset       int                   `json:"offset,omitempty"`
+	HasMore      bool                  `json:"has_more"`
+	NextOffset   *int                  `json:"next_offset,omitempty"`
 	Pages        []frontMatterIssueDTO `json:"pages"`
 }
 
@@ -171,6 +179,8 @@ type validateOutput struct {
 	Returned     int                   `json:"returned_count,omitempty"`
 	Limit        int                   `json:"limit,omitempty"`
 	Offset       int                   `json:"offset,omitempty"`
+	HasMore      bool                  `json:"has_more"`
+	NextOffset   *int                  `json:"next_offset,omitempty"`
 	Pages        []frontMatterIssueDTO `json:"pages"`
 }
 
@@ -439,7 +449,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "validate_front_matter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. Requires content.read.",
+	addReadOnlyTool(s, "validate_front_matter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -454,7 +464,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
 		})
 
-	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_front_matter with no slug filter. Requires content.read.",
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_front_matter with no slug filter. `pages_checked` always covers every page on the site; `pages` returns detail rows for all of them (this tool does not currently accept limit/offset). Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -998,6 +1008,7 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 	if len(results) > limit {
 		results = results[:limit]
 	}
+	meta := toolcontract.ComputePagination(total, limit, offset, len(results))
 	return newValidateOutput(validateOutputData{
 		PagesChecked: total,
 		PagesPassed:  total - invalid,
@@ -1005,6 +1016,8 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 		Returned:     len(results),
 		Limit:        limit,
 		Offset:       offset,
+		HasMore:      meta.HasMore,
+		NextOffset:   meta.NextOffset,
 		Pages:        results,
 	}, time.Now().UTC())
 }
@@ -1061,6 +1074,8 @@ func newValidateOutput(data validateOutputData, now time.Time) validateOutput {
 		Returned:     data.Returned,
 		Limit:        data.Limit,
 		Offset:       data.Offset,
+		HasMore:      data.HasMore,
+		NextOffset:   data.NextOffset,
 		Pages:        data.Pages,
 	}
 }
