@@ -904,6 +904,7 @@ func Defs() []tools.ToolDef {
 		{Name: "export_agent_context", RequiredScope: "content.read"},
 		{Name: "get_page_for_edit", RequiredScope: "content.read"},
 		{Name: "list_content_types", RequiredScope: "content.read"},
+		{Name: "list_page_assets", RequiredScope: "content.read"},
 		{Name: "search_content", RequiredScope: "content.read"},
 		{Name: "explain_structure", RequiredScope: "content.read"},
 		{Name: "get_site_health", RequiredScope: "content.read"},

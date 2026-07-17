@@ -365,6 +365,104 @@ func TestListContentTypesMergesArchetypeAndObservedSections(t *testing.T) {
 	}
 }
 
+func TestListPageAssetsListsSiblingFilesInBundle(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel string, data []byte) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("content/posts/article/index.md", []byte("---\ntitle: Article\n---\nBody.\n"))
+	write("content/posts/article/cover.webp", []byte("cover bytes"))
+	write("content/posts/article/notes.txt", []byte("notes"))
+
+	src, err := hugosite.NewSourceIndex(filepath.Join(root, "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join(root, "content")
+	session, done := newTestClientWithCfg(t, idx, cfg, src)
+	defer done()
+
+	res := callTool(t, session, "list_page_assets", map[string]any{"slug": "/posts/article"})
+	if res.IsError {
+		t.Fatalf("list_page_assets returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	assets, ok := m["assets"].([]any)
+	if !ok {
+		t.Fatalf("list_page_assets: 'assets' is %T, want []any", m["assets"])
+	}
+	names := make(map[string]bool, len(assets))
+	for _, raw := range assets {
+		a, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("list_page_assets: entry = %T, want map", raw)
+		}
+		names[a["name"].(string)] = true
+		if a["name"] == "cover.webp" {
+			if size, _ := a["size_bytes"].(float64); size != float64(len("cover bytes")) {
+				t.Fatalf("list_page_assets cover.webp size_bytes = %v, want %d", a["size_bytes"], len("cover bytes"))
+			}
+		}
+	}
+	if !names["cover.webp"] || !names["notes.txt"] {
+		t.Fatalf("list_page_assets missing expected siblings, got %v", names)
+	}
+	if names["index.md"] {
+		t.Fatal("list_page_assets must not list the page's own index.md")
+	}
+}
+
+func TestListPageAssetsSingleFilePageReturnsNotABundle(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "content", "pages"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "content", "pages", "about.md"), []byte("---\ntitle: About\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, err := hugosite.NewSourceIndex(filepath.Join(root, "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join(root, "content")
+	session, done := newTestClientWithCfg(t, idx, cfg, src)
+	defer done()
+
+	res := callTool(t, session, "list_page_assets", map[string]any{"slug": "/pages/about"})
+	if !res.IsError {
+		t.Fatal("list_page_assets: want error for single-file page, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "not_a_bundle") {
+		t.Fatalf("list_page_assets error = %s, want not_a_bundle", raw)
+	}
+}
+
+func TestListPageAssetsNotFound(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "list_page_assets", map[string]any{"slug": "/no/such/page"})
+	if !res.IsError {
+		t.Fatal("list_page_assets: want error for missing page, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "content_not_found") {
+		t.Fatalf("list_page_assets error = %s, want content_not_found", raw)
+	}
+}
+
 func TestGetPageForEditDefaultReturnsFullBundle(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

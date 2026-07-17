@@ -230,6 +230,7 @@ breaking change since the parameters are optional and additive.
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
 | `get_page_for_edit`     | flat        | `page.state`, `page.revision`, `page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` or unavailable for the caller's profile; `quality` requires source access and is omitted for `reader` (#339) |
 | `list_content_types`    | flat        | `content_types[*]` (`name`, `source`, `archetype_path?`, `expected_fields?`, `page_count?`); `expected_fields` is the union of the archetype's declared keys and keys observed on existing pages of that type; `page_count` and observed-page-derived fields (source-derived) are omitted for `reader`, archetype metadata is not (#347) |
+| `list_page_assets`      | flat        | `assets[*]` (`name`, `size_bytes`, `modified_at`); lists the sibling files in a leaf page bundle's directory; `not_a_bundle` for single-file pages; entirely source-derived, so `reader` gets an empty `assets` list for a public page and `content_not_public` for a non-public one (#348) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
 | `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
@@ -247,6 +248,7 @@ breaking change since the parameters are optional and additive.
 | `create_page` | flat     | `status`, `slug`, `path`, `dry_run?`, `content?`, `warning?`      |
 | `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`                 |
 | `delete_page` | flat     | `status`, `slug`, `warning?`                                      |
+| `upload_page_asset` | flat | `status`, `slug`, `filename`, `path`, `content_type`, `size_bytes`, `sha256`, `duplicate_of?` (advisory only), `dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`) |
 
 ### `site.admin`
 

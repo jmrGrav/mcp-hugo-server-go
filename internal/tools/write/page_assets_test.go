@@ -1,0 +1,271 @@
+package write_test
+
+import (
+	"encoding/base64"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// minimalPNG is enough leading bytes for http.DetectContentType to sniff
+// image/png; it need not be a structurally complete PNG.
+var minimalPNG = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0}
+
+func b64(data []byte) string { return base64.StdEncoding.EncodeToString(data) }
+
+func writeBundle(t *testing.T, contentRoot, slug string) {
+	t.Helper()
+	dir := filepath.Join(contentRoot, slug)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte("---\ntitle: Article\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUploadPageAssetSuccess(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("upload_page_asset returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	if out["content_type"] != "image/png" {
+		t.Fatalf("upload_page_asset content_type = %v, want image/png", out["content_type"])
+	}
+	if size, _ := out["size_bytes"].(float64); size != float64(len(minimalPNG)) {
+		t.Fatalf("upload_page_asset size_bytes = %v, want %d", out["size_bytes"], len(minimalPNG))
+	}
+	data, err := os.ReadFile(filepath.Join(contentRoot, "posts", "article", "cover.png"))
+	if err != nil {
+		t.Fatalf("uploaded file not found: %v", err)
+	}
+	if string(data) != string(minimalPNG) {
+		t.Fatal("uploaded file content mismatch")
+	}
+}
+
+func TestUploadPageAssetRejectsSVG(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.svg",
+		"content_base64": b64([]byte("<svg></svg>")),
+	})
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want error for .svg, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("upload_page_asset svg error = %s, want invalid_params", raw)
+	}
+}
+
+func TestUploadPageAssetRejectsMimeMismatch(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64([]byte("this is plain text, not a png")),
+	})
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want error for mime mismatch, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("upload_page_asset mime-mismatch error = %s, want invalid_params", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); !os.IsNotExist(err) {
+		t.Fatal("upload_page_asset must not write a file when sniffing rejects the content")
+	}
+}
+
+func TestUploadPageAssetRejectsExistingFilename(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	args := map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	}
+	if res := callTool(t, session, "upload_page_asset", args); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first upload_page_asset returned error: %s", raw)
+	}
+
+	res := callTool(t, session, "upload_page_asset", args)
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want already_exists on second write to same filename, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "already_exists") {
+		t.Fatalf("upload_page_asset duplicate-filename error = %s, want already_exists", raw)
+	}
+}
+
+func TestUploadPageAssetNotABundle(t *testing.T) {
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "pages"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "pages", "about.md"), []byte("---\ntitle: About\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "pages/about",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	})
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want not_a_bundle for single-file page, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "not_a_bundle") {
+		t.Fatalf("upload_page_asset error = %s, want not_a_bundle", raw)
+	}
+}
+
+func TestUploadPageAssetDryRunDoesNotWrite(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+		"dry_run":        true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("upload_page_asset dry_run returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	if dryRun, _ := out["dry_run"].(bool); !dryRun {
+		t.Fatalf("upload_page_asset dry_run response dry_run = %v, want true", out["dry_run"])
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); !os.IsNotExist(err) {
+		t.Fatal("upload_page_asset dry_run must not write a file")
+	}
+}
+
+func TestUploadPageAssetDuplicateContentIsAdvisoryOnly(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	if res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first upload_page_asset returned error: %s", raw)
+	}
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover-copy.png",
+		"content_base64": b64(minimalPNG),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("second upload_page_asset (identical content, new filename) returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	if out["duplicate_of"] != "cover.png" {
+		t.Fatalf("upload_page_asset duplicate_of = %v, want cover.png", out["duplicate_of"])
+	}
+	// The write must still happen under the requested filename — duplicate
+	// detection is advisory, not a substitute for the caller's explicit intent.
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover-copy.png")); err != nil {
+		t.Fatalf("upload_page_asset must still write cover-copy.png despite duplicate content: %v", err)
+	}
+}
+
+func TestUploadPageAssetTrimsFilenameConsistently(t *testing.T) {
+	// Regression: validateAssetFilename validated a trimmed copy of the
+	// filename but the handler used to write/echo the raw, untrimmed input,
+	// so "cover.png\n" passed the safe-charset regex on its trimmed form
+	// while still writing a file literally named "cover.png\n" on disk.
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png\n",
+		"content_base64": b64(minimalPNG),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("upload_page_asset with whitespace-padded filename returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	if out["filename"] != "cover.png" {
+		t.Fatalf("upload_page_asset filename = %v, want trimmed \"cover.png\"", out["filename"])
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); err != nil {
+		t.Fatalf("expected file written under trimmed name %q: %v", "cover.png", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(contentRoot, "posts", "article"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != "index.md" && e.Name() != "cover.png" {
+			t.Fatalf("unexpected file written with untrimmed name: %q", e.Name())
+		}
+	}
+}
+
+func TestUploadPageAssetRejectsPathTraversalFilename(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	for _, filename := range []string{"../evil.png", "sub/dir.png", ".hidden.png"} {
+		res := callTool(t, session, "upload_page_asset", map[string]any{
+			"slug":           "posts/article",
+			"filename":       filename,
+			"content_base64": b64(minimalPNG),
+		})
+		if !res.IsError {
+			t.Fatalf("upload_page_asset: want error for unsafe filename %q, got success", filename)
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "invalid_params") {
+			t.Fatalf("upload_page_asset filename %q error = %s, want invalid_params", filename, raw)
+		}
+	}
+}

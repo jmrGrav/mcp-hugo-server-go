@@ -775,6 +775,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		return nil, out, nil
 	}))
+
+	registerUploadPageAsset(s, pg, idx, cfg, idem)
 }
 
 func createPageState() site.LifecycleState {
@@ -1057,6 +1059,7 @@ func Defs() []tools.ToolDef {
 		{Name: "create_page", RequiredScope: "content.write"},
 		{Name: "update_page", RequiredScope: "content.write"},
 		{Name: "delete_page", RequiredScope: "content.write"},
+		{Name: "upload_page_asset", RequiredScope: "content.write"},
 	}
 }
 

@@ -50,7 +50,7 @@ func TestWriteHelpers(t *testing.T) {
 	}
 
 	defs := Defs()
-	if len(defs) != 3 || defs[0].RequiredScope != "content.write" {
+	if len(defs) != 4 || defs[0].RequiredScope != "content.write" {
 		t.Fatalf("Defs() = %#v", defs)
 	}
 }
