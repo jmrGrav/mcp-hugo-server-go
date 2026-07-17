@@ -100,7 +100,9 @@ type getRelatedContentData struct {
 }
 
 type buildAgentContextInput struct {
-	Slug string `json:"slug"`
+	Slug         string `json:"slug"`
+	ResponseMode string `json:"response_mode,omitempty"`
+	MaxBodyChars int    `json:"max_body_chars,omitempty"`
 }
 
 type agentContextDTO struct {
@@ -111,8 +113,18 @@ type agentContextDTO struct {
 	RelatedPages []relatedPageDTO     `json:"related_pages"`
 }
 
+// agentContextCompactDTO is the reduced shape returned when
+// response_mode=compact: frontmatter, body, and lifecycle state only —
+// drops translations/related_pages, which cost a lookup and payload bytes
+// an agent doesn't need once it already knows which page it wants.
+type agentContextCompactDTO struct {
+	Frontmatter frontmatterDTO      `json:"frontmatter"`
+	Markdown    string              `json:"markdown"`
+	State       site.LifecycleState `json:"state"`
+}
+
 type buildAgentContextData struct {
-	Context agentContextDTO `json:"context"`
+	Context any `json:"context"`
 }
 
 type exportAgentContextInput struct {
@@ -174,7 +186,7 @@ type getRelatedContentOutput struct {
 
 type buildAgentContextOutput struct {
 	toolcontract.ToolResponse[buildAgentContextData]
-	Context agentContextDTO `json:"context"`
+	Context any `json:"context"`
 }
 
 type exportAgentContextOutput struct {
@@ -271,16 +283,20 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
-		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or editing a page. Input: indexed slug only.",
+		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or editing a page. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode). Omitting both preserves the full default shape. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in buildAgentContextInput) (*mcp.CallToolResult, buildAgentContextOutput, error) {
 			if idx == nil {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("index not initialized")
+			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, buildAgentContextOutput{}, err
 			}
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			resolved, err = readerSafeResolvedPage(ctx, resolved, in.Slug)
 			if err != nil {
 				return nil, buildAgentContextOutput{}, err
 			}
@@ -288,20 +304,30 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
 			fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)
-			ref := p
-			if resolved.Public != nil {
-				ref = *resolved.Public
+			state := resolvedState(resolved, cfg.SiteRoot)
+			md, truncated := toolcontract.TruncateBody(md, in.MaxBodyChars)
+
+			var ac any
+			if mode == toolcontract.ResponseModeCompact {
+				ac = agentContextCompactDTO{Frontmatter: fm, Markdown: md, State: state}
+			} else {
+				ref := p
+				if resolved.Public != nil {
+					ref = *resolved.Public
+				}
+				ac = agentContextDTO{
+					Frontmatter:  fm,
+					Markdown:     md,
+					State:        state,
+					Translations: collectTranslations(idx, ref),
+					RelatedPages: computeRelated(idx, ref, 5),
+				}
 			}
-			translations := collectTranslations(idx, ref)
-			related := computeRelated(idx, ref, 5)
-			ac := agentContextDTO{
-				Frontmatter:  fm,
-				Markdown:     md,
-				State:        resolvedState(resolved, cfg.SiteRoot),
-				Translations: translations,
-				RelatedPages: related,
+			var warnings []string
+			if truncated {
+				warnings = append(warnings, fmt.Sprintf("markdown truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", in.MaxBodyChars))
 			}
-			return nil, newBuildAgentContextOutput(buildAgentContextData{Context: ac}, time.Now().UTC()), nil
+			return nil, newBuildAgentContextOutput(buildAgentContextData{Context: ac}, warnings, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "export_agent_context", "Export agent context",
@@ -423,8 +449,12 @@ func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRe
 	}
 }
 
-func newBuildAgentContextOutput(data buildAgentContextData, now time.Time) buildAgentContextOutput {
-	return buildAgentContextOutput{ToolResponse: successEnvelope(data, now), Context: data.Context}
+func newBuildAgentContextOutput(data buildAgentContextData, warnings []string, now time.Time) buildAgentContextOutput {
+	resp := successEnvelope(data, now)
+	if len(warnings) > 0 {
+		resp.Warnings = warnings
+	}
+	return buildAgentContextOutput{ToolResponse: resp, Context: data.Context}
 }
 
 func newExportAgentContextOutput(data exportAgentContextData, warnings []string, now time.Time) exportAgentContextOutput {
