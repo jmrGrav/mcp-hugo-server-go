@@ -146,6 +146,36 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
   the deploy workflow, and the Makefile all set it to the real git tag or
   commit; a release or production build should never report `"dev"`.
 
+### 5.1 Envelope nesting vs. third-party scanner expectations (#328)
+
+Automated scanners such as [mcpscan.dev](https://mcpscan.dev) score tools
+against a convention where a tool's primary output schema is the top-level
+JSON payload. The structured envelope described in
+[Section 1.2](#12-structured-envelope) deliberately nests that payload under
+`data` instead, alongside `success`/`warnings`/`errors`/`meta` — this is the
+documented v1.x contract (#278), not an oversight. mcpscan flags this as
+`Non-Standard Response Wrapping` and deducts score accordingly.
+
+This is a known, accepted tradeoff, not a bug to silently fix:
+
+- **Real cost**: lower mcpscan score.
+- **No cost to real clients**: Claude.ai, ChatGPT, and other live MCP
+  integrations already depend on the uniform envelope (`success`/`data`/
+  `warnings`/`errors`/`meta`) to distinguish partial success from hard
+  failure and to read `meta.server_version` consistently across tools.
+  Flattening the payload in place would be a breaking change to every
+  existing caller, for a scanner-score gain with no functional benefit to
+  agents.
+
+**Decision**: do not flatten the structured envelope in v1.x. If a flattened
+top-level payload is ever wanted, it ships as an explicit new contract
+version (a hypothetical `v2` response shape, versioned the same way
+`version: "v1.0.0"` is today), never as a stealth v1.x patch that changes
+what existing callers already parse. This mirrors the flat-envelope freeze
+already documented in [Section 1](#1-response-envelopes) (`#210`) — both are
+the same category of decision: a v1.x compatibility guarantee outranks a
+scanner-score optimization.
+
 ---
 
 ## 6. Tool Inventory
