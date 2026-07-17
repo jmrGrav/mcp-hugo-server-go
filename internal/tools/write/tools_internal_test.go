@@ -4,11 +4,60 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"golang.org/x/time/rate"
 )
+
+func TestCallerLimiterEnforcesPerMinuteBudget(t *testing.T) {
+	var mu sync.Mutex
+	m := make(map[string]*rate.Limiter)
+	for i := 0; i < 3; i++ {
+		if !callerLimiter(&mu, m, "caller-a", 3).Allow() {
+			t.Fatalf("call %d: expected allowed within budget", i)
+		}
+	}
+	if callerLimiter(&mu, m, "caller-a", 3).Allow() {
+		t.Fatal("expected 4th call to be denied")
+	}
+}
+
+func TestCallerLimiterIsolatesCallersByKey(t *testing.T) {
+	var mu sync.Mutex
+	m := make(map[string]*rate.Limiter)
+	if !callerLimiter(&mu, m, "caller-a", 1).Allow() {
+		t.Fatal("caller-a's first call should be allowed")
+	}
+	if callerLimiter(&mu, m, "caller-a", 1).Allow() {
+		t.Fatal("caller-a's second call should be denied")
+	}
+	if !callerLimiter(&mu, m, "caller-b", 1).Allow() {
+		t.Fatal("caller-b must have its own independent budget")
+	}
+}
+
+func TestCallerLimiterZeroOrNegativePerMinuteFailsOpen(t *testing.T) {
+	// A zero/unset config value must never divide by zero or silently deny
+	// every call — it fails open (always allows), matching the documented
+	// behavior in callerLimiter's doc comment. In production this branch is
+	// unreachable for destructive/mutation limits because config.Load clamps
+	// non-positive values to safe defaults; this is defense-in-depth for any
+	// other caller of callerLimiter that doesn't go through config.Load.
+	var mu sync.Mutex
+	m := make(map[string]*rate.Limiter)
+	for _, perMinute := range []int{0, -1} {
+		l := callerLimiter(&mu, m, "caller-zero", perMinute)
+		for i := 0; i < 100; i++ {
+			if !l.Allow() {
+				t.Fatalf("perMinute=%d: expected fail-open (always allow), denied on call %d", perMinute, i)
+			}
+		}
+		delete(m, "caller-zero")
+	}
+}
 
 func TestWriteHelpers(t *testing.T) {
 	fm := buildFrontmatter("Title", []string{"go"}, []string{"docs"}, "Body")

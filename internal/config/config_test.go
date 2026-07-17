@@ -59,6 +59,22 @@ func TestLoadConfigContentRoot(t *testing.T) {
 	}
 }
 
+func TestLoadConfigClampsNonPositiveMutationRateLimits(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("rate_limit:\n  destructive_per_min: 0\n  create_update_per_min: -1\n")
+	f.Close()
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RateLimit.DestructivePerMin != 5 {
+		t.Fatalf("want destructive_per_min clamped to default 5, got %d", cfg.RateLimit.DestructivePerMin)
+	}
+	if cfg.RateLimit.CreateUpdatePerMin != 60 {
+		t.Fatalf("want create_update_per_min clamped to default 60, got %d", cfg.RateLimit.CreateUpdatePerMin)
+	}
+}
+
 func TestLoadConfigGitBaseline(t *testing.T) {
 	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
 	f.WriteString("git_baseline:\n  mode: configured\n  repo_path: /srv/hugo-arleo.eu\n  branch: release\n  remote: backup\n")

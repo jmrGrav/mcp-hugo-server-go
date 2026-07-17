@@ -89,7 +89,7 @@ classification:
 | `content_not_found:` | Slug or resource does not exist                |
 | `ambiguous_language:`| Multiple language variants and no `lang` param |
 | `not_found:`         | File or path does not exist on disk            |
-| `rate_limited:`      | Per-caller budget exceeded (delete operations) |
+| `rate_limit_exceeded:` | Per-caller budget exceeded (`create_page`/`update_page`/`upload_page_asset` share one budget, `delete_page` has its own — see §6.3) |
 
 ---
 
@@ -342,6 +342,17 @@ tracked separately — see the schema-constraints issue filed after the
 ChatGPT connector audit (2026-07-17). Runtime validation and schema
 publication are complementary layers, not alternatives; this issue lands
 the runtime layer first because it is the one that cannot be skipped.
+
+## 6.4. Per-Caller Mutation Rate Limits (#378)
+
+Two independent layers protect the write surface:
+
+1. **Per-scope, per-IP, HTTP-layer** (`internal/oauth/ratelimit.go`, pre-existing): every `tools/call` request is throttled by `(caller IP, token scope)`, configured via `rate_limit.content_write_per_min` etc. — a single shared budget across every tool in that scope tier.
+2. **Per-tool-class, per-caller, in-process** (`internal/tools/write`, this section): `create_page`, `update_page`, and `upload_page_asset` share one budget, configured via `rate_limit.create_update_per_min` (default 60/min); `delete_page` has its own, separate budget via `rate_limit.destructive_per_min` (default 5/min, unchanged from before this issue). These are independent of each other and independent of the layer-1 limit above — exhausting one never blocks the other.
+
+Both layers key on caller IP (the only caller identity currently available in tool-handler context); a true per-`client_id` budget would need OAuth `client_id` propagated into context, which is a larger change tracked separately.
+
+A budget-exceeded call returns `rate_limit_exceeded: <tool> is limited to N per minute`.
 
 ## 7. New tools (v1.3.8+)
 

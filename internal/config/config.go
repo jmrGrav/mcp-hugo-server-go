@@ -91,6 +91,16 @@ type RateLimitConfig struct {
 	ContentWritePerMin int `yaml:"content_write_per_min"`
 	SiteAdminPerMin    int `yaml:"site_admin_per_min"` // HTTP requests/min; effective tool calls ≈ N/2 in stateful mode
 	DestructivePerMin  int `yaml:"destructive_per_min"`
+	// CreateUpdatePerMin bounds create_page/update_page/upload_page_asset
+	// per caller (#378), the same defense-in-depth pattern already applied
+	// to delete_page via DestructivePerMin — layered on top of, not instead
+	// of, the broader per-scope-per-IP limit content.write already gets
+	// from internal/oauth's RateLimiter. That existing limiter is a single
+	// shared budget across every content.write tool; this one gives
+	// create/update/upload their own per-caller budget the same way delete
+	// already has its own, so one operation type can't silently consume
+	// another's headroom.
+	CreateUpdatePerMin int `yaml:"create_update_per_min"`
 }
 
 // OAuthConfig holds OAuth 2.0 server configuration.
@@ -141,6 +151,7 @@ func Default() Config {
 			ContentWritePerMin: 60,
 			SiteAdminPerMin:    60,
 			DestructivePerMin:  5,
+			CreateUpdatePerMin: 60,
 		},
 		OAuth: OAuthConfig{
 			RequirePKCE: true,
@@ -166,7 +177,24 @@ func Load(path string) (Config, error) {
 	if err := cfg.validate(); err != nil {
 		return Config{}, err
 	}
+	cfg.RateLimit.clampMutationLimits()
 	return cfg, nil
+}
+
+// clampMutationLimits guards against a config file zeroing or negating the
+// per-caller limits on destructive/mutating write tools (delete_page,
+// create_page/update_page/upload_page_asset). callerLimiter fails open when
+// given a non-positive per-minute budget, so a config typo (e.g.
+// destructive_per_min: 0) must not be allowed to silently disable rate
+// limiting on these operations; fall back to the safe Default() values
+// instead.
+func (r *RateLimitConfig) clampMutationLimits() {
+	if r.DestructivePerMin <= 0 {
+		r.DestructivePerMin = 5
+	}
+	if r.CreateUpdatePerMin <= 0 {
+		r.CreateUpdatePerMin = 60
+	}
 }
 
 // validate performs fail-fast checks on cross-field invariants.

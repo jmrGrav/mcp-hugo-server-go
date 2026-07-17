@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -22,6 +23,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/time/rate"
 )
 
 // maxAssetBytes bounds the decoded size of an uploaded page-bundle asset,
@@ -178,7 +180,7 @@ func findDuplicateAsset(dir string, data []byte) (string, error) {
 // registerUploadPageAsset registers upload_page_asset. Separate function
 // (mirrors registerListContentTypes's split from Register in the read
 // package) called from Register with the idempotency store it already owns.
-func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore) {
+func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, mutationMu *sync.Mutex, mutationLimiters map[string]*rate.Limiter) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "upload_page_asset",
 		Title: "Upload page asset",
@@ -197,7 +199,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, toolcontract.WrapTool(func(_ context.Context, _ *mcp.CallToolRequest, in uploadPageAssetInput) (*mcp.CallToolResult, uploadPageAssetOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in uploadPageAssetInput) (*mcp.CallToolResult, uploadPageAssetOutput, error) {
 		slug := normalizeInputSlug(in.Slug)
 		if slug == "" {
 			return nil, uploadPageAssetOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
@@ -205,6 +207,10 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		filename, ext, wantMIME, err := validateAssetFilename(in.Filename)
 		if err != nil {
 			return nil, uploadPageAssetOutput{}, err
+		}
+		callerKey := mutationCallerKey(ctx)
+		if !callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin).Allow() {
+			return nil, uploadPageAssetOutput{}, fmt.Errorf("rate_limit_exceeded: upload_page_asset is limited to %d per minute", cfg.RateLimit.CreateUpdatePerMin)
 		}
 		data, err := decodeAndValidateAssetContent(in.ContentBase64, ext, wantMIME)
 		if err != nil {
