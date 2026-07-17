@@ -78,19 +78,19 @@ func TestContractContentReadToolsUseToolResponseEnvelope(t *testing.T) {
 		tool string
 		args map[string]any
 	}{
-		{tool: "get_full_page_markdown", args: map[string]any{"slug": "/posts/hello/"}},
+		{tool: "get_page_markdown", args: map[string]any{"slug": "/posts/hello/"}},
 		{tool: "get_page_frontmatter", args: map[string]any{"slug": "/posts/hello/"}},
 		{tool: "get_related_content", args: map[string]any{"slug": "/posts/hello/", "limit": 2}},
 		{tool: "build_agent_context", args: map[string]any{"slug": "/posts/hello/"}},
 		{tool: "export_agent_context", args: map[string]any{"limit": 1, "offset": 0}},
 		{tool: "search_content", args: map[string]any{"type": "all", "limit": 2, "offset": 0}},
-		{tool: "explain_site_structure", args: map[string]any{}},
+		{tool: "explain_structure", args: map[string]any{}},
 		{tool: "get_site_health", args: map[string]any{}},
-		{tool: "validate_front_matter", args: map[string]any{"slug": "/posts/hello/"}},
+		{tool: "validate_frontmatter", args: map[string]any{"slug": "/posts/hello/"}},
 		{tool: "validate_site", args: map[string]any{}},
 		{tool: "get_broken_links", args: map[string]any{"limit": 2, "offset": 0}},
 		{tool: "get_backlinks", args: map[string]any{"slug": "/posts/hello/"}},
-		{tool: "suggest_internal_links", args: map[string]any{"slug": "/posts/hello/", "limit": 2}},
+		{tool: "suggest_links", args: map[string]any{"slug": "/posts/hello/", "limit": 2}},
 	}
 
 	for _, tc := range tests {
@@ -142,10 +142,10 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 	}
 
 	got := map[string]identity{
-		"get_page":               identityFromGetPage(t, callTool(t, anonSession, "get_page", map[string]any{"slug": slug})),
-		"get_page_frontmatter":   identityFromFrontmatter(t, callTool(t, readSession, "get_page_frontmatter", map[string]any{"slug": slug})),
-		"get_full_page_markdown": identityFromMarkdownPage(t, callTool(t, readSession, "get_full_page_markdown", map[string]any{"slug": slug})),
-		"build_agent_context":    identityFromAgentContext(t, callTool(t, readSession, "build_agent_context", map[string]any{"slug": slug})),
+		"get_page":             identityFromGetPage(t, callTool(t, anonSession, "get_page", map[string]any{"slug": slug})),
+		"get_page_frontmatter": identityFromFrontmatter(t, callTool(t, readSession, "get_page_frontmatter", map[string]any{"slug": slug})),
+		"get_page_markdown":    identityFromMarkdownPage(t, callTool(t, readSession, "get_page_markdown", map[string]any{"slug": slug})),
+		"build_agent_context":  identityFromAgentContext(t, callTool(t, readSession, "build_agent_context", map[string]any{"slug": slug})),
 	}
 
 	ref := got["get_page"]
@@ -199,8 +199,8 @@ func TestContractRichReadToolsExposeLifecycleState(t *testing.T) {
 		read func(*testing.T, map[string]any) map[string]any
 	}{
 		{
-			name: "get_full_page_markdown",
-			tool: "get_full_page_markdown",
+			name: "get_page_markdown",
+			tool: "get_page_markdown",
 			args: map[string]any{"slug": slug},
 			read: func(t *testing.T, m map[string]any) map[string]any {
 				t.Helper()
@@ -287,10 +287,10 @@ func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *test
 	const slug = "/posts/bonjour/"
 
 	readIDs := map[string]identity{
-		"get_page_frontmatter":   identityFromFrontmatter(t, callTool(t, readSession, "get_page_frontmatter", map[string]any{"slug": slug})),
-		"get_full_page_markdown": identityFromMarkdownPage(t, callTool(t, readSession, "get_full_page_markdown", map[string]any{"slug": slug})),
-		"build_agent_context":    identityFromAgentContext(t, callTool(t, readSession, "build_agent_context", map[string]any{"slug": slug})),
-		"diff_page":              identityFromDiffPage(t, callTool(t, readSession, "diff_page", map[string]any{"slug": slug})),
+		"get_page_frontmatter": identityFromFrontmatter(t, callTool(t, readSession, "get_page_frontmatter", map[string]any{"slug": slug})),
+		"get_page_markdown":    identityFromMarkdownPage(t, callTool(t, readSession, "get_page_markdown", map[string]any{"slug": slug})),
+		"build_agent_context":  identityFromAgentContext(t, callTool(t, readSession, "build_agent_context", map[string]any{"slug": slug})),
+		"diff_page":            identityFromDiffPage(t, callTool(t, readSession, "diff_page", map[string]any{"slug": slug})),
 	}
 
 	for tool, actual := range readIDs {
@@ -363,9 +363,9 @@ func TestContractDryRunMutationsDoNotWriteToDisk(t *testing.T) {
 		t.Fatalf("delete_page dry_run removed or altered file: %v", err)
 	}
 
-	res := callTool(t, readSession, "get_full_page_markdown", map[string]any{"slug": "/posts/existing/"})
+	res := callTool(t, readSession, "get_page_markdown", map[string]any{"slug": "/posts/existing/"})
 	if res.IsError {
-		t.Fatalf("get_full_page_markdown after dry_run returned error: %s", marshalAny(t, res.Content))
+		t.Fatalf("get_page_markdown after dry_run returned error: %s", marshalAny(t, res.Content))
 	}
 	page := mapAt(t, decodeContent(t, res), "page")
 	if got := asString(page["markdown"]); got != "Original body." {

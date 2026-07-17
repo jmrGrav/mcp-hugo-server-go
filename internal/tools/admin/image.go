@@ -82,7 +82,7 @@ func Defs() []tools.ToolDef {
 		{Name: "build_site", RequiredScope: "site.admin"},
 		{Name: "preview_build", RequiredScope: "site.admin"},
 		{Name: "run_post_build_hooks", RequiredScope: "site.admin"},
-		{Name: "generate_featured_image", RequiredScope: "site.admin"},
+		{Name: "generate_hero_image", RequiredScope: "site.admin"},
 		{Name: "check_sri_versions", RequiredScope: "site.admin"},
 		{Name: "get_runtime_status", RequiredScope: "site.admin"},
 		{Name: "get_theme_status", RequiredScope: "site.admin"},
@@ -93,9 +93,9 @@ func Defs() []tools.ToolDef {
 
 func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 	mcp.AddTool(s, &mcp.Tool{
-		Name:  "generate_featured_image",
-		Title: "Generate featured image",
-		Description: "Generate a featured image for a page and save it to {HugoRoot}/static/images/{slug}-featured.jpg. " +
+		Name:  "generate_hero_image",
+		Title: "Generate hero image",
+		Description: "Generate a hero/featured image for a page and save it to {HugoRoot}/static/images/{slug}-featured.jpg. " +
 			"Uses local Go rendering (1200×675 JPEG, Unsplash photo background selected by title hash, dark gradient overlay, title, tags). " +
 			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo).",
 		InputSchema:  tools.MustSchema[generateFeaturedImageInput](),
@@ -153,44 +153,44 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		// a symlinked static/images directory (component visible from HugoRoot).
 		outerPg, err := security.New(cfg.HugoRoot, true)
 		if err != nil {
-			slog.Error("generate_featured_image: could not initialize path guard", "error", err)
+			slog.Error("generate_hero_image: could not initialize path guard", "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 		}
 		// Validate BEFORE MkdirAll so we don't follow a symlink before detecting it.
 		relPath := filepath.Join("static", "images", in.Slug+"-featured.jpg")
 		if _, err := outerPg.SafeJoin(relPath); err != nil {
-			slog.Warn("generate_featured_image: path validation failed", "slug", in.Slug, "error", err)
+			slog.Warn("generate_hero_image: path validation failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
 		// Create images directory and narrow-scoped guard for the actual write.
 		imagesRoot := filepath.Join(cfg.HugoRoot, "static", "images")
 		if err := os.MkdirAll(imagesRoot, 0o755); err != nil {
 			errPath := filepath.Join(imagesRoot, in.Slug+"-featured.jpg")
-			slog.Error("generate_featured_image: could not create images directory", "slug", in.Slug, "error", err)
+			slog.Error("generate_hero_image: could not create images directory", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, imageWriteError(errPath)
 		}
 		imagesGuard, err := security.New(imagesRoot, true)
 		if err != nil {
-			slog.Error("generate_featured_image: could not initialize images guard", "error", err)
+			slog.Error("generate_hero_image: could not initialize images guard", "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 		}
 		destPath, err := imagesGuard.SafeJoin(in.Slug + "-featured.jpg")
 		if err != nil {
-			slog.Warn("generate_featured_image: scoped path validation failed", "slug", in.Slug, "error", err)
+			slog.Warn("generate_hero_image: scoped path validation failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 		}
 		if err := ensureImageTargetWritable(destPath); err != nil {
-			slog.Error("generate_featured_image: destination not writable", "slug", in.Slug, "path", destPath, "error", err)
+			slog.Error("generate_hero_image: destination not writable", "slug", in.Slug, "path", destPath, "error", err)
 			return nil, generateFeaturedImageOutput{}, err
 		}
 
 		bgDir := filepath.Join(cfg.HugoRoot, "static", "images", "featured-backgrounds")
 		if err := imagesGuard.RevalidateForWrite(destPath); err != nil {
-			slog.Warn("generate_featured_image: symlink-swap detected before write", "slug", in.Slug, "error", err)
+			slog.Warn("generate_hero_image: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("security_error: symlink detected in image write path")
 		}
 		if err := renderFeaturedImage(bgDir, destPath, style, in.Title, in.Subtitle, in.Tags, accent); err != nil {
-			slog.Error("generate_featured_image: render failed", "slug", in.Slug, "error", err)
+			slog.Error("generate_hero_image: render failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 		}
 
@@ -237,11 +237,11 @@ func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedI
 	}
 
 	if err := imagesGuard.RevalidateForWrite(destPath); err != nil {
-		slog.Warn("generate_featured_image: symlink-swap detected before write (api path)", "slug", in.Slug, "error", err)
+		slog.Warn("generate_hero_image: symlink-swap detected before write (api path)", "slug", in.Slug, "error", err)
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("security_error: symlink detected in image write path")
 	}
 	if err := fileutil.AtomicWriteBytes(destPath, imgBytes); err != nil {
-		slog.Error("generate_featured_image: write failed", "slug", in.Slug, "error", err)
+		slog.Error("generate_hero_image: write failed", "slug", in.Slug, "error", err)
 		return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 	}
 
@@ -253,7 +253,7 @@ func imageWriteError(destPath string) error {
 		Error:           "write_error",
 		TargetDirectory: filepath.Dir(destPath),
 		TargetPath:      destPath,
-		OperatorHint:    "Ensure hugo_root/static/images is writable by the MCP service user and hugo_root is included in systemd ReadWritePaths before using generate_featured_image.",
+		OperatorHint:    "Ensure hugo_root/static/images is writable by the MCP service user and hugo_root is included in systemd ReadWritePaths before using generate_hero_image.",
 		Retryable:       false,
 		Docs:            "docs/operator-guide.md#image-generation-configuration",
 	}

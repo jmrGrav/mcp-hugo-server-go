@@ -71,14 +71,14 @@ func newInspectRenderedPageOutput(data inspectRenderedPageData, now time.Time) i
 // because that would be a false positive on legitimate content.
 var hugoRenderErrorRe = regexp.MustCompile(`(?i)error calling |failed to render|html/template:|text/template:|shortcode "[^"]*" not found|partial "[^"]*" not found`)
 
-// RegisterInspectRenderedPage registers inspect_rendered_page on s. It is
+// RegisterInspectRenderedPage registers inspect_rendered on s. It is
 // called from RegisterWithSourceIndex alongside the other content.read tools
 // that need both the public site index and the source index.
 func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "inspect_rendered_page", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, and heuristic shortcode/render-error markers. Complements validate_front_matter (source-only) and get_broken_links (site-wide). Requires content.read.",
+	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in inspectRenderedPageInput) (*mcp.CallToolResult, inspectRenderedPageOutput, error) {
 			if idx == nil {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("index not initialized")

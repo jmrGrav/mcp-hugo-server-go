@@ -69,7 +69,7 @@ of which line it's attached to, carries:
   `tool_call` log line (see `internal/observability`) rather than a
   duplicate log entry.
 - **`admin_operation`** — a `site.admin` tool call outcome (`build_site`,
-  `preview_build`, `run_post_build_hooks`, `generate_featured_image`,
+  `preview_build`, `run_post_build_hooks`, `generate_hero_image`,
   `check_sri_versions`, `get_runtime_status`, `get_theme_status`). Same
   tagging mechanism as `mutation`. Also carries `"degraded":true` when a
   successful call's structured result reports a `partial_success` status

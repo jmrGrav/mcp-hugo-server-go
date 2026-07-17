@@ -76,18 +76,18 @@ func TestCrossToolTaxonomyConsistency(t *testing.T) {
 	}
 	var results []toolResult
 
-	// get_full_page_markdown
+	// get_page_markdown
 	{
-		res := callTool(t, session, "get_full_page_markdown", map[string]any{"slug": slug})
+		res := callTool(t, session, "get_page_markdown", map[string]any{"slug": slug})
 		if res.IsError {
-			t.Fatalf("get_full_page_markdown error")
+			t.Fatalf("get_page_markdown error")
 		}
 		m := decodeContent(t, res)
 		page, _ := m["page"].(map[string]any)
 		results = append(results, toolResult{
-			tool:   "get_full_page_markdown",
-			slugs:  extractTagSlugs(t, "get_full_page_markdown", page),
-			labels: extractLabels(t, "get_full_page_markdown", page),
+			tool:   "get_page_markdown",
+			slugs:  extractTagSlugs(t, "get_page_markdown", page),
+			labels: extractLabels(t, "get_page_markdown", page),
 		})
 	}
 
@@ -249,15 +249,15 @@ func TestCrossToolTaxonomySourceOverride(t *testing.T) {
 	}
 	var results []toolResult
 
-	// get_full_page_markdown
+	// get_page_markdown
 	{
-		res := callTool(t, session, "get_full_page_markdown", map[string]any{"slug": slug})
+		res := callTool(t, session, "get_page_markdown", map[string]any{"slug": slug})
 		if res.IsError {
-			t.Fatalf("get_full_page_markdown error")
+			t.Fatalf("get_page_markdown error")
 		}
 		m := decodeContent(t, res)
 		page, _ := m["page"].(map[string]any)
-		results = append(results, toolResult{"get_full_page_markdown", extractTagSlugs(t, "get_full_page_markdown", page)})
+		results = append(results, toolResult{"get_page_markdown", extractTagSlugs(t, "get_page_markdown", page)})
 	}
 
 	// get_page_frontmatter

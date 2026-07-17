@@ -253,7 +253,7 @@ func TestACLBlocksProtectedToolAnonymous(t *testing.T) {
 	// With OAuth enabled, unauthenticated requests get 401 before reaching
 	// the ACL layer — the challenge is the guard, not a 403.
 	srv := mustOAuthServer(t)
-	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_full_page_markdown"}}`)
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_markdown"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -665,7 +665,7 @@ func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
 	if len(names) != 24 {
 		t.Fatalf("authenticated tools/list = %d tools, want 24; got %v", len(names), names)
 	}
-	for _, name := range []string{"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_site_structure", "get_site_health", "diff_page", "validate_front_matter", "validate_site", "suggest_internal_links"} {
+	for _, name := range []string{"get_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_structure", "get_site_health", "diff_page", "validate_frontmatter", "validate_site", "suggest_links"} {
 		found := false
 		for _, n := range names {
 			if n == name {
@@ -692,9 +692,9 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	}
 	for _, name := range []string{
 		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
-		"get_full_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context",
-		"search_content", "explain_site_structure", "get_site_health", "diff_page", "validate_front_matter", "validate_site",
-		"get_broken_links", "get_backlinks", "suggest_internal_links",
+		"get_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context",
+		"search_content", "explain_structure", "get_site_health", "diff_page", "validate_frontmatter", "validate_site",
+		"get_broken_links", "get_backlinks", "suggest_links",
 	} {
 		found := false
 		for _, got := range names {
@@ -860,16 +860,16 @@ func TestReaderTokenGetFullPageMarkdownUsesPublicContentOnly(t *testing.T) {
 	const bearer = "reader-token"
 	addBearerToken(t, storePath, bearer, "reader")
 
-	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_full_page_markdown","arguments":{"slug":"/posts/demo/"}}}`))
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_markdown","arguments":{"slug":"/posts/demo/"}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader get_full_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("reader get_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
 	if strings.Contains(body, "Source-only body that should stay hidden.") || strings.Contains(body, "SecretCat") {
-		t.Fatalf("reader get_full_page_markdown must not expose source content; body = %q", body)
+		t.Fatalf("reader get_page_markdown must not expose source content; body = %q", body)
 	}
 	if !strings.Contains(body, "Rendered public body.") {
-		t.Fatalf("reader get_full_page_markdown missing rendered public body; body = %q", body)
+		t.Fatalf("reader get_page_markdown missing rendered public body; body = %q", body)
 	}
 }
 
@@ -905,12 +905,12 @@ func TestReaderTokenGetFullPageMarkdownRejectsSourceOnlyPage(t *testing.T) {
 	const bearer = "reader-token"
 	addBearerToken(t, storePath, bearer, "reader")
 
-	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_full_page_markdown","arguments":{"slug":"/drafts/fresh/"}}}`))
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_markdown","arguments":{"slug":"/drafts/fresh/"}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader get_full_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("reader get_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "content_not_public") {
-		t.Fatalf("reader get_full_page_markdown must reject source-only page with content_not_public; body = %q", rec.Body.String())
+		t.Fatalf("reader get_page_markdown must reject source-only page with content_not_public; body = %q", rec.Body.String())
 	}
 }
 
@@ -948,7 +948,7 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 		}
 	}
 
-	readPayload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_full_page_markdown","arguments":{"slug":"/posts/hello"}}}`)
+	readPayload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_markdown","arguments":{"slug":"/posts/hello"}}}`)
 	readRec := doMCPCall(t, srv, bearer, readPayload)
 	if readRec.Code != http.StatusOK {
 		t.Fatalf("legacy mcp must allow read tool: status = %d body = %q", readRec.Code, readRec.Body.String())
@@ -1265,7 +1265,7 @@ clients:
 
 // TestAnonymousServerDoesNotExposeAuthenticatedTools guards the scope boundary
 // between the anonymous server (no OAuth) and the content.read tier.
-// Tools like validate_site and validate_front_matter require content.read and
+// Tools like validate_site and validate_frontmatter require content.read and
 // must NEVER appear when the server runs without OAuth (anonymous mode).
 // If they appear here it means they were accidentally registered on anonServer.
 func TestAnonymousServerDoesNotExposeAuthenticatedTools(t *testing.T) {
@@ -1275,7 +1275,7 @@ func TestAnonymousServerDoesNotExposeAuthenticatedTools(t *testing.T) {
 	// These tools require content.read and must not be on the anonymous server.
 	authOnlyTools := []string{
 		"validate_site",
-		"validate_front_matter",
+		"validate_frontmatter",
 		"build_agent_context",
 		"export_agent_context",
 		"get_broken_links",

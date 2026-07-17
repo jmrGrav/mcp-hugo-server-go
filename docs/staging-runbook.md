@@ -123,7 +123,7 @@ MCP_SMOKE_WRITE_SLUG=codex-mcp-live-audit-$(date -u +%Y%m%d-%H%M%S) \
 bash scripts/smoke-mcp-live.sh
 ```
 
-If `generate_featured_image` is intentionally disabled because `image_gen_url`
+If `generate_hero_image` is intentionally disabled because `image_gen_url`
 is absent, the tool should return a structured `config_error`. That is expected
 operator feedback, not a secret or a crash.
 

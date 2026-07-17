@@ -84,7 +84,7 @@ func TestGenerateFeaturedImage_Success(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
 		"slug":   "my-post",
 		"prompt": "a scenic mountain landscape",
 	})
@@ -128,7 +128,7 @@ func TestGenerateFeaturedImage_MIMEReject(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
 		"slug":   "test-post",
 		"prompt": "test prompt",
 	})
@@ -164,7 +164,7 @@ func TestGenerateFeaturedImage_Timeout(t *testing.T) {
 	defer cancel()
 
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name: "generate_featured_image",
+		Name: "generate_hero_image",
 		Arguments: map[string]any{
 			"slug":   "timeout-post",
 			"prompt": "timeout test",
@@ -194,11 +194,11 @@ func TestGenerateFeaturedImageAlwaysRegistered(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	for _, tool := range result.Tools {
-		if tool.Name == "generate_featured_image" {
+		if tool.Name == "generate_hero_image" {
 			return
 		}
 	}
-	t.Fatal("generate_featured_image not found in tools list — tool must always be registered")
+	t.Fatal("generate_hero_image not found in tools list — tool must always be registered")
 }
 
 func TestGenerateFeaturedImageLocalRender(t *testing.T) {
@@ -212,7 +212,7 @@ func TestGenerateFeaturedImageLocalRender(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
 		"slug":  "my-post",
 		"title": "Hello World from Local Renderer",
 		"tags":  []string{"go", "hugo"},
@@ -257,7 +257,7 @@ func TestGenerateFeaturedImageWriteErrorIsActionable(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
 		"slug":   "test-post",
 		"prompt": "test prompt",
 	})
@@ -290,14 +290,14 @@ func TestGenerateFeaturedImageDescriptionWhenConfigured(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	for _, tool := range result.Tools {
-		if tool.Name == "generate_featured_image" {
+		if tool.Name == "generate_hero_image" {
 			if strings.Contains(tool.Description, "not configured") {
 				t.Errorf("description should not contain 'not configured' when configured, got: %q", tool.Description)
 			}
 			return
 		}
 	}
-	t.Fatal("generate_featured_image not found in tools list")
+	t.Fatal("generate_hero_image not found in tools list")
 }
 
 func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
@@ -309,7 +309,7 @@ func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
 		"slug":   "../../etc/passwd",
 		"prompt": "traversal test",
 	})
@@ -330,15 +330,15 @@ func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
 	}
 	err0 := errors[0].(map[string]any)
 	if got := err0["code"]; got != "invalid_params" {
-		t.Fatalf("generate_featured_image error code = %v, want invalid_params", got)
+		t.Fatalf("generate_hero_image error code = %v, want invalid_params", got)
 	}
 	if got := err0["field"]; got != "slug" {
-		t.Fatalf("generate_featured_image error field = %v, want slug", got)
+		t.Fatalf("generate_hero_image error field = %v, want slug", got)
 	}
 }
 
 // TestGenerateFeaturedImage_SymlinkedImagesDir_APIMode verifies that
-// generate_featured_image (API mode) fails closed when static/images is
+// generate_hero_image (API mode) fails closed when static/images is
 // symlinked to a directory outside hugo_root. Uses RejectSymlinks=false to
 // confirm the fix forces detection regardless of the operator config setting
 // (#234).
@@ -371,7 +371,7 @@ func TestGenerateFeaturedImage_SymlinkedImagesDir_APIMode(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
 		"slug":   "my-post",
 		"prompt": "test prompt",
 	})
@@ -388,7 +388,7 @@ func TestGenerateFeaturedImage_SymlinkedImagesDir_APIMode(t *testing.T) {
 }
 
 // TestGenerateFeaturedImage_SymlinkedImagesDir_LocalRender verifies that
-// generate_featured_image (local render mode) fails closed when static/images
+// generate_hero_image (local render mode) fails closed when static/images
 // is symlinked outside hugo_root, even when RejectSymlinks=false (#234).
 func TestGenerateFeaturedImage_SymlinkedImagesDir_LocalRender(t *testing.T) {
 	hugoRoot := t.TempDir()
@@ -411,7 +411,7 @@ func TestGenerateFeaturedImage_SymlinkedImagesDir_LocalRender(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
 		"slug":  "my-post",
 		"title": "My Post",
 	})
@@ -439,7 +439,7 @@ func TestGenerateFeaturedImage_NormalPath_StillSucceeds(t *testing.T) {
 	session, done := newTestServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "generate_featured_image", map[string]any{
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
 		"slug":  "normal-post",
 		"title": "Normal Post",
 	})

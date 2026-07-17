@@ -320,7 +320,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"Pass content_only=true to strip navigation, header, and footer from the rendered HTML of published pages "+
 			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; if `content_only=true` is also set, the `html` field is returned empty for source-only fallback results). "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
-			"For the raw Markdown source, use get_full_page_markdown (requires content.read). "+
+			"For the raw Markdown source, use get_page_markdown (requires content.read). "+
 			"Does not require authentication.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
 			if idx == nil && srcIdx == nil {

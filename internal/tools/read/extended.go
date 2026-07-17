@@ -391,7 +391,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "explain_site_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Requires content.read.",
+	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -449,7 +449,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "validate_front_matter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. Requires content.read.",
+	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -464,7 +464,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
 		})
 
-	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_front_matter with no slug filter. `pages_checked` always covers every page on the site; `pages` returns detail rows for all of them (this tool does not currently accept limit/offset). Requires content.read.",
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked` always covers every page on the site; `pages` returns detail rows for all of them (this tool does not currently accept limit/offset). Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -558,7 +558,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, env, nil
 		})
 
-	addReadOnlyTool(s, "suggest_internal_links", "Suggest internal links",
+	addReadOnlyTool(s, "suggest_links", "Suggest internal links",
 		"Recommend existing published pages to link from a draft or existing page, based on shared tags and categories. "+
 			"Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. "+
 			"Optionally include body to detect pages whose titles already appear in the text (body_mention: true). "+

@@ -12,10 +12,10 @@ var anonymousToolNames = []string{
 }
 
 var readToolNames = []string{
-	"get_full_page_markdown", "get_page_frontmatter",
+	"get_page_markdown", "get_page_frontmatter",
 	"get_related_content", "build_agent_context", "export_agent_context",
-	"search_content", "explain_site_structure", "get_site_health", "diff_page",
-	"validate_front_matter", "validate_site",
+	"search_content", "explain_structure", "get_site_health", "diff_page",
+	"validate_frontmatter", "validate_site",
 }
 
 func populateRegistry(r *tools.Registry) {

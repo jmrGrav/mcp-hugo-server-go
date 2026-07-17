@@ -52,9 +52,9 @@ func TestACLAllowsPublicToolAnonymous(t *testing.T) {
 
 func TestACLBlocksReadToolForAnonymous(t *testing.T) {
 	p := buildTestPolicy()
-	body := toolsCallBody("get_full_page_markdown")
+	body := toolsCallBody("get_page_markdown")
 	if p.AllowRequest(body, "") {
-		t.Fatal("expected get_full_page_markdown to be blocked for anonymous")
+		t.Fatal("expected get_page_markdown to be blocked for anonymous")
 	}
 	if reason := p.DenyReason(body, ""); reason != "forbidden_tool" {
 		t.Fatalf("expected forbidden_tool, got %q", reason)
@@ -63,9 +63,9 @@ func TestACLBlocksReadToolForAnonymous(t *testing.T) {
 
 func TestACLAllowsReadToolForContentRead(t *testing.T) {
 	p := buildTestPolicy()
-	body := toolsCallBody("get_full_page_markdown")
+	body := toolsCallBody("get_page_markdown")
 	if !p.AllowRequest(body, "content.read") {
-		t.Fatal("expected get_full_page_markdown to be allowed for content.read")
+		t.Fatal("expected get_page_markdown to be allowed for content.read")
 	}
 }
 
@@ -110,7 +110,7 @@ func TestACLBatchWithForbidden(t *testing.T) {
 		map[string]any{
 			"jsonrpc": "2.0", "id": 2,
 			"method": "tools/call",
-			"params": map[string]any{"name": "get_full_page_markdown"},
+			"params": map[string]any{"name": "get_page_markdown"},
 		},
 	})
 	if p.AllowRequest(body, "") {
