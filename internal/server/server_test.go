@@ -662,8 +662,8 @@ func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 24 {
-		t.Fatalf("authenticated tools/list = %d tools, want 24; got %v", len(names), names)
+	if len(names) != 25 {
+		t.Fatalf("authenticated tools/list = %d tools, want 25; got %v", len(names), names)
 	}
 	for _, name := range []string{"get_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_structure", "get_site_health", "diff_page", "validate_frontmatter", "validate_site", "suggest_links"} {
 		found := false
@@ -687,8 +687,8 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	addBearerToken(t, storePath, bearer, "reader")
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 24 {
-		t.Fatalf("reader tools/list = %d tools, want 24; got %v", len(names), names)
+	if len(names) != 25 {
+		t.Fatalf("reader tools/list = %d tools, want 25; got %v", len(names), names)
 	}
 	for _, name := range []string{
 		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
@@ -873,6 +873,73 @@ func TestReaderTokenGetFullPageMarkdownUsesPublicContentOnly(t *testing.T) {
 	}
 }
 
+func TestReaderTokenGetPageForEditUsesPublicContentAndOmitsQuality(t *testing.T) {
+	// #339: get_page_for_edit's quality section needs raw source access
+	// (front matter validation via sourcePagesForValidation), the same
+	// class of source-derived signal as #324's taxonomy details. Confirm
+	// end-to-end that a reader gets public-only frontmatter/markdown and
+	// no quality section, rather than trusting sourceIndexForProfile's
+	// nil-for-readers behavior by inspection alone.
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(content) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "demo", "index.md"), []byte("---\ntitle: Demo\ncategories:\n  - SecretCat\n---\nSource-only body that should stay hidden.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(publicRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(public page) error = %v", err)
+	}
+	publicHTML := `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Demo</title>
+  <meta name="description" content="Rendered summary">
+  <link rel="canonical" href="https://example.test/posts/demo/">
+</head>
+<body><main><article><h1>Demo</h1><p>Rendered public body.</p></article></main></body>
+</html>`
+	if err := os.WriteFile(filepath.Join(publicRoot, "posts", "demo", "index.html"), []byte(publicHTML), 0o644); err != nil {
+		t.Fatalf("WriteFile(public html) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_for_edit","arguments":{"slug":"/posts/demo/"}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader get_page_for_edit status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "Source-only body that should stay hidden.") || strings.Contains(body, "SecretCat") {
+		t.Fatalf("reader get_page_for_edit must not expose source content; body = %q", body)
+	}
+	if !strings.Contains(body, "Rendered public body.") {
+		t.Fatalf("reader get_page_for_edit missing rendered public body; body = %q", body)
+	}
+	if strings.Contains(body, `"quality"`) {
+		t.Fatalf("reader get_page_for_edit must omit quality (requires source access); body = %q", body)
+	}
+}
+
 func TestReaderTokenGetSiteHealthOmitsTaxonomyInconsistencyDetails(t *testing.T) {
 	// #324: taxonomy_inconsistency_details carries source-page slugs
 	// (including draft/source-only pages). get_site_health has no
@@ -994,8 +1061,8 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	rewriteTokenScopeToLegacyMCP(t, storePath, bearer)
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 24 {
-		t.Fatalf("legacy mcp tools/list = %d tools, want 24; got %v", len(names), names)
+	if len(names) != 25 {
+		t.Fatalf("legacy mcp tools/list = %d tools, want 25; got %v", len(names), names)
 	}
 	for _, bad := range []string{"create_page", "update_page", "delete_page", "build_site"} {
 		for _, n := range names {

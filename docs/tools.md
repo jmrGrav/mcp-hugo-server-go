@@ -67,6 +67,7 @@ available.
 - `get_related_content` - Get related content
 - `build_agent_context` - Build agent context
 - `export_agent_context` - Export agent context
+- `get_page_for_edit` - Get page for edit (compact edit bundle: frontmatter + markdown + state + quality + revision in one call; see #339)
 - `search_content` - Search content
 - `explain_structure` - Explain site structure
 - `get_site_health` - Get site health

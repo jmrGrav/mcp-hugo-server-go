@@ -21,6 +21,7 @@ detail matters for runtime setup.
 | Read a published page (summary + HTML) | `get_page` | No auth needed |
 | Read a page's source Markdown for editing | `get_page_markdown` | Needs `content.read`; includes `page.state` |
 | Get a full context bundle before editing | `build_agent_context` | Frontmatter + Markdown + related + `context.state` |
+| Get a compact edit bundle in one call | `get_page_for_edit` | Frontmatter + Markdown + `state` + `quality` + `revision`; shape with `include`/`max_body_chars` |
 | Bulk-export content for analysis | `export_agent_context` | Tag/category filter + pagination + per-page `state` |
 | Simple keyword search (no auth) | `search_pages` | Title, summary, tags, URL |
 | Filtered search (type, tag, language, sort) | `search_content` | Full filter set + pagination + per-result `state` |

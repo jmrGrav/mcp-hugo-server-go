@@ -125,6 +125,21 @@ func (idx *Index) classifier() *ContentClassifier {
 	return NewClassifier(idx)
 }
 
+// Classifier returns idx's cached content classifier (rebuilt automatically
+// on Reload — see index.go). Prefer this over calling NewClassifier(idx)
+// directly when a caller already has an *Index: NewClassifier walks every
+// indexed page to build its section/taxonomy maps, so reconstructing it
+// per-call is O(pages) on every use; this accessor is O(1) after the first
+// build.
+func (idx *Index) Classifier() *ContentClassifier {
+	if idx == nil {
+		return NewClassifier(nil)
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.classifier()
+}
+
 // contentPagesLocked builds the content page list. Callers must hold idx.mu.RLock.
 func (idx *Index) contentPagesLocked() []Page {
 	classifier := idx.classifier()

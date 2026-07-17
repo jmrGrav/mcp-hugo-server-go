@@ -202,6 +202,86 @@ type exportAgentContextOutput struct {
 	IncludeBody   bool            `json:"include_body"`
 }
 
+type getPageForEditInput struct {
+	Slug         string   `json:"slug"`
+	Include      []string `json:"include,omitempty"`
+	MaxBodyChars int      `json:"max_body_chars,omitempty"`
+}
+
+// pageQualityDTO surfaces enough signal to decide whether a page is safe to
+// edit/publish without a separate validate_front_matter/get_broken_links
+// call. It is nil (omitted) when quality wasn't requested, or when quality
+// requires source access the caller's profile doesn't have (reader scope).
+type pageQualityDTO struct {
+	Valid       bool `json:"valid"`
+	BrokenLinks int  `json:"broken_links"`
+}
+
+// pageForEditDTO is the compact edit bundle (#339): the fields an agent
+// needs before modifying a page, gathered in one call instead of chaining
+// get_page_frontmatter + get_page_markdown + build_agent_context. Each
+// section is a pointer so an unrequested (via `include`) or unavailable
+// section is omitted from the JSON entirely rather than serialized as a
+// zero value that could be mistaken for real data.
+type pageForEditDTO struct {
+	Slug        string               `json:"slug"`
+	Revision    string               `json:"revision,omitempty"`
+	Frontmatter *frontmatterDTO      `json:"frontmatter,omitempty"`
+	Markdown    string               `json:"markdown,omitempty"`
+	State       *site.LifecycleState `json:"state,omitempty"`
+	Quality     *pageQualityDTO      `json:"quality,omitempty"`
+}
+
+type getPageForEditData struct {
+	Page pageForEditDTO `json:"page"`
+}
+
+type getPageForEditOutput struct {
+	toolcontract.ToolResponse[getPageForEditData]
+	Page pageForEditDTO `json:"page"`
+}
+
+// getPageForEditSections is the allowed vocabulary for the `include` param.
+// An empty/omitted `include` defaults to all four sections (the full
+// pre-shaping bundle), matching this repo's established shaping convention
+// (#337) that omitting shaping params never reduces the default response.
+var getPageForEditSections = map[string]bool{
+	"frontmatter": true,
+	"markdown":    true,
+	"state":       true,
+	"quality":     true,
+}
+
+func resolveEditInclude(raw []string) (map[string]bool, error) {
+	if len(raw) == 0 {
+		// Return a copy, not the package-level map itself: callers treat
+		// the result as theirs to hold, and getPageForEditSections also
+		// backs the validation lookup below — an accidental mutation by a
+		// future caller must not corrupt the shared vocabulary.
+		out := make(map[string]bool, len(getPageForEditSections))
+		for k, v := range getPageForEditSections {
+			out[k] = v
+		}
+		return out, nil
+	}
+	out := make(map[string]bool, len(raw))
+	for _, r := range raw {
+		if !getPageForEditSections[r] {
+			return nil, fmt.Errorf("invalid_params: include must be a subset of frontmatter, markdown, state, quality (got %q)", r)
+		}
+		out[r] = true
+	}
+	return out, nil
+}
+
+func newGetPageForEditOutput(data getPageForEditData, warnings []string, now time.Time) getPageForEditOutput {
+	resp := successEnvelope(data, now)
+	if len(warnings) > 0 {
+		resp.Warnings = warnings
+	}
+	return getPageForEditOutput{ToolResponse: resp, Page: data.Page}
+}
+
 func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
 	if s == nil {
 		return
@@ -427,6 +507,60 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				IncludeBody:   includeBody,
 			}
 			return nil, newExportAgentContextOutput(payload, warnings, time.Now().UTC()), nil
+		})
+
+	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
+		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality; default all four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. Lower-level tools remain available; this is an addition, not a replacement. Input: indexed slug only.",
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageForEditInput) (*mcp.CallToolResult, getPageForEditOutput, error) {
+			if idx == nil {
+				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
+			}
+			include, err := resolveEditInclude(in.Include)
+			if err != nil {
+				return nil, getPageForEditOutput{}, err
+			}
+			resolved, ok := resolver.Resolve(in.Slug)
+			if !ok {
+				return nil, getPageForEditOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
+			}
+			resolved, err = readerSafeResolvedPage(ctx, resolved, in.Slug)
+			if err != nil {
+				return nil, getPageForEditOutput{}, err
+			}
+			p := resolvedPublicPage(resolved)
+			page := pageForEditDTO{Slug: p.Slug, Revision: resolvedRevision(resolved)}
+			var warnings []string
+
+			if include["frontmatter"] {
+				rt := readingTimeMinutes(resolvedMarkdown(resolved))
+				fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)
+				page.Frontmatter = &fm
+			}
+			if include["markdown"] {
+				md, truncated := toolcontract.TruncateBody(resolvedMarkdown(resolved), in.MaxBodyChars)
+				page.Markdown = md
+				if truncated {
+					warnings = append(warnings, fmt.Sprintf("markdown truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", in.MaxBodyChars))
+				}
+			}
+			if include["state"] {
+				st := resolvedState(resolved, cfg.SiteRoot)
+				page.State = &st
+			}
+			if include["quality"] {
+				qSrc := sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx))
+				if qSrc != nil {
+					if srcPages, err := sourcePagesForValidation(qSrc, in.Slug); err == nil && len(srcPages) > 0 {
+						issues := validateFrontMatterPage(srcPages[0], aliases)
+						broken := 0
+						if indexedPage, found := idx.GetBySlug(p.Slug); found {
+							broken = len(brokenLinksForPage(idx, idx.Classifier(), *indexedPage))
+						}
+						page.Quality = &pageQualityDTO{Valid: len(issues) == 0, BrokenLinks: broken}
+					}
+				}
+			}
+			return nil, newGetPageForEditOutput(getPageForEditData{Page: page}, warnings, time.Now().UTC()), nil
 		})
 }
 
@@ -768,6 +902,7 @@ func Defs() []tools.ToolDef {
 		{Name: "get_related_content", RequiredScope: "content.read"},
 		{Name: "build_agent_context", RequiredScope: "content.read"},
 		{Name: "export_agent_context", RequiredScope: "content.read"},
+		{Name: "get_page_for_edit", RequiredScope: "content.read"},
 		{Name: "search_content", RequiredScope: "content.read"},
 		{Name: "explain_structure", RequiredScope: "content.read"},
 		{Name: "get_site_health", RequiredScope: "content.read"},
