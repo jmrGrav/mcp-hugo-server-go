@@ -116,16 +116,17 @@ type buildAgentContextData struct {
 }
 
 type exportAgentContextInput struct {
-	Tag      string `json:"tag,omitempty"`
-	Category string `json:"category,omitempty"`
-	Limit    int    `json:"limit,omitempty"`
-	Offset   int    `json:"offset,omitempty"`
+	Tag         string `json:"tag,omitempty"`
+	Category    string `json:"category,omitempty"`
+	Limit       int    `json:"limit,omitempty"`
+	Offset      int    `json:"offset,omitempty"`
+	IncludeBody *bool  `json:"include_body,omitempty"`
 }
 
 type pageExportDTO struct {
 	Frontmatter frontmatterDTO      `json:"frontmatter"`
 	State       site.LifecycleState `json:"state"`
-	Markdown    string              `json:"markdown"`
+	Markdown    string              `json:"markdown,omitempty"`
 }
 
 type exportResultDTO struct {
@@ -136,7 +137,19 @@ type exportResultDTO struct {
 	ReturnedCount int             `json:"returned_count"`
 	HasMore       bool            `json:"has_more"`
 	NextOffset    *int            `json:"next_offset,omitempty"`
+	IncludeBody   bool            `json:"include_body"`
 }
+
+// exportAgentContextMaxLimitWithBody caps the page count when full Markdown
+// bodies are included, since a single page body can run tens of KB and an
+// uncapped multi-page export can exceed MCP message size limits. Callers
+// that only need metadata can set include_body=false to use the higher
+// exportAgentContextMaxLimitMetadataOnly cap instead.
+const (
+	exportAgentContextMaxLimitWithBody     = 10
+	exportAgentContextMaxLimitMetadataOnly = 50
+	exportAgentContextDefaultLimit         = 10
+)
 
 type exportAgentContextData = exportResultDTO
 
@@ -174,6 +187,7 @@ type exportAgentContextOutput struct {
 	ReturnedCount int             `json:"returned_count"`
 	HasMore       bool            `json:"has_more"`
 	NextOffset    *int            `json:"next_offset,omitempty"`
+	IncludeBody   bool            `json:"include_body"`
 }
 
 func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
@@ -291,13 +305,27 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "export_agent_context", "Export agent context",
-		"Paginated export of page context bundles filtered by tag or category. Each page includes front matter, reading time, full Markdown content, and lifecycle `state` so bulk consumers can distinguish built pages from source-only or stale content. Use this for bulk analysis or migration work.",
+		"Paginated export of page context bundles filtered by tag or category. Each page includes front matter, reading time, and lifecycle `state`. By default also includes full Markdown content, which caps `limit` at 10 pages to keep the response within MCP message size limits; set `include_body=false` to fetch metadata only (frontmatter + state, no Markdown) at a higher cap of 50 pages. Use this for bulk analysis or migration work.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in exportAgentContextInput) (*mcp.CallToolResult, exportAgentContextOutput, error) {
 			if idx == nil {
 				return nil, exportAgentContextOutput{}, fmt.Errorf("index not initialized")
 			}
 			readerSafe := site.IsReaderProfile(ctx)
-			limit := clampLimit(in.Limit, 10, 50)
+			includeBody := true
+			if in.IncludeBody != nil {
+				includeBody = *in.IncludeBody
+			}
+			maxLimit := exportAgentContextMaxLimitMetadataOnly
+			if includeBody {
+				maxLimit = exportAgentContextMaxLimitWithBody
+			}
+			limit := clampLimit(in.Limit, exportAgentContextDefaultLimit, maxLimit)
+			var warnings []string
+			if in.Limit > maxLimit {
+				warnings = append(warnings, fmt.Sprintf(
+					"requested limit %d exceeds the maximum of %d for include_body=%t; results were capped. Set include_body=false to raise the cap to %d.",
+					in.Limit, maxLimit, includeBody, exportAgentContextMaxLimitMetadataOnly))
+			}
 			all := idx.ContentPages()
 			var filtered []site.Page
 			tagSlug := taxonomy.Slug(in.Tag)
@@ -334,8 +362,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					ReturnedCount: meta.ReturnedCount,
 					HasMore:       meta.HasMore,
 					NextOffset:    meta.NextOffset,
+					IncludeBody:   includeBody,
 				}
-				return nil, newExportAgentContextOutput(payload, time.Now().UTC()), nil
+				return nil, newExportAgentContextOutput(payload, warnings, time.Now().UTC()), nil
 			}
 			slice := filtered[offset:]
 			if len(slice) > limit {
@@ -352,11 +381,14 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				p := resolvedPublicPage(resolved)
 				md := resolvedMarkdown(resolved)
 				rt := readingTimeMinutes(md)
-				pages = append(pages, pageExportDTO{
+				page := pageExportDTO{
 					Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt),
 					State:       resolvedState(resolved, cfg.SiteRoot),
-					Markdown:    md,
-				})
+				}
+				if includeBody {
+					page.Markdown = md
+				}
+				pages = append(pages, page)
 			}
 			payload := exportAgentContextData{
 				Pages:         pages,
@@ -366,8 +398,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				ReturnedCount: meta.ReturnedCount,
 				HasMore:       meta.HasMore,
 				NextOffset:    meta.NextOffset,
+				IncludeBody:   includeBody,
 			}
-			return nil, newExportAgentContextOutput(payload, time.Now().UTC()), nil
+			return nil, newExportAgentContextOutput(payload, warnings, time.Now().UTC()), nil
 		})
 }
 
@@ -394,9 +427,13 @@ func newBuildAgentContextOutput(data buildAgentContextData, now time.Time) build
 	return buildAgentContextOutput{ToolResponse: successEnvelope(data, now), Context: data.Context}
 }
 
-func newExportAgentContextOutput(data exportAgentContextData, now time.Time) exportAgentContextOutput {
+func newExportAgentContextOutput(data exportAgentContextData, warnings []string, now time.Time) exportAgentContextOutput {
+	resp := successEnvelope(data, now)
+	if len(warnings) > 0 {
+		resp.Warnings = warnings
+	}
 	return exportAgentContextOutput{
-		ToolResponse:  successEnvelope(data, now),
+		ToolResponse:  resp,
 		Export:        exportResultDTO(data),
 		Pages:         data.Pages,
 		Total:         data.Total,
@@ -405,6 +442,7 @@ func newExportAgentContextOutput(data exportAgentContextData, now time.Time) exp
 		ReturnedCount: data.ReturnedCount,
 		HasMore:       data.HasMore,
 		NextOffset:    data.NextOffset,
+		IncludeBody:   data.IncludeBody,
 	}
 }
 

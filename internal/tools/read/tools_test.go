@@ -382,6 +382,71 @@ func TestExportAgentContextPaginationMetadataTerminalPage(t *testing.T) {
 	assertReadPaginationMetadata(t, exportVal, 2, 10, 1, 1, false, 0, false)
 }
 
+func TestExportAgentContextDefaultCapsLimitWhenIncludeBody(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "export_agent_context", map[string]any{"limit": 15})
+	if res.IsError {
+		t.Fatalf("export_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	exportVal, ok := m["export"].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context export type = %T", m["export"])
+	}
+	if got := exportVal["limit"]; got != float64(10) {
+		t.Fatalf("export_agent_context limit=15 with include_body default: effective limit = %v, want 10 (capped)", got)
+	}
+	if got := exportVal["include_body"]; got != true {
+		t.Fatalf("export_agent_context include_body = %v, want true (default)", got)
+	}
+	warnings, _ := m["warnings"].([]any)
+	if len(warnings) == 0 {
+		t.Fatal("export_agent_context limit=15 with include_body default: expected a warning that the limit was capped")
+	}
+}
+
+func TestExportAgentContextIncludeBodyFalseOmitsMarkdownAndRaisesCap(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "export_agent_context", map[string]any{"limit": 15, "include_body": false})
+	if res.IsError {
+		t.Fatalf("export_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	exportVal, ok := m["export"].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context export type = %T", m["export"])
+	}
+	if got := exportVal["limit"]; got != float64(15) {
+		t.Fatalf("export_agent_context limit=15 with include_body=false: effective limit = %v, want 15 (not capped)", got)
+	}
+	if got := exportVal["include_body"]; got != false {
+		t.Fatalf("export_agent_context include_body = %v, want false", got)
+	}
+	warnings, _ := m["warnings"].([]any)
+	if len(warnings) != 0 {
+		t.Fatalf("export_agent_context limit=15 with include_body=false: unexpected warnings %v", warnings)
+	}
+	pages, _ := exportVal["pages"].([]any)
+	if len(pages) == 0 {
+		t.Fatal("export_agent_context include_body=false: expected at least one page")
+	}
+	for _, raw := range pages {
+		page, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("export_agent_context page = %T, want map", raw)
+		}
+		if md, present := page["markdown"]; present {
+			t.Fatalf("export_agent_context include_body=false: page still carries markdown field: %v", md)
+		}
+	}
+}
+
 func TestExportAgentContextUsesSourceMarkdownForPublicLanguageSlug(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
