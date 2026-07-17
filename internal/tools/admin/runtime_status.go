@@ -2,7 +2,6 @@ package admin
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -178,14 +178,19 @@ func probeGitBaseline(ctx context.Context, cfg config.Config) gitRuntimeStatus {
 		return status
 	}
 
-	tctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	gitRoot, err := gitStatusOutput(tctx, root, "rev-parse", "--show-toplevel")
+	// Discovered via a pure filesystem walk (gitutil.DiscoverRoot), not by
+	// invoking git: git's own root-discovery command is itself blocked by
+	// the dubious-ownership check this indirection routes around (a
+	// content checkout owned by an interactive user, read by a dedicated
+	// service account, is exactly the case that check exists to flag).
+	gitRoot, err := gitutil.DiscoverRoot(root)
 	if err != nil {
 		status.Error = sanitiseGitError(err, cfg, root, gitRoot)
 		return status
 	}
 
+	tctx, cancel := context.WithTimeout(ctx, probeTimeout)
+	defer cancel()
 	branch, err := gitStatusOutput(tctx, gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
 	if err == nil {
 		status.Branch = branch
@@ -222,10 +227,5 @@ func sanitiseGitError(err error, cfg config.Config, roots ...string) string {
 }
 
 func gitStatusOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return strings.TrimSpace(string(out)), nil
+	return gitutil.Output(ctx, dir, args...)
 }

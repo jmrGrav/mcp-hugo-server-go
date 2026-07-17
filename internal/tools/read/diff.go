@@ -13,6 +13,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
@@ -194,12 +195,16 @@ func resolvedLogicalPath(contentRoot, absPath, relPath string) string {
 	return filepath.ToSlash(filepath.Join("content", relPath))
 }
 
-func findGitRoot(ctx context.Context, start string) (string, error) {
-	return gitOutput(ctx, start, "rev-parse", "--show-toplevel")
+// findGitRoot discovers the repository root via a pure filesystem walk
+// (gitutil.DiscoverRoot), not by invoking git — see gitutil's package
+// comment for why: git's own discovery command is itself blocked by the
+// dubious-ownership check this indirection exists to route around.
+func findGitRoot(_ context.Context, start string) (string, error) {
+	return gitutil.DiscoverRoot(start)
 }
 
 func gitShowFile(ctx context.Context, gitRoot, relPath string) ([]byte, bool, error) {
-	out, err := gitBytes(ctx, gitRoot, "show", "HEAD:"+filepath.ToSlash(relPath))
+	out, err := gitutil.Bytes(ctx, gitRoot, "show", "HEAD:"+filepath.ToSlash(relPath))
 	if err == nil {
 		return out, true, nil
 	}
@@ -210,20 +215,7 @@ func gitShowFile(ctx context.Context, gitRoot, relPath string) ([]byte, bool, er
 }
 
 func gitOutput(ctx context.Context, gitRoot string, args ...string) (string, error) {
-	out, err := gitBytes(ctx, gitRoot, args...)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func gitBytes(ctx context.Context, gitRoot string, args ...string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", gitRoot}, args...)...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
-	}
-	return out, nil
+	return gitutil.Output(ctx, gitRoot, args...)
 }
 
 func isGitPathMissing(err error) bool {
