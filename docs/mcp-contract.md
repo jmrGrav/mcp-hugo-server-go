@@ -502,6 +502,41 @@ be more misleading than omitting it.
 No behavior change: `score`/`status` are identical to pre-#419 for every
 input, including sites with `alias_mismatch`/`possible_duplicate` findings.
 
+## 6.9. `verify_publication` Bounded Wait (#421)
+
+Extends the existing `verify_publication` tool with an optional
+`wait_seconds` rather than inventing a parallel polling mechanism — a
+mutation's `expected_revision` is already sufficient to identify what a
+caller is waiting for, so no new `mutation_id` concept was added.
+
+- Omitted or `0`: unchanged — a single point-in-time check, exactly as
+  before #421.
+- A positive value: the tool polls the *local* source/build/public/index
+  state (disk mtimes/presence — no network) internally and returns as soon
+  as that local state settles, or once the wait budget is exhausted with
+  whatever state it has by then. Exactly one outbound HTTP probe is made,
+  at the end, regardless of how many local-state ticks the wait took —
+  never once per tick, since that could push a "20s" wait to ~30s
+  wall-clock on a slow host (bounded by `verifyPublicationHTTPTimeout`,
+  10s) and would otherwise fire dozens of GETs at the live site for no
+  benefit. Clamped server-side to a small maximum (currently 20s) so this
+  can never become a long-held connection. The response always echoes the
+  actual (clamped) budget in `data.wait_seconds`, so a caller who requested
+  more than the maximum can see it was capped.
+- Scope limit: the in-memory site index is a snapshot from server
+  startup/last reindex, not a live filesystem view — a page the index
+  hasn't picked up at all (e.g. a brand-new page) cannot resolve mid-wait
+  no matter how long `wait_seconds` runs; it fails fast with
+  `content_not_found` instead. `wait_seconds` smooths the "an edit to a
+  page the index already knows about is catching up with a build" lag, not
+  "wait for the index to notice a brand-new page."
+
+Does not overlap with the `docs/transactional-edit-design.md` proposal:
+that `publish_changes` concept is a full confirmation gate for the
+build/publish step itself; this is narrower — making the existing
+post-write settle time observable in one call instead of several, and
+applies today without depending on that design.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
