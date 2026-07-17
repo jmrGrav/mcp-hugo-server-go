@@ -520,6 +520,125 @@ func TestSearchPagesPaginationMetadata(t *testing.T) {
 	assertPaginationMetadata(t, m, 2, 1, 0, 1, true, 1, true)
 }
 
+func TestSearchPagesDefaultShapeUnchanged(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_pages", map[string]any{"query": "hugo", "limit": 5})
+	if res.IsError {
+		t.Fatalf("search_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	pages, _ := m["pages"].([]any)
+	if len(pages) == 0 {
+		t.Fatal("search_pages('hugo'): expected results, got 0")
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("search_pages: page = %T, want map", pages[0])
+	}
+	// The full default shape must be preserved when response_mode/fields
+	// are omitted, since omitting them is the pre-shaping call pattern
+	// every existing client already uses.
+	for _, field := range []string{"slug", "title", "summary", "tags", "categories", "date", "url", "lang"} {
+		if _, present := page[field]; !present {
+			t.Errorf("search_pages default shape: missing field %q, got keys %v", field, mapKeys(page))
+		}
+	}
+}
+
+func TestSearchPagesResponseModeCompact(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_pages", map[string]any{"query": "hugo", "limit": 5, "response_mode": "compact"})
+	if res.IsError {
+		t.Fatalf("search_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	pages, _ := m["pages"].([]any)
+	if len(pages) == 0 {
+		t.Fatal("search_pages('hugo', compact): expected results, got 0")
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("search_pages: page = %T, want map", pages[0])
+	}
+	for _, field := range []string{"slug", "title", "url"} {
+		if _, present := page[field]; !present {
+			t.Errorf("search_pages compact: missing field %q", field)
+		}
+	}
+	for _, field := range []string{"summary", "tags", "categories", "date", "lang"} {
+		if _, present := page[field]; present {
+			t.Errorf("search_pages compact: unexpected field %q present, want reduced shape", field)
+		}
+	}
+
+	standard := callTool(t, session, "search_pages", map[string]any{"query": "hugo", "limit": 5})
+	standardBytes, err := json.Marshal(decodeContent(t, standard)["pages"])
+	if err != nil {
+		t.Fatalf("marshal standard pages: %v", err)
+	}
+	compactBytes, err := json.Marshal(pages)
+	if err != nil {
+		t.Fatalf("marshal compact pages: %v", err)
+	}
+	if len(compactBytes) >= len(standardBytes) {
+		t.Errorf("search_pages compact payload (%d bytes) not smaller than standard (%d bytes)", len(compactBytes), len(standardBytes))
+	}
+}
+
+func TestSearchPagesFieldsSelection(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_pages", map[string]any{"query": "hugo", "limit": 5, "fields": []string{"slug", "title"}})
+	if res.IsError {
+		t.Fatalf("search_pages returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	pages, _ := m["pages"].([]any)
+	if len(pages) == 0 {
+		t.Fatal("search_pages('hugo', fields): expected results, got 0")
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("search_pages: page = %T, want map", pages[0])
+	}
+	if len(page) != 2 {
+		t.Fatalf("search_pages fields=[slug,title]: got keys %v, want exactly slug+title", mapKeys(page))
+	}
+	if _, ok := page["slug"]; !ok {
+		t.Error("search_pages fields=[slug,title]: missing slug")
+	}
+	if _, ok := page["title"]; !ok {
+		t.Error("search_pages fields=[slug,title]: missing title")
+	}
+}
+
+func TestSearchPagesResponseModeReservedRejected(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_pages", map[string]any{"query": "hugo", "response_mode": "ids_only"})
+	if !res.IsError {
+		t.Fatal("search_pages response_mode=ids_only: expected error, reserved mode is not yet implemented")
+	}
+}
+
+func mapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func TestSearchPagesLimitCap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

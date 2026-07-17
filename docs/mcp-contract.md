@@ -176,6 +176,30 @@ already documented in [Section 1](#1-response-envelopes) (`#210`) — both are
 the same category of decision: a v1.x compatibility guarantee outranks a
 scanner-score optimization.
 
+### 5.2 Response shaping (#337)
+
+Some read tools accept optional shaping parameters that reduce payload size
+without changing the envelope (Section 5.1 still applies — shaping narrows
+what's inside `data`/the flat top level, never removes `success`/`errors`/
+`warnings`/`meta`). Omitting all shaping parameters is always a no-op: a
+call with no shaping parameters returns the exact same shape it returned
+before this feature existed.
+
+| Parameter        | Type       | Meaning                                                    |
+|-------------------|------------|-------------------------------------------------------------|
+| `response_mode`   | string     | `standard` (default) or `compact` (reduced field set, tool-defined). `full` and `ids_only` are reserved for future work and rejected as `invalid_params` until implemented — they are never silently treated as `standard`. |
+| `fields`          | string[]   | Restrict each returned item to the named JSON fields. Applied after `response_mode`, so it can further narrow a `compact` row. Unknown field names are silently dropped, not an error. |
+| `include_body`    | bool       | Default `true`. When `false`, omit large body content (e.g. Markdown) and return metadata only. Same nil-means-true semantics everywhere it appears (see `export_agent_context`, #325). |
+| `max_body_chars`  | int        | Truncate a body field to N characters. `0` (default) disables truncation. Truncation adds a `warnings` entry so callers know the body was cut. |
+
+Not every tool supports every parameter — see [Section 6](#6-tool-inventory)
+for which parameters each tool accepts. Current adopters: `search_pages`
+(`response_mode`, `fields`), `build_agent_context` (`response_mode`,
+`max_body_chars`), `export_agent_context` (`include_body`, predates this
+section — see #325). Additional tools adopt these parameters incrementally;
+adding support to a new tool is not a breaking change since the parameters
+are optional and additive.
+
 ---
 
 ## 6. Tool Inventory
@@ -186,7 +210,7 @@ scanner-score optimization.
 |-----------------------|-----------|---------------------------|
 | `list_pages`          | flat      | `pages`                   |
 | `get_page`            | flat      | `page`                    |
-| `search_pages`        | flat      | `pages`                   |
+| `search_pages`        | flat      | `pages`; supports `response_mode`/`fields` shaping (§5.2, #337) |
 | `get_recent_posts`    | flat      | `pages`                   |
 | `list_tags`           | flat      | `tags`                    |
 | `list_categories`     | flat      | `categories`              |
@@ -201,7 +225,7 @@ scanner-score optimization.
 | `get_full_page_markdown`| flat        | `page` + `page.state`                        |
 | `get_page_frontmatter`  | flat        | `frontmatter` + `frontmatter.state`          |
 | `get_related_content`   | flat        | `related`                                    |
-| `build_agent_context`   | flat        | `context` + `context.state`                  |
+| `build_agent_context`   | flat        | `context` + `context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337) |
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
 | `explain_site_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |

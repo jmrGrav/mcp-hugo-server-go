@@ -2,6 +2,7 @@ package anonymous
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	neturl "net/url"
 	"slices"
@@ -32,9 +33,21 @@ type getPageInput struct {
 }
 
 type searchPagesInput struct {
-	Query  string `json:"query"`
-	Limit  int    `json:"limit,omitempty"`
-	Offset int    `json:"offset,omitempty"`
+	Query        string   `json:"query"`
+	Limit        int      `json:"limit,omitempty"`
+	Offset       int      `json:"offset,omitempty"`
+	ResponseMode string   `json:"response_mode,omitempty"`
+	Fields       []string `json:"fields,omitempty"`
+}
+
+// pageDTOCompact is the reduced shape returned when response_mode=compact:
+// just enough to identify and link to a page during a selection pass,
+// without the fields (summary, tags, categories, date, lang) an agent
+// typically doesn't need until it has picked a candidate.
+type pageDTOCompact struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title"`
+	URL   string `json:"url"`
 }
 
 type getRecentPostsInput struct {
@@ -117,13 +130,13 @@ type getPageData struct {
 }
 
 type searchPagesData struct {
-	Pages         []pageDTO `json:"pages"`
-	Total         int       `json:"total"`
-	Limit         int       `json:"limit"`
-	Offset        int       `json:"offset"`
-	ReturnedCount int       `json:"returned_count"`
-	HasMore       bool      `json:"has_more"`
-	NextOffset    *int      `json:"next_offset,omitempty"`
+	Pages         []any `json:"pages"`
+	Total         int   `json:"total"`
+	Limit         int   `json:"limit"`
+	Offset        int   `json:"offset"`
+	ReturnedCount int   `json:"returned_count"`
+	HasMore       bool  `json:"has_more"`
+	NextOffset    *int  `json:"next_offset,omitempty"`
 }
 
 type getRecentPostsData struct {
@@ -186,13 +199,13 @@ type getPageOutput struct {
 
 type searchPagesOutput struct {
 	toolcontract.ToolResponse[searchPagesData]
-	Pages         []pageDTO `json:"pages"`
-	Total         int       `json:"total"`
-	Limit         int       `json:"limit"`
-	Offset        int       `json:"offset"`
-	ReturnedCount int       `json:"returned_count"`
-	HasMore       bool      `json:"has_more"`
-	NextOffset    *int      `json:"next_offset,omitempty"`
+	Pages         []any `json:"pages"`
+	Total         int   `json:"total"`
+	Limit         int   `json:"limit"`
+	Offset        int   `json:"offset"`
+	ReturnedCount int   `json:"returned_count"`
+	HasMore       bool  `json:"has_more"`
+	NextOffset    *int  `json:"next_offset,omitempty"`
 }
 
 type getRecentPostsOutput struct {
@@ -329,13 +342,17 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			return nil, newGetPageOutput(getPageData{Page: dto}), nil
 		})
 
-	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. For filtered search with type, language, sort, pagination, or to search source-only content use search_content (requires content.read).",
+	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. For filtered search with type, language, sort, pagination, or to search source-only content use search_content (requires content.read). Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchPagesInput) (*mcp.CallToolResult, searchPagesOutput, error) {
 			if idx == nil {
 				return nil, searchPagesOutput{}, fmt.Errorf("index not initialized")
 			}
 			if in.Query == "" {
 				return nil, searchPagesOutput{}, fmt.Errorf("invalid_params: query must not be empty")
+			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, searchPagesOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 50, 50)
 			offset := in.Offset
@@ -346,14 +363,16 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			total := len(all)
 			if offset >= total {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
-				return nil, newSearchPagesOutput(searchPagesData{Pages: []pageDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
+				return nil, newSearchPagesOutput(searchPagesData{Pages: []any{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 			}
 			pages := all[offset:]
 			if len(pages) > limit {
 				pages = pages[:limit]
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
-			return nil, newSearchPagesOutput(searchPagesData{Pages: toPageDTOsForProfile(pages, srcIdx, aliases, site.IsReaderProfile(ctx)), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
+			dtos := toPageDTOsForProfile(pages, srcIdx, aliases, site.IsReaderProfile(ctx))
+			shaped := shapeSearchPages(dtos, mode, in.Fields)
+			return nil, newSearchPagesOutput(searchPagesData{Pages: shaped, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
 
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
@@ -626,6 +645,39 @@ func toPageDTOsForProfile(pages []site.Page, srcIdx *hugosite.SourceIndex, alias
 		return out
 	}
 	return toPageDTOsEnriched(pages, srcIdx, aliases)
+}
+
+// shapeSearchPages applies response_mode then fields selection to a slice
+// of pageDTO, in that order. Both are no-ops when unset, so the default
+// call (mode=standard, fields=nil) returns rows byte-identical to the
+// pre-shaping []pageDTO output.
+func shapeSearchPages(dtos []pageDTO, mode toolcontract.ResponseMode, fields []string) []any {
+	out := make([]any, len(dtos))
+	for i, dto := range dtos {
+		var row any = dto
+		if mode == toolcontract.ResponseModeCompact {
+			row = pageDTOCompact{Slug: dto.Slug, Title: dto.Title, URL: dto.URL}
+		}
+		if len(fields) > 0 {
+			row = toolcontract.SelectFields(toFieldMap(row), fields)
+		}
+		out[i] = row
+	}
+	return out
+}
+
+// toFieldMap round-trips v through JSON so SelectFields can operate on its
+// field names generically, regardless of which concrete DTO v holds.
+func toFieldMap(v any) map[string]any {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return map[string]any{}
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return map[string]any{}
+	}
+	return m
 }
 
 func toPageDetailDTO(p site.Page) pageDetailDTO {

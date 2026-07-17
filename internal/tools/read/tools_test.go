@@ -306,6 +306,80 @@ func TestBuildAgentContext(t *testing.T) {
 	}
 }
 
+func TestBuildAgentContextResponseModeCompact(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "build_agent_context", map[string]any{"slug": "/posts/hello", "response_mode": "compact"})
+	if res.IsError {
+		t.Fatalf("build_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	ctx, ok := m["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("build_agent_context: 'context' is %T, want map", m["context"])
+	}
+	for _, field := range []string{"frontmatter", "markdown", "state"} {
+		if _, present := ctx[field]; !present {
+			t.Errorf("build_agent_context compact: missing field %q", field)
+		}
+	}
+	for _, field := range []string{"translations", "related_pages"} {
+		if _, present := ctx[field]; present {
+			t.Errorf("build_agent_context compact: unexpected field %q present, want reduced shape", field)
+		}
+	}
+
+	standard := callTool(t, session, "build_agent_context", map[string]any{"slug": "/posts/hello"})
+	standardBytes, err := json.Marshal(decodeContent(t, standard)["context"])
+	if err != nil {
+		t.Fatalf("marshal standard context: %v", err)
+	}
+	compactBytes, err := json.Marshal(ctx)
+	if err != nil {
+		t.Fatalf("marshal compact context: %v", err)
+	}
+	if len(compactBytes) >= len(standardBytes) {
+		t.Errorf("build_agent_context compact payload (%d bytes) not smaller than standard (%d bytes)", len(compactBytes), len(standardBytes))
+	}
+}
+
+func TestBuildAgentContextMaxBodyCharsTruncatesAndWarns(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "build_agent_context", map[string]any{"slug": "/posts/hello", "max_body_chars": 10})
+	if res.IsError {
+		t.Fatalf("build_agent_context returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	ctx, ok := m["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("build_agent_context: 'context' is %T, want map", m["context"])
+	}
+	md, _ := ctx["markdown"].(string)
+	if len(md) != 10 {
+		t.Fatalf("build_agent_context max_body_chars=10: markdown length = %d, want 10", len(md))
+	}
+	warnings, _ := m["warnings"].([]any)
+	if len(warnings) == 0 {
+		t.Fatal("build_agent_context max_body_chars=10: expected a truncation warning")
+	}
+}
+
+func TestBuildAgentContextResponseModeReservedRejected(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "build_agent_context", map[string]any{"slug": "/posts/hello", "response_mode": "full"})
+	if !res.IsError {
+		t.Fatal("build_agent_context response_mode=full: expected error, reserved mode is not yet implemented")
+	}
+}
+
 func TestExportAgentContext(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
