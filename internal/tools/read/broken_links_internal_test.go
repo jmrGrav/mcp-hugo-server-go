@@ -69,6 +69,35 @@ func TestCollectBrokenLinks(t *testing.T) {
 	if got := sliceBrokenLinks(issues, 10, 1); len(got) != 0 {
 		t.Fatalf("sliceBrokenLinks(offset overflow) = %#v", got)
 	}
+
+	// brokenLinksForPage (#339, used by get_page_for_edit's quality signal
+	// instead of a full-site collectBrokenLinks scan) must find the same
+	// broken link when scoped to just the offending page...
+	hello, found := idx.GetBySlug("/posts/hello/")
+	if !found {
+		t.Fatal("GetBySlug(/posts/hello/) not found")
+	}
+	classifier := site.NewClassifier(idx)
+	got := brokenLinksForPage(idx, classifier, *hello)
+	if len(got) != 1 || got[0].Link != "/missing/" {
+		t.Fatalf("brokenLinksForPage(/posts/hello/) = %#v, want one issue for /missing/", got)
+	}
+
+	// The home page's own broken outbound link ("/missing-home/") isn't
+	// part of collectBrokenLinks's site-wide total above (1, not 2)
+	// because idx.ContentPages() — what collectBrokenLinks iterates as
+	// origins — excludes the home page (it isn't classified as content).
+	// brokenLinksForPage has no such origin restriction: given the home
+	// page directly, it correctly finds that real broken link, which is
+	// the more complete behavior get_page_for_edit wants when the page
+	// being edited happens to be the home page.
+	home, found := idx.GetBySlug("/")
+	if !found {
+		t.Fatal("GetBySlug(/) not found")
+	}
+	if got := brokenLinksForPage(idx, classifier, *home); len(got) != 1 || got[0].Link != "/missing-home/" {
+		t.Fatalf("brokenLinksForPage(/) = %#v, want one issue for /missing-home/", got)
+	}
 }
 
 func TestCollectBrokenLinksIgnoresGeneratedAndNonHTTPLinks(t *testing.T) {

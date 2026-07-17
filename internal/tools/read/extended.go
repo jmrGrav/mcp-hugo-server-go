@@ -895,28 +895,38 @@ func collectBrokenLinks(idx *site.Index) []brokenLinkDTO {
 	var issues []brokenLinkDTO
 	classifier := site.NewClassifier(idx)
 	for _, page := range idx.ContentPages() {
-		base, err := url.Parse(page.URL)
-		if err != nil {
+		issues = append(issues, brokenLinksForPage(idx, classifier, page)...)
+	}
+	return issues
+}
+
+// brokenLinksForPage scopes the broken-link scan to a single page instead
+// of walking the whole site (collectBrokenLinks's job). Used by
+// get_page_for_edit's quality signal, which must stay cheap since it runs
+// on the default path of a tool meant to be called before every edit.
+func brokenLinksForPage(idx *site.Index, classifier *site.ContentClassifier, page site.Page) []brokenLinkDTO {
+	base, err := url.Parse(page.URL)
+	if err != nil {
+		return nil
+	}
+	var issues []brokenLinkDTO
+	for _, href := range extractLinks(page.RawHTML) {
+		target, ok := resolveInternalLink(base, href)
+		if !ok {
 			continue
 		}
-		for _, href := range extractLinks(page.RawHTML) {
-			target, ok := resolveInternalLink(base, href)
-			if !ok {
-				continue
-			}
-			if shouldIgnoreBrokenLinkTarget(classifier, target.Path) {
-				continue
-			}
-			if targetPage, found := idx.GetBySlug(target.Path); found && classifier.IsContent(*targetPage) {
-				continue
-			}
-			issues = append(issues, brokenLinkDTO{
-				PageSlug: page.Slug,
-				Link:     href,
-				Target:   target.String(),
-				Reason:   "missing target page",
-			})
+		if shouldIgnoreBrokenLinkTarget(classifier, target.Path) {
+			continue
 		}
+		if targetPage, found := idx.GetBySlug(target.Path); found && classifier.IsContent(*targetPage) {
+			continue
+		}
+		issues = append(issues, brokenLinkDTO{
+			PageSlug: page.Slug,
+			Link:     href,
+			Target:   target.String(),
+			Reason:   "missing target page",
+		})
 	}
 	return issues
 }

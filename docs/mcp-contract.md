@@ -196,9 +196,10 @@ Not every tool supports every parameter — see [Section 6](#6-tool-inventory)
 for which parameters each tool accepts. Current adopters: `search_pages`
 (`response_mode`, `fields`), `build_agent_context` (`response_mode`,
 `max_body_chars`), `export_agent_context` (`include_body`, predates this
-section — see #325). Additional tools adopt these parameters incrementally;
-adding support to a new tool is not a breaking change since the parameters
-are optional and additive.
+section — see #325), `get_page_for_edit` (`include`, a named-section variant
+of `fields` — see #339 — plus `max_body_chars`). Additional tools adopt
+these parameters incrementally; adding support to a new tool is not a
+breaking change since the parameters are optional and additive.
 
 ---
 
@@ -227,6 +228,7 @@ are optional and additive.
 | `get_related_content`   | flat        | `related`                                    |
 | `build_agent_context`   | flat        | `context` + `context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337) |
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
+| `get_page_for_edit`     | flat        | `page.state`, `page.revision`, `page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` or unavailable for the caller's profile; `quality` requires source access and is omitted for `reader` (#339) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
 | `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |

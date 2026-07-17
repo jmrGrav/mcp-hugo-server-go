@@ -267,6 +267,118 @@ func TestGetRelatedContent(t *testing.T) {
 	}
 }
 
+func TestGetPageForEditDefaultReturnsFullBundle(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit: 'page' is %T, want map", m["page"])
+	}
+	for _, field := range []string{"slug", "revision", "frontmatter", "markdown", "state", "quality"} {
+		if _, present := page[field]; !present {
+			t.Errorf("get_page_for_edit default: missing field %q, got keys %v", field, mapKeysRead(page))
+		}
+	}
+	if rev, _ := page["revision"].(string); rev == "" {
+		t.Error("get_page_for_edit default: revision is empty, want a stable revision (#335 dependency)")
+	}
+	quality, ok := page["quality"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit: 'quality' is %T, want map", page["quality"])
+	}
+	if _, present := quality["valid"]; !present {
+		t.Error("get_page_for_edit: quality.valid missing")
+	}
+	if _, present := quality["broken_links"]; !present {
+		t.Error("get_page_for_edit: quality.broken_links missing")
+	}
+}
+
+func TestGetPageForEditIncludeShapesResponse(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello", "include": []string{"markdown"}})
+	if res.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit: 'page' is %T, want map", m["page"])
+	}
+	if _, present := page["markdown"]; !present {
+		t.Error("get_page_for_edit include=[markdown]: missing markdown")
+	}
+	for _, field := range []string{"frontmatter", "state", "quality"} {
+		if _, present := page[field]; present {
+			t.Errorf("get_page_for_edit include=[markdown]: unexpected field %q present", field)
+		}
+	}
+}
+
+func TestGetPageForEditMaxBodyCharsTruncatesAndWarns(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello", "max_body_chars": 10})
+	if res.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit: 'page' is %T, want map", m["page"])
+	}
+	md, _ := page["markdown"].(string)
+	if len(md) != 10 {
+		t.Fatalf("get_page_for_edit max_body_chars=10: markdown length = %d, want 10", len(md))
+	}
+	warnings, _ := m["warnings"].([]any)
+	if len(warnings) == 0 {
+		t.Fatal("get_page_for_edit max_body_chars=10: expected a truncation warning")
+	}
+}
+
+func TestGetPageForEditInvalidIncludeRejected(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello", "include": []string{"bogus"}})
+	if !res.IsError {
+		t.Fatal("get_page_for_edit include=[bogus]: expected error")
+	}
+}
+
+func TestGetPageForEditNotFound(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/does/not/exist/"})
+	if !res.IsError {
+		t.Fatal("get_page_for_edit(missing slug): expected error")
+	}
+}
+
+func mapKeysRead(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func TestBuildAgentContext(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
