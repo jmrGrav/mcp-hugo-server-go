@@ -266,6 +266,26 @@ breaking change since the parameters are optional and additive.
 
 ---
 
+## 6.1. Git Trust Model (#379)
+
+The full model — configuration, baseline states, and per-tool wiring — lives
+in `docs/git-baseline-model.md`. That document is the design anchor; the
+five points below are its normative summary and the ones any future
+publish/rollback tool (`#340`) must build on:
+
+1. A write tool commits its change to the content tree, not to Git. Git
+   commit/push is out of scope for this server and happens externally.
+2. Only a *committed* baseline state (a real `head_commit`) is a valid
+   rollback target — never "whatever was on disk before the last write,"
+   since that may not correspond to any commit.
+3. The local baseline checkout is authoritative; the configured remote is a
+   comparison point only, never a sync source.
+4. Divergence between local and remote is surfaced as a warning, never
+   resolved automatically (no force-push, no auto-merge).
+5. Agents can read Git state (`get_runtime_status`, `diff_page`) but cannot
+   commit, push, rewrite history, or roll back without an explicit,
+   individually-confirmed call naming a target commit.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
