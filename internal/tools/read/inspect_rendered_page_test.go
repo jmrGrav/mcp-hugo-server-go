@@ -236,6 +236,154 @@ func TestInspectRenderedPageMultilingualWarnsMissingHreflang(t *testing.T) {
 	}
 }
 
+// TestInspectRenderedPageHreflangDetectionAttributeOrderCaseAndRelCombining
+// covers #420: hreflang detection walks the parsed DOM, not raw HTML text,
+// so a real <link rel="alternate" hreflang="fr" href="..."> tag must be
+// found regardless of attribute order, attribute-name case, or being
+// combined with other rel values.
+func TestInspectRenderedPageHreflangDetectionAttributeOrderCaseAndRelCombining(t *testing.T) {
+	cases := []struct {
+		name string
+		link string
+	}{
+		{"reordered attributes", `<link href="https://example.test/fr/posts/salut/" hreflang="fr" rel="alternate">`},
+		{"uppercase attribute names", `<link REL="alternate" HREFLANG="fr" HREF="https://example.test/fr/posts/salut/">`},
+		{"combined with another rel value", `<link rel="alternate stylesheet" hreflang="fr" href="https://example.test/fr/posts/salut/">`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			siteRoot := t.TempDir()
+			writeRenderedHTML(t, siteRoot, "en/posts/hi/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Hi</title><meta name="description" content="English description text."><link rel="canonical" href="https://example.test/en/posts/hi/">`+tc.link+`</head>
+<body>Hi.</body>
+</html>`)
+			writeRenderedHTML(t, siteRoot, "fr/posts/salut/index.html", `<!DOCTYPE html>
+<html lang="fr">
+<head><title>Salut</title><meta name="description" content="Description en francais ici."><link rel="canonical" href="https://example.test/fr/posts/salut/"></head>
+<body>Salut.</body>
+</html>`)
+
+			idx := inspectRenderedPageIndex(t, siteRoot)
+			session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+			defer done()
+
+			res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/en/posts/hi/"})
+			if res.IsError {
+				t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+			}
+			m := decodeContent(t, res)
+			data := m["data"].(map[string]any)
+			checks := findChecks(t, data)
+			if checks["hreflang"]["status"] != "pass" {
+				t.Fatalf("hreflang status = %v, want pass (%s)", checks["hreflang"]["status"], tc.name)
+			}
+		})
+	}
+}
+
+// TestInspectRenderedPageHreflangWithEmptyHrefIsIncomplete covers #420's
+// acceptance criterion that a hreflang tag with an empty href must still be
+// flagged, not silently accepted as a valid alternate.
+func TestInspectRenderedPageHreflangWithEmptyHrefIsIncomplete(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "en/posts/hi/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Hi</title><meta name="description" content="English description text."><link rel="canonical" href="https://example.test/en/posts/hi/"><link rel="alternate" hreflang="fr" href=""></head>
+<body>Hi.</body>
+</html>`)
+	writeRenderedHTML(t, siteRoot, "fr/posts/salut/index.html", `<!DOCTYPE html>
+<html lang="fr">
+<head><title>Salut</title><meta name="description" content="Description en francais ici."><link rel="canonical" href="https://example.test/fr/posts/salut/"></head>
+<body>Salut.</body>
+</html>`)
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/en/posts/hi/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	m := decodeContent(t, res)
+	data := m["data"].(map[string]any)
+	checks := findChecks(t, data)
+	if checks["hreflang"]["status"] != "warn" {
+		t.Fatalf("hreflang status = %v, want warn (href is empty, must not be accepted as a valid alternate)", checks["hreflang"]["status"])
+	}
+}
+
+// TestInspectRenderedPageHreflangMultipleTranslationsAllFound covers #420's
+// acceptance criterion of multiple translations: any one valid alternate is
+// enough to pass, regardless of how many other <link> tags are present.
+func TestInspectRenderedPageHreflangMultipleTranslationsAllFound(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "en/posts/hi/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Hi</title><meta name="description" content="English description text."><link rel="canonical" href="https://example.test/en/posts/hi/">
+<link rel="alternate" hreflang="fr" href="https://example.test/fr/posts/salut/">
+<link rel="alternate" hreflang="de" href="https://example.test/de/posts/hallo/">
+</head>
+<body>Hi.</body>
+</html>`)
+	writeRenderedHTML(t, siteRoot, "fr/posts/salut/index.html", `<!DOCTYPE html>
+<html lang="fr">
+<head><title>Salut</title><meta name="description" content="Description en francais ici."><link rel="canonical" href="https://example.test/fr/posts/salut/"></head>
+<body>Salut.</body>
+</html>`)
+	writeRenderedHTML(t, siteRoot, "de/posts/hallo/index.html", `<!DOCTYPE html>
+<html lang="de">
+<head><title>Hallo</title><meta name="description" content="Eine ausreichend lange Beschreibung."><link rel="canonical" href="https://example.test/de/posts/hallo/"></head>
+<body>Hallo.</body>
+</html>`)
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/en/posts/hi/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	m := decodeContent(t, res)
+	data := m["data"].(map[string]any)
+	checks := findChecks(t, data)
+	if checks["hreflang"]["status"] != "pass" {
+		t.Fatalf("hreflang status = %v, want pass", checks["hreflang"]["status"])
+	}
+}
+
+// TestInspectRenderedPageHreflangMonolingualSiteDoesNotFalsePositive covers
+// #420's acceptance criterion of a monolingual site: with only one language
+// across the whole public index, hreflang is not applicable at all, and the
+// check must pass without requiring any <link rel="alternate"> tag —
+// treating this as a false positive would incorrectly flag every
+// single-language site as missing translations.
+func TestInspectRenderedPageHreflangMonolingualSiteDoesNotFalsePositive(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/hi/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Hi</title><meta name="description" content="English description text."><link rel="canonical" href="https://example.test/posts/hi/"></head>
+<body>Hi.</body>
+</html>`)
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/hi/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	m := decodeContent(t, res)
+	data := m["data"].(map[string]any)
+	checks := findChecks(t, data)
+	if checks["hreflang"]["status"] != "pass" {
+		t.Fatalf("hreflang status = %v, want pass (single-language site, hreflang not applicable)", checks["hreflang"]["status"])
+	}
+}
+
 // TestInspectRenderedPageFlagsCanonicalMismatch proves the canonical check
 // compares against an independently-derived expected URL (cfg.SiteURL +
 // slug), not against page.URL — which the index copies straight out of the

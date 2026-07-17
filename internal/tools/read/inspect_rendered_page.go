@@ -78,7 +78,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). Requires content.read.",
+	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in inspectRenderedPageInput) (*mcp.CallToolResult, inspectRenderedPageOutput, error) {
 			if idx == nil {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("index not initialized")
@@ -210,24 +210,49 @@ func checkCanonical(doc *html.Node, siteURL, slug string) renderCheckResult {
 // individually cross-linked — that requires bundle-relation data this tool
 // does not have — so a "pass" here means "hreflang present", not "hreflang
 // complete."
+//
+// Detection walks the parsed DOM (*html.Node from golang.org/x/net/html),
+// not raw HTML text, so it is inherently immune to attribute order and to
+// attribute-*name* case (the tokenizer already lowercases element/attribute
+// names per the HTML spec, and htmlAttr compares case-insensitively too);
+// rel is compared case-insensitively as a substring since Hugo/theme output
+// may combine it with other rel values (e.g. rel="alternate stylesheet").
+// #420 added the href-non-empty check: a <link rel="alternate" hreflang="fr">
+// with no href is a broken/incomplete tag, not a valid alternate, and must
+// not be silently accepted as "found".
+//
+// A "warn" here can mean one of three different things this tool cannot
+// distinguish without operator confirmation: (1) a real parser miss (should
+// no longer happen after #420's DOM-based, order/case-independent check),
+// (2) this specific page genuinely has no translations even though other
+// site content does, or (3) the Hugo theme's <head> template simply never
+// emits hreflang tags for translated pages — a theme-side gap, not a bug in
+// this server. Confirm the page-bundle actually has a translated sibling
+// before treating a "warn" as a theme bug report.
 func checkHreflang(doc *html.Node, idx *site.Index, page site.Page) renderCheckResult {
 	if !siteIsMultilingual(idx) {
 		return renderCheckResult{Check: "hreflang", Status: "pass", Detail: "single-language site, hreflang not applicable"}
 	}
-	found := false
+	foundComplete, foundIncomplete := false, false
 	walkNodes(doc, func(n *html.Node) bool {
 		if n.Type == html.ElementNode && n.Data == "link" &&
 			strings.Contains(strings.ToLower(htmlAttr(n, "rel")), "alternate") &&
 			strings.TrimSpace(htmlAttr(n, "hreflang")) != "" {
-			found = true
-			return false
+			if strings.TrimSpace(htmlAttr(n, "href")) != "" {
+				foundComplete = true
+				return false
+			}
+			foundIncomplete = true
 		}
 		return true
 	})
-	if !found {
-		return renderCheckResult{Check: "hreflang", Status: "warn", Detail: "site has multiple languages but no <link rel=\"alternate\" hreflang=...> found for this page"}
+	if foundComplete {
+		return renderCheckResult{Check: "hreflang", Status: "pass"}
 	}
-	return renderCheckResult{Check: "hreflang", Status: "pass"}
+	if foundIncomplete {
+		return renderCheckResult{Check: "hreflang", Status: "warn", Detail: "found <link rel=\"alternate\" hreflang=...> for this page but its href is empty"}
+	}
+	return renderCheckResult{Check: "hreflang", Status: "warn", Detail: "site has multiple languages but no <link rel=\"alternate\" hreflang=...> found for this page"}
 }
 
 func siteIsMultilingual(idx *site.Index) bool {
