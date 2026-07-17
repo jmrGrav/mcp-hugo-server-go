@@ -2,6 +2,27 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.0-pre2] - 2026-07-18
+
+Prerelease covering a live connector audit (ChatGPT, 2026-07-17) of
+v1.5.0-pre1, plus the Le Chat OAuth discovery fix and write-tool version-
+reporting bug found while triaging it.
+
+### Added
+- **Structured error recovery hints** (#428, PR #429): `revision_conflict` and `content_not_found` tool errors now carry a `resolution.recommended_tool` (`get_page_for_edit`, `search_pages`) alongside the existing `resolution.action`, so an agent can act on a failure without guessing which tool to retry with.
+- **`validate_site` pagination and `invalid_only` filter** (#431, PR #440): `limit`/`offset` paginate the per-page detail rows independently of `pages_checked`/`pages_passed`/`invalid` (which always describe the full scan); `invalid_only` filters the paginated view to failing pages only.
+- **Taxonomy cross-language alias detection** (#183, PR #442): `get_site_health`'s near-duplicate tag/category detector now distinguishes a `translation_pair` (the same page bundle tagged in two languages — the site's own localization) from a genuine `possible_duplicate`/`alias_mismatch`, via a new `kind` field. Each finding also carries a `severity` (#419, see below).
+- **Published schema `enum`/`maximum` constraints** (#418, PR #443): `search_pages.match`/`response_mode`, `build_agent_context.response_mode`, and every paginated tool's `limit` now publish real JSON Schema constraints in `tools/list`, so a well-behaved client discovers the valid range instead of learning it from a runtime rejection. Deliberately publishes only `maximum` for `limit`, never `minimum` — `clampLimit` treats `limit: 0` as "use the default," a real accepted request, and a `minimum` would break it.
+- **`get_site_health` explainable score** (#419, PR #444): additive `score_breakdown` (`{frontmatter, taxonomy}`, each `{score, weight, issues, advisories?}`) and per-finding `severity` (`info`/`warning`) explain *why* `score`/`status` are what they are, without changing their existing formula for any input.
+- **Bounded post-mutation publication tracking** (#421, PR #446): `verify_publication` accepts an optional `wait_seconds` (clamped server-side to 20s) to poll internally for build/reindex catch-up instead of requiring multiple round trips; omitting it preserves the original single-check behavior.
+- **Docs: `lang` may be empty caveat** (#430, PR #439) on `get_page_frontmatter`, `build_agent_context`, and `get_page_for_edit`, matching the existing caveat on `get_page`.
+
+### Fixed
+- **Le Chat MCP server-card discovery** (#424, PR #425): added a `/.well-known/mcp/server-card/mcp` alias and embedded `authorization_servers`/`protected_resource_metadata` pointers in the card itself, after production logs showed Le Chat never reaching the standard OAuth discovery chain. Issue left open pending live re-test.
+- **Write-tool `meta.server_version` reported the wrong version** (#426, PR #427): `create_page`/`update_page`/`delete_page`/`upload_page_asset`/image tools were reporting the response *schema* version (`toolcontract.ToolResultVersion`) instead of the actual build/commit version (`buildinfo.Version`).
+- **`content_only` no longer includes theme chrome nested inside `<article>`** (#432, PR #441): `ExtractArticleHTML` now prefers `id="content"` over the `<article>`/`<main>`/`<body>` fallback chain, since the LoveIt theme's title/TOC/post-meta/share-buttons/tags/nav live as siblings of the real body inside the same `<article>` wrapper.
+- **`inspect_rendered` hreflang check flags an empty `href`** (#420, PR #445): a `<link rel="alternate" hreflang="...">` with no `href` is now reported as incomplete instead of silently accepted; the underlying DOM-based detection was already immune to attribute order/case.
+
 ## [v1.5.0-pre1] - 2026-07-17
 
 Prerelease for live OAuth connector testing (Gemini, Le Chat) ahead of v1.5.0.
