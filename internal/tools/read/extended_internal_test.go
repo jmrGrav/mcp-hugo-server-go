@@ -333,13 +333,20 @@ func TestDetectTaxonomyInconsistencies(t *testing.T) {
 	// alias map: "golang" is an alias for "go"
 	aliases := map[string]string{"golang": "go"}
 	issues := detectTaxonomyInconsistencies(src, aliases)
-	found := false
-	for _, iss := range issues {
-		if strings.Contains(iss, "golang") {
-			found = true
+	var match *taxonomyInconsistencyDTO
+	for i := range issues {
+		if strings.Contains(issues[i].Message, "golang") {
+			match = &issues[i]
+			break
 		}
 	}
-	if !found {
+	if match == nil {
 		t.Fatalf("detectTaxonomyInconsistencies() did not flag alias 'golang': %v", issues)
+	}
+	if match.TermA != "golang" {
+		t.Fatalf("detectTaxonomyInconsistencies() term_a = %q, want %q", match.TermA, "golang")
+	}
+	if len(match.PagesWithTermA) != 1 || match.PagesWithTermA[0] != "posts/a" {
+		t.Fatalf("detectTaxonomyInconsistencies() pages_with_term_a = %v, want [posts/a] (#324)", match.PagesWithTermA)
 	}
 }

@@ -229,7 +229,7 @@ are optional and additive.
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
-| `get_site_health`       | structured  | `data.score`, `data.status`, counts          |
+| `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`            |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
 | `diff_page`             | structured  | `data` (diff result) + `data.state`          |

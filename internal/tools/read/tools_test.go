@@ -1118,6 +1118,64 @@ func TestValidateSite(t *testing.T) {
 	}
 }
 
+func TestGetSiteHealthTaxonomyInconsistencyDetailsIncludeAffectedPages(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/a/index.md", "---\ntitle: A\ncategories: [security]\n---\n")
+	write("posts/b/index.md", "---\ntitle: B\ncategories: [securite]\n---\n")
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithSourceIndex(t, idx, src)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_site_health data type = %T", m["data"])
+	}
+	strs, ok := data["taxonomy_inconsistencies"].([]any)
+	if !ok || len(strs) == 0 {
+		t.Fatalf("get_site_health: taxonomy_inconsistencies = %#v, want at least one legacy string entry (#210/#328 backward compat)", data["taxonomy_inconsistencies"])
+	}
+	details, ok := data["taxonomy_inconsistency_details"].([]any)
+	if !ok || len(details) == 0 {
+		t.Fatalf("get_site_health: taxonomy_inconsistency_details = %#v, want at least one structured entry (#324)", data["taxonomy_inconsistency_details"])
+	}
+	if len(details) != len(strs) {
+		t.Fatalf("get_site_health: %d structured details vs %d legacy strings, want same count and order", len(details), len(strs))
+	}
+	detail, ok := details[0].(map[string]any)
+	if !ok {
+		t.Fatalf("get_site_health: taxonomy_inconsistency_details[0] = %T, want map", details[0])
+	}
+	for _, field := range []string{"message", "term_a", "term_b", "pages_with_term_a", "pages_with_term_b"} {
+		if _, present := detail[field]; !present {
+			t.Errorf("get_site_health: taxonomy_inconsistency_details[0] missing %q", field)
+		}
+	}
+	pagesA, _ := detail["pages_with_term_a"].([]any)
+	pagesB, _ := detail["pages_with_term_b"].([]any)
+	if len(pagesA) == 0 && len(pagesB) == 0 {
+		t.Fatal("get_site_health: taxonomy_inconsistency_details[0] has no affected pages on either side — the actionability #324 asked for")
+	}
+}
+
 func TestExtendedReadAnnotations(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
