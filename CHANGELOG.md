@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.7] - 2026-07-17
+
+### Added
+- **`export_agent_context` size guard** (#325, PR #399): new `include_body` param (default `true`) caps `limit` at 10 pages when full Markdown bodies are included, since a 28-page tag previously returned ~900KB with no server-side size guard and MCP has no response streaming. `include_body=false` returns frontmatter + state only, at a higher cap of 50 pages. A `warnings` entry is emitted when a requested `limit` is silently capped. Behavior change: callers that previously passed `limit` 11–50 with the default body-included mode now get a 10-page cap instead.
+- **Shared response-shaping contract** (#337, PR #400): new `internal/toolcontract` vocabulary (`response_mode`, `fields`, `include_body`, `max_body_chars`) so read tools can return smaller payloads on request without a proliferation of ad hoc per-tool knobs. `response_mode: compact` implemented on `search_pages` (list/search) and `build_agent_context` (page-read); `fields` selection on `search_pages`; `max_body_chars` (rune-aware truncation) on `build_agent_context`. `full`/`ids_only` modes are reserved vocabulary, rejected as `invalid_params` rather than silently downgraded to `standard`. Omitting all shaping params is a verified no-op — existing callers get byte-identical output. Documented in `docs/mcp-contract.md` §5.2.
+
+### Documented
+- **v1.x envelope-nesting compatibility decision recorded** (#328, PR #398): `docs/mcp-contract.md` §5.1 documents why the structured envelope's `data`-nesting (flagged by mcpscan as "Non-Standard Response Wrapping") is a known, accepted tradeoff — live clients depend on the uniform envelope. Decision: no v1.x flattening; any flattened payload ships as an explicit new contract version, never a stealth v1.x patch. Docs-only, no code changes; the shape is already mechanically enforced by `internal/contracttests`.
+
 ## [v1.4.6] - 2026-07-17
 
 ### Added
