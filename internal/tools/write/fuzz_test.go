@@ -48,6 +48,32 @@ func FuzzValidateFrontmatterRoundTrip(f *testing.F) {
 	})
 }
 
+// FuzzRejectUnsafeText covers #380's null-byte/control-char/UTF-8-boundary
+// edge cases. It never asserts a specific accept/reject outcome (both are
+// valid depending on input) — it only asserts rejectUnsafeText never panics
+// and, when it does reject, the returned error is non-nil and non-empty.
+func FuzzRejectUnsafeText(f *testing.F) {
+	f.Add("")
+	f.Add("hello world")
+	f.Add("line one\nline two\ttabbed\r\n")
+	f.Add("\x00null byte")
+	f.Add("bell\x07control")
+	f.Add("héllo wörld") // multibyte UTF-8, must not be misread as control chars
+	f.Add("emoji 🎉 boundary")
+	f.Add("c1 control \x85 (NEL)")
+	f.Add(string([]byte{0xff, 0xfe})) // invalid UTF-8 byte sequence
+
+	f.Fuzz(func(t *testing.T, s string) {
+		if len(s) > 4096 {
+			return
+		}
+		err := rejectUnsafeText(s)
+		if err != nil && err.Error() == "" {
+			t.Fatalf("rejectUnsafeText returned a non-nil error with empty message for input %q", s)
+		}
+	})
+}
+
 func splitCSV(raw string) []string {
 	if raw == "" {
 		return nil

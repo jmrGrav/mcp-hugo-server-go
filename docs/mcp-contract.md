@@ -304,6 +304,45 @@ pre-validated `update_page` call, not a new write path. `publish_changes`/
 rollback to a Git-committed state per [§6.1](#61-git-trust-model-379)) and
 remain design-only until the plan/apply foundation exists in production.
 
+## 6.3. Write Input Validation Contract (#380)
+
+`create_page` and `update_page` enforce, in addition to the existing
+`content.write` scope check and `pg.SafeJoin` path-traversal guard:
+
+- **Slug format**: `^[a-z0-9]([a-z0-9/_-]*[a-z0-9])?$` — lowercase
+  alphanumeric segments joined by `/`, `_`, or `-`. Rejected with
+  `invalid_params`. This is a content-convention check layered on top of,
+  not instead of, the path-safety check `pg.SafeJoin` already performs.
+- **Title**: at most 255 characters (Unicode code points, not bytes).
+- **Body**: at most 1MB (bytes).
+- **Text sanitization** (title, body, and `update_page`'s `description`):
+  null bytes and C0/C1 control characters other than `\n`, `\r`, `\t` are
+  rejected with `invalid_params`. Valid multibyte UTF-8 (accents, CJK,
+  emoji) is unaffected — only the control-character range is policed.
+- **Frontmatter well-formedness**: unchanged from the existing
+  `validateFrontmatterRoundTrip` check, which parses the generated
+  frontmatter block and rejects malformed/duplicated YAML.
+
+On `update_page`, title/body/description are optional (omitting one leaves
+that field unchanged) — these checks only run when the caller actually sets
+a value, matching the tool's existing "empty means unchanged" semantics.
+
+These are enforced as runtime Go checks in the tool handlers — this is the
+actual security boundary and stays regardless of what the published schema
+says. The schema library this server uses
+(`github.com/google/jsonschema-go`, via `tools.MustSchema`) does not parse
+constraint sub-keys out of Go struct tags — a `jsonschema:"pattern=..."`
+tag becomes the field's description text, not a schema constraint — but its
+underlying `*jsonschema.Schema` type does support real `pattern`/
+`maxLength`/`enum` fields, settable by post-processing the schema after
+generation. Publishing these same constraints (plus enum values for other
+string parameters across the read surface) in the JSON Schema itself, so a
+client rejects an invalid call before sending it rather than after, is
+tracked separately — see the schema-constraints issue filed after the
+ChatGPT connector audit (2026-07-17). Runtime validation and schema
+publication are complementary layers, not alternatives; this issue lands
+the runtime layer first because it is the one that cannot be skipped.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
