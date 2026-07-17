@@ -104,6 +104,62 @@ func TestContractContentReadToolsUseToolResponseEnvelope(t *testing.T) {
 	}
 }
 
+// TestContractWriteToolsUseToolResponseEnvelope covers #426: a shared
+// write/admin success-envelope helper (writeSuccessEnvelope,
+// imageSuccessEnvelope) previously passed the response schema version into
+// meta.server_version instead of the actual server build version, on every
+// successful create_page/update_page/delete_page/upload_page_asset call.
+func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeFile(t, filepath.Join(contentRoot, "posts", "existing", "index.md"), "---\ntitle: Existing\n---\nBody.\n")
+
+	session, done := newWriteSession(t, contentRoot, fixtureConfig(), nil)
+	defer done()
+	readSession, readDone := newReadSession(t, nil, fixtureConfig(), mustSourceIndexFromRoot(t, contentRoot))
+	defer readDone()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/envelope-check",
+		"title":      "Envelope Check",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		t.Fatalf("create_page returned error: %s", marshalAny(t, res.Content))
+	}
+	assertToolResponseEnvelope(t, "create_page", decodeContent(t, res))
+
+	revision := func() string {
+		t.Helper()
+		res := callTool(t, readSession, "get_page_markdown", map[string]any{"slug": "/posts/existing/"})
+		if res.IsError {
+			t.Fatalf("get_page_markdown returned error: %s", marshalAny(t, res.Content))
+		}
+		page := mapAt(t, decodeContent(t, res), "page")
+		return asString(page["revision"])
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/existing",
+		"title":             "Updated",
+		"expected_revision": revision(),
+	})
+	if res.IsError {
+		t.Fatalf("update_page returned error: %s", marshalAny(t, res.Content))
+	}
+	assertToolResponseEnvelope(t, "update_page", decodeContent(t, res))
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/existing",
+		"expected_revision": revision(),
+	})
+	if res.IsError {
+		t.Fatalf("delete_page returned error: %s", marshalAny(t, res.Content))
+	}
+	assertToolResponseEnvelope(t, "delete_page", decodeContent(t, res))
+}
+
 func TestContractDiffPageErrorUsesStructuredEnvelope(t *testing.T) {
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
@@ -933,6 +989,14 @@ func assertToolResponseEnvelopeMeta(t *testing.T, tool string, m map[string]any)
 	metaVersion, ok := meta["server_version"].(string)
 	if !ok || metaVersion == "" {
 		t.Fatalf("%s meta.server_version = %v, want non-empty string", tool, meta["server_version"])
+	}
+	// #426: meta.server_version must carry the build version
+	// (buildinfo.Version, "test-server-version" in this harness — see
+	// connectClient), never the response schema version. A prior bug had a
+	// shared write/admin success-envelope helper pass the schema version
+	// into this field by mistake.
+	if metaVersion == toolcontract.ToolResultVersion {
+		t.Fatalf("%s meta.server_version = %q, want the build version, not the schema version (regression of #426)", tool, metaVersion)
 	}
 	metaGeneratedAt, ok := meta["generated_at"].(string)
 	if !ok || metaGeneratedAt == "" {
