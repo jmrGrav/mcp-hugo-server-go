@@ -12,6 +12,17 @@ Public documentation uses two external profiles:
 The registry below still lists the current internal scope tiers enforced by the
 runtime during v1.x so the mapping stays explicit and auditable.
 
+## Search tool selection (#326)
+
+Two overlapping search tools exist: `search_pages` (anonymous) and
+`search_content` (`content.read`). If an agent has `content.read` scope,
+prefer `search_content` — it also matches body text and supports
+type/language/sort filtering that `search_pages` doesn't (both tools
+support `limit`/`offset` pagination).
+`search_pages` exists for callers with no authentication at all; it is not
+a lighter-weight alternative to reach for when `search_content` is
+available.
+
 ## Anonymous
 
 - `list_pages` - Browse pages
