@@ -84,6 +84,32 @@ func TestParseToolErrorMissingRequiredParameter(t *testing.T) {
 	}
 }
 
+func TestParseToolErrorRevisionConflict(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
+	if got.Code != "revision_conflict" {
+		t.Fatalf("Code = %q", got.Code)
+	}
+	if got.Field != "expected_revision" || !got.Retryable {
+		t.Fatalf("Field/Retryable = %q/%v", got.Field, got.Retryable)
+	}
+	if got.Resolution == nil || got.Resolution.Action != "reread_then_retry" || got.Resolution.Parameter != "expected_revision" {
+		t.Fatalf("Resolution = %#v", got.Resolution)
+	}
+	if got.Resolution.RecommendedTool != "get_page_for_edit" {
+		t.Fatalf("RecommendedTool = %q, want get_page_for_edit", got.Resolution.RecommendedTool)
+	}
+}
+
+func TestParseToolErrorContentNotFound(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("content_not_found: no source or public page found for slug %q", "posts/gone"))
+	if got.Code != "content_not_found" {
+		t.Fatalf("Code = %q", got.Code)
+	}
+	if got.Resolution == nil || got.Resolution.RecommendedTool != "search_pages" {
+		t.Fatalf("Resolution = %#v", got.Resolution)
+	}
+}
+
 func TestParseToolErrorRejectsNonMachinePrefix(t *testing.T) {
 	got := ParseToolError(fmt.Errorf("unexpected content-type: text/html"))
 	if got.Code != "tool_error" {

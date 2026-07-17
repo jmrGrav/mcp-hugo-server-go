@@ -19,9 +19,10 @@ type ResponseMeta struct {
 }
 
 type ErrorResolution struct {
-	Action        string   `json:"action"`
-	Parameter     string   `json:"parameter,omitempty"`
-	AllowedValues []string `json:"allowed_values,omitempty"`
+	Action          string   `json:"action"`
+	Parameter       string   `json:"parameter,omitempty"`
+	AllowedValues   []string `json:"allowed_values,omitempty"`
+	RecommendedTool string   `json:"recommended_tool,omitempty"`
 }
 
 type ToolError struct {
@@ -152,6 +153,19 @@ func ParseToolError(err error) ToolError {
 	case "build_in_progress", "rate_limit_exceeded":
 		out.Retryable = true
 		out.Resolution = &ErrorResolution{Action: "retry_later"}
+	case "revision_conflict":
+		out.Field = "expected_revision"
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{
+			Action:          "reread_then_retry",
+			Parameter:       "expected_revision",
+			RecommendedTool: "get_page_for_edit",
+		}
+	case "content_not_found":
+		out.Resolution = &ErrorResolution{
+			Action:          "search_then_retry",
+			RecommendedTool: "search_pages",
+		}
 	}
 
 	return out

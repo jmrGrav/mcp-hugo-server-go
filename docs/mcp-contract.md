@@ -400,6 +400,25 @@ scope — and the caller is the same operator who configured `hugo_root` in
 the first place, so this crosses no trust boundary the way a reader-scoped
 leak would.
 
+## 6.6. Structured Error Recovery Hints (#428)
+
+Beyond `code`/`message`/`field`/`retryable`, `errors[*].resolution` (when
+present) tells an agent concretely how to recover, not just what failed:
+
+```json
+"resolution": {
+  "action": "reread_then_retry",
+  "parameter": "expected_revision",
+  "recommended_tool": "get_page_for_edit"
+}
+```
+
+Populated in `toolcontract.ParseToolError` for `ambiguous_language`,
+`invalid_params`/`missing_required_parameter`, `build_in_progress`,
+`rate_limit_exceeded`, `revision_conflict`, and `content_not_found`. Not
+every error code carries a `resolution` — absence means there's no more
+specific recovery action than "read `message` and adjust."
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
