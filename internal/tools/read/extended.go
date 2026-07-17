@@ -42,6 +42,14 @@ type taxonomyInconsistencyDTO struct {
 	TermB          string   `json:"term_b,omitempty"`
 	PagesWithTermA []string `json:"pages_with_term_a,omitempty"`
 	PagesWithTermB []string `json:"pages_with_term_b,omitempty"`
+	// Kind distinguishes an actionable finding from an expected one (#183):
+	// "alias_mismatch" (a term should use its declared canonical form),
+	// "possible_duplicate" (similar spelling, no known relationship — likely
+	// a typo or unintentional variant), or "translation_pair" (the two
+	// terms are used on exactly the same set of page-bundle slugs, just in
+	// different languages — this is the site's own localization, not a
+	// content inconsistency, and does not need an alias entry to resolve).
+	Kind string `json:"kind,omitempty"`
 }
 
 type contentEnvelopeData struct {
@@ -455,7 +463,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Use this before publishing or reviewing content. Requires content.read.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Use this before publishing or reviewing content. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -1303,14 +1311,29 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 	pages := srcIdx.ListPages(0, 0)
 	tagPages := map[string][]string{}
 	catPages := map[string][]string{}
+	// tagOccurrence/catOccurrence track (page slug -> lang) per term, used
+	// by isTranslationPair below to confirm two terms never both land on
+	// the exact same (slug, lang) — i.e. they're genuinely different
+	// language variants of the same bundle, not two spelling variants
+	// applied together on one (possibly monolingual) page.
+	tagOccurrence := map[string]map[string]string{}
+	catOccurrence := map[string]map[string]string{}
 	for _, p := range pages {
 		for _, t := range p.Tags {
 			s := taxonomy.Slug(t)
 			tagPages[s] = append(tagPages[s], p.Slug)
+			if tagOccurrence[s] == nil {
+				tagOccurrence[s] = map[string]string{}
+			}
+			tagOccurrence[s][p.Slug] = p.Lang
 		}
 		for _, c := range p.Categories {
 			s := taxonomy.Slug(c)
 			catPages[s] = append(catPages[s], p.Slug)
+			if catOccurrence[s] == nil {
+				catOccurrence[s] = map[string]string{}
+			}
+			catOccurrence[s][p.Slug] = p.Lang
 		}
 	}
 
@@ -1323,6 +1346,7 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 				Message:        fmt.Sprintf("tag %q is an alias for %q; use the canonical form", raw, canonical),
 				TermA:          raw,
 				PagesWithTermA: tagPages[s],
+				Kind:           "alias_mismatch",
 			})
 		}
 		tagSlugs = append(tagSlugs, s)
@@ -1335,33 +1359,86 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 				Message:        fmt.Sprintf("category %q is an alias for %q; use the canonical form", raw, canonical),
 				TermA:          raw,
 				PagesWithTermA: catPages[s],
+				Kind:           "alias_mismatch",
 			})
 		}
 		catSlugs = append(catSlugs, s)
 	}
 
-	// Report similar slug pairs (possible duplicates / cross-language variants).
+	// Report similar slug pairs. #183: a pair used on exactly the same set
+	// of page-bundle slugs (just in different languages — the same Hugo
+	// page bundle uses one Slug across index.en.md/index.fr.md, see
+	// hugosite.SlugFromRel) is the site's own localization, not a content
+	// inconsistency — classify it as translation_pair/info instead of
+	// possible_duplicate/warning so it doesn't read as an actionable
+	// finding needing a taxonomy_aliases entry to go away.
 	const maxDist, minLen = 2, 5
 	for _, pair := range taxonomy.FindSimilarPairs(tagSlugs, maxDist, minLen, aliases) {
+		kind, verb := "possible_duplicate", "may be duplicates"
+		if isTranslationPair(tagPages[pair[0]], tagPages[pair[1]], tagOccurrence[pair[0]], tagOccurrence[pair[1]]) {
+			kind, verb = "translation_pair", "are used on the same page bundle in different languages, not a duplicate"
+		}
 		out = append(out, taxonomyInconsistencyDTO{
-			Message:        fmt.Sprintf("tags %q and %q may be duplicates (edit distance ≤ %d)", pair[0], pair[1], maxDist),
+			Message:        fmt.Sprintf("tags %q and %q %s (edit distance ≤ %d)", pair[0], pair[1], verb, maxDist),
 			TermA:          pair[0],
 			TermB:          pair[1],
 			PagesWithTermA: tagPages[pair[0]],
 			PagesWithTermB: tagPages[pair[1]],
+			Kind:           kind,
 		})
 	}
 	for _, pair := range taxonomy.FindSimilarPairs(catSlugs, maxDist, minLen, aliases) {
+		kind, verb := "possible_duplicate", "may be duplicates"
+		if isTranslationPair(catPages[pair[0]], catPages[pair[1]], catOccurrence[pair[0]], catOccurrence[pair[1]]) {
+			kind, verb = "translation_pair", "are used on the same page bundle in different languages, not a duplicate"
+		}
 		out = append(out, taxonomyInconsistencyDTO{
-			Message:        fmt.Sprintf("categories %q and %q may be duplicates (edit distance ≤ %d)", pair[0], pair[1], maxDist),
+			Message:        fmt.Sprintf("categories %q and %q %s (edit distance ≤ %d)", pair[0], pair[1], verb, maxDist),
 			TermA:          pair[0],
 			TermB:          pair[1],
 			PagesWithTermA: catPages[pair[0]],
 			PagesWithTermB: catPages[pair[1]],
+			Kind:           kind,
 		})
 	}
 
 	return out
+}
+
+// isTranslationPair reports whether two taxonomy terms are genuinely
+// different-language variants of the same page bundle rather than two
+// spelling variants applied to the same or unrelated pages (#183). Two
+// conditions must both hold:
+//  1. the terms are used on exactly the same set of page-bundle slugs
+//     (pagesA/pagesB, order and duplicate count ignored) — a bundle's
+//     index.en.md/index.fr.md share one Slug per hugosite.SlugFromRel;
+//  2. no single (slug, lang) pair carries both terms — otherwise a
+//     monolingual page tagged with both spelling variants directly
+//     (e.g. tags: [postmortem, post-mortems] on one index.md, lang="")
+//     would be wrongly classified as a translation instead of the typo
+//     it actually is.
+func isTranslationPair(pagesA, pagesB []string, occA, occB map[string]string) bool {
+	if len(pagesA) == 0 || len(pagesA) != len(pagesB) {
+		return false
+	}
+	counts := make(map[string]int, len(pagesA))
+	for _, s := range pagesA {
+		counts[s]++
+	}
+	for _, s := range pagesB {
+		counts[s]--
+	}
+	for _, n := range counts {
+		if n != 0 {
+			return false
+		}
+	}
+	for slug, langA := range occA {
+		if langB, ok := occB[slug]; ok && langA == langB {
+			return false
+		}
+	}
+	return true
 }
 
 func countSections(pages []site.Page) []sectionDTO {
