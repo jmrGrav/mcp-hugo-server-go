@@ -342,7 +342,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			return nil, newGetPageOutput(getPageData{Page: dto}), nil
 		})
 
-	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. For filtered search with type, language, sort, pagination, or to search source-only content use search_content (requires content.read). Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
+	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. Anonymous alternative to search_content — if you have content.read scope, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchPagesInput) (*mcp.CallToolResult, searchPagesOutput, error) {
 			if idx == nil {
 				return nil, searchPagesOutput{}, fmt.Errorf("index not initialized")

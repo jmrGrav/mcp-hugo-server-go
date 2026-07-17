@@ -277,7 +277,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	RegisterDiffPage(s, idx, srcIdx, cfg)
 	RegisterInspectRenderedPage(s, idx, srcIdx, cfg)
 
-	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Requires content.read. For a simple unauthenticated keyword search use search_pages.",
+	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Also matches body text, unlike search_pages. Requires content.read — prefer this tool over search_pages whenever you have that scope; use search_pages only when you're calling anonymously.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {
 			if idx == nil {
 				return nil, searchContentEnvelope{}, fmt.Errorf("index not initialized")
