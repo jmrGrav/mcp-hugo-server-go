@@ -286,6 +286,24 @@ publish/rollback tool (`#340`) must build on:
    commit, push, rewrite history, or roll back without an explicit,
    individually-confirmed call naming a target commit.
 
+## 6.2. Transactional Edit Design (#338, #340)
+
+`docs/transactional-edit-design.md` is the design anchor for two future
+tools, `plan_content_change`/`apply_content_plan` (#338) and
+`publish_changes`/`rollback_change` (#340). **Neither pair is implemented
+yet** — this section exists only so the design is discoverable from the
+contract doc, per #338/#340's acceptance criteria.
+
+Summary: `plan_content_change` (read-only, `content.read`) previews a small
+set of named operations (`update_body`, `add_tag`, ...) against one page,
+returning a diff and a short-lived `plan_id` without writing anything.
+`apply_content_plan` (`content.write`) re-verifies the plan's pinned
+revision and writes exactly what was previewed — it is a deferred,
+pre-validated `update_page` call, not a new write path. `publish_changes`/
+`rollback_change` sit one layer above (build/publish confirmation, and
+rollback to a Git-committed state per [§6.1](#61-git-trust-model-379)) and
+remain design-only until the plan/apply foundation exists in production.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
