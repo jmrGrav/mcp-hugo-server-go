@@ -1600,6 +1600,182 @@ func TestGetSiteHealthTaxonomyInconsistencyDetailsIncludeAffectedPages(t *testin
 	}
 }
 
+// TestGetSiteHealthTranslationPairInfoFindingDoesNotMoveScore covers #419:
+// a translation_pair finding (info severity) must not affect score or
+// score_breakdown.taxonomy.issues at all — only score_breakdown.taxonomy.
+// advisories, which exists precisely so an agent can see the finding was
+// counted but intentionally excluded from the score.
+func TestGetSiteHealthTranslationPairInfoFindingDoesNotMoveScore(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/a/index.en.md", "---\ntitle: A\ndate: 2026-07-01\ntags: [security]\n---\n")
+	write("posts/a/index.fr.md", "---\ntitle: A\ndate: 2026-07-01\ntags: [sécurité]\n---\n")
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithSourceIndex(t, idx, src)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data := m["data"].(map[string]any)
+
+	score, _ := data["score"].(float64)
+	if score != 100 {
+		t.Fatalf("score = %v, want 100 (a translation_pair finding must not penalize score)", score)
+	}
+	details, _ := data["taxonomy_inconsistency_details"].([]any)
+	if len(details) == 0 {
+		t.Fatal("taxonomy_inconsistency_details is empty, want the security/sécurité translation_pair finding")
+	}
+	detail := details[0].(map[string]any)
+	if detail["kind"] != "translation_pair" {
+		t.Fatalf("taxonomy_inconsistency_details[0].kind = %v, want translation_pair", detail["kind"])
+	}
+	if detail["severity"] != "info" {
+		t.Fatalf("taxonomy_inconsistency_details[0].severity = %v, want info", detail["severity"])
+	}
+	breakdown, ok := data["score_breakdown"].(map[string]any)
+	if !ok {
+		t.Fatalf("score_breakdown missing or wrong type: %#v", data["score_breakdown"])
+	}
+	taxonomy := breakdown["taxonomy"].(map[string]any)
+	if issues, _ := taxonomy["issues"].(float64); issues != 0 {
+		t.Fatalf("score_breakdown.taxonomy.issues = %v, want 0 (info findings aren't issues)", issues)
+	}
+	if advisories, _ := taxonomy["advisories"].(float64); advisories != 1 {
+		t.Fatalf("score_breakdown.taxonomy.advisories = %v, want 1", advisories)
+	}
+	if taxScore, _ := taxonomy["score"].(float64); taxScore != 100 {
+		t.Fatalf("score_breakdown.taxonomy.score = %v, want 100", taxScore)
+	}
+}
+
+// TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly covers
+// #419: a warning-severity finding (possible_duplicate) applies a real,
+// visible penalty within score_breakdown.taxonomy.score — proving the
+// field isn't decorative — but per the issue's own scope note ("not a
+// scoring algorithm change") must NOT move the top-level `score`, which is
+// still computed exactly as it was before #419 (frontmatter signals only).
+func TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/a/index.md", "---\ntitle: A\ndate: 2026-07-01\ntags: [postmortem]\n---\n")
+	write("posts/b/index.md", "---\ntitle: B\ndate: 2026-07-01\ntags: [post-mortems]\n---\n")
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithSourceIndex(t, idx, src)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data := m["data"].(map[string]any)
+
+	status, _ := data["status"].(string)
+	if status != "healthy" {
+		t.Fatalf("status = %q, want healthy", status)
+	}
+	score, _ := data["score"].(float64)
+	if score != 100 {
+		t.Fatalf("score = %v, want 100 — a taxonomy warning must not move the top-level score (#419 is presentation-only)", score)
+	}
+	breakdown := data["score_breakdown"].(map[string]any)
+	taxonomy := breakdown["taxonomy"].(map[string]any)
+	if issues, _ := taxonomy["issues"].(float64); issues != 1 {
+		t.Fatalf("score_breakdown.taxonomy.issues = %v, want 1", issues)
+	}
+	if weight, _ := taxonomy["weight"].(float64); weight != 0 {
+		t.Fatalf("score_breakdown.taxonomy.weight = %v, want 0 (taxonomy never contributes to the top-level score)", weight)
+	}
+	if taxScore, _ := taxonomy["score"].(float64); taxScore >= 100 {
+		t.Fatalf("score_breakdown.taxonomy.score = %v, want < 100 (the finding must show up somewhere, even though it doesn't move the top-level score)", taxScore)
+	}
+}
+
+// TestGetSiteHealthFrontmatterIssueReducesScore covers #419's acceptance
+// criterion of "an error/critical finding that changes status": a
+// frontmatter validation error is this server's only category that has
+// ever driven `status` (unchanged by #419), and one missing-date page
+// already drops it from "healthy" to "degraded" under the pre-existing
+// formula (a missing field is flagged twice — once by the free-text check,
+// once by the raw front-matter-key check — for 20 points of penalty);
+// that's pre-existing behavior this PR doesn't touch.
+func TestGetSiteHealthFrontmatterIssueReducesScore(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/a/index.md", "---\ntitle: A\ndate: 2026-07-01\n---\n")
+	write("posts/b/index.md", "---\ntitle: B\n---\n") // missing date: a real frontmatter finding
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithSourceIndex(t, idx, src)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data := m["data"].(map[string]any)
+
+	status, _ := data["status"].(string)
+	if status != "degraded" {
+		t.Fatalf("status = %q, want degraded (one missing-date finding is enough to change status under the pre-existing formula)", status)
+	}
+	score, _ := data["score"].(float64)
+	if score >= 100 {
+		t.Fatalf("score = %v, want < 100 (a frontmatter finding must apply a real penalty)", score)
+	}
+	breakdown := data["score_breakdown"].(map[string]any)
+	frontmatter := breakdown["frontmatter"].(map[string]any)
+	if weight, _ := frontmatter["weight"].(float64); weight != 100 {
+		t.Fatalf("score_breakdown.frontmatter.weight = %v, want 100 (it's the sole driver of the top-level score)", weight)
+	}
+	if fmScore, _ := frontmatter["score"].(float64); fmScore != score {
+		t.Fatalf("score_breakdown.frontmatter.score = %v, want to equal top-level score %v (weight=100 means they must reconcile exactly)", fmScore, score)
+	}
+}
+
 func TestExtendedReadAnnotations(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

@@ -350,6 +350,25 @@ func TestDetectTaxonomyInconsistencies(t *testing.T) {
 	if len(match.PagesWithTermA) != 1 || match.PagesWithTermA[0] != "posts/a" {
 		t.Fatalf("detectTaxonomyInconsistencies() pages_with_term_a = %v, want [posts/a] (#324)", match.PagesWithTermA)
 	}
+	if match.Severity != "warning" {
+		t.Fatalf("detectTaxonomyInconsistencies() alias_mismatch severity = %q, want %q (#419)", match.Severity, "warning")
+	}
+}
+
+// TestTaxonomyFindingSeverity covers #419: every Kind this server ever
+// assigns must map to an explicit Severity, since score_breakdown's
+// taxonomy penalty is computed purely from that mapping.
+func TestTaxonomyFindingSeverity(t *testing.T) {
+	cases := map[string]string{
+		"alias_mismatch":     "warning",
+		"possible_duplicate": "warning",
+		"translation_pair":   "info",
+	}
+	for kind, want := range cases {
+		if got := taxonomyFindingSeverity(kind); got != want {
+			t.Errorf("taxonomyFindingSeverity(%q) = %q, want %q", kind, got, want)
+		}
+	}
 }
 
 // TestDetectTaxonomyInconsistenciesTranslationPairNotFlaggedAsDuplicate

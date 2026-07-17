@@ -233,7 +233,7 @@ breaking change since the parameters are optional and additive.
 | `list_page_assets`      | flat        | `assets[*]` (`name`, `size_bytes`, `modified_at`); lists the sibling files in a leaf page bundle's directory; `not_a_bundle` for single-file pages; entirely source-derived, so `reader` gets an empty `assets` list for a public page and `content_not_public` for a non-public one (#348) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
-| `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
+| `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`            |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
 | `diff_page`             | structured  | `data` (diff result) + `data.state`          |
@@ -467,6 +467,40 @@ it returns the full scan) and so publishes no `maximum`.
 `internal/contracttests/schema_constraints_test.go` asserts the published
 enum/range for each of the above matches what the runtime actually accepts,
 so schema and validation can't silently drift apart again.
+
+## 6.8. `get_site_health` Score Breakdown and Finding Severity (#419)
+
+A live connector audit (ChatGPT, 2026-07-17) found `get_site_health` could
+report `score: 100, status: "healthy"` while `taxonomy_inconsistencies`
+still listed a finding — an agent had no way to tell *why* a listed finding
+didn't move the score short of re-deriving the server's internal scoring
+logic.
+
+Two additive fields. `score`/`status` are byte-for-byte the same formula as
+before #419 for every input — this is presentation only, not a scoring
+algorithm change (per the issue's own scope note):
+
+- Each entry in `taxonomy_inconsistency_details[*]` now carries a
+  `severity`: `"info"` (`translation_pair` — the site's own localization,
+  never counted as an issue) or `"warning"` (`alias_mismatch`/
+  `possible_duplicate` — counted as an issue, but still never penalizes the
+  top-level `score`, exactly as before #419).
+- `score_breakdown` gives a per-category `{score, weight, issues,
+  advisories?}`. `weight` is each category's actual share of the top-level
+  `score`, not a decorative number: `frontmatter` carries weight 100 (it's
+  the only category the formula has ever penalized — `frontmatter.score`
+  always equals the top-level `score`) and `taxonomy` carries weight 0
+  (`taxonomy.score` is informational, a local per-finding penalty shown for
+  reference, and never feeds into the top-level `score`).
+
+`score_breakdown` deliberately covers only `frontmatter` and `taxonomy` —
+the two categories this server computes a real signal for today. It omits
+`links`/`rendering`/`publication` placeholders an earlier proposal sketched;
+publishing a fabricated 100 for a category with no underlying check would
+be more misleading than omitting it.
+
+No behavior change: `score`/`status` are identical to pre-#419 for every
+input, including sites with `alias_mismatch`/`possible_duplicate` findings.
 
 ## 7. New tools (v1.3.8+)
 
