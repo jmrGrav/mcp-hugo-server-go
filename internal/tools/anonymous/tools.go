@@ -310,7 +310,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(slice))
 			return nil, newListPagesOutput(listPagesData{Pages: toPageDTOsForProfile(slice, srcIdx, aliases, site.IsReaderProfile(ctx)), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
-		})
+		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 
 	addReadOnlyTool(s, "get_page", "Read page",
 		"Read a Hugo page by slug. Returns metadata, rendered HTML, and a short summary. "+
@@ -419,7 +419,15 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			shaped := shapeSearchPages(dtos, mode, in.Fields)
 			return nil, newSearchPagesOutput(searchPagesData{Pages: shaped, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
-		})
+		},
+		func(s any) any {
+			return tools.WithEnum(s, "match", "", "any", "title_exact")
+		},
+		func(s any) any {
+			return tools.WithEnum(s, "response_mode", "", string(toolcontract.ResponseModeStandard), string(toolcontract.ResponseModeCompact))
+		},
+		func(s any) any { return tools.WithMaxLimit(s, "limit", 50) },
+	)
 
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
@@ -443,7 +451,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			return nil, newGetRecentPostsOutput(getRecentPostsData{Pages: toPageDTOsForProfile(pages, srcIdx, aliases, site.IsReaderProfile(ctx)), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
-		})
+		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 
 	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listTagsOutput, error) {
@@ -515,7 +523,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(entries))
 			return nil, newGetSitemapOutput(getSitemapData{Entries: entries, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
-		})
+		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 200) })
 
 	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getFeedInput) (*mcp.CallToolResult, getFeedOutput, error) {
@@ -543,7 +551,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(items))
 			return nil, newGetFeedOutput(getFeedData{Items: items, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
-		})
+		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, getSiteInformationOutput, error) {
@@ -559,12 +567,19 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 }
 
-func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out]) {
+// schemaOpts, when provided, post-process the inferred input schema (#418) —
+// e.g. tools.WithEnum/tools.WithRange to publish a real enum/range constraint
+// that jsonschema-go's struct-tag inference can't express directly.
+func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out], schemaOpts ...func(any) any) {
+	inputSchema := tools.MustSchema[In]()
+	for _, opt := range schemaOpts {
+		inputSchema = opt(inputSchema)
+	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         name,
 		Title:        title,
 		Description:  description,
-		InputSchema:  tools.MustSchema[In](),
+		InputSchema:  inputSchema,
 		OutputSchema: tools.MustSchema[Out](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    true,

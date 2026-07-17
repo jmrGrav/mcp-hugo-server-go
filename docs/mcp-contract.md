@@ -419,6 +419,55 @@ Populated in `toolcontract.ParseToolError` for `ambiguous_language`,
 every error code carries a `resolution` — absence means there's no more
 specific recovery action than "read `message` and adjust."
 
+## 6.7. Published Schema Constraints (#418)
+
+`tools.MustSchema[T]()` (via `github.com/google/jsonschema-go`) infers a
+schema from Go struct types but does not parse constraint sub-keys out of
+`jsonschema:"..."` tags — the tag becomes description text, not a real
+`enum`/`maximum`. Where a field only accepts a small fixed set of
+values, or a pagination `limit` has a real enforced ceiling, the tool
+registration post-processes the inferred schema with `tools.WithEnum`/
+`tools.WithMaxLimit` so a well-behaved client discovers the constraint from
+`tools/list` instead of learning it from a runtime rejection.
+
+Note: only `maximum` is published for `limit`, never `minimum`. Every
+paginated tool's `clampLimit(v, defaultVal, maxVal)` treats any `v <= 0`
+(including `0` itself) as "use the default", not as an error — a real,
+currently-accepted request shape. Publishing `minimum: 1` would make the SDK
+reject `limit: 0` before the handler runs, breaking that existing behavior.
+
+**Tradeoff, by design**: once a field carries a schema constraint, the MCP
+SDK's own request validation rejects an out-of-range value *before* the
+tool handler runs, returning a plain-text validation error rather than this
+server's structured envelope. A conforming client that reads the schema
+never hits this path; a non-conforming client that ignores it gets a less
+structured, but still clearly rejected, response instead of the server
+silently rewriting its request (e.g. `list_pages(limit: 250)` used to
+silently return `limit: 50` with no indication anything changed — it now
+rejects the call outright, with the correct ceiling visible in the schema
+beforehand).
+
+Applied to: `search_pages.match` (`enum: ["", "any", "title_exact"]`),
+`search_pages.response_mode`/`build_agent_context.response_mode`
+(`enum: ["", "standard", "compact"]` — `"full"`/`"ids_only"` are deliberately
+excluded as reserved-but-unimplemented vocabulary, #337), and `limit` on
+every paginated anonymous/content.read tool (`maximum` matches that tool's
+actual `clampLimit` ceiling).
+
+**Deliberately not applied**: `search_content.type` accepts its values
+case-insensitively at runtime (`post`/`Post`/`POST` all work) — a schema
+`enum` can only match exact strings, so publishing one would newly reject
+mixed-case values the handler currently accepts. Left unconstrained pending
+a decision on whether to normalize case at the schema layer or keep runtime
+leniency; already validated at runtime with a clear `invalid_params` error,
+so this is a smaller gap than the ones this issue fixes. `validate_site`/
+`validate_frontmatter`'s `limit` has no enforced ceiling by design (omitting
+it returns the full scan) and so publishes no `maximum`.
+
+`internal/contracttests/schema_constraints_test.go` asserts the published
+enum/range for each of the above matches what the runtime actually accepts,
+so schema and validation can't silently drift apart again.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
