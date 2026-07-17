@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -108,7 +109,7 @@ type deletePageOutput struct {
 }
 
 func writeSuccessEnvelope() toolcontract.ToolResponse[map[string]any] {
-	return toolcontract.Success(map[string]any{}, toolcontract.NewMeta(toolcontract.ToolResultVersion, time.Now().UTC()))
+	return toolcontract.Success(map[string]any{}, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
 // normalizeInputSlug strips leading and trailing slashes so agents that pass
