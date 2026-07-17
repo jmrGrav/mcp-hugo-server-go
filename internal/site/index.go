@@ -257,7 +257,28 @@ func (idx *Index) GetBySlug(slug string) (*Page, bool) {
 	return &p, true
 }
 
+// ScoredPage pairs a search result with its match score (the count of
+// query terms that matched somewhere in the page's title/summary/url/tags/
+// categories — see scoreEntry). Exposing the score lets a caller judge
+// match strength instead of treating every hit as equally relevant.
+type ScoredPage struct {
+	Page  Page
+	Score int
+}
+
 func (idx *Index) Search(query string, limit int) []Page {
+	if idx == nil {
+		return nil
+	}
+	scored := idx.SearchScored(query, limit)
+	out := make([]Page, len(scored))
+	for i, s := range scored {
+		out[i] = s.Page
+	}
+	return out
+}
+
+func (idx *Index) SearchScored(query string, limit int) []ScoredPage {
 	if idx == nil {
 		return nil
 	}
@@ -268,34 +289,26 @@ func (idx *Index) Search(query string, limit int) []Page {
 		limit = len(pages)
 	}
 	terms := strings.Fields(strings.ToLower(query))
-	type scored struct {
-		page  Page
-		score int
-	}
-	var results []scored
+	var results []ScoredPage
 	for _, page := range pages {
 		s := scoreEntry(page, terms)
 		if len(terms) == 0 {
 			s = 1
 		}
 		if s > 0 {
-			results = append(results, scored{page: page, score: s})
+			results = append(results, ScoredPage{Page: page, Score: s})
 		}
 	}
 	sort.SliceStable(results, func(i, j int) bool {
-		if results[i].score == results[j].score {
-			return results[i].page.Date > results[j].page.Date
+		if results[i].Score == results[j].Score {
+			return results[i].Page.Date > results[j].Page.Date
 		}
-		return results[i].score > results[j].score
+		return results[i].Score > results[j].Score
 	})
 	if len(results) > limit {
 		results = results[:limit]
 	}
-	out := make([]Page, len(results))
-	for i, r := range results {
-		out[i] = r.page
-	}
-	return out
+	return results
 }
 
 func (idx *Index) RecentPosts(n int) []Page {

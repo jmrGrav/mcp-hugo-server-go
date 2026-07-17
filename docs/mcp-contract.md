@@ -210,7 +210,7 @@ are optional and additive.
 |-----------------------|-----------|---------------------------|
 | `list_pages`          | flat      | `pages`                   |
 | `get_page`            | flat      | `page`                    |
-| `search_pages`        | flat      | `pages`; supports `response_mode`/`fields` shaping (§5.2, #337) |
+| `search_pages`        | flat      | `pages`; supports `response_mode`/`fields` shaping (§5.2, #337); each page carries `score` (term-match count) and `match: "title_exact"` requests a strict full-title match instead of broad term matching (#332) |
 | `get_recent_posts`    | flat      | `pages`                   |
 | `list_tags`           | flat      | `tags`                    |
 | `list_categories`     | flat      | `categories`              |

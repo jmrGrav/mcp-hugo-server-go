@@ -38,6 +38,23 @@ type searchPagesInput struct {
 	Offset       int      `json:"offset,omitempty"`
 	ResponseMode string   `json:"response_mode,omitempty"`
 	Fields       []string `json:"fields,omitempty"`
+	Match        string   `json:"match,omitempty"`
+}
+
+// resolveSearchMatch validates the match mode (#332). "any" (the default,
+// pre-existing behavior) does broad term-based substring matching across
+// title/summary/tags/categories/url. "title_exact" is a stricter mode for
+// callers that need to know whether a specific page still exists (e.g.
+// verifying a delete) without wading through loosely related hits.
+func resolveSearchMatch(raw string) (string, error) {
+	switch raw {
+	case "", "any":
+		return "any", nil
+	case "title_exact":
+		return "title_exact", nil
+	default:
+		return "", fmt.Errorf("invalid_params: match must be one of: any, title_exact (got %q)", raw)
+	}
 }
 
 // pageDTOCompact is the reduced shape returned when response_mode=compact:
@@ -69,6 +86,11 @@ type pageDTO struct {
 	Date       string   `json:"date"`
 	URL        string   `json:"url"`
 	Lang       string   `json:"lang"`
+	// Score is only populated by search_pages (#332): the count of query
+	// terms that matched somewhere in the page. Other tools that build a
+	// pageDTO (list_pages, get_recent_posts, ...) never set it, so it's
+	// omitted from their output via omitempty.
+	Score int `json:"score,omitempty"`
 }
 
 type pageDetailDTO struct {
@@ -342,7 +364,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			return nil, newGetPageOutput(getPageData{Page: dto}), nil
 		})
 
-	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. Anonymous alternative to search_content — if you have content.read scope, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
+	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. Anonymous alternative to search_content — if you have content.read scope, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Matching is intentionally broad: any page containing at least one query term in any indexed field is returned, ranked by `score` (count of matching terms, highest first) — it is not an exact-match search. Each result's `score` field indicates match strength; a low score means a loose/partial match. Use `match: \"title_exact\"` for a strict case-insensitive full-title match instead (e.g. to verify whether a specific page still exists after deleting it), which returns zero results rather than loosely related hits when there's no exact title match. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchPagesInput) (*mcp.CallToolResult, searchPagesOutput, error) {
 			if idx == nil {
 				return nil, searchPagesOutput{}, fmt.Errorf("index not initialized")
@@ -354,23 +376,47 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if err != nil {
 				return nil, searchPagesOutput{}, err
 			}
+			match, err := resolveSearchMatch(in.Match)
+			if err != nil {
+				return nil, searchPagesOutput{}, err
+			}
 			limit := clampLimit(in.Limit, 50, 50)
 			offset := in.Offset
 			if offset < 0 {
 				offset = 0
 			}
-			all := idx.Search(in.Query, 0)
-			total := len(all)
+			allScored := idx.SearchScored(in.Query, 0)
+			if match == "title_exact" {
+				q := strings.TrimSpace(strings.ToLower(in.Query))
+				filtered := make([]site.ScoredPage, 0, len(allScored))
+				for _, s := range allScored {
+					if strings.TrimSpace(strings.ToLower(s.Page.Title)) == q {
+						filtered = append(filtered, s)
+					}
+				}
+				allScored = filtered
+			}
+			total := len(allScored)
 			if offset >= total {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
 				return nil, newSearchPagesOutput(searchPagesData{Pages: []any{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 			}
-			pages := all[offset:]
-			if len(pages) > limit {
-				pages = pages[:limit]
+			scoredPage := allScored[offset:]
+			if len(scoredPage) > limit {
+				scoredPage = scoredPage[:limit]
 			}
-			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
+			meta := toolcontract.ComputePagination(total, limit, offset, len(scoredPage))
+			pages := make([]site.Page, len(scoredPage))
+			for i, s := range scoredPage {
+				pages[i] = s.Page
+			}
+			// toPageDTOsForProfile (both its reader-safe and enriched branches)
+			// always emits exactly one DTO per input page, in the same order —
+			// so attaching scoredPage[i].Score by index here is safe.
 			dtos := toPageDTOsForProfile(pages, srcIdx, aliases, site.IsReaderProfile(ctx))
+			for i := range dtos {
+				dtos[i].Score = scoredPage[i].Score
+			}
 			shaped := shapeSearchPages(dtos, mode, in.Fields)
 			return nil, newSearchPagesOutput(searchPagesData{Pages: shaped, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		})
