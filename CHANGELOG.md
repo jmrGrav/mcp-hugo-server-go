@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.8] - 2026-07-17
+
+### Changed
+- **BREAKING: 6 canonical tool names shortened to fit MCP client truncation limits** (#329, PR #405): at least one MCP client connector was observed silently truncating and hash-suffixing tool names of 21+ characters (e.g. `get_full_page_markdown` rendered to the model as `get_ful_7c6ab376aa24`), destroying tool-selection legibility. Renamed in place rather than aliased — MCP clients re-fetch `tools/list` every session, so nothing is hardcoded client-side, but any saved prompts/automation that reference the old names by string must be updated:
+  - `generate_featured_image` → `generate_hero_image`
+  - `suggest_internal_links` → `suggest_links`
+  - `get_full_page_markdown` → `get_page_markdown`
+  - `explain_site_structure` → `explain_structure`
+  - `validate_front_matter` → `validate_frontmatter`
+  - `inspect_rendered_page` → `inspect_rendered`
+
+  Verified scope enforcement is safe across the rename (name-keyed lookup, but the registry is populated fresh at every server start from the same source, and no per-tool grants are persisted). The 20-character length ceiling is inferred from the observed failures, not independently reconfirmed against a live connector; `TestToolNamesWithinConnectorTruncationBudget` enforces it mechanically going forward. Full migration table in `docs/tools.md`.
+
+### Added
+- **`search_pages` match scoring and exact-title mode** (#332, PR #404): each result now carries `score` (count of matching query terms), and a new `match: "title_exact"` param returns a strict case-insensitive full-title match — zero results instead of loosely related hits when there's no exact match (e.g. verifying a page's absence after deletion). `site.Index.Search` refactored into a thin wrapper over a new `SearchScored` method; existing callers/tests unaffected.
+- **`validate_front_matter`/`validate_site` pagination clarity** (#333, PR #403): added `has_more`/`next_offset` so a global validation call with a small `limit` no longer conflates the full scan scope (`pages_checked`, always the complete matched set regardless of pagination) with the paginated detail-row view (`pages`). Both tool descriptions now document explicitly which counters mean what.
+
+### Documented
+- **`search_pages` vs `search_content` tool selection guidance** (#326, PR #402): both tool descriptions now cross-reference each other so an agent with `content.read` scope knows to prefer `search_content` (also matches body text, supports type/language/sort filtering); `search_pages` is for anonymous callers. Docs-only, no behavior change.
+
 ## [v1.4.7] - 2026-07-17
 
 ### Added
