@@ -15,7 +15,7 @@ func TestRejectUnsafeTextRejectsControlChars(t *testing.T) {
 }
 
 func TestRejectUnsafeTextRejectsC1Controls(t *testing.T) {
-	if err := rejectUnsafeText("helloworld"); err == nil {
+	if err := rejectUnsafeText("hello\u0085world"); err == nil {
 		t.Fatal("rejectUnsafeText: want error for U+0085 NEL (C1 control), got nil")
 	}
 }
