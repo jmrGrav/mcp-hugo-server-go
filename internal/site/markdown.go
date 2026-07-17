@@ -8,13 +8,22 @@ import (
 	"golang.org/x/net/html"
 )
 
-// ExtractArticleHTML extracts the content of the first <article> element in
-// rawHTML, then falls back to <main>, then strips nav/header/footer from body.
+// ExtractArticleHTML extracts the page's actual article body, preferring the
+// narrowest reliable boundary and falling back to progressively coarser
+// ones: an element with id="content" (the convention used by this site's
+// theme — and common generally — for the body wrapper, deliberately
+// excluding sibling chrome like the title, table of contents, post
+// metadata, share buttons, and prev/next navigation that themes commonly
+// place alongside it, not inside it, #432), then the first <article>, then
+// <main>, then <body> with script/style/nav/header/footer tags stripped.
 // Input is the body-level HTML already extracted from a full page.
 func ExtractArticleHTML(rawHTML string) string {
 	doc, err := html.Parse(strings.NewReader(rawHTML))
 	if err != nil {
 		return rawHTML
+	}
+	if content := findElementByID(doc, "content"); content != nil {
+		return renderChildrenHTML(content)
 	}
 	if article := findElement(doc, "article"); article != nil {
 		return renderChildrenHTML(article)
@@ -28,6 +37,27 @@ func ExtractArticleHTML(rawHTML string) string {
 	}
 	removeDescendants(body, "script", "style", "nav", "header", "footer")
 	return renderChildrenHTML(body)
+}
+
+// findElementByID returns the first element in the tree whose id attribute
+// equals id, or nil if none matches.
+func findElementByID(n *html.Node, id string) *html.Node {
+	var out *html.Node
+	var walk func(*html.Node)
+	walk = func(cur *html.Node) {
+		if cur == nil || out != nil {
+			return
+		}
+		if cur.Type == html.ElementNode && nodeAttr(cur, "id") == id {
+			out = cur
+			return
+		}
+		for c := cur.FirstChild; c != nil; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(n)
+	return out
 }
 
 func renderChildrenHTML(n *html.Node) string {

@@ -119,6 +119,35 @@ func TestExtractArticleHTMLPaths(t *testing.T) {
 	}
 }
 
+// TestExtractArticleHTMLPrefersContentIDOverArticleChrome covers #432: the
+// live theme (LoveIt) nests the title, table of contents, post metadata,
+// share buttons, and prev/next navigation inside <article> but outside
+// <div id="content">, which wraps only the actual rendered Markdown body.
+// content_only should return just that, not the whole <article>.
+func TestExtractArticleHTMLPrefersContentIDOverArticleChrome(t *testing.T) {
+	pageHTML := `<body><article class="page single">` +
+		`<h1 class="single-title">Title</h1>` +
+		`<div class="post-meta">by Someone, 2026-01-01</div>` +
+		`<div class="details toc" id="toc-static"><div class="toc-content">Contents</div></div>` +
+		`<div class="content" id="content"><p>Actual article body.</p></div>` +
+		`<div class="post-footer" id="post-footer">` +
+		`<div class="post-info-share">Share buttons</div>` +
+		`<section class="post-tags">tag1, tag2</section>` +
+		`<div class="post-nav"><a class="prev">Prev</a><a class="next">Next</a></div>` +
+		`</div>` +
+		`</article></body>`
+
+	got := ExtractArticleHTML(pageHTML)
+	if !strings.Contains(got, "Actual article body.") {
+		t.Fatalf("ExtractArticleHTML(#content) lost the article body: %q", got)
+	}
+	for _, unwanted := range []string{"single-title", "Title</h1>", "post-meta", "toc-static", "Contents", "post-footer", "Share buttons", "post-tags", "tag1", "post-nav", "Prev", "Next"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("ExtractArticleHTML(#content) leaked theme chrome %q: %q", unwanted, got)
+		}
+	}
+}
+
 func TestToolsRegistryHelpers(t *testing.T) {
 	r := tools.NewRegistry()
 	r.Register(tools.ToolDef{Name: "public_tool"})
