@@ -86,6 +86,7 @@ Legend used in `MCP annotations`:
 | `build_agent_context` | Source-aware edit context bundle | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
 | `export_agent_context` | Bulk source/context export | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
 | `get_page_for_edit` | Compact edit bundle (frontmatter+markdown+state+quality+revision) | `content.read` | `reader` after public-safe filtering; `quality` omitted for `reader` | high | `RO, IDEM, CLOSED` |
+| `list_content_types` | Content type/archetype discovery | `content.read` | `reader` sees archetype metadata only; `page_count` and observed-page-derived `expected_fields` (source-derived) omitted | low | `RO, IDEM, CLOSED` |
 | `search_content` | Filtered source-aware search | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `explain_structure` | Site-structure summary | `content.read` | `reader` after public-safe filtering | low | `RO, IDEM, CLOSED` |
 | `get_site_health` | Site health summary | `content.read` | `reader` after public-safe filtering | low | `RO, IDEM, CLOSED` |

@@ -662,8 +662,8 @@ func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 25 {
-		t.Fatalf("authenticated tools/list = %d tools, want 25; got %v", len(names), names)
+	if len(names) != 26 {
+		t.Fatalf("authenticated tools/list = %d tools, want 26; got %v", len(names), names)
 	}
 	for _, name := range []string{"get_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_structure", "get_site_health", "diff_page", "validate_frontmatter", "validate_site", "suggest_links"} {
 		found := false
@@ -687,8 +687,8 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	addBearerToken(t, storePath, bearer, "reader")
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 25 {
-		t.Fatalf("reader tools/list = %d tools, want 25; got %v", len(names), names)
+	if len(names) != 26 {
+		t.Fatalf("reader tools/list = %d tools, want 26; got %v", len(names), names)
 	}
 	for _, name := range []string{
 		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
@@ -940,6 +940,64 @@ func TestReaderTokenGetPageForEditUsesPublicContentAndOmitsQuality(t *testing.T)
 	}
 }
 
+func TestReaderTokenListContentTypesOmitsPageCounts(t *testing.T) {
+	// #347: page_count is derived from source pages (including drafts),
+	// the same class of source-derived signal as #324/#339. Archetype
+	// metadata (filesystem templates, not page content) should remain
+	// visible; only the observed/counted side must be reader-safe.
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(root, "archetypes"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(archetypes) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "archetypes", "posts.md"), []byte("---\ntitle: \"\"\n---\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(archetype) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "secret-draft"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(content) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "secret-draft", "index.md"), []byte("---\ntitle: SecretDraftTitle\ndraft: true\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	if err := os.MkdirAll(publicRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(public) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_content_types","arguments":{}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader list_content_types status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "SecretDraftTitle") || strings.Contains(body, "secret-draft") {
+		t.Fatalf("reader list_content_types must not expose draft slugs/titles; body = %q", body)
+	}
+	if strings.Contains(body, `"page_count"`) {
+		t.Fatalf("reader list_content_types must omit page_count (source-derived); body = %q", body)
+	}
+	if !strings.Contains(body, `"posts"`) || !strings.Contains(body, "archetype") {
+		t.Fatalf("reader list_content_types should still see the archetype-derived 'posts' entry; body = %q", body)
+	}
+}
+
 func TestReaderTokenGetSiteHealthOmitsTaxonomyInconsistencyDetails(t *testing.T) {
 	// #324: taxonomy_inconsistency_details carries source-page slugs
 	// (including draft/source-only pages). get_site_health has no
@@ -1061,8 +1119,8 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	rewriteTokenScopeToLegacyMCP(t, storePath, bearer)
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 25 {
-		t.Fatalf("legacy mcp tools/list = %d tools, want 25; got %v", len(names), names)
+	if len(names) != 26 {
+		t.Fatalf("legacy mcp tools/list = %d tools, want 26; got %v", len(names), names)
 	}
 	for _, bad := range []string{"create_page", "update_page", "delete_page", "build_site"} {
 		for _, n := range names {

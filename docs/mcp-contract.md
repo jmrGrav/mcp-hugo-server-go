@@ -229,6 +229,7 @@ breaking change since the parameters are optional and additive.
 | `build_agent_context`   | flat        | `context` + `context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337) |
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
 | `get_page_for_edit`     | flat        | `page.state`, `page.revision`, `page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` or unavailable for the caller's profile; `quality` requires source access and is omitted for `reader` (#339) |
+| `list_content_types`    | flat        | `content_types[*]` (`name`, `source`, `archetype_path?`, `expected_fields?`, `page_count?`); `expected_fields` is the union of the archetype's declared keys and keys observed on existing pages of that type; `page_count` and observed-page-derived fields (source-derived) are omitted for `reader`, archetype metadata is not (#347) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
 | `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
