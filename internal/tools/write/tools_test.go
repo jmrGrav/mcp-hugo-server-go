@@ -25,6 +25,10 @@ type testServerOpts struct {
 	SiteRoot string
 	SiteDB   *db.DB
 	SiteIdx  *site.Index
+	// RateLimit overrides config.Default()'s RateLimit section when non-nil,
+	// e.g. for tests that need a low CreateUpdatePerMin/DestructivePerMin to
+	// exercise rate limiting without hundreds of calls.
+	RateLimit *config.RateLimitConfig
 }
 
 // newTestServer builds a write-tool MCP server over an in-memory transport and
@@ -47,6 +51,9 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 	cfg := config.Default()
 	cfg.ContentRoot = contentRoot
 	cfg.SiteRoot = o.SiteRoot
+	if o.RateLimit != nil {
+		cfg.RateLimit = *o.RateLimit
+	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg, o.SiteDB, o.SiteIdx)
@@ -345,6 +352,129 @@ func TestDeletePageRateLimit(t *testing.T) {
 	raw, _ := json.Marshal(res.Content)
 	if !strings.Contains(string(raw), "rate_limit_exceeded") {
 		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
+	}
+}
+
+func TestCreatePageRateLimit(t *testing.T) {
+	// #378: create_page/update_page/upload_page_asset share a per-caller
+	// budget separate from delete_page's own (defense-in-depth mirroring
+	// delete's existing pattern), layered on top of the broader per-scope
+	// content.write limiter enforced at the OAuth/HTTP layer.
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.CreateUpdatePerMin = 3
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	for i := 0; i < 3; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("rl-post-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "rl-post-3", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 4th create_page, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
+	}
+}
+
+func TestUpdatePageSharesRateLimitBudgetWithCreatePage(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.CreateUpdatePerMin = 2
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	// First call (create) consumes 1 of the 2-per-minute budget.
+	if res := callTool(t, session, "create_page", map[string]any{
+		"slug": "shared-budget", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page expected success, got error: %s", raw)
+	}
+
+	// Second call (update, same caller) consumes the last slot.
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug": "shared-budget", "title": "Updated",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "shared-budget", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page expected success, got error: %s", raw)
+	}
+
+	// Third call (update again) must be blocked — the budget is shared
+	// across tool types, not per-tool.
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug": "shared-budget", "title": "Updated Again",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "shared-budget", "index.md")),
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 3rd mutation sharing the budget, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
+	}
+}
+
+func TestDeleteAndCreateRateLimitsAreIndependent(t *testing.T) {
+	// delete_page's DestructivePerMin budget and create/update/upload's
+	// CreateUpdatePerMin budget must not share state — exhausting one must
+	// not block the other.
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	rl.CreateUpdatePerMin = 60
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	for i := 0; i < 2; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("indep-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	if res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "indep-0",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "indep-0", "index.md")),
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page expected success, got error: %s", raw)
+	}
+
+	// Second delete must be blocked (DestructivePerMin=1), but create_page
+	// must still work — the two budgets are independent.
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "indep-1",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "indep-1", "index.md")),
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete_page, got success")
+	}
+
+	res = callTool(t, session, "create_page", map[string]any{
+		"slug": "indep-2", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page must not be blocked by delete_page's exhausted budget: %s", raw)
 	}
 }
 

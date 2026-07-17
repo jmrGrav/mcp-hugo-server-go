@@ -65,3 +65,7 @@ rate_limit:
   content_write_per_min: 30
   site_admin_per_min: 10
   destructive_per_min: 5
+  # Per-caller budget for create_page/update_page/upload_page_asset (#378),
+  # separate from destructive_per_min (delete_page) and layered on top of
+  # content_write_per_min (the broader per-scope-per-IP HTTP-layer limit).
+  create_update_per_min: 30

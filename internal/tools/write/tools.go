@@ -123,9 +123,12 @@ var reservedSlugs = map[string]bool{
 
 var validLangPattern = regexp.MustCompile(`^[A-Za-z0-9-]{2,5}$`)
 
-// deleteCallerKey builds a rate-limit key that isolates delete budgets by caller IP.
-// Falls back to "unknown" when context carries no IP (e.g. in tests).
-func deleteCallerKey(ctx context.Context) string {
+// mutationCallerKey builds a rate-limit key that isolates mutation budgets
+// by caller IP. Falls back to "unknown" when context carries no IP (e.g. in
+// tests). Shared by every per-tool-class caller limiter (delete, create/
+// update/upload) — same identity signal, same "IP is the only caller
+// identity available in context today" limitation noted in #378.
+func mutationCallerKey(ctx context.Context) string {
 	ip, _ := ctx.Value(oauth.CtxCallerIP).(string)
 	if ip == "" {
 		ip = "unknown"
@@ -133,14 +136,25 @@ func deleteCallerKey(ctx context.Context) string {
 	return ip
 }
 
-// deleteCallerLimiter returns (or creates) a per-caller rate.Limiter for deletions.
-func deleteCallerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string) *rate.Limiter {
+// callerLimiter returns (or creates) a per-caller rate.Limiter allowing
+// perMinute calls/minute with a burst equal to perMinute, generalizing the
+// pattern originally hardcoded to delete_page's 5/min. perMinute <= 0
+// disables the limiter (Allow always returns true) rather than dividing by
+// zero, so a zero-valued/unset config field fails open instead of panicking
+// — callers that want a hard deny-by-default should set an explicit
+// positive value.
+func callerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string, perMinute int) *rate.Limiter {
 	mu.Lock()
 	defer mu.Unlock()
 	if l, ok := m[key]; ok {
 		return l
 	}
-	l := rate.NewLimiter(rate.Every(time.Minute/5), 5)
+	var l *rate.Limiter
+	if perMinute <= 0 {
+		l = rate.NewLimiter(rate.Inf, 0)
+	} else {
+		l = rate.NewLimiter(rate.Every(time.Minute/time.Duration(perMinute)), perMinute)
+	}
 	m[key] = l
 	return l
 }
@@ -167,6 +181,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 	var deleteMu sync.Mutex
 	deleteLimiters := make(map[string]*rate.Limiter)
+	// mutationMu/mutationLimiters (#378): a separate per-caller budget for
+	// create_page/update_page/upload_page_asset, layered on top of (not
+	// instead of) the existing per-scope-per-IP content.write limit in
+	// internal/oauth's RateLimiter — that one is a single shared budget
+	// across every content.write tool, this one mirrors delete_page's own
+	// tool-class-scoped defense-in-depth so one operation type can't
+	// silently consume another's headroom.
+	var mutationMu sync.Mutex
+	mutationLimiters := make(map[string]*rate.Limiter)
 	idem := newIdempotencyStore(15*time.Minute, 256)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -181,7 +204,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, toolcontract.WrapTool(func(_ context.Context, _ *mcp.CallToolRequest, in createPageInput) (*mcp.CallToolResult, createPageOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createPageInput) (*mcp.CallToolResult, createPageOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, createPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
@@ -204,6 +227,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		if err := validateBodyFormat(in.Body); err != nil {
 			return nil, createPageOutput{}, err
+		}
+		callerKey := mutationCallerKey(ctx)
+		if !callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin).Allow() {
+			return nil, createPageOutput{}, fmt.Errorf("rate_limit_exceeded: create_page is limited to %d per minute", cfg.RateLimit.CreateUpdatePerMin)
 		}
 
 		dir, err := pg.SafeJoin(in.Slug)
@@ -373,7 +400,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, toolcontract.WrapTool(func(_ context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		if in.Slug == "" {
 			return nil, updatePageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
@@ -402,6 +429,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			if err := rejectUnsafeText(in.Description); err != nil {
 				return nil, updatePageOutput{}, fmt.Errorf("invalid_params: description %w", err)
 			}
+		}
+		callerKey := mutationCallerKey(ctx)
+		if !callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin).Allow() {
+			return nil, updatePageOutput{}, fmt.Errorf("rate_limit_exceeded: update_page is limited to %d per minute", cfg.RateLimit.CreateUpdatePerMin)
 		}
 
 		const lockWait = 10 * time.Second
@@ -662,9 +693,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page")
 		}
 
-		callerKey := deleteCallerKey(ctx)
-		if !deleteCallerLimiter(&deleteMu, deleteLimiters, callerKey).Allow() {
-			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute")
+		callerKey := mutationCallerKey(ctx)
+		if !callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin).Allow() {
+			return nil, deletePageOutput{}, fmt.Errorf("rate_limit_exceeded: delete_page is limited to %d per minute", cfg.RateLimit.DestructivePerMin)
 		}
 
 		const lockWait = 10 * time.Second
@@ -806,7 +837,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		return nil, out, nil
 	}))
 
-	registerUploadPageAsset(s, pg, idx, cfg, idem)
+	registerUploadPageAsset(s, pg, idx, cfg, idem, &mutationMu, mutationLimiters)
 }
 
 func createPageState() site.LifecycleState {

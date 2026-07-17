@@ -29,6 +29,7 @@ rate_limit:
   content_write_per_min: 60
   site_admin_per_min: 60
   destructive_per_min: 10
+  create_update_per_min: 60
 
 oauth:
   enabled: true
