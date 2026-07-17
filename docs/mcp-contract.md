@@ -202,7 +202,7 @@ scanner-score optimization.
 | `get_page_frontmatter`  | flat        | `frontmatter` + `frontmatter.state`          |
 | `get_related_content`   | flat        | `related`                                    |
 | `build_agent_context`   | flat        | `context` + `context.state`                  |
-| `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`      |
+| `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
 | `explain_site_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
 | `get_site_health`       | structured  | `data.score`, `data.status`, counts          |
