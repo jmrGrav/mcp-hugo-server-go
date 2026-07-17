@@ -1064,6 +1064,41 @@ func TestValidateFrontMatter(t *testing.T) {
 	}
 }
 
+func TestValidateFrontMatterGlobalPaginationDistinguishesScanFromDetailPage(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_front_matter returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_front_matter data type = %T", m["data"])
+	}
+	pagesChecked, _ := data["pages_checked"].(float64)
+	returnedCount, _ := data["returned_count"].(float64)
+	pages, _ := data["pages"].([]any)
+	if pagesChecked < 2 {
+		t.Fatalf("validate_front_matter limit=1: pages_checked = %v, want the full scan scope (>=2), not capped by limit", pagesChecked)
+	}
+	if returnedCount != 1 || len(pages) != 1 {
+		t.Fatalf("validate_front_matter limit=1: returned_count=%v len(pages)=%d, want exactly 1 detail row", returnedCount, len(pages))
+	}
+	if int(pagesChecked) <= int(returnedCount) {
+		t.Fatalf("validate_front_matter limit=1: pages_checked (%v) should exceed returned_count (%v) so has_more is meaningful", pagesChecked, returnedCount)
+	}
+	hasMore, _ := data["has_more"].(bool)
+	if !hasMore {
+		t.Fatal("validate_front_matter limit=1: has_more = false, want true (more detail rows exist beyond this page)")
+	}
+	if data["next_offset"] == nil {
+		t.Fatal("validate_front_matter limit=1: next_offset missing, want a value to continue pagination")
+	}
+}
+
 func TestValidateSite(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
