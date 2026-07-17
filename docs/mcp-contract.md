@@ -354,6 +354,52 @@ Both layers key on caller IP (the only caller identity currently available in to
 
 A budget-exceeded call returns `rate_limit_exceeded: <tool> is limited to N per minute`.
 
+## 6.5. Read-Only Tool Path/Content Leakage Audit (#376)
+
+Follow-up to #334 (logical path exposure) and #354 (reader-safe response
+policy). Audited every anonymous, `content.read`, and read-only `site.admin`
+tool (`get_runtime_status`, `check_sri_versions`, `get_theme_status`,
+`verify_publication`) for two failure modes: absolute host filesystem paths
+leaking into any response field (including `warnings`/`meta`), and
+source-only/non-public content (drafts, future posts, expired posts) being
+returned to reader-scoped callers.
+
+**Result: no leaks found in any read-only tool.** The existing sanitizers
+from #334/#354 already cover the full surface:
+
+- `fileutil.LogicalContentPath` (#334) relativizes every source path exposed
+  in read-tool responses against `content_root`, and returns `""` rather
+  than falling back to a raw absolute path if relativization fails.
+- `site.ReaderSafeResolvedPage` / `readerSafeResolvedPage` (#354) reject
+  reader-scoped calls against any page with no public counterpart
+  (`content_not_public`), and `sourceIndexForProfile` nulls the source index
+  entirely for the reader profile — draft/future/expired filtering falls out
+  of this for free, since `Public` is only ever populated from Hugo's
+  already-filtered `public/` build output.
+- Admin diagnostic output (git errors, build stderr) is separately sanitized
+  via `sanitiseStderr`/`sanitiseGitError` (`internal/tools/admin/build.go`,
+  `internal/tools/admin/runtime_status.go`), which string-replace the
+  configured `hugo_root`/`site_root`/git-resolved-root before truncating.
+
+**Automated regression test**: `internal/contracttests/path_leak_audit_test.go`
+(`TestAuditAnonymousAndReadToolsNeverLeakAbsolutePaths`) calls every
+anonymous/`content.read`/read-only-`site.admin` tool (including `diff_page`'s
+expected-error path) against a fixture config with real absolute
+`site_root`/`content_root` paths, and asserts the full JSON response body
+never contains those exact paths nor any string matching common deployment
+path prefixes (`/home/`, `/root/`, `/var/{www,lib,opt}/`, `/srv/`, `/opt/`,
+`/etc/`, `/runner/`). This runs as part of the normal `go test ./...` suite,
+so a future regression fails CI rather than requiring manual re-audit.
+
+**Intentional exception, documented rather than filed as a new issue**:
+`generate_hero_image`'s success/error responses (`internal/tools/admin/image.go`)
+and `build_site`'s preflight error (`internal/tools/admin/build.go`) return
+an absolute path (`hugo_root`-derived write target / preflight directory).
+Both are `site.admin`-only, mutating tools, out of this audit's read-only
+scope — and the caller is the same operator who configured `hugo_root` in
+the first place, so this crosses no trust boundary the way a reader-scoped
+leak would.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
