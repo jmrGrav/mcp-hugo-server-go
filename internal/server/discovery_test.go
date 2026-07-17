@@ -335,6 +335,45 @@ func TestWellKnownMCPServerCard(t *testing.T) {
 	if len(schemes) != 2 || schemes[0] != "bearer" || schemes[1] != "oauth2" {
 		t.Fatalf("authentication.schemes = %v", schemes)
 	}
+
+	// #424: a client that discovers OAuth via the server card itself
+	// (rather than following WWW-Authenticate's resource_metadata pointer)
+	// must be able to bootstrap discovery from these fields alone.
+	authServers, ok := auth["authorization_servers"].([]any)
+	if !ok || len(authServers) != 1 || authServers[0] != "https://mcp.arleo.eu" {
+		t.Fatalf("authentication.authorization_servers = %v", auth["authorization_servers"])
+	}
+	if auth["protected_resource_metadata"] != "https://mcp.arleo.eu/.well-known/oauth-protected-resource" {
+		t.Fatalf("authentication.protected_resource_metadata = %v", auth["protected_resource_metadata"])
+	}
+}
+
+// TestWellKnownMCPServerCardResourcePathAlias covers #424: Mistral Le Chat's
+// connector auto-detect requests the server card under a per-resource
+// sub-path (/.well-known/mcp/server-card/mcp) rather than the canonical
+// /.well-known/mcp/server-card.json, and gives up entirely (never reaching
+// OAuth discovery) on a 404. Confirms the alias serves byte-identical
+// content to the canonical path.
+func TestWellKnownMCPServerCardResourcePathAlias(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+
+	canonical := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(canonical, httptest.NewRequest(http.MethodGet, "/.well-known/mcp/server-card.json", nil))
+	if canonical.Code != http.StatusOK {
+		t.Fatalf("canonical status = %d want 200", canonical.Code)
+	}
+
+	alias := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(alias, httptest.NewRequest(http.MethodGet, "/.well-known/mcp/server-card/mcp", nil))
+	if alias.Code != http.StatusOK {
+		t.Fatalf("alias status = %d want 200", alias.Code)
+	}
+	if alias.Body.String() != canonical.Body.String() {
+		t.Fatalf("alias body = %q, want identical to canonical %q", alias.Body.String(), canonical.Body.String())
+	}
+	if got := alias.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("alias Content-Type = %q want application/json", got)
+	}
 }
 
 func TestLegacyMCPJSONAliasStillServed(t *testing.T) {
