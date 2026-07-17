@@ -2,6 +2,31 @@
 
 This document reflects the current MCP registry. Tool IDs are stable; titles and descriptions are tuned for Claude and other MCP clients.
 
+## Tool name migration (#329)
+
+At least one MCP client connector was observed silently truncating and
+hash-suffixing canonical tool names of 21+ characters for uniqueness (e.g.
+`get_full_page_markdown` rendered to the model as `get_ful_7c6ab376aa24`),
+which destroys legibility for tool selection. Six tools with names over a
+20-character budget were shortened. Agents re-fetch the tool list via MCP's
+`tools/list` each session, so no client-side caching migration is required
+— this is a rename, not a deprecation:
+
+| Old name                  | New name              |
+|----------------------------|------------------------|
+| `generate_featured_image`  | `generate_hero_image`  |
+| `suggest_internal_links`   | `suggest_links`        |
+| `get_full_page_markdown`   | `get_page_markdown`    |
+| `explain_site_structure`   | `explain_structure`    |
+| `validate_front_matter`    | `validate_frontmatter` |
+| `inspect_rendered_page`    | `inspect_rendered`     |
+
+The 20-character budget is inferred from the observed failures (all 21–22
+characters); it has not been independently reconfirmed against a live
+connector this session. `TestToolNamesWithinConnectorTruncationBudget`
+(`internal/tools/toolcount_test.go`) enforces the budget mechanically for
+every registered tool going forward.
+
 ## External access profiles
 
 Public documentation uses two external profiles:
@@ -37,20 +62,20 @@ available.
 
 ## `content.read`
 
-- `get_full_page_markdown` - Get full page Markdown
+- `get_page_markdown` - Get full page Markdown
 - `get_page_frontmatter` - Get page frontmatter
 - `get_related_content` - Get related content
 - `build_agent_context` - Build agent context
 - `export_agent_context` - Export agent context
 - `search_content` - Search content
-- `explain_site_structure` - Explain site structure
+- `explain_structure` - Explain site structure
 - `get_site_health` - Get site health
 - `get_broken_links` - Get broken links
 - `get_backlinks` - Get backlinks
-- `suggest_internal_links` - Suggest internal links
+- `suggest_links` - Suggest internal links
 - `diff_page` - Diff page (depends on a readable local Git baseline; see `docs/git-baseline-model.md`)
-- `inspect_rendered_page` - Inspect rendered page (title/meta description/canonical/hreflang/internal links/missing images/render-error checks against the current public build output)
-- `validate_front_matter` - Validate front matter
+- `inspect_rendered` - Inspect rendered page (title/meta description/canonical/hreflang/internal links/missing images/render-error checks against the current public build output)
+- `validate_frontmatter` - Validate front matter
 - `validate_site` - Validate site
 
 ## `content.write`
@@ -69,7 +94,7 @@ input returns a structured `idempotency_conflict` error.
 - `build_site` - Build website
 - `preview_build` - Preview build
 - `run_post_build_hooks` - Run post-build hooks
-- `generate_featured_image` - Generate featured image
+- `generate_hero_image` - Generate hero image
 - `check_sri_versions` - Verify SRI integrity
 - `get_runtime_status` - Get runtime status (server version/commit, hugo/git availability, source/public revision hashes)
 - `get_theme_status` - Get theme status (active theme/module name, on-disk presence, Git commit/dirty state for classic themes)

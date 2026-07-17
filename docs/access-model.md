@@ -80,20 +80,20 @@ Legend used in `MCP annotations`:
 | `get_sitemap` | Published URL inventory | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
 | `get_feed` | Published feed slice | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
 | `get_site_information` | Site metadata | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `get_full_page_markdown` | Source markdown read | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
+| `get_page_markdown` | Source markdown read | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `get_page_frontmatter` | Source/frontmatter metadata read | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `get_related_content` | Related-content analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `build_agent_context` | Source-aware edit context bundle | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
 | `export_agent_context` | Bulk source/context export | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
 | `search_content` | Filtered source-aware search | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `explain_site_structure` | Site-structure summary | `content.read` | `reader` after public-safe filtering | low | `RO, IDEM, CLOSED` |
+| `explain_structure` | Site-structure summary | `content.read` | `reader` after public-safe filtering | low | `RO, IDEM, CLOSED` |
 | `get_site_health` | Site health summary | `content.read` | `reader` after public-safe filtering | low | `RO, IDEM, CLOSED` |
 | `get_broken_links` | Broken-link analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `get_backlinks` | Backlink analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `suggest_internal_links` | Link suggestion analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
+| `suggest_links` | Link suggestion analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `diff_page` | Source vs Git diff | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
-| `inspect_rendered_page` | Rendered-HTML/SEO/link validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `validate_front_matter` | Source validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
+| `inspect_rendered` | Rendered-HTML/SEO/link validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
+| `validate_frontmatter` | Source validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `validate_site` | Full-site source validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
 | `create_page` | Create source content | `content.write` | `operator` | high | `OPEN` |
 | `update_page` | Mutate source content | `content.write` | `operator` | high | `IDEM, OPEN` |
@@ -101,7 +101,7 @@ Legend used in `MCP annotations`:
 | `build_site` | Build/publish site output | `site.admin` | `operator` | high | `OPEN` |
 | `preview_build` | Preview build execution | `site.admin` | `operator` | high | `CLOSED` |
 | `run_post_build_hooks` | Outbound post-build webhooks | `site.admin` | `operator` | high | `OPEN` |
-| `generate_featured_image` | Generate/write image asset | `site.admin` | `operator` | high | `CLOSED` |
+| `generate_hero_image` | Generate/write image asset | `site.admin` | `operator` | high | `CLOSED` |
 | `check_sri_versions` | Live SRI verification against remote assets | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
 | `get_runtime_status` | Runtime/build/git/site status surface | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
 | `get_theme_status` | Active theme/module presence + Git commit/dirty state | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |

@@ -60,7 +60,7 @@ Configuration is stored in YAML format. The following table lists all available 
 
 ### Featured image generation
 
-`generate_featured_image` is always registered. It renders a 1200×675 JPEG using a local
+`generate_hero_image` is always registered. It renders a 1200×675 JPEG using a local
 Go renderer: an Unsplash photo background selected deterministically by title hash,
 composited with a dark gradient overlay, accent bar, title, and tag chips. No external
 service is required by default.
@@ -251,7 +251,7 @@ Required writable paths for each tool:
 |------|----------------------------|
 | `build_site` | `site_root` (site root), `{hugo_root}/resources` |
 | `preview_build` | `{hugo_root}/resources` (render-to-memory; no writes to `public/`) |
-| `generate_featured_image` | `{hugo_root}/static/images` |
+| `generate_hero_image` | `{hugo_root}/static/images` |
 
 Add the missing paths to `ReadWritePaths` in the systemd override and reload:
 
@@ -281,7 +281,7 @@ state rather than broadening filesystem permissions silently.
 
 ### Known Pitfalls
 
-#### `generate_featured_image` returns `write_error` after first deploy
+#### `generate_hero_image` returns `write_error` after first deploy
 
 The service unit's `ReadWritePaths` list usually covers `content/`, `resources/`, and
 `public/`, but **`static/images/` is a separate tree that must be declared explicitly**.
@@ -728,7 +728,7 @@ ReadWritePaths=/var/lib/mcp-hugo-server-go /home/user/hugo-site/content /home/us
 
 ### Pitfall 2 — Write/build/image tools fail with "read-only file system"
 
-**Symptom:** `create_page`, `update_page`, `delete_page`, `build_site`, `preview_build`, or `generate_featured_image` fail even though the service user has Unix access to the Hugo tree.
+**Symptom:** `create_page`, `update_page`, `delete_page`, `build_site`, `preview_build`, or `generate_hero_image` fail even though the service user has Unix access to the Hugo tree.
 
 **Cause:** `ProtectHome=read-only` blocks all writes under `/home/`, including directories the service user owns or belongs to via group membership. Group membership is not sufficient — systemd's namespace isolation applies before Unix permissions.
 

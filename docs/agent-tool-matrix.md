@@ -19,7 +19,7 @@ detail matters for runtime setup.
 | Scenario | Tool | Notes |
 |---|---|---|
 | Read a published page (summary + HTML) | `get_page` | No auth needed |
-| Read a page's source Markdown for editing | `get_full_page_markdown` | Needs `content.read`; includes `page.state` |
+| Read a page's source Markdown for editing | `get_page_markdown` | Needs `content.read`; includes `page.state` |
 | Get a full context bundle before editing | `build_agent_context` | Frontmatter + Markdown + related + `context.state` |
 | Bulk-export content for analysis | `export_agent_context` | Tag/category filter + pagination + per-page `state` |
 | Simple keyword search (no auth) | `search_pages` | Title, summary, tags, URL |
@@ -32,13 +32,13 @@ detail matters for runtime setup.
 | Read site name/URL/language | `get_site_information` | No auth |
 | Get page metadata only (no body) | `get_page_frontmatter` | Reading time, tags, categories + `frontmatter.state` |
 | Find pages related to a slug | `get_related_content` | Shared tags/categories |
-| **Suggest links to add in a draft** | `suggest_internal_links` | Tags/categories → ranked suggestions |
+| **Suggest links to add in a draft** | `suggest_links` | Tags/categories → ranked suggestions |
 | Check what links to a page (before delete) | `get_backlinks` | Impact analysis |
 | Show what changed since last Git commit | `diff_page` | Requires local Git; includes `data.state` even in fallback mode |
-| Validate frontmatter before publishing | `validate_front_matter` | One slug or all pages |
+| Validate frontmatter before publishing | `validate_frontmatter` | One slug or all pages |
 | Full-site validation pass | `validate_site` | All source pages |
 | Audit all internal broken links | `get_broken_links` | Published index only |
-| Understand site structure / onboard | `explain_site_structure` | Sections, languages, recent |
+| Understand site structure / onboard | `explain_structure` | Sections, languages, recent |
 | Get a health score before publishing | `get_site_health` | Counts + taxonomy warnings |
 | **Create a new page** | `create_page` | → then `build_site` |
 | **Edit an existing page** | `update_page` | → then `build_site` |
@@ -46,7 +46,7 @@ detail matters for runtime setup.
 | **Build (publish changes)** | `build_site` | Required after write ops |
 | Preview the build output | `preview_build` | Dry-run build |
 | Run post-build hooks (CDN purge, etc.) | `run_post_build_hooks` | After `build_site` |
-| Generate a featured image | `generate_featured_image` | site.admin scope |
+| Generate a featured image | `generate_hero_image` | site.admin scope |
 
 ---
 
@@ -63,7 +63,7 @@ create_page(slug, title, tags, categories, body)
 ### Edit an existing article
 
 ```
-get_full_page_markdown(slug)          ← read current source
+get_page_markdown(slug)          ← read current source
 update_page(slug, title?, body?, tags?, ...)
   → build_site()
 ```
@@ -80,7 +80,7 @@ update_page(slug, ...)
 ### Internal linking pass on a draft
 
 ```
-suggest_internal_links(tags, categories, body)   ← ranked link suggestions
+suggest_links(tags, categories, body)   ← ranked link suggestions
   → update_page(slug, body_with_links_added)
 ```
 
@@ -97,7 +97,7 @@ get_backlinks(slug)                   ← find pages that link here
 
 ```
 get_site_health()                     ← health score + taxonomy warnings
-validate_front_matter(slug)           ← frontmatter issues for one page
+validate_frontmatter(slug)           ← frontmatter issues for one page
 validate_site()                       ← full-site validation pass
 get_broken_links()                    ← internal link audit
 ```
@@ -111,7 +111,7 @@ Need to READ a page?
 ├── No auth available       → get_page (HTML), search_pages, list_pages
 └── Auth available
     ├── Just metadata       → get_page_frontmatter
-    ├── Markdown (editing)  → get_full_page_markdown
+    ├── Markdown (editing)  → get_page_markdown
     └── Full bundle         → build_agent_context
 
 Need to SEARCH?
@@ -120,7 +120,7 @@ Need to SEARCH?
 
 Need to DISCOVER related content?
 ├── Related to an indexed slug → get_related_content
-└── Suggest outgoing links     → suggest_internal_links
+└── Suggest outgoing links     → suggest_links
 
 Need to WRITE?
 ├── New page    → create_page → build_site
@@ -128,7 +128,7 @@ Need to WRITE?
 └── Delete      → get_backlinks first, then delete_page → build_site
 
 Need to VALIDATE?
-├── One page    → validate_front_matter(slug)
+├── One page    → validate_frontmatter(slug)
 └── All pages   → validate_site
 ```
 
@@ -146,9 +146,9 @@ Need to VALIDATE?
 | Envelope | Flat `{pages}` | Structured `{success, data, warnings, errors}` |
 | Use when | Quick keyword lookup, no token | Precise filtering, pagination, agent workflows |
 
-### `get_page` vs `get_full_page_markdown` vs `build_agent_context`
+### `get_page` vs `get_page_markdown` vs `build_agent_context`
 
-| | `get_page` | `get_full_page_markdown` | `build_agent_context` |
+| | `get_page` | `get_page_markdown` | `build_agent_context` |
 |---|---|---|---|
 | Auth | None | `content.read` | `content.read` |
 | Returns | Published HTML + metadata | Source Markdown + frontmatter | Frontmatter + Markdown + related pages |
@@ -165,9 +165,9 @@ Need to VALIDATE?
 | Response fields | title, summary, tags, categories, date, URL | slug, URL, date only |
 | Use when | Browse content | Full URL inventory, sitemap generation |
 
-### `validate_front_matter` vs `validate_site`
+### `validate_frontmatter` vs `validate_site`
 
-Both validate Hugo source front matter. `validate_front_matter` accepts an optional `slug` to target one page; `validate_site` always runs over all pages (it is an alias for `validate_front_matter` without a slug). Use `validate_front_matter(slug)` when checking a specific page; use `validate_site` for a full sweep.
+Both validate Hugo source front matter. `validate_frontmatter` accepts an optional `slug` to target one page; `validate_site` always runs over all pages (it is an alias for `validate_frontmatter` without a slug). Use `validate_frontmatter(slug)` when checking a specific page; use `validate_site` for a full sweep.
 
 ---
 
@@ -178,5 +178,5 @@ The following description improvements were made during the v1.3.8 audit:
 - `get_page`: clarified that `content_only` applies to published pages; added guidance on `allow_source_fallback` for pre-build verification.
 - `search_pages` vs `search_content`: descriptions now explicitly cross-reference each other to help agents choose.
 - `list_pages` vs `get_sitemap`: descriptions now note the scope difference (content only vs all slugs).
-- `validate_site`: noted it is equivalent to `validate_front_matter` with no slug filter.
-- `suggest_internal_links`: new tool, description covers all three input modes (slug, tags/categories, body).
+- `validate_site`: noted it is equivalent to `validate_frontmatter` with no slug filter.
+- `suggest_links`: new tool, description covers all three input modes (slug, tags/categories, body).

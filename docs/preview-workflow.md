@@ -53,7 +53,7 @@ point of handing an agent (or a human) a single clickable link.
 - `ttl_seconds` is clamped to `[60, 3600]`; the default is `900` (15
   minutes). A preview is a disposable, short-lived surface by design — there
   is no "make it permanent" option here (see `verify_publication` /
-  `inspect_rendered_page` for the durable, no-TTL diagnostics).
+  `inspect_rendered` for the durable, no-TTL diagnostics).
 - Expiry is enforced on **every access**, not only at creation time: `Get`
   checks `time.Now().After(entry.ExpiresAt)` before serving, deletes the
   entry, and removes its directory.

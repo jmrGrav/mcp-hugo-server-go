@@ -29,7 +29,7 @@ Tested against `https://mcp.arleo.eu` (v1.3.0). Each client is tested for: disco
 
 - **Connector type:** Custom GPT action / MCP connector
 - **Discovery:** OAuth auth server metadata read correctly
-- **OAuth:** Completes with read/write scope; writes `update_page`, `validate_front_matter` visible
+- **OAuth:** Completes with read/write scope; writes `update_page`, `validate_frontmatter` visible
 - **Known quirk:** Spinner + reconnect prompt on first connection (cosmetic, not a failure)
 - **Status:** ✅ functional
 

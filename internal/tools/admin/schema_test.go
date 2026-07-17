@@ -24,7 +24,7 @@ func TestAdminToolSchemasPresent(t *testing.T) {
 	for i := range result.Tools {
 		got[result.Tools[i].Name] = result.Tools[i]
 	}
-	for _, name := range []string{"build_site", "preview_build", "run_post_build_hooks", "generate_featured_image", "check_sri_versions"} {
+	for _, name := range []string{"build_site", "preview_build", "run_post_build_hooks", "generate_hero_image", "check_sri_versions"} {
 		tool, ok := got[name]
 		if !ok {
 			t.Fatalf("missing tool %q", name)

@@ -222,19 +222,19 @@ are optional and additive.
 
 | Tool                    | Envelope    | Notes                                        |
 |-------------------------|-------------|----------------------------------------------|
-| `get_full_page_markdown`| flat        | `page` + `page.state`                        |
+| `get_page_markdown`| flat        | `page` + `page.state`                        |
 | `get_page_frontmatter`  | flat        | `frontmatter` + `frontmatter.state`          |
 | `get_related_content`   | flat        | `related`                                    |
 | `build_agent_context`   | flat        | `context` + `context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337) |
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
-| `explain_site_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
+| `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
 | `get_site_health`       | structured  | `data.score`, `data.status`, counts          |
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`            |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
 | `diff_page`             | structured  | `data` (diff result) + `data.state`          |
-| `inspect_rendered_page` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state` |
-| `validate_front_matter` | structured  | `data.pages`, `data.pages_checked`           |
+| `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state` |
+| `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`           |
 | `validate_site`         | structured  | `data.pages`, `data.pages_checked`           |
 
 ### `content.write`
@@ -252,7 +252,7 @@ are optional and additive.
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready` |
 | `preview_build`           | flat     | (build result)                       |
 | `run_post_build_hooks`    | flat     | (hook result)                        |
-| `generate_featured_image` | flat     | `path`                               |
+| `generate_hero_image` | flat     | `path`                               |
 | `check_sri_versions`      | flat     | (SRI result)                         |
 | `get_runtime_status`      | structured | `data.server_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |

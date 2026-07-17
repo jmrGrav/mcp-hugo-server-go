@@ -213,7 +213,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 
-	addReadOnlyTool(s, "get_full_page_markdown", "Read page Markdown",
+	addReadOnlyTool(s, "get_page_markdown", "Read page Markdown",
 		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. The response includes a `state` object so agents can tell whether they are reading built public content, source-only content, or stale source ahead of the last build. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getFullPageMarkdownInput) (*mcp.CallToolResult, getFullPageMarkdownOutput, error) {
 			if idx == nil && srcIdx == nil {
@@ -763,20 +763,20 @@ func nullsafeStrings(s []string) []string {
 // Defs returns the tool definitions for this package (used to build the global registry).
 func Defs() []tools.ToolDef {
 	return []tools.ToolDef{
-		{Name: "get_full_page_markdown", RequiredScope: "content.read"},
+		{Name: "get_page_markdown", RequiredScope: "content.read"},
 		{Name: "get_page_frontmatter", RequiredScope: "content.read"},
 		{Name: "get_related_content", RequiredScope: "content.read"},
 		{Name: "build_agent_context", RequiredScope: "content.read"},
 		{Name: "export_agent_context", RequiredScope: "content.read"},
 		{Name: "search_content", RequiredScope: "content.read"},
-		{Name: "explain_site_structure", RequiredScope: "content.read"},
+		{Name: "explain_structure", RequiredScope: "content.read"},
 		{Name: "get_site_health", RequiredScope: "content.read"},
 		{Name: "get_broken_links", RequiredScope: "content.read"},
-		{Name: "inspect_rendered_page", RequiredScope: "content.read"},
+		{Name: "inspect_rendered", RequiredScope: "content.read"},
 		{Name: "get_backlinks", RequiredScope: "content.read"},
-		{Name: "suggest_internal_links", RequiredScope: "content.read"},
+		{Name: "suggest_links", RequiredScope: "content.read"},
 		{Name: "diff_page", RequiredScope: "content.read"},
-		{Name: "validate_front_matter", RequiredScope: "content.read"},
+		{Name: "validate_frontmatter", RequiredScope: "content.read"},
 		{Name: "validate_site", RequiredScope: "content.read"},
 	}
 }

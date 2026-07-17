@@ -288,14 +288,14 @@ if [[ "$ENABLE_WRITES" == "1" ]]; then
   sleep "$SMOKE_DELAY"
   call_tool "update_page" "update_page" "$(jq -nc --arg slug "$WRITE_SLUG" '{slug:$slug,title:"MCP live smoke updated",body:"Temporary MCP smoke page updated. Safe to delete."}')"
   sleep "$SMOKE_DELAY"
-  call_tool "generate_featured_image" "generate_featured_image" "$(jq -nc --arg slug "$WRITE_SLUG" --arg prompt "Photo of a mountain at sunset" '{slug:$slug,prompt:$prompt}')"
-  img_result="$(jq -r '.result.content[0].text // empty' "$TMPDIR/last-generate_featured_image.json" 2>/dev/null || true)"
+  call_tool "generate_hero_image" "generate_hero_image" "$(jq -nc --arg slug "$WRITE_SLUG" --arg prompt "Photo of a mountain at sunset" '{slug:$slug,prompt:$prompt}')"
+  img_result="$(jq -r '.result.content[0].text // empty' "$TMPDIR/last-generate_hero_image.json" 2>/dev/null || true)"
   if [[ "$img_result" == *"config_error"* ]]; then
-    echo "SKIP generate_featured_image (image_gen_url not configured)"
+    echo "SKIP generate_hero_image (image_gen_url not configured)"
   elif [[ -z "$img_result" ]]; then
-    fail "generate_featured_image returned empty content"
+    fail "generate_hero_image returned empty content"
   else
-    pass "generate_featured_image: content present (${#img_result} chars)"
+    pass "generate_hero_image: content present (${#img_result} chars)"
   fi
   sleep "$SMOKE_DELAY"
   call_tool "get_page_created" "get_page" "$(jq -nc --arg slug "$WRITE_SLUG" '{slug:$slug}')"

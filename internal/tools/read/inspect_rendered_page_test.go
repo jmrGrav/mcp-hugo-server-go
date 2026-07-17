@@ -97,9 +97,9 @@ func TestInspectRenderedPageCleanPagePassesAllChecks(t *testing.T) {
 	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
 	defer done()
 
-	res := callTool(t, session, "inspect_rendered_page", map[string]any{"slug": "/posts/hello/"})
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/hello/"})
 	if res.IsError {
-		t.Fatalf("inspect_rendered_page returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
@@ -133,9 +133,9 @@ func TestInspectRenderedPageFlagsMissingSEOFields(t *testing.T) {
 	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
 	defer done()
 
-	res := callTool(t, session, "inspect_rendered_page", map[string]any{"slug": "/posts/bare/"})
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/bare/"})
 	if res.IsError {
-		t.Fatalf("inspect_rendered_page returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
 	m := decodeContent(t, res)
 	data := m["data"].(map[string]any)
@@ -165,9 +165,9 @@ func TestInspectRenderedPageFlagsBrokenLinkAndMissingImage(t *testing.T) {
 	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
 	defer done()
 
-	res := callTool(t, session, "inspect_rendered_page", map[string]any{"slug": "/posts/broken/"})
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/broken/"})
 	if res.IsError {
-		t.Fatalf("inspect_rendered_page returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
 	m := decodeContent(t, res)
 	data := m["data"].(map[string]any)
@@ -192,9 +192,9 @@ func TestInspectRenderedPageFlagsRenderErrorMarker(t *testing.T) {
 	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
 	defer done()
 
-	res := callTool(t, session, "inspect_rendered_page", map[string]any{"slug": "/posts/errpage/"})
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/errpage/"})
 	if res.IsError {
-		t.Fatalf("inspect_rendered_page returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
 	m := decodeContent(t, res)
 	data := m["data"].(map[string]any)
@@ -221,9 +221,9 @@ func TestInspectRenderedPageMultilingualWarnsMissingHreflang(t *testing.T) {
 	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
 	defer done()
 
-	res := callTool(t, session, "inspect_rendered_page", map[string]any{"slug": "/en/posts/hi/"})
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/en/posts/hi/"})
 	if res.IsError {
-		t.Fatalf("inspect_rendered_page returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
 	m := decodeContent(t, res)
 	data := m["data"].(map[string]any)
@@ -258,9 +258,9 @@ func TestInspectRenderedPageFlagsCanonicalMismatch(t *testing.T) {
 	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
 	defer done()
 
-	res := callTool(t, session, "inspect_rendered_page", map[string]any{"slug": "/posts/drifted/"})
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/drifted/"})
 	if res.IsError {
-		t.Fatalf("inspect_rendered_page returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
 	m := decodeContent(t, res)
 	data := m["data"].(map[string]any)
@@ -276,9 +276,9 @@ func TestInspectRenderedPageUnknownSlugReturnsNotFound(t *testing.T) {
 	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
 	defer done()
 
-	res := callTool(t, session, "inspect_rendered_page", map[string]any{"slug": "/does/not/exist/"})
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/does/not/exist/"})
 	if !res.IsError {
-		t.Fatalf("inspect_rendered_page on unknown slug: want error, got success")
+		t.Fatalf("inspect_rendered on unknown slug: want error, got success")
 	}
 }
 
@@ -288,8 +288,8 @@ func TestInspectRenderedPageEmptySlugIsInvalidParams(t *testing.T) {
 	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
 	defer done()
 
-	res := callTool(t, session, "inspect_rendered_page", map[string]any{"slug": "   "})
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "   "})
 	if !res.IsError {
-		t.Fatalf("inspect_rendered_page with blank slug: want error, got success")
+		t.Fatalf("inspect_rendered with blank slug: want error, got success")
 	}
 }

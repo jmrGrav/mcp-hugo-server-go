@@ -131,32 +131,32 @@ func TestGetFullPageMarkdown(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "get_full_page_markdown", map[string]any{"slug": "/posts/hello"})
+	res := callTool(t, session, "get_page_markdown", map[string]any{"slug": "/posts/hello"})
 	if res.IsError {
-		t.Fatalf("get_full_page_markdown returned error: %v", res.Content)
+		t.Fatalf("get_page_markdown returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	pageVal, ok := m["page"]
 	if !ok {
-		t.Fatal("get_full_page_markdown: missing 'page' key")
+		t.Fatal("get_page_markdown: missing 'page' key")
 	}
 	page, ok := pageVal.(map[string]any)
 	if !ok {
-		t.Fatalf("get_full_page_markdown: 'page' is %T, want map", pageVal)
+		t.Fatalf("get_page_markdown: 'page' is %T, want map", pageVal)
 	}
 	markdownVal, ok := page["markdown"]
 	if !ok {
-		t.Fatal("get_full_page_markdown: missing 'markdown' key in page")
+		t.Fatal("get_page_markdown: missing 'markdown' key in page")
 	}
 	markdown, ok := markdownVal.(string)
 	if !ok || markdown == "" {
-		t.Fatalf("get_full_page_markdown: markdown is empty or not a string: %v", markdownVal)
+		t.Fatalf("get_page_markdown: markdown is empty or not a string: %v", markdownVal)
 	}
 	if markdown != "This is the hello world post body." {
-		t.Fatalf("get_full_page_markdown markdown = %q, want source body", markdown)
+		t.Fatalf("get_page_markdown markdown = %q, want source body", markdown)
 	}
 	if got := page["resolved_source_path"]; got != "content/posts/hello.md" {
-		t.Fatalf("get_full_page_markdown resolved_source_path = %v, want content/posts/hello.md", got)
+		t.Fatalf("get_page_markdown resolved_source_path = %v, want content/posts/hello.md", got)
 	}
 	assertReadPageState(t, page["state"], "present", "built", "available", "fresh")
 }
@@ -166,9 +166,9 @@ func TestGetFullPageMarkdownUnknown(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "get_full_page_markdown", map[string]any{"slug": "/posts/does-not-exist"})
+	res := callTool(t, session, "get_page_markdown", map[string]any{"slug": "/posts/does-not-exist"})
 	if !res.IsError {
-		t.Fatal("get_full_page_markdown with unknown slug should return error")
+		t.Fatal("get_page_markdown with unknown slug should return error")
 	}
 	raw, _ := json.Marshal(res.Content)
 	if len(raw) == 0 {
@@ -749,10 +749,10 @@ func TestRichReadToolsPreferMatchingLanguageSource(t *testing.T) {
 		checkFrontmatter(t, fm)
 	})
 
-	t.Run("get_full_page_markdown", func(t *testing.T) {
-		res := callTool(t, session, "get_full_page_markdown", map[string]any{"slug": "/en/posts/hello/"})
+	t.Run("get_page_markdown", func(t *testing.T) {
+		res := callTool(t, session, "get_page_markdown", map[string]any{"slug": "/en/posts/hello/"})
 		if res.IsError {
-			t.Fatalf("get_full_page_markdown returned error: %v", res.Content)
+			t.Fatalf("get_page_markdown returned error: %v", res.Content)
 		}
 		m := decodeContent(t, res)
 		page, ok := m["page"].(map[string]any)
@@ -875,9 +875,9 @@ func TestSuggestInternalLinksSeparatesTranslations(t *testing.T) {
 	session, done := newEditorialGraphSession(t)
 	defer done()
 
-	res := callTool(t, session, "suggest_internal_links", map[string]any{"slug": "/posts/hello/", "limit": 10})
+	res := callTool(t, session, "suggest_links", map[string]any{"slug": "/posts/hello/", "limit": 10})
 	if res.IsError {
-		t.Fatalf("suggest_internal_links returned error: %v", res.Content)
+		t.Fatalf("suggest_links returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
@@ -1023,24 +1023,24 @@ func TestExplainSiteStructure(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	res := callTool(t, session, "explain_structure", map[string]any{})
 	if res.IsError {
-		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("explain_site_structure data type = %T", m["data"])
+		t.Fatalf("explain_structure data type = %T", m["data"])
 	}
 	if _, ok := data["sections"]; !ok {
-		t.Fatal("explain_site_structure missing sections")
+		t.Fatal("explain_structure missing sections")
 	}
 	if _, ok := data["summary"]; !ok {
-		t.Fatal("explain_site_structure missing summary")
+		t.Fatal("explain_structure missing summary")
 	}
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok || len(recentPages) == 0 {
-		t.Fatalf("explain_site_structure recent_pages = %#v, want at least one page", data["recent_pages"])
+		t.Fatalf("explain_structure recent_pages = %#v, want at least one page", data["recent_pages"])
 	}
 	assertReadPageState(t, recentPages[0].(map[string]any)["state"], "present", "built", "available", "fresh")
 }
@@ -1050,17 +1050,17 @@ func TestValidateFrontMatter(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 10, "offset": 0})
+	res := callTool(t, session, "validate_frontmatter", map[string]any{"limit": 10, "offset": 0})
 	if res.IsError {
-		t.Fatalf("validate_front_matter returned error: %v", res.Content)
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("validate_front_matter data type = %T", m["data"])
+		t.Fatalf("validate_frontmatter data type = %T", m["data"])
 	}
 	if _, ok := data["pages"]; !ok {
-		t.Fatal("validate_front_matter missing pages")
+		t.Fatal("validate_frontmatter missing pages")
 	}
 }
 
@@ -1069,33 +1069,33 @@ func TestValidateFrontMatterGlobalPaginationDistinguishesScanFromDetailPage(t *t
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 1, "offset": 0})
+	res := callTool(t, session, "validate_frontmatter", map[string]any{"limit": 1, "offset": 0})
 	if res.IsError {
-		t.Fatalf("validate_front_matter returned error: %v", res.Content)
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("validate_front_matter data type = %T", m["data"])
+		t.Fatalf("validate_frontmatter data type = %T", m["data"])
 	}
 	pagesChecked, _ := data["pages_checked"].(float64)
 	returnedCount, _ := data["returned_count"].(float64)
 	pages, _ := data["pages"].([]any)
 	if pagesChecked < 2 {
-		t.Fatalf("validate_front_matter limit=1: pages_checked = %v, want the full scan scope (>=2), not capped by limit", pagesChecked)
+		t.Fatalf("validate_frontmatter limit=1: pages_checked = %v, want the full scan scope (>=2), not capped by limit", pagesChecked)
 	}
 	if returnedCount != 1 || len(pages) != 1 {
-		t.Fatalf("validate_front_matter limit=1: returned_count=%v len(pages)=%d, want exactly 1 detail row", returnedCount, len(pages))
+		t.Fatalf("validate_frontmatter limit=1: returned_count=%v len(pages)=%d, want exactly 1 detail row", returnedCount, len(pages))
 	}
 	if int(pagesChecked) <= int(returnedCount) {
-		t.Fatalf("validate_front_matter limit=1: pages_checked (%v) should exceed returned_count (%v) so has_more is meaningful", pagesChecked, returnedCount)
+		t.Fatalf("validate_frontmatter limit=1: pages_checked (%v) should exceed returned_count (%v) so has_more is meaningful", pagesChecked, returnedCount)
 	}
 	hasMore, _ := data["has_more"].(bool)
 	if !hasMore {
-		t.Fatal("validate_front_matter limit=1: has_more = false, want true (more detail rows exist beyond this page)")
+		t.Fatal("validate_frontmatter limit=1: has_more = false, want true (more detail rows exist beyond this page)")
 	}
 	if data["next_offset"] == nil {
-		t.Fatal("validate_front_matter limit=1: next_offset missing, want a value to continue pagination")
+		t.Fatal("validate_frontmatter limit=1: next_offset missing, want a value to continue pagination")
 	}
 }
 
@@ -1131,7 +1131,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 	for i := range tools.Tools {
 		got[tools.Tools[i].Name] = tools.Tools[i]
 	}
-	for _, name := range []string{"search_content", "explain_site_structure", "get_site_health", "get_broken_links", "diff_page", "validate_front_matter", "validate_site"} {
+	for _, name := range []string{"search_content", "explain_structure", "get_site_health", "get_broken_links", "diff_page", "validate_frontmatter", "validate_site"} {
 		tool, ok := got[name]
 		if !ok {
 			t.Fatalf("missing tool %q", name)
@@ -1156,19 +1156,19 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		tool string
 		keys []string
 	}{
-		{tool: "get_full_page_markdown", keys: []string{"success", "data", "errors", "warnings", "meta", "page"}},
+		{tool: "get_page_markdown", keys: []string{"success", "data", "errors", "warnings", "meta", "page"}},
 		{tool: "get_page_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "frontmatter"}},
 		{tool: "get_related_content", keys: []string{"success", "data", "errors", "warnings", "meta", "translations", "related_pages", "related"}},
 		{tool: "build_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "context"}},
 		{tool: "export_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "export", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
 		{tool: "search_content", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
-		{tool: "explain_site_structure", keys: []string{"success", "data", "errors", "warnings", "meta", "summary", "sections", "languages"}},
+		{tool: "explain_structure", keys: []string{"success", "data", "errors", "warnings", "meta", "summary", "sections", "languages"}},
 		{tool: "get_site_health", keys: []string{"success", "data", "errors", "warnings", "meta", "status", "score", "published_pages"}},
 		{tool: "get_broken_links", keys: []string{"success", "data", "errors", "warnings", "meta", "links", "broken_links", "total_pages"}},
 		{tool: "get_backlinks", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "count", "backlinks"}},
-		{tool: "suggest_internal_links", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "total", "translations", "suggestions", "suggested_links"}},
+		{tool: "suggest_links", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "total", "translations", "suggestions", "suggested_links"}},
 		{tool: "diff_page", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "path", "status", "diff_available"}},
-		{tool: "validate_front_matter", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
+		{tool: "validate_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
 		{tool: "validate_site", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
 	} {
 		tool, ok := got[tc.tool]
@@ -1281,21 +1281,21 @@ func TestExplainSiteStructureUsesSourceIndexCategories(t *testing.T) {
 		t.Fatal("test precondition: source index must have at least one category")
 	}
 
-	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	res := callTool(t, session, "explain_structure", map[string]any{})
 	if res.IsError {
-		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("explain_site_structure data type = %T", m["data"])
+		t.Fatalf("explain_structure data type = %T", m["data"])
 	}
 	gotCats, ok := data["categories"].(float64)
 	if !ok {
-		t.Fatalf("explain_site_structure categories type = %T, value = %v", data["categories"], data["categories"])
+		t.Fatalf("explain_structure categories type = %T, value = %v", data["categories"], data["categories"])
 	}
 	if int(gotCats) != wantCats {
-		t.Fatalf("explain_site_structure categories = %d, want %d (source index count)", int(gotCats), wantCats)
+		t.Fatalf("explain_structure categories = %d, want %d (source index count)", int(gotCats), wantCats)
 	}
 }
 
@@ -1304,14 +1304,14 @@ func TestExplainSiteStructureRecentPagesUseSourceCategories(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	res := callTool(t, session, "explain_structure", map[string]any{})
 	if res.IsError {
-		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("explain_site_structure data type = %T", m["data"])
+		t.Fatalf("explain_structure data type = %T", m["data"])
 	}
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok {
@@ -1394,14 +1394,14 @@ func TestExplainSiteStructureRecentPagesUseSourceCategoriesForLanguagePrefixedSl
 	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
 	defer done()
 
-	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	res := callTool(t, session, "explain_structure", map[string]any{})
 	if res.IsError {
-		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("explain_site_structure data type = %T", m["data"])
+		t.Fatalf("explain_structure data type = %T", m["data"])
 	}
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok || len(recentPages) != 1 {
@@ -1465,14 +1465,14 @@ func TestExplainSiteStructureRecentPagesPreferSourceCategoriesOverStalePublicCat
 	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
 	defer done()
 
-	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	res := callTool(t, session, "explain_structure", map[string]any{})
 	if res.IsError {
-		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("explain_site_structure data type = %T", m["data"])
+		t.Fatalf("explain_structure data type = %T", m["data"])
 	}
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok || len(recentPages) != 1 {
@@ -1536,14 +1536,14 @@ func TestExplainSiteStructureRecentPagesPreferEmptySourceCategoriesOverStalePubl
 	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
 	defer done()
 
-	res := callTool(t, session, "explain_site_structure", map[string]any{})
+	res := callTool(t, session, "explain_structure", map[string]any{})
 	if res.IsError {
-		t.Fatalf("explain_site_structure returned error: %v", res.Content)
+		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("explain_site_structure data type = %T", m["data"])
+		t.Fatalf("explain_structure data type = %T", m["data"])
 	}
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok || len(recentPages) != 1 {
@@ -1613,29 +1613,29 @@ func TestValidateFrontMatterOutputFields(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "validate_front_matter", map[string]any{"limit": 1, "offset": 0})
+	res := callTool(t, session, "validate_frontmatter", map[string]any{"limit": 1, "offset": 0})
 	if res.IsError {
-		t.Fatalf("validate_front_matter returned error: %v", res.Content)
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("validate_front_matter data type = %T", m["data"])
+		t.Fatalf("validate_frontmatter data type = %T", m["data"])
 	}
 	if _, ok := data["pages_checked"]; !ok {
-		t.Fatal("validate_front_matter: pages_checked field missing (was 'total')")
+		t.Fatal("validate_frontmatter: pages_checked field missing (was 'total')")
 	}
 	if _, ok := data["pages_passed"]; !ok {
-		t.Fatal("validate_front_matter: pages_passed field missing (was 'valid')")
+		t.Fatal("validate_frontmatter: pages_passed field missing (was 'valid')")
 	}
 	if _, ok := data["invalid"]; !ok {
-		t.Fatal("validate_front_matter: invalid field missing")
+		t.Fatal("validate_frontmatter: invalid field missing")
 	}
 	if _, ok := data["total"]; ok {
-		t.Fatal("validate_front_matter: old 'total' field must not be present")
+		t.Fatal("validate_frontmatter: old 'total' field must not be present")
 	}
 	if _, ok := data["valid"]; ok {
-		t.Fatal("validate_front_matter: old 'valid' field must not be present")
+		t.Fatal("validate_frontmatter: old 'valid' field must not be present")
 	}
 	pagesChecked := int(data["pages_checked"].(float64))
 	pagesPassed := int(data["pages_passed"].(float64))
@@ -1654,25 +1654,25 @@ func TestValidateFrontMatterDTOHasLangField(t *testing.T) {
 	session, done := newTestClient(t, idx)
 	defer done()
 
-	res := callTool(t, session, "validate_front_matter", map[string]any{})
+	res := callTool(t, session, "validate_frontmatter", map[string]any{})
 	if res.IsError {
-		t.Fatalf("validate_front_matter returned error: %v", res.Content)
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
 	data, ok := m["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("validate_front_matter data type = %T", m["data"])
+		t.Fatalf("validate_frontmatter data type = %T", m["data"])
 	}
 	pages, ok := data["pages"].([]any)
 	if !ok || len(pages) == 0 {
-		t.Skip("no pages in validate_front_matter output; cannot check DTO shape")
+		t.Skip("no pages in validate_frontmatter output; cannot check DTO shape")
 	}
 	firstDTO, ok := pages[0].(map[string]any)
 	if !ok {
-		t.Fatalf("validate_front_matter pages[0] type = %T", pages[0])
+		t.Fatalf("validate_frontmatter pages[0] type = %T", pages[0])
 	}
 	if _, ok := firstDTO["lang"]; !ok {
-		t.Fatal("validate_front_matter page DTO: 'lang' field missing")
+		t.Fatal("validate_frontmatter page DTO: 'lang' field missing")
 	}
 }
 
