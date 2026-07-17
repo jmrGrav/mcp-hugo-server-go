@@ -69,6 +69,7 @@ available.
 - `export_agent_context` - Export agent context
 - `get_page_for_edit` - Get page for edit (compact edit bundle: frontmatter + markdown + state + quality + revision in one call; see #339)
 - `list_content_types` - List content types (site's Hugo content types/sections, archetype template + expected front matter fields [union of archetype-declared and observed-page fields] + observed page count per type; see #347)
+- `list_page_assets` - List page assets (sibling files stored alongside a page bundle's index.md, e.g. images; only leaf bundles have an asset directory, single-file pages fail with `not_a_bundle`; see #348)
 - `search_content` - Search content
 - `explain_structure` - Explain site structure
 - `get_site_health` - Get site health
@@ -85,6 +86,7 @@ available.
 - `create_page` - Publish page
 - `update_page` - Update page
 - `delete_page` - Delete page
+- `upload_page_asset` - Upload page asset (write a new file into an existing leaf page bundle directory; allowed types png/jpg/jpeg/gif/webp, content is sniffed against the declared extension, never overwrites; SVG is not yet supported — see #348)
 
 Write tools also accept an optional `idempotency_key` on non-dry-run calls.
 Replaying the exact same mutation with the same key returns the original result

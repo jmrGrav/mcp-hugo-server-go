@@ -662,8 +662,8 @@ func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 26 {
-		t.Fatalf("authenticated tools/list = %d tools, want 26; got %v", len(names), names)
+	if len(names) != 27 {
+		t.Fatalf("authenticated tools/list = %d tools, want 27; got %v", len(names), names)
 	}
 	for _, name := range []string{"get_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "search_content", "explain_structure", "get_site_health", "diff_page", "validate_frontmatter", "validate_site", "suggest_links"} {
 		found := false
@@ -687,8 +687,8 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	addBearerToken(t, storePath, bearer, "reader")
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 26 {
-		t.Fatalf("reader tools/list = %d tools, want 26; got %v", len(names), names)
+	if len(names) != 27 {
+		t.Fatalf("reader tools/list = %d tools, want 27; got %v", len(names), names)
 	}
 	for _, name := range []string{
 		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
@@ -940,6 +940,109 @@ func TestReaderTokenGetPageForEditUsesPublicContentAndOmitsQuality(t *testing.T)
 	}
 }
 
+func TestReaderTokenListPageAssetsOmitsBundleDirectoryForPublicPage(t *testing.T) {
+	// #348: list_page_assets' payload is entirely source-derived (it lists a
+	// filesystem directory under content root). Even for a page that is
+	// publicly available, site.ReaderSafeResolvedPage strips SourcePath for
+	// readers, so there is no directory to list. Confirm end-to-end that
+	// this degrades to an empty assets list rather than leaking a path or
+	// erroring in a way that suggests the page doesn't exist.
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(content) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "demo", "index.md"), []byte("---\ntitle: Demo\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "demo", "cover.webp"), []byte("cover bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile(asset) error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(publicRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(public page) error = %v", err)
+	}
+	publicHTML := `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Demo</title><link rel="canonical" href="https://example.test/posts/demo/"></head>
+<body><main><article><h1>Demo</h1><p>Rendered public body.</p></article></main></body>
+</html>`
+	if err := os.WriteFile(filepath.Join(publicRoot, "posts", "demo", "index.html"), []byte(publicHTML), 0o644); err != nil {
+		t.Fatalf("WriteFile(public html) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_page_assets","arguments":{"slug":"/posts/demo/"}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader list_page_assets status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "cover.webp") || strings.Contains(body, contentRoot) {
+		t.Fatalf("reader list_page_assets must not expose the source bundle directory or its contents; body = %q", body)
+	}
+	if !strings.Contains(body, `"assets":[]`) {
+		t.Fatalf("reader list_page_assets should return an empty assets list for a public page; body = %q", body)
+	}
+}
+
+func TestReaderTokenListPageAssetsRejectsSourceOnlyPage(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "draft"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(content) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "draft", "index.md"), []byte("---\ntitle: Draft\ndraft: true\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+	if err := os.MkdirAll(publicRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(public) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_page_assets","arguments":{"slug":"/posts/draft/"}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader list_page_assets status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "content_not_public") {
+		t.Fatalf("reader list_page_assets must reject a source-only page with content_not_public; body = %q", rec.Body.String())
+	}
+}
+
 func TestReaderTokenListContentTypesOmitsPageCounts(t *testing.T) {
 	// #347: page_count is derived from source pages (including drafts),
 	// the same class of source-derived signal as #324/#339. Archetype
@@ -1119,8 +1222,8 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	rewriteTokenScopeToLegacyMCP(t, storePath, bearer)
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 26 {
-		t.Fatalf("legacy mcp tools/list = %d tools, want 26; got %v", len(names), names)
+	if len(names) != 27 {
+		t.Fatalf("legacy mcp tools/list = %d tools, want 27; got %v", len(names), names)
 	}
 	for _, bad := range []string{"create_page", "update_page", "delete_page", "build_site"} {
 		for _, n := range names {

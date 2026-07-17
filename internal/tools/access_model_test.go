@@ -28,6 +28,7 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"export_agent_context": "content.read",
 		"get_page_for_edit":    "content.read",
 		"list_content_types":   "content.read",
+		"list_page_assets":     "content.read",
 		"search_content":       "content.read",
 		"explain_structure":    "content.read",
 		"get_site_health":      "content.read",
@@ -41,6 +42,7 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"create_page":          "content.write",
 		"update_page":          "content.write",
 		"delete_page":          "content.write",
+		"upload_page_asset":    "content.write",
 		"build_site":           "site.admin",
 		"preview_build":        "site.admin",
 		"run_post_build_hooks": "site.admin",
@@ -74,11 +76,11 @@ func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
 	if got := len(anonpkg.Defs()); got != 9 {
 		t.Fatalf("anonymous tool count = %d, want 9", got)
 	}
-	if got := len(readpkg.Defs()); got != 17 {
-		t.Fatalf("content.read tool count = %d, want 17", got)
+	if got := len(readpkg.Defs()); got != 18 {
+		t.Fatalf("content.read tool count = %d, want 18", got)
 	}
-	if got := len(writepkg.Defs()); got != 3 {
-		t.Fatalf("content.write tool count = %d, want 3", got)
+	if got := len(writepkg.Defs()); got != 4 {
+		t.Fatalf("content.write tool count = %d, want 4", got)
 	}
 	if got := len(adminpkg.Defs()); got != 9 {
 		t.Fatalf("site.admin tool count = %d, want 9", got)
