@@ -51,6 +51,54 @@ type taxonomyInconsistencyDTO struct {
 	// different languages — this is the site's own localization, not a
 	// content inconsistency, and does not need an alias entry to resolve).
 	Kind string `json:"kind,omitempty"`
+	// Severity tells an agent whether this finding is expected to be
+	// actionable at all (#419), instead of leaving it to infer that from a
+	// static score: "info" (translation_pair — the site's own localization,
+	// not a content problem) or "warning" (alias_mismatch/possible_duplicate
+	// — a real content issue worth fixing). Neither ever moves the
+	// top-level `score`/`status` (#419 is presentation only); "warning"
+	// findings do show a local penalty in score_breakdown.taxonomy.score.
+	Severity string `json:"severity,omitempty"`
+}
+
+// taxonomyFindingSeverity maps a finding's Kind to its Severity (#419).
+func taxonomyFindingSeverity(kind string) string {
+	if kind == "translation_pair" {
+		return "info"
+	}
+	return "warning"
+}
+
+// scoreCategoryDTO is one line item of get_site_health's score_breakdown
+// (#419). Weight is each category's actual share of the top-level `score`
+// (it reconciles: score == the weighted category the top-level score is
+// computed from), not a decorative number — a weight of 0 means that
+// category's Score is shown for reference only and never moves the
+// top-level score.
+type scoreCategoryDTO struct {
+	Score      int `json:"score"`
+	Weight     int `json:"weight"`
+	Issues     int `json:"issues"`
+	Advisories int `json:"advisories,omitempty"`
+}
+
+// scoreBreakdownDTO is additive to get_site_health's response (#419) and
+// presentation-only: it explains the pre-existing `score`/`status` formula,
+// it does not change it (#419's scope note: "not a scoring algorithm
+// change"). Frontmatter carries all the weight because it's the only
+// category the formula has ever penalized; taxonomy findings — even
+// "warning"-severity ones — have never moved `score` and still don't, so
+// taxonomy carries zero weight.
+//
+// Only covers the categories the server actually computes a real signal
+// for today (front matter validation, taxonomy findings). It deliberately
+// omits "links"/"rendering"/"publication" placeholders that #419's proposal
+// sketched but that this server has no corresponding check for yet —
+// publishing a fabricated 100 for an uncomputed category would be more
+// misleading than omitting it.
+type scoreBreakdownDTO struct {
+	Frontmatter scoreCategoryDTO `json:"frontmatter"`
+	Taxonomy    scoreCategoryDTO `json:"taxonomy"`
 }
 
 type contentEnvelopeData struct {
@@ -68,6 +116,11 @@ type contentEnvelopeData struct {
 
 	Status string `json:"status,omitempty"`
 	Score  int    `json:"score,omitempty"`
+	// ScoreBreakdown is additive to get_site_health (#419): per-category
+	// score/weight/issues so an agent can see why `score` is what it is,
+	// without re-deriving the scoring logic. Nil for tools other than
+	// get_site_health.
+	ScoreBreakdown *scoreBreakdownDTO `json:"score_breakdown,omitempty"`
 	// TaxonomyInconsistencies keeps its original string[] shape for
 	// backward compatibility (#210/#328: no v1.x field-shape breaks).
 	// TaxonomyInconsistencyDetails is the additive, structured sibling —
@@ -94,6 +147,7 @@ type contentEnvelope struct {
 	toolcontract.ToolResponse[contentEnvelopeData]
 	Status                       string                     `json:"status,omitempty"`
 	Score                        int                        `json:"score,omitempty"`
+	ScoreBreakdown               *scoreBreakdownDTO         `json:"score_breakdown,omitempty"`
 	PublishedPages               int                        `json:"published_pages,omitempty"`
 	SourcePages                  int                        `json:"source_pages,omitempty"`
 	DraftPages                   int                        `json:"draft_pages,omitempty"`
@@ -464,7 +518,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Use this before publishing or reviewing content. Requires content.read.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`) — neither moves the top-level `score`/`status`, but a `warning` finding does show a local penalty in `score_breakdown.taxonomy.score`. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never contributed to `score`), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -473,6 +527,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, newContentEnvelope(contentEnvelopeData{
 				Status:                       health.Status,
 				Score:                        health.Score,
+				ScoreBreakdown:               health.ScoreBreakdown,
 				PublishedPages:               health.PublishedPages,
 				SourcePages:                  health.SourcePages,
 				DraftPages:                   health.DraftPages,
@@ -1094,6 +1149,7 @@ func newContentEnvelope(data contentEnvelopeData, now time.Time) contentEnvelope
 		ToolResponse:                 successEnvelope(data, now),
 		Status:                       data.Status,
 		Score:                        data.Score,
+		ScoreBreakdown:               data.ScoreBreakdown,
 		PublishedPages:               data.PublishedPages,
 		SourcePages:                  data.SourcePages,
 		DraftPages:                   data.DraftPages,
@@ -1233,6 +1289,17 @@ func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) ([]hugosit
 	return nil, fmt.Errorf("content_not_found: no source page matched slug %q", slug)
 }
 
+// clampScore clamps a score component to [0, 100].
+func clampScore(v int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
+}
+
 func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) contentEnvelopeData {
 	health := contentEnvelopeData{
 		Status: "healthy",
@@ -1281,11 +1348,35 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[
 			health.TaxonomyInconsistencies = append(health.TaxonomyInconsistencies, d.Message)
 		}
 	}
-	penalty := (health.ValidationErrors * 10) + (health.MissingTitles * 5) + (health.MissingDates * 5)
-	score := 100 - penalty
-	if score < 0 {
-		score = 0
+
+	// score_breakdown (#419) is presentation only — it must not change what
+	// `score` itself was computed from (that's the pre-existing formula
+	// below, byte-for-byte). frontmatter carries 100% of the weight because
+	// it's the only category this formula has ever penalized; taxonomy
+	// carries 0% because a taxonomy finding — even a "warning"-severity one
+	// — has never moved `score` and still doesn't. taxonomy.score is shown
+	// for reference only (a per-finding informational penalty local to that
+	// category) and does not feed into the top-level score.
+	const frontmatterWeight, taxonomyWeight = 100, 0
+	frontmatterPenalty := (health.ValidationErrors * 10) + (health.MissingTitles * 5) + (health.MissingDates * 5)
+	frontmatterScore := clampScore(100 - frontmatterPenalty)
+
+	var taxonomyWarnings, taxonomyAdvisories int
+	for _, d := range health.TaxonomyInconsistencyDetails {
+		if d.Severity == "info" {
+			taxonomyAdvisories++
+		} else {
+			taxonomyWarnings++
+		}
 	}
+	taxonomyScore := clampScore(100 - taxonomyWarnings*2)
+
+	health.ScoreBreakdown = &scoreBreakdownDTO{
+		Frontmatter: scoreCategoryDTO{Score: frontmatterScore, Weight: frontmatterWeight, Issues: health.ValidationErrors},
+		Taxonomy:    scoreCategoryDTO{Score: taxonomyScore, Weight: taxonomyWeight, Issues: taxonomyWarnings, Advisories: taxonomyAdvisories},
+	}
+
+	score := frontmatterScore
 	health.Score = score
 	switch {
 	case score >= 90:
@@ -1403,6 +1494,9 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 		})
 	}
 
+	for i := range out {
+		out[i].Severity = taxonomyFindingSeverity(out[i].Kind)
+	}
 	return out
 }
 
