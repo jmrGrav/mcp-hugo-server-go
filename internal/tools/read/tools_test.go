@@ -1426,6 +1426,122 @@ func TestValidateSite(t *testing.T) {
 	}
 }
 
+// mustSiteWithOneInvalidPage builds a small fixture with one page missing
+// title/date (invalid) and one clean page, for #431's pagination/invalid_only
+// tests below.
+func mustSiteWithOneInvalidPage(t *testing.T) (*site.Index, *hugosite.SourceIndex) {
+	t.Helper()
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "valid"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "valid", "index.md"), []byte("---\ntitle: Valid\ndate: 2026-01-01\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "broken"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "broken", "index.md"), []byte("---\n---\nNo title or date.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg := config.Default()
+	cfg.SiteRoot = root
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex() error = %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex() error = %v", err)
+	}
+	return idx, srcIdx
+}
+
+func TestValidateSiteInvalidOnlyFiltersPassingPages(t *testing.T) {
+	idx, srcIdx := mustSiteWithOneInvalidPage(t)
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{"invalid_only": true})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T", m["data"])
+	}
+	if pagesChecked, _ := data["pages_checked"].(float64); pagesChecked != 2 {
+		t.Fatalf("pages_checked = %v, want 2 (full scan scope unaffected by invalid_only)", pagesChecked)
+	}
+	if invalid, _ := data["invalid"].(float64); invalid != 1 {
+		t.Fatalf("invalid = %v, want 1", invalid)
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 1 {
+		t.Fatalf("pages = %v, want exactly the 1 invalid page's detail row", pages)
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok || page["slug"] != "posts/broken" {
+		t.Fatalf("pages[0] = %v, want the broken page", pages[0])
+	}
+	if hasMore, _ := data["has_more"].(bool); hasMore {
+		t.Fatalf("has_more = true, want false (only 1 invalid page total, all returned)")
+	}
+}
+
+func TestValidateSiteWithoutInvalidOnlyReturnsAllPages(t *testing.T) {
+	idx, srcIdx := mustSiteWithOneInvalidPage(t)
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T", m["data"])
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 2 {
+		t.Fatalf("pages = %v, want both pages when invalid_only is unset", pages)
+	}
+}
+
+func TestValidateSitePaginatesDetailRows(t *testing.T) {
+	idx, srcIdx := mustSiteWithOneInvalidPage(t)
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{"limit": 1, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T", m["data"])
+	}
+	if pagesChecked, _ := data["pages_checked"].(float64); pagesChecked != 2 {
+		t.Fatalf("pages_checked = %v, want 2 (full scan scope unaffected by limit)", pagesChecked)
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 1 {
+		t.Fatalf("pages = %v, want exactly 1 detail row for limit=1", pages)
+	}
+	if hasMore, _ := data["has_more"].(bool); !hasMore {
+		t.Fatal("has_more = false, want true (1 more page beyond limit=1)")
+	}
+}
+
 func TestGetSiteHealthTaxonomyInconsistencyDetailsIncludeAffectedPages(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, raw string) {

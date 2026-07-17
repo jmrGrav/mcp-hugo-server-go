@@ -144,6 +144,12 @@ type validateFrontMatterInput struct {
 	Offset int    `json:"offset,omitempty"`
 }
 
+type validateSiteInput struct {
+	Limit       int  `json:"limit,omitempty"`
+	Offset      int  `json:"offset,omitempty"`
+	InvalidOnly bool `json:"invalid_only,omitempty"`
+}
+
 type frontMatterIssueDTO struct {
 	Slug   string   `json:"slug"`
 	Lang   string   `json:"lang"`
@@ -486,8 +492,8 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
 		})
 
-	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked` always covers every page on the site; `pages` returns detail rows for all of them (this tool does not currently accept limit/offset). Requires content.read.",
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, validateOutput, error) {
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. Set `invalid_only=true` to skip passing pages in the `pages` view entirely — useful on a large site where most pages pass and returning all of them wastes context. Requires content.read.",
+		func(ctx context.Context, _ *mcp.CallToolRequest, in validateSiteInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
 			}
@@ -495,7 +501,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
 			pages := srcIdx.ListPages(0, 0)
-			return nil, validatePagesWithIssues(pages, 0, 0, aliases), nil
+			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.InvalidOnly, aliases), nil
 		})
 
 	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets and requires content.read.",
@@ -1013,12 +1019,18 @@ func sliceBrokenLinks(issues []brokenLinkDTO, offset, limit int) []brokenLinkDTO
 }
 
 func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, aliases map[string]string) validateOutput {
+	return validatePagesWithIssuesFiltered(pages, offset, limit, false, aliases)
+}
+
+// validatePagesWithIssuesFiltered is validatePagesWithIssues plus an
+// invalidOnly filter (#431). pages_checked/pages_passed/invalid always
+// describe the full scan scope regardless of invalidOnly — only the
+// paginated `pages` detail rows (and the has_more/next_offset pagination
+// built from them) are affected by the filter.
+func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit int, invalidOnly bool, aliases map[string]string) validateOutput {
 	total := len(pages)
 	if offset < 0 {
 		offset = 0
-	}
-	if limit <= 0 {
-		limit = total
 	}
 
 	allResults := make([]frontMatterIssueDTO, 0, len(pages))
@@ -1031,7 +1043,21 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 		allResults = append(allResults, frontMatterIssueDTO{Slug: p.Slug, Lang: p.Lang, Issues: issues})
 	}
 
-	results := allResults
+	filtered := allResults
+	if invalidOnly {
+		filtered = make([]frontMatterIssueDTO, 0, invalid)
+		for _, r := range allResults {
+			if len(r.Issues) > 0 {
+				filtered = append(filtered, r)
+			}
+		}
+	}
+	filteredTotal := len(filtered)
+	if limit <= 0 {
+		limit = filteredTotal
+	}
+
+	results := filtered
 	if offset < len(results) {
 		results = results[offset:]
 	} else {
@@ -1040,7 +1066,7 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 	if len(results) > limit {
 		results = results[:limit]
 	}
-	meta := toolcontract.ComputePagination(total, limit, offset, len(results))
+	meta := toolcontract.ComputePagination(filteredTotal, limit, offset, len(results))
 	return newValidateOutput(validateOutputData{
 		PagesChecked: total,
 		PagesPassed:  total - invalid,
