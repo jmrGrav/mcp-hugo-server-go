@@ -2,6 +2,16 @@
 
 All notable changes to this project are documented here.
 
+## [v1.4.9] - 2026-07-17
+
+### Added
+- **`get_page_for_edit` compact edit-oriented read surface** (#339, PR #408): bundles frontmatter + markdown + lifecycle `state` + `quality` (validity, per-page broken-link count) + `revision` in one call, replacing 2-3 separate reads before an edit. `include` selects a subset; `max_body_chars` truncates the markdown body with a `warnings` entry. `quality.broken_links` scopes the scan to the single page (`site.Index.Classifier()`, a new O(1) cached-classifier accessor, plus a new `brokenLinksForPage` helper extracted from the existing site-wide scan) rather than re-scanning the whole site on every edit. `quality` is omitted for the `reader` profile (source-derived).
+- **`list_content_types` content-type/archetype discovery** (#347, PR #409): reports each Hugo content type/section, its archetype template (if any), and expected front matter fields — the union of the archetype's declared keys and the keys actually observed on existing pages of that type, so archetype-less sites (the common case) still get real field guidance instead of an empty list. `page_count` and observed-page-derived fields are omitted for `reader`; archetype metadata (filesystem templates, not page content) remains visible.
+- **`list_page_assets` / `upload_page_asset` page-bundle asset management** (#348, PR #410): `list_page_assets` (`content.read`) lists sibling files in a page bundle directory; `upload_page_asset` (`content.write`) writes a new asset into one, with MIME sniffing (never trusts a caller-supplied content type), a 10MB size cap, filename sanitization, exclusive-create (never overwrites), and advisory duplicate-content detection by hash. Allowed types: png, jpg, jpeg, gif, webp — **SVG is intentionally not supported**, since SVG XSS can't be safely neutralized by an allowlist or a hand-rolled sanitizer; that needs a real parser and is deferred to a follow-up. Single-file pages (no per-page directory) are rejected with `not_a_bundle` for both tools. `list_page_assets`'s payload is entirely source-derived (a content-root directory listing); `reader` gets an empty list for a public page rather than an error, and `content_not_public` for a non-public one.
+
+### Fixed
+- **`get_site_health` taxonomy inconsistency details now name the affected pages** (#324, PR #407): the existing `taxonomy_inconsistencies` string list explained *that* two tag/category terms looked inconsistent but never *which pages* used them. New additive `taxonomy_inconsistency_details[*]` carries the affected page slugs per finding; the original string list is unchanged for backward compatibility. Omitted for `reader` (source-derived).
+
 ## [v1.4.8] - 2026-07-17
 
 ### Changed
