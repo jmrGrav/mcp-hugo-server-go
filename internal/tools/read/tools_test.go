@@ -267,6 +267,104 @@ func TestGetRelatedContent(t *testing.T) {
 	}
 }
 
+func TestListContentTypesMergesArchetypeAndObservedSections(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// "posts": has both an archetype and observed source pages.
+	write("archetypes/posts.md", "---\ntitle: \"\"\nsubtitle: \"\"\ntags: []\n---\n")
+	write("content/posts/a/index.md", "---\ntitle: A\n---\nBody A.\n")
+	write("content/posts/b/index.md", "---\ntitle: B\n---\nBody B.\n")
+	// "notes": observed only, no archetype.
+	write("content/notes/c/index.md", "---\ntitle: C\n---\nBody C.\n")
+	// "landing": archetype only, no source pages yet.
+	write("archetypes/landing.md", "---\nhero_image: \"\"\n---\n")
+	// default.md is Hugo's fallback archetype, not a content type itself.
+	write("archetypes/default.md", "---\ntitle: \"\"\n---\n")
+
+	src, err := hugosite.NewSourceIndex(filepath.Join(root, "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join(root, "content")
+	cfg.HugoRoot = root
+	session, done := newTestClientWithCfg(t, idx, cfg, src)
+	defer done()
+
+	res := callTool(t, session, "list_content_types", map[string]any{})
+	if res.IsError {
+		t.Fatalf("list_content_types returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	types, ok := m["content_types"].([]any)
+	if !ok {
+		t.Fatalf("list_content_types: 'content_types' is %T, want []any", m["content_types"])
+	}
+	byName := make(map[string]map[string]any, len(types))
+	for _, raw := range types {
+		ct, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("list_content_types: entry = %T, want map", raw)
+		}
+		name, _ := ct["name"].(string)
+		byName[name] = ct
+	}
+	if _, ok := byName["default"]; ok {
+		t.Fatal("list_content_types: 'default' archetype must not appear as a content type")
+	}
+
+	posts, ok := byName["posts"]
+	if !ok {
+		t.Fatal("list_content_types: missing 'posts'")
+	}
+	if posts["source"] != "archetype+observed" {
+		t.Fatalf("list_content_types posts.source = %v, want archetype+observed", posts["source"])
+	}
+	if count, _ := posts["page_count"].(float64); count != 2 {
+		t.Fatalf("list_content_types posts.page_count = %v, want 2", posts["page_count"])
+	}
+	fields, _ := posts["expected_fields"].([]any)
+	if len(fields) == 0 {
+		t.Fatal("list_content_types posts.expected_fields is empty, want archetype's front matter keys")
+	}
+
+	notes, ok := byName["notes"]
+	if !ok {
+		t.Fatal("list_content_types: missing 'notes'")
+	}
+	if notes["source"] != "observed" {
+		t.Fatalf("list_content_types notes.source = %v, want observed", notes["source"])
+	}
+	if _, present := notes["archetype_path"]; present {
+		t.Fatal("list_content_types notes: unexpected archetype_path, notes has no archetype")
+	}
+	notesFields, _ := notes["expected_fields"].([]any)
+	if len(notesFields) != 1 || notesFields[0] != "title" {
+		t.Fatalf("list_content_types notes.expected_fields = %v, want [title] inferred from observed pages", notesFields)
+	}
+
+	landing, ok := byName["landing"]
+	if !ok {
+		t.Fatal("list_content_types: missing 'landing'")
+	}
+	if landing["source"] != "archetype" {
+		t.Fatalf("list_content_types landing.source = %v, want archetype", landing["source"])
+	}
+	if _, present := landing["page_count"]; present {
+		t.Fatal("list_content_types landing: unexpected page_count, landing has no source pages")
+	}
+}
+
 func TestGetPageForEditDefaultReturnsFullBundle(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

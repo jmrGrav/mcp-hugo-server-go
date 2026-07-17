@@ -291,6 +291,20 @@ func langFromRel(rel string) string {
 	return ""
 }
 
+// ParseFrontmatterFile reads path and returns its front matter as a map,
+// discarding the body. Exported for callers outside the content tree that
+// need front matter from a Hugo-conventioned file — e.g. an archetypes/*.md
+// template, which uses the identical --- delimited format as source pages
+// but is never part of a SourceIndex.
+func ParseFrontmatterFile(path string) (map[string]any, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	fm, _ := splitFrontmatter(raw)
+	return fm, nil
+}
+
 func splitFrontmatter(raw []byte) (map[string]any, string) {
 	content := string(raw)
 	if !strings.HasPrefix(content, "---") {

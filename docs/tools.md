@@ -68,6 +68,7 @@ available.
 - `build_agent_context` - Build agent context
 - `export_agent_context` - Export agent context
 - `get_page_for_edit` - Get page for edit (compact edit bundle: frontmatter + markdown + state + quality + revision in one call; see #339)
+- `list_content_types` - List content types (site's Hugo content types/sections, archetype template + expected front matter fields [union of archetype-declared and observed-page fields] + observed page count per type; see #347)
 - `search_content` - Search content
 - `explain_structure` - Explain site structure
 - `get_site_health` - Get site health
