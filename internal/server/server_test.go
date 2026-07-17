@@ -873,6 +873,63 @@ func TestReaderTokenGetFullPageMarkdownUsesPublicContentOnly(t *testing.T) {
 	}
 }
 
+func TestReaderTokenGetSiteHealthOmitsTaxonomyInconsistencyDetails(t *testing.T) {
+	// #324: taxonomy_inconsistency_details carries source-page slugs
+	// (including draft/source-only pages). get_site_health has no
+	// content_not_public reader guard the way validate_* tools do —
+	// it silently delegates source-safety to sourceIndexForProfile,
+	// which returns nil for the reader profile. Confirm that holds
+	// end-to-end rather than trusting it by inspection alone.
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	publicRoot := filepath.Join(root, "public")
+	storePath := filepath.Join(root, "tokens.db")
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "a"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "a", "index.md"), []byte("---\ntitle: A\ncategories:\n  - security\n---\nBody A.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "b"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "b", "index.md"), []byte("---\ntitle: B\ncategories:\n  - securite\n---\nBody B.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.MkdirAll(publicRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(public) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(publicRoot, "index.html"), []byte(`<!doctype html><html lang="en"><head><title>Home</title><link rel="canonical" href="https://example.test/"></head><body><main>home</main></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile(index.html) error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.HugoRoot = root
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const bearer = "reader-token"
+	addBearerToken(t, storePath, bearer, "reader")
+
+	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_site_health","arguments":{}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reader get_site_health status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "taxonomy_inconsistency_details") {
+		t.Fatalf("reader get_site_health must not expose taxonomy_inconsistency_details (source page slugs); body = %q", body)
+	}
+	if strings.Contains(body, "taxonomy_inconsistencies") {
+		t.Fatalf("reader get_site_health must not expose taxonomy_inconsistencies either (same source-derived signal); body = %q", body)
+	}
+}
+
 func TestReaderTokenGetFullPageMarkdownRejectsSourceOnlyPage(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")

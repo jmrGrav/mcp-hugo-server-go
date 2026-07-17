@@ -31,6 +31,19 @@ type searchContentInput struct {
 	Order    string `json:"order,omitempty"`
 }
 
+// taxonomyInconsistencyDTO is the structured, actionable form of a
+// taxonomy_inconsistencies entry (#324): the plain-string message alone
+// tells an agent *what* is wrong but not *where*, forcing a separate
+// list_pages/filter round trip. TermB/PagesWithTermB are omitted for
+// single-term findings (e.g. an alias mismatch), which have no "other side".
+type taxonomyInconsistencyDTO struct {
+	Message        string   `json:"message"`
+	TermA          string   `json:"term_a"`
+	TermB          string   `json:"term_b,omitempty"`
+	PagesWithTermA []string `json:"pages_with_term_a,omitempty"`
+	PagesWithTermB []string `json:"pages_with_term_b,omitempty"`
+}
+
 type contentEnvelopeData struct {
 	Pages    []pageDTO `json:"pages,omitempty"`
 	Total    int       `json:"total,omitempty"`
@@ -44,44 +57,50 @@ type contentEnvelopeData struct {
 	Category string    `json:"category,omitempty"`
 	Language string    `json:"language,omitempty"`
 
-	Status                  string       `json:"status,omitempty"`
-	Score                   int          `json:"score,omitempty"`
-	PublishedPages          int          `json:"published_pages,omitempty"`
-	SourcePages             int          `json:"source_pages,omitempty"`
-	DraftPages              int          `json:"draft_pages,omitempty"`
-	Tags                    int          `json:"tags,omitempty"`
-	Categories              int          `json:"categories,omitempty"`
-	MissingTitles           int          `json:"missing_titles,omitempty"`
-	MissingDates            int          `json:"missing_dates,omitempty"`
-	ValidationErrors        int          `json:"validation_errors,omitempty"`
-	TaxonomyInconsistencies []string     `json:"taxonomy_inconsistencies,omitempty"`
-	OrphanPages             []string     `json:"orphan_pages,omitempty"`
-	Sections                []sectionDTO `json:"sections,omitempty"`
-	Languages               []string     `json:"languages,omitempty"`
-	Summary                 string       `json:"summary,omitempty"`
-	RecentPages             []pageDTO    `json:"recent_pages,omitempty"`
-	Notes                   []string     `json:"notes,omitempty"`
+	Status string `json:"status,omitempty"`
+	Score  int    `json:"score,omitempty"`
+	// TaxonomyInconsistencies keeps its original string[] shape for
+	// backward compatibility (#210/#328: no v1.x field-shape breaks).
+	// TaxonomyInconsistencyDetails is the additive, structured sibling —
+	// same findings, same order, with affected page slugs attached.
+	PublishedPages               int                        `json:"published_pages,omitempty"`
+	SourcePages                  int                        `json:"source_pages,omitempty"`
+	DraftPages                   int                        `json:"draft_pages,omitempty"`
+	Tags                         int                        `json:"tags,omitempty"`
+	Categories                   int                        `json:"categories,omitempty"`
+	MissingTitles                int                        `json:"missing_titles,omitempty"`
+	MissingDates                 int                        `json:"missing_dates,omitempty"`
+	ValidationErrors             int                        `json:"validation_errors,omitempty"`
+	TaxonomyInconsistencies      []string                   `json:"taxonomy_inconsistencies,omitempty"`
+	TaxonomyInconsistencyDetails []taxonomyInconsistencyDTO `json:"taxonomy_inconsistency_details,omitempty"`
+	OrphanPages                  []string                   `json:"orphan_pages,omitempty"`
+	Sections                     []sectionDTO               `json:"sections,omitempty"`
+	Languages                    []string                   `json:"languages,omitempty"`
+	Summary                      string                     `json:"summary,omitempty"`
+	RecentPages                  []pageDTO                  `json:"recent_pages,omitempty"`
+	Notes                        []string                   `json:"notes,omitempty"`
 }
 
 type contentEnvelope struct {
 	toolcontract.ToolResponse[contentEnvelopeData]
-	Status                  string       `json:"status,omitempty"`
-	Score                   int          `json:"score,omitempty"`
-	PublishedPages          int          `json:"published_pages,omitempty"`
-	SourcePages             int          `json:"source_pages,omitempty"`
-	DraftPages              int          `json:"draft_pages,omitempty"`
-	Tags                    int          `json:"tags,omitempty"`
-	Categories              int          `json:"categories,omitempty"`
-	MissingTitles           int          `json:"missing_titles,omitempty"`
-	MissingDates            int          `json:"missing_dates,omitempty"`
-	ValidationErrors        int          `json:"validation_errors,omitempty"`
-	TaxonomyInconsistencies []string     `json:"taxonomy_inconsistencies,omitempty"`
-	OrphanPages             []string     `json:"orphan_pages,omitempty"`
-	Sections                []sectionDTO `json:"sections,omitempty"`
-	Languages               []string     `json:"languages,omitempty"`
-	Summary                 string       `json:"summary,omitempty"`
-	RecentPages             []pageDTO    `json:"recent_pages,omitempty"`
-	Notes                   []string     `json:"notes,omitempty"`
+	Status                       string                     `json:"status,omitempty"`
+	Score                        int                        `json:"score,omitempty"`
+	PublishedPages               int                        `json:"published_pages,omitempty"`
+	SourcePages                  int                        `json:"source_pages,omitempty"`
+	DraftPages                   int                        `json:"draft_pages,omitempty"`
+	Tags                         int                        `json:"tags,omitempty"`
+	Categories                   int                        `json:"categories,omitempty"`
+	MissingTitles                int                        `json:"missing_titles,omitempty"`
+	MissingDates                 int                        `json:"missing_dates,omitempty"`
+	ValidationErrors             int                        `json:"validation_errors,omitempty"`
+	TaxonomyInconsistencies      []string                   `json:"taxonomy_inconsistencies,omitempty"`
+	TaxonomyInconsistencyDetails []taxonomyInconsistencyDTO `json:"taxonomy_inconsistency_details,omitempty"`
+	OrphanPages                  []string                   `json:"orphan_pages,omitempty"`
+	Sections                     []sectionDTO               `json:"sections,omitempty"`
+	Languages                    []string                   `json:"languages,omitempty"`
+	Summary                      string                     `json:"summary,omitempty"`
+	RecentPages                  []pageDTO                  `json:"recent_pages,omitempty"`
+	Notes                        []string                   `json:"notes,omitempty"`
 }
 
 type searchContentData struct {
@@ -428,24 +447,25 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. Use this before publishing or reviewing content. Requires content.read.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Use this before publishing or reviewing content. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
 			health := buildSiteHealth(idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases)
 			return nil, newContentEnvelope(contentEnvelopeData{
-				Status:                  health.Status,
-				Score:                   health.Score,
-				PublishedPages:          health.PublishedPages,
-				SourcePages:             health.SourcePages,
-				DraftPages:              health.DraftPages,
-				Tags:                    health.Tags,
-				Categories:              health.Categories,
-				MissingTitles:           health.MissingTitles,
-				MissingDates:            health.MissingDates,
-				ValidationErrors:        health.ValidationErrors,
-				TaxonomyInconsistencies: health.TaxonomyInconsistencies,
+				Status:                       health.Status,
+				Score:                        health.Score,
+				PublishedPages:               health.PublishedPages,
+				SourcePages:                  health.SourcePages,
+				DraftPages:                   health.DraftPages,
+				Tags:                         health.Tags,
+				Categories:                   health.Categories,
+				MissingTitles:                health.MissingTitles,
+				MissingDates:                 health.MissingDates,
+				ValidationErrors:             health.ValidationErrors,
+				TaxonomyInconsistencies:      health.TaxonomyInconsistencies,
+				TaxonomyInconsistencyDetails: health.TaxonomyInconsistencyDetails,
 			}, time.Now().UTC()), nil
 		})
 
@@ -1024,24 +1044,25 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 
 func newContentEnvelope(data contentEnvelopeData, now time.Time) contentEnvelope {
 	return contentEnvelope{
-		ToolResponse:            successEnvelope(data, now),
-		Status:                  data.Status,
-		Score:                   data.Score,
-		PublishedPages:          data.PublishedPages,
-		SourcePages:             data.SourcePages,
-		DraftPages:              data.DraftPages,
-		Tags:                    data.Tags,
-		Categories:              data.Categories,
-		MissingTitles:           data.MissingTitles,
-		MissingDates:            data.MissingDates,
-		ValidationErrors:        data.ValidationErrors,
-		TaxonomyInconsistencies: data.TaxonomyInconsistencies,
-		OrphanPages:             data.OrphanPages,
-		Sections:                data.Sections,
-		Languages:               data.Languages,
-		Summary:                 data.Summary,
-		RecentPages:             data.RecentPages,
-		Notes:                   data.Notes,
+		ToolResponse:                 successEnvelope(data, now),
+		Status:                       data.Status,
+		Score:                        data.Score,
+		PublishedPages:               data.PublishedPages,
+		SourcePages:                  data.SourcePages,
+		DraftPages:                   data.DraftPages,
+		Tags:                         data.Tags,
+		Categories:                   data.Categories,
+		MissingTitles:                data.MissingTitles,
+		MissingDates:                 data.MissingDates,
+		ValidationErrors:             data.ValidationErrors,
+		TaxonomyInconsistencies:      data.TaxonomyInconsistencies,
+		TaxonomyInconsistencyDetails: data.TaxonomyInconsistencyDetails,
+		OrphanPages:                  data.OrphanPages,
+		Sections:                     data.Sections,
+		Languages:                    data.Languages,
+		Summary:                      data.Summary,
+		RecentPages:                  data.RecentPages,
+		Notes:                        data.Notes,
 	}
 }
 
@@ -1207,7 +1228,11 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[
 				}
 			}
 		}
-		health.TaxonomyInconsistencies = detectTaxonomyInconsistencies(srcIdx, aliases)
+		details := detectTaxonomyInconsistencies(srcIdx, aliases)
+		health.TaxonomyInconsistencyDetails = details
+		for _, d := range details {
+			health.TaxonomyInconsistencies = append(health.TaxonomyInconsistencies, d.Message)
+		}
 	}
 	penalty := (health.ValidationErrors * 10) + (health.MissingTitles * 5) + (health.MissingDates * 5)
 	score := 100 - penalty
@@ -1227,19 +1252,40 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[
 }
 
 // detectTaxonomyInconsistencies finds slug pairs that look like duplicates or
-// transliterations and flags alias-key terms that should use their canonical form.
-func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[string]string) []string {
+// transliterations and flags alias-key terms that should use their canonical
+// form. Each finding carries the slugs of affected pages (#324) so an agent
+// can act on it directly instead of running a separate list_pages/filter
+// round trip to find which pages use which term.
+func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[string]string) []taxonomyInconsistencyDTO {
 	if srcIdx == nil {
 		return nil
 	}
-	var out []string
+	var out []taxonomyInconsistencyDTO
+
+	pages := srcIdx.ListPages(0, 0)
+	tagPages := map[string][]string{}
+	catPages := map[string][]string{}
+	for _, p := range pages {
+		for _, t := range p.Tags {
+			s := taxonomy.Slug(t)
+			tagPages[s] = append(tagPages[s], p.Slug)
+		}
+		for _, c := range p.Categories {
+			s := taxonomy.Slug(c)
+			catPages[s] = append(catPages[s], p.Slug)
+		}
+	}
 
 	// Report alias mismatches: terms in content that should use the canonical form.
 	tagSlugs := make([]string, 0)
 	for _, raw := range srcIdx.AllTags() {
 		s := taxonomy.Slug(raw)
 		if canonical, ok := aliases[s]; ok {
-			out = append(out, fmt.Sprintf("tag %q is an alias for %q; use the canonical form", raw, canonical))
+			out = append(out, taxonomyInconsistencyDTO{
+				Message:        fmt.Sprintf("tag %q is an alias for %q; use the canonical form", raw, canonical),
+				TermA:          raw,
+				PagesWithTermA: tagPages[s],
+			})
 		}
 		tagSlugs = append(tagSlugs, s)
 	}
@@ -1247,7 +1293,11 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 	for _, raw := range srcIdx.AllCategories() {
 		s := taxonomy.Slug(raw)
 		if canonical, ok := aliases[s]; ok {
-			out = append(out, fmt.Sprintf("category %q is an alias for %q; use the canonical form", raw, canonical))
+			out = append(out, taxonomyInconsistencyDTO{
+				Message:        fmt.Sprintf("category %q is an alias for %q; use the canonical form", raw, canonical),
+				TermA:          raw,
+				PagesWithTermA: catPages[s],
+			})
 		}
 		catSlugs = append(catSlugs, s)
 	}
@@ -1255,10 +1305,22 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 	// Report similar slug pairs (possible duplicates / cross-language variants).
 	const maxDist, minLen = 2, 5
 	for _, pair := range taxonomy.FindSimilarPairs(tagSlugs, maxDist, minLen, aliases) {
-		out = append(out, fmt.Sprintf("tags %q and %q may be duplicates (edit distance ≤ %d)", pair[0], pair[1], maxDist))
+		out = append(out, taxonomyInconsistencyDTO{
+			Message:        fmt.Sprintf("tags %q and %q may be duplicates (edit distance ≤ %d)", pair[0], pair[1], maxDist),
+			TermA:          pair[0],
+			TermB:          pair[1],
+			PagesWithTermA: tagPages[pair[0]],
+			PagesWithTermB: tagPages[pair[1]],
+		})
 	}
 	for _, pair := range taxonomy.FindSimilarPairs(catSlugs, maxDist, minLen, aliases) {
-		out = append(out, fmt.Sprintf("categories %q and %q may be duplicates (edit distance ≤ %d)", pair[0], pair[1], maxDist))
+		out = append(out, taxonomyInconsistencyDTO{
+			Message:        fmt.Sprintf("categories %q and %q may be duplicates (edit distance ≤ %d)", pair[0], pair[1], maxDist),
+			TermA:          pair[0],
+			TermB:          pair[1],
+			PagesWithTermA: catPages[pair[0]],
+			PagesWithTermB: catPages[pair[1]],
+		})
 	}
 
 	return out
