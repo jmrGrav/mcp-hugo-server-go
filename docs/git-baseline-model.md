@@ -163,6 +163,66 @@ Out of scope here:
 
 Those require separate review because they broaden trust and blast radius.
 
+## Rollback and trust model (#379)
+
+This section is the design anchor for issue `#379`. It states explicitly, in
+one place, the trust contract that `#340` (publish/rollback workflow design)
+and any future rollback/publication tool must build on. It does not add new
+runtime behavior — it names invariants that are already true of the model
+above and closes the ambiguity #379 was filed to resolve.
+
+1. **Commit semantics.** A write tool (`create_page`, `update_page`,
+   `delete_page`, `upload_page_asset`) commits its change to the *content
+   tree* (the `content_root` filesystem) synchronously, before returning
+   success. It does **not** commit to Git. Git commit/push remains entirely
+   out of scope for the MCP server itself (see Non-goals above) — whatever
+   commits the working tree into Git history (a human, a CI job, a separate
+   automation) is external to this server and operates on its own schedule.
+   A source-only change (written to disk but not yet committed by whatever
+   external process does that) is therefore **not yet part of the Git
+   baseline** and cannot be a rollback target.
+
+2. **Rollback safety.** Only a *committed* state in the Git baseline
+   checkout is a safe rollback target — a specific `head_commit` that
+   `get_runtime_status`/`diff_page` have already observed and reported. A
+   rollback tool must resolve its target to a real commit in that baseline,
+   never to "the state before the last write," since the last write may not
+   correspond to any commit at all if nothing has committed the working tree
+   since. This is exactly why #340 stays blocked: designing "roll back to
+   the previous state" without this distinction would silently assume every
+   write is committed, which this model explicitly says is not guaranteed.
+
+3. **Remote sync authority.** The local baseline checkout (`git_baseline`)
+   is authoritative for diagnostics and rollback targets. The configured
+   `remote` is a comparison point only — used to compute `ahead`/`behind`/
+   `diverged`, never treated as more current than the local checkout. No
+   tool pulls from, pushes to, or otherwise mutates the remote.
+
+4. **Divergence handling.** When the local checkout's `head_commit` and the
+   expected remote disagree (see the `ahead`/`behind`/`diverged` states
+   above), the correct behavior is to surface a warning, not to resolve it
+   automatically. No tool may force-push, rebase, or silently prefer one
+   side. Resolution is an operator action outside the MCP server.
+
+5. **Agent trust boundaries.** An agent (of any scope, including
+   `operator`) can *read* Git state (`head_commit`, `dirty`, future
+   `ahead`/`behind`/`diverged`) via `get_runtime_status` and `diff_page`. No
+   current or currently-designed tool lets an agent commit, push, rewrite
+   history, or force a rollback without an explicit, individually-confirmed
+   call naming its target commit. There is no implicit or automatic revert
+   on a failed write — a failed write simply leaves the content tree as it
+   was before the attempt.
+
+These five points are the complete answer to #379's key questions. They
+require no code change: `get_runtime_status`'s existing `head_commit`/`dirty`
+fields (landed via `#344`, regression-tested in
+`internal/tools/admin/runtime_status_test.go`) already give agents the
+committed-state visibility invariant 5 requires, and the "Non-goals" section
+above already forbids everything invariants 1, 3, and 4 rule out. What #379
+adds is stating the *rollback* consequence explicitly, since a rollback tool
+is the first place an implicit "write = committed" assumption would actually
+cause harm.
+
 ## Recommended operator setup
 
 For production or staging:
