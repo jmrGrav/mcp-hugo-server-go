@@ -1808,6 +1808,7 @@ func TestRegressionIsItAgentReadyDiscoveryEndpoints(t *testing.T) {
 		{"/.well-known/oauth-authorization-server", "OAuth/OIDC discovery"},
 		{"/.well-known/oauth-protected-resource", "OAuth protected resource"},
 		{"/.well-known/mcp/server-card.json", "MCP server card"},
+		{"/.well-known/mcp/server-card/mcp", "MCP server card (Le Chat per-resource alias, #424)"},
 		{"/.well-known/mcp.json", "API catalog (mcp.json alias)"},
 		{"/.well-known/agent.json", "Agent skills index"},
 		{"/auth.md", "Auth.md agent integration"},

@@ -201,6 +201,14 @@ type mcpCapabilities struct {
 type mcpAuthentication struct {
 	Required bool     `json:"required"`
 	Schemes  []string `json:"schemes"`
+	// AuthorizationServers and ProtectedResourceMetadata let a client that
+	// discovers OAuth via this server card (rather than following the
+	// WWW-Authenticate resource_metadata pointer on a 401, as RFC 9728
+	// intends) bootstrap the standard discovery chain without an extra
+	// round trip. Same authorization_servers value as the RFC 9728
+	// protected-resource-metadata document (#424).
+	AuthorizationServers      []string `json:"authorization_servers,omitempty"`
+	ProtectedResourceMetadata string   `json:"protected_resource_metadata,omitempty"`
 }
 
 func buildMCPServerCard(cfg config.Config) mcpServerCard {
@@ -247,8 +255,10 @@ func buildMCPServerCard(cfg config.Config) mcpServerCard {
 			},
 		},
 		Authentication: mcpAuthentication{
-			Required: cfg.OAuth.Enabled,
-			Schemes:  []string{"bearer", "oauth2"},
+			Required:                  cfg.OAuth.Enabled,
+			Schemes:                   []string{"bearer", "oauth2"},
+			AuthorizationServers:      []string{base},
+			ProtectedResourceMetadata: base + "/.well-known/oauth-protected-resource",
 		},
 		DocumentationURL: base + "/auth.md",
 		Resources:        []string{"dynamic"},

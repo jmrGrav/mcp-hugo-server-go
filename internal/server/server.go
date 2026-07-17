@@ -347,6 +347,13 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			handleOAuthProtectedResource(w, r, cfg)
 		case "/.well-known/mcp/server-card.json":
 			handleMCPServerCard(w, r, cfg)
+		case "/.well-known/mcp/server-card/mcp":
+			// Alias for clients (observed: Mistral Le Chat, #424) that request
+			// the server card under a per-resource sub-path (mirroring the
+			// /mcp endpoint path) instead of the canonical
+			// /.well-known/mcp/server-card.json. Same content either way —
+			// this server only ever hosts one MCP resource at /mcp.
+			handleMCPServerCard(w, r, cfg)
 		case "/.well-known/mcp.json":
 			handleMCPJSON(w, r, cfg)
 		case "/.well-known/agent.json":
