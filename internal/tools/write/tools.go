@@ -196,6 +196,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if reservedSlugs[in.Slug] {
 			return nil, createPageOutput{}, fmt.Errorf("invalid_params: slug is reserved")
 		}
+		if err := validateSlugFormat(in.Slug); err != nil {
+			return nil, createPageOutput{}, err
+		}
+		if err := validateTitleFormat(in.Title); err != nil {
+			return nil, createPageOutput{}, err
+		}
+		if err := validateBodyFormat(in.Body); err != nil {
+			return nil, createPageOutput{}, err
+		}
 
 		dir, err := pg.SafeJoin(in.Slug)
 		if err != nil {
@@ -372,6 +381,27 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		lang, err := validateLangParam(in.Lang)
 		if err != nil {
 			return nil, updatePageOutput{}, err
+		}
+		if err := validateSlugFormat(in.Slug); err != nil {
+			return nil, updatePageOutput{}, err
+		}
+		// Title/body are optional on update (empty means "leave unchanged" —
+		// see applyPageUpdates), so only validate format when the caller is
+		// actually setting a new value.
+		if in.Title != "" {
+			if err := validateTitleFormat(in.Title); err != nil {
+				return nil, updatePageOutput{}, err
+			}
+		}
+		if in.Body != "" {
+			if err := validateBodyFormat(in.Body); err != nil {
+				return nil, updatePageOutput{}, err
+			}
+		}
+		if in.Description != "" {
+			if err := rejectUnsafeText(in.Description); err != nil {
+				return nil, updatePageOutput{}, fmt.Errorf("invalid_params: description %w", err)
+			}
 		}
 
 		const lockWait = 10 * time.Second
