@@ -360,7 +360,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				SuggestedLinks: suggestedLinks,
 				Related:        related,
 			}, time.Now().UTC()), nil
-		})
+		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 20) })
 
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
 		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or editing a page. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode). Omitting both preserves the full default shape. `lang` may be empty for a source-only page read back before the next Hugo build; use `resolved_lang` instead, which is always populated. Input: indexed slug only.",
@@ -408,6 +408,13 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				warnings = append(warnings, fmt.Sprintf("markdown truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", in.MaxBodyChars))
 			}
 			return nil, newBuildAgentContextOutput(buildAgentContextData{Context: ac}, warnings, time.Now().UTC()), nil
+		}, func(s any) any {
+			// "" is included because ResolveResponseMode treats an omitted
+			// or explicitly empty value the same as "standard" — the enum
+			// must not reject a value runtime already accepts. "full" and
+			// "ids_only" are deliberately excluded: they're reserved
+			// vocabulary rejected at runtime (#337), not yet implemented.
+			return tools.WithEnum(s, "response_mode", "", string(toolcontract.ResponseModeStandard), string(toolcontract.ResponseModeCompact))
 		})
 
 	addReadOnlyTool(s, "export_agent_context", "Export agent context",
@@ -507,6 +514,16 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				IncludeBody:   includeBody,
 			}
 			return nil, newExportAgentContextOutput(payload, warnings, time.Now().UTC()), nil
+		}, func(s any) any {
+			// The published ceiling is the loosest of the two runtime caps
+			// (exportAgentContextMaxLimitMetadataOnly=50, with include_body
+			// defaulting true and further capping to
+			// exportAgentContextMaxLimitWithBody=10) — a schema minimum
+			// couldn't express the include_body-dependent cap without two
+			// mutually exclusive schemas, and the tool's own warnings-on-cap
+			// behavior already tells the caller when their limit was
+			// narrowed by include_body at runtime.
+			return tools.WithMaxLimit(s, "limit", exportAgentContextMaxLimitMetadataOnly)
 		})
 
 	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
@@ -859,12 +876,19 @@ func readingTimeMinutes(md string) int {
 	return minutes
 }
 
-func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out]) {
+// schemaOpts, when provided, post-process the inferred input schema (#418) —
+// e.g. tools.WithEnum/tools.WithRange to publish a real enum/range constraint
+// that jsonschema-go's struct-tag inference can't express directly.
+func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out], schemaOpts ...func(any) any) {
+	inputSchema := tools.MustSchema[In]()
+	for _, opt := range schemaOpts {
+		inputSchema = opt(inputSchema)
+	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         name,
 		Title:        title,
 		Description:  description,
-		InputSchema:  tools.MustSchema[In](),
+		InputSchema:  inputSchema,
 		OutputSchema: tools.MustSchema[Out](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    true,

@@ -15,6 +15,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
@@ -424,7 +425,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Category:      strings.TrimSpace(in.Category),
 				Language:      strings.TrimSpace(in.Language),
 			}, time.Now().UTC()), nil
-		})
+		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
 	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
@@ -555,7 +556,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Offset:      offset,
 				Links:       sliceBrokenLinks(issues, offset, limit),
 			}, time.Now().UTC()), nil
-		})
+		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
 	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
@@ -658,7 +659,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC())
 			resp.Warnings = warnings
 			return nil, resp, nil
-		})
+		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 20) })
 }
 
 // containsPhrase reports whether phrase appears in text with word-boundary

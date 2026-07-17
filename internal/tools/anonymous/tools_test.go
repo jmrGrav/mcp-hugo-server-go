@@ -148,19 +148,23 @@ func TestListPagesPaginationMetadata(t *testing.T) {
 	assertPaginationMetadata(t, m, 2, 1, 0, 1, true, 1, true)
 }
 
+// TestListPagesLimitCap covers #418: list_pages's schema now publishes
+// maximum=50 for limit, so an over-limit request is rejected up front by
+// SDK-level schema validation instead of being silently capped to 50 with
+// no indication to the caller that anything changed.
 func TestListPagesLimitCap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "list_pages", map[string]any{"limit": 200, "offset": 0})
-	if res.IsError {
-		t.Fatalf("list_pages returned error: %v", res.Content)
+	if !res.IsError {
+		t.Fatal("list_pages limit=200: expected schema-level rejection (published maximum is 50), got success")
 	}
-	m := decodeContent(t, res)
-	pages, _ := m["pages"].([]any)
-	if len(pages) > 50 {
-		t.Fatalf("list_pages limit=200 returned %d pages, want ≤50", len(pages))
+
+	res = callTool(t, session, "list_pages", map[string]any{"limit": 50, "offset": 0})
+	if res.IsError {
+		t.Fatalf("list_pages limit=50 (at the published maximum): expected success, got error: %v", res.Content)
 	}
 }
 
@@ -722,19 +726,15 @@ func TestSearchPagesMatchInvalidRejected(t *testing.T) {
 	}
 }
 
+// TestSearchPagesLimitCap covers #418, see TestListPagesLimitCap.
 func TestSearchPagesLimitCap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "search_pages", map[string]any{"query": "hugo", "limit": 200})
-	if res.IsError {
-		t.Fatalf("search_pages returned error: %v", res.Content)
-	}
-	m := decodeContent(t, res)
-	pages, _ := m["pages"].([]any)
-	if len(pages) > 50 {
-		t.Fatalf("search_pages limit=200 returned %d results, want ≤50", len(pages))
+	if !res.IsError {
+		t.Fatal("search_pages limit=200: expected schema-level rejection (published maximum is 50), got success")
 	}
 }
 
@@ -790,19 +790,15 @@ func TestGetRecentPostsDefaultLimit(t *testing.T) {
 	}
 }
 
+// TestGetRecentPostsLimitCap covers #418, see TestListPagesLimitCap.
 func TestGetRecentPostsLimitCap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "get_recent_posts", map[string]any{"limit": 200})
-	if res.IsError {
-		t.Fatalf("get_recent_posts returned error: %v", res.Content)
-	}
-	m := decodeContent(t, res)
-	pages, _ := m["pages"].([]any)
-	if len(pages) > 50 {
-		t.Fatalf("get_recent_posts limit=200 returned %d results, want ≤50", len(pages))
+	if !res.IsError {
+		t.Fatal("get_recent_posts limit=200: expected schema-level rejection (published maximum is 50), got success")
 	}
 }
 
@@ -1194,19 +1190,15 @@ func TestListPagesPaginationMetadataTerminalPage(t *testing.T) {
 	assertPaginationMetadata(t, m, 2, 10, 1, 1, false, 0, false)
 }
 
+// TestGetFeedLimitCap covers #418, see TestListPagesLimitCap.
 func TestGetFeedLimitCap(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "get_feed", map[string]any{"limit": 200})
-	if res.IsError {
-		t.Fatalf("get_feed returned error: %v", res.Content)
-	}
-	m := decodeContent(t, res)
-	items, _ := m["items"].([]any)
-	if len(items) > 50 {
-		t.Fatalf("get_feed limit=200 returned %d items, want ≤50", len(items))
+	if !res.IsError {
+		t.Fatal("get_feed limit=200: expected schema-level rejection (published maximum is 50), got success")
 	}
 }
 
