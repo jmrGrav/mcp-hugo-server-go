@@ -2,6 +2,20 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.0-pre1] - 2026-07-17
+
+Prerelease for live OAuth connector testing (Gemini, Le Chat) ahead of v1.5.0.
+
+### Added
+- **OAuth flow observability** (PR #412): `HandleRegister`/`HandleAuthorize`/`HandleToken` now emit structured `oauth_register`/`oauth_authorize`/`oauth_token` log lines (`client_id`, redirect URI host, PKCE usage, scope, grant type), correlatable end-to-end by `client_id`, without ever logging secrets (client_secret, auth code, PKCE verifier, tokens). Added to let real connector behavior (which OAuth path a given client actually takes) be reconstructed from server logs.
+- **Per-caller mutation rate limits** (#378, PR #422): `create_page`/`update_page`/`upload_page_asset` now share a per-caller-IP budget (`rate_limit.create_update_per_min`, default 60/min), independent of `delete_page`'s existing budget (`rate_limit.destructive_per_min`, now config-driven instead of hardcoded) and independent of the pre-existing per-scope OAuth HTTP rate limiter. A misconfigured `0`/negative limit now clamps to the safe default instead of silently disabling the limiter.
+- **Automated path-leak audit + regression test for read-only tools** (#376, PR #423): confirmed no read-only tool (anonymous, `content.read`, or read-only `site.admin`) leaks absolute host filesystem paths, on both success and error response paths. New `internal/contracttests` regression test runs on every `go test ./...`, so future regressions fail CI instead of requiring manual re-audit.
+- **Runtime input validation for write tools** (#380, PR #415): `create_page`/`update_page` now validate slug format, title length (255 runes), body size (1MB), and reject null bytes/control characters, before writing to disk. Schema-level (client-side) validation is a documented follow-up (#418), not yet implemented.
+- **Git trust model and transactional-edit design docs** (#379, #338, #340, PRs #413, #414): normative documentation of rollback/commit semantics and a full design (not yet implemented) for future `plan_content_change`/`apply_content_plan` and `publish_changes`/`rollback_change` tools.
+
+### Fixed
+- **`diff_page`/`get_runtime_status` git dubious-ownership failure** (#416, PR #417): the production git checkout's owner (`jm`) differs from the MCP service account (`mcp-hugo-server-go`), which Git's CVE-2022-24765 mitigation was rejecting outright. New `internal/gitutil` package centralizes all git invocation with a server-resolved `safe.directory`, fixing both tools against the real production repository.
+
 ## [v1.4.9] - 2026-07-17
 
 ### Added
