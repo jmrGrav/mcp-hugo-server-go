@@ -110,6 +110,70 @@ func TestParseToolErrorContentNotFound(t *testing.T) {
 	}
 }
 
+// TestParseToolErrorMissingExpectedRevision is a regression test for #461's
+// concrete acceptance criterion: expected_revision's own message shape
+// ("expected_revision is required for non-dry-run update_page") doesn't
+// match missingRequiredField's generic "X must not be empty" phrasing, so it
+// needs its own branch — verified against the exact string update_page/
+// delete_page actually emit, not a synthetic one.
+func TestParseToolErrorMissingExpectedRevision(t *testing.T) {
+	for _, msg := range []string{
+		"invalid_params: expected_revision is required for non-dry-run update_page",
+		"invalid_params: expected_revision is required for non-dry-run delete_page",
+	} {
+		got := ParseToolError(fmt.Errorf("%s", msg))
+		if got.Code != "missing_required_parameter" {
+			t.Fatalf("%s: Code = %q, want missing_required_parameter", msg, got.Code)
+		}
+		if got.Field != "expected_revision" || !got.Retryable {
+			t.Fatalf("%s: Field/Retryable = %q/%v", msg, got.Field, got.Retryable)
+		}
+		if got.Resolution == nil || got.Resolution.RecommendedTool != "get_page_for_edit" {
+			t.Fatalf("%s: Resolution = %#v, want RecommendedTool=get_page_for_edit", msg, got.Resolution)
+		}
+	}
+}
+
+func TestParseToolErrorNotFoundMatchesContentNotFound(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("not_found: page not found for slug %q", "posts/gone"))
+	if got.Code != "not_found" {
+		t.Fatalf("Code = %q", got.Code)
+	}
+	if got.Resolution == nil || got.Resolution.Action != "search_then_retry" || got.Resolution.RecommendedTool != "search_pages" {
+		t.Fatalf("Resolution = %#v", got.Resolution)
+	}
+}
+
+// TestParseToolErrorContentNotPublicHasNoResolution pins the deliberate
+// non-hint: content_not_public is overloaded across a draft-visibility case
+// and a diagnostics-unavailable case, and only the first would benefit from
+// "search again" — a single static hint would misguide the second, so #461
+// leaves it with no resolution rather than guessing.
+func TestParseToolErrorContentNotPublicHasNoResolution(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics"))
+	if got.Resolution != nil {
+		t.Fatalf("Resolution = %#v, want nil (deliberately not hinted, see #461)", got.Resolution)
+	}
+}
+
+func TestParseToolErrorAlreadyExistsRecommendsUpdatePage(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("already_exists: page already exists at slug %q", "posts/dup"))
+	if got.Resolution == nil || got.Resolution.RecommendedTool != "update_page" {
+		t.Fatalf("Resolution = %#v, want RecommendedTool=update_page", got.Resolution)
+	}
+}
+
+// TestParseToolErrorAlreadyExistsAssetHasNoResolution pins the deliberate
+// non-hint for upload_page_asset's own already_exists message: there's no
+// "update an existing asset" tool, so recommending update_page would
+// misguide the caller (#461).
+func TestParseToolErrorAlreadyExistsAssetHasNoResolution(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("already_exists: asset already exists at %q", "hero.png"))
+	if got.Resolution != nil {
+		t.Fatalf("Resolution = %#v, want nil (no update path for an existing asset)", got.Resolution)
+	}
+}
+
 func TestParseToolErrorRejectsNonMachinePrefix(t *testing.T) {
 	got := ParseToolError(fmt.Errorf("unexpected content-type: text/html"))
 	if got.Code != "tool_error" {
