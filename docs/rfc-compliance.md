@@ -44,7 +44,7 @@ Items marked **(live)** were verified against the production server with `script
 | `authorization_endpoint` | ✅ **(live)** | |
 | `token_endpoint` | ✅ **(live)** | |
 | `registration_endpoint` | ✅ **(live)** | Always present when OAuth is enabled (v1.2.0 fix, issue #117) |
-| `scopes_supported` | ✅ **(live)** | `["content.read","content.write","site.admin"]`; legacy aliases stay unadvertised |
+| `scopes_supported` | ✅ **(live)** | `["read","write"]`; legacy aliases (4-tier model + `mcp`) stay unadvertised (#450) |
 | `access_profiles` (extension) | ✅ | Additive discovery metadata documents external `reader` / `operator` profiles without changing OAuth scope strings |
 | `response_types_supported` | ✅ **(live)** | `["code"]` |
 | `grant_types_supported` | ✅ | Includes `authorization_code`, `refresh_token`, and agent assertion grants on the current branch; re-verify live after deployment |
@@ -69,7 +69,7 @@ Items marked **(live)** were verified against the production server with `script
 | `resource` field | ✅ **(live)** | `{issuer}/mcp` |
 | `authorization_servers` field | ✅ **(live)** | Points to issuer |
 | `bearer_methods_supported` | ✅ **(live)** | `["header"]` |
-| `scopes_supported` | ✅ **(live)** | Canonical internal scopes listed: `content.read`, `content.write`, `site.admin` |
+| `scopes_supported` | ✅ **(live)** | Canonical internal scopes listed: `read`, `write` (#450) |
 | `access_profiles` (extension) | ✅ | Additive reader/operator profile mapping published alongside protected-resource metadata |
 
 ## MCP Streamable HTTP Transport

@@ -71,14 +71,14 @@ type protectedResourceMeta struct {
 func discoveryAccessProfiles() map[string]discoveryAccessProfile {
 	return map[string]discoveryAccessProfile{
 		"reader": {
-			Description:    "Public-safe read-only access profile for discovery and content inspection.",
+			Description:    "Read-only access profile for discovery and content inspection (full visibility, drafts included).",
 			Acquisition:    "anonymous or self-serve registration",
-			InternalScopes: []string{"content.read"},
+			InternalScopes: []string{"read"},
 		},
 		"operator": {
 			Description:    "Approved operator profile that bundles read, write, and site operation capabilities.",
 			Acquisition:    "approved token present in the server registry",
-			InternalScopes: []string{"content.read", "content.write", "site.admin"},
+			InternalScopes: []string{"read", "write"},
 		},
 	}
 }
@@ -403,7 +403,7 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"Token endpoint: `%s/token`\n"+
 				"Protected resource metadata: %s/.well-known/oauth-protected-resource\n"+
 				"MCP endpoint: `%s/mcp`\n"+
-				"Scopes: `reader`, `content.read`, `content.write`, `site.admin`\n\n"+
+				"Scopes: `read`, `write`\n\n"+
 				"```json\n"+
 				"{\n"+
 				"  \"registration_flow\": {\n"+
@@ -413,10 +413,8 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"    \"protected_resource_metadata\": \"%s/.well-known/oauth-protected-resource\",\n"+
 				"    \"mcp_endpoint\": \"%s/mcp\",\n"+
 				"    \"scopes\": [\n"+
-				"      \"reader\",\n"+
-				"      \"content.read\",\n"+
-				"      \"content.write\",\n"+
-				"      \"site.admin\"\n"+
+				"      \"read\",\n"+
+				"      \"write\"\n"+
 				"    ]\n"+
 				"  }\n"+
 				"}\n"+
@@ -435,14 +433,14 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"{\n" +
 				"  \"access_profiles\": {\n" +
 				"    \"reader\": {\n" +
-				"      \"description\": \"Public-safe read-only access profile for discovery and content inspection.\",\n" +
+				"      \"description\": \"Read-only access profile for discovery and content inspection (full visibility, drafts included).\",\n" +
 				"      \"acquisition\": \"anonymous or self-serve registration\",\n" +
-				"      \"internal_scopes\": [\"content.read\"]\n" +
+				"      \"internal_scopes\": [\"read\"]\n" +
 				"    },\n" +
 				"    \"operator\": {\n" +
 				"      \"description\": \"Approved operator profile that bundles read, write, and site operation capabilities.\",\n" +
 				"      \"acquisition\": \"approved token present in the server registry\",\n" +
-				"      \"internal_scopes\": [\"content.read\", \"content.write\", \"site.admin\"]\n" +
+				"      \"internal_scopes\": [\"read\", \"write\"]\n" +
 				"    }\n" +
 				"  }\n" +
 				"}\n" +

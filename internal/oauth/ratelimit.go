@@ -105,12 +105,17 @@ func (rl *RateLimiter) evictOldest() {
 }
 
 func (rl *RateLimiter) perMinFor(scope string) int {
+	// Per #450, the caller's scope has already been canonicalized to "read"
+	// or "write" (or a handful of pre-#450 literal strings, kept here for
+	// callers that haven't been routed through CanonicalScope) by the time
+	// it reaches the rate limiter — a bearer token's scope is normalized at
+	// validation time, well before RateLimiter ever sees it.
 	switch scope {
-	case "content.read", "reader":
+	case "content.read", "reader", "read":
 		return rl.cfg.ContentReadPerMin
 	case "content.write":
 		return rl.cfg.ContentWritePerMin
-	case "site.admin":
+	case "write", "site.admin":
 		return rl.cfg.SiteAdminPerMin
 	default:
 		return rl.cfg.AnonymousPerMin

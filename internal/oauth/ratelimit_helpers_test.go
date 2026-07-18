@@ -39,6 +39,15 @@ func TestRateLimiterHelperBranches(t *testing.T) {
 	if got := rl.perMinFor("unknown"); got != 11 {
 		t.Fatalf("perMinFor(unknown) = %d", got)
 	}
+	// Per #450, a bearer token's scope is already canonicalized to "read"/
+	// "write" by the time it reaches the rate limiter in production — these
+	// are the literal values perMinFor actually sees on a live request.
+	if got := rl.perMinFor("read"); got != 22 {
+		t.Fatalf("perMinFor(read) = %d", got)
+	}
+	if got := rl.perMinFor("write"); got != 44 {
+		t.Fatalf("perMinFor(write) = %d", got)
+	}
 
 	rl.limiters["old"] = rate.NewLimiter(rate.Every(time.Minute), 1)
 	rl.limiters["new"] = rate.NewLimiter(rate.Every(time.Minute), 1)

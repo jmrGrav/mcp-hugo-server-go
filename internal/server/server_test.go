@@ -43,19 +43,19 @@ func mustTestServer(t *testing.T) *server.Server {
 
 func mustOAuthServer(t *testing.T) *server.Server {
 	t.Helper()
-	// Bake in a content.read client for http://localhost:9999/cb so that
+	// Bake in a read client for http://localhost:9999/cb so that
 	// obtainBearerToken (which DCR-registers with that redirect URI) inherits
-	// content.read scope via resolveRegistrationScope. Without this, unmatched
+	// read scope via resolveRegistrationScope. Without this, unmatched
 	// DCR clients get anonymous scope ("") after the #249 fix, which would make
-	// TestContentReadCannotCallWriteTool and TestContentReadCannotCallSiteAdminTool
-	// test the wrong boundary (anonymous→write, not content.read→write).
+	// TestReadCannotCallWriteTool and TestReadCannotCallSiteAdminTool
+	// test the wrong boundary (anonymous→write, not read→write).
 	registryPath := filepath.Join(t.TempDir(), "clients.yaml")
 	if err := os.WriteFile(registryPath, []byte(`clients:
 - client_id: test-read-client
   client_secret: test-read-secret
   redirect_uris:
     - http://localhost:9999/cb
-  scope: content.read
+  scope: read
 `), 0o600); err != nil {
 		t.Fatalf("write test registry: %v", err)
 	}
@@ -685,7 +685,7 @@ func TestInSessionInvalidBearerEmitsStructuredLog(t *testing.T) {
 
 // TestScopeDeniedToolCallEmitsStructuredAuditLog proves the security audit
 // trail (#371) acceptance criteria for insufficient-scope denials: a
-// content.read token attempting a content.write tool must produce a
+// read token attempting a write tool must produce a
 // distinguishable event_type=scope_denied audit line (not just a generic
 // tool_error), and that line must never contain the caller's raw bearer
 // token.
@@ -707,7 +707,7 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 	if !strings.Contains(raw, `"event_type":"scope_denied"`) {
 		t.Fatalf("missing event_type=scope_denied in log: %s", raw)
 	}
-	if !strings.Contains(raw, `"scope":"content.read"`) {
+	if !strings.Contains(raw, `"scope":"read"`) {
 		t.Fatalf("missing caller scope in log: %s", raw)
 	}
 	if strings.Contains(raw, bearer) {
@@ -716,9 +716,9 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 }
 
 func TestToolsListAuthenticatedReturnsTwentyOneTools(t *testing.T) {
-	// mustOAuthServer includes a content.read client for http://localhost:9999/cb,
+	// mustOAuthServer includes a read client for http://localhost:9999/cb,
 	// so obtainBearerToken (which DCR-registers with that redirect URI) gets a
-	// content.read token via resolveRegistrationScope (#249).
+	// read token via resolveRegistrationScope (#249).
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
@@ -744,7 +744,7 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	srv := mustOAuthSQLiteServer(t, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	names := doMCPToolsList(t, srv, bearer)
 	if len(names) != 27 {
@@ -806,15 +806,22 @@ func TestReaderTokenGetPageRejectsSourceOnlyFallback(t *testing.T) {
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page","arguments":{"slug":"/drafts/fresh/","allow_source_fallback":true}}}`)
 	rec := doMCPCall(t, srv, bearer, payload)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader get_page status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read get_page status = %d body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "content_not_public") {
-		t.Fatalf("reader get_page must reject source-only fallback with content_not_public; body = %q", rec.Body.String())
+	// Per #450, "read" grants full visibility including drafts/source-only
+	// content (an explicit operator risk-acceptance decision, not an
+	// oversight) — the reader-safe content_not_public rejection no longer
+	// applies to any live scope.
+	if strings.Contains(rec.Body.String(), "content_not_public") {
+		t.Fatalf("read get_page must allow source-only fallback (full visibility per #450); body = %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Fresh body") {
+		t.Fatalf("read get_page missing draft body content; body = %q", rec.Body.String())
 	}
 }
 
@@ -861,17 +868,20 @@ func TestReaderTokenListPagesUsesPublicMetadataOnly(t *testing.T) {
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_pages","arguments":{"limit":10,"offset":0}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader list_pages status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read list_pages status = %d body = %q", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), "SourceCat") || strings.Contains(rec.Body.String(), "SourceTag") {
-		t.Fatalf("reader list_pages must not expose source-only taxonomy; body = %q", rec.Body.String())
+	// Per #450, "read" grants full visibility: source-derived taxonomy
+	// (categories not present in the public rendered HTML) is now
+	// expected to be visible, not stripped.
+	if !strings.Contains(rec.Body.String(), "SourceCat") {
+		t.Fatalf("read list_pages must expose source-derived taxonomy (full visibility per #450); body = %q", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "\"slug\":\"/posts/demo/\"") {
-		t.Fatalf("reader list_pages missing public page slug; body = %q", rec.Body.String())
+		t.Fatalf("read list_pages missing public page slug; body = %q", rec.Body.String())
 	}
 }
 
@@ -918,18 +928,19 @@ func TestReaderTokenGetFullPageMarkdownUsesPublicContentOnly(t *testing.T) {
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_markdown","arguments":{"slug":"/posts/demo/"}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader get_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read get_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "Source-only body that should stay hidden.") || strings.Contains(body, "SecretCat") {
-		t.Fatalf("reader get_page_markdown must not expose source content; body = %q", body)
-	}
-	if !strings.Contains(body, "Rendered public body.") {
-		t.Fatalf("reader get_page_markdown missing rendered public body; body = %q", body)
+	// Per #450, "read" grants full visibility (drafts/source-only content
+	// included, an explicit operator risk-acceptance decision): the
+	// source markdown/frontmatter is now expected to be visible, not
+	// stripped down to the public rendered projection.
+	if !strings.Contains(body, "Source-only body that should stay hidden.") || !strings.Contains(body, "SecretCat") {
+		t.Fatalf("read get_page_markdown must expose full source content (full visibility per #450); body = %q", body)
 	}
 }
 
@@ -982,21 +993,23 @@ func TestReaderTokenGetPageForEditUsesPublicContentAndOmitsQuality(t *testing.T)
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_for_edit","arguments":{"slug":"/posts/demo/"}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader get_page_for_edit status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read get_page_for_edit status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "Source-only body that should stay hidden.") || strings.Contains(body, "SecretCat") {
-		t.Fatalf("reader get_page_for_edit must not expose source content; body = %q", body)
+	// Per #450, "read" grants full visibility (drafts/source-only content
+	// included, an explicit operator risk-acceptance decision): source
+	// content/frontmatter and the source-derived quality section are both
+	// now expected to be visible, not stripped as they were for the old
+	// reader-safe profile.
+	if !strings.Contains(body, "Source-only body that should stay hidden.") || !strings.Contains(body, "SecretCat") {
+		t.Fatalf("read get_page_for_edit must expose full source content (full visibility per #450); body = %q", body)
 	}
-	if !strings.Contains(body, "Rendered public body.") {
-		t.Fatalf("reader get_page_for_edit missing rendered public body; body = %q", body)
-	}
-	if strings.Contains(body, `"quality"`) {
-		t.Fatalf("reader get_page_for_edit must omit quality (requires source access); body = %q", body)
+	if !strings.Contains(body, `"quality"`) {
+		t.Fatalf("read get_page_for_edit must include quality (source access granted per #450); body = %q", body)
 	}
 }
 
@@ -1047,18 +1060,17 @@ func TestReaderTokenListPageAssetsOmitsBundleDirectoryForPublicPage(t *testing.T
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_page_assets","arguments":{"slug":"/posts/demo/"}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader list_page_assets status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read list_page_assets status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "cover.webp") || strings.Contains(body, contentRoot) {
-		t.Fatalf("reader list_page_assets must not expose the source bundle directory or its contents; body = %q", body)
-	}
-	if !strings.Contains(body, `"assets":[]`) {
-		t.Fatalf("reader list_page_assets should return an empty assets list for a public page; body = %q", body)
+	// Per #450, "read" grants full visibility: the source bundle directory
+	// is now expected to be listed, not stripped to an empty result.
+	if !strings.Contains(body, "cover.webp") {
+		t.Fatalf("read list_page_assets must expose the source bundle contents (full visibility per #450); body = %q", body)
 	}
 }
 
@@ -1092,14 +1104,16 @@ func TestReaderTokenListPageAssetsRejectsSourceOnlyPage(t *testing.T) {
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_page_assets","arguments":{"slug":"/posts/draft/"}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader list_page_assets status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read list_page_assets status = %d body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "content_not_public") {
-		t.Fatalf("reader list_page_assets must reject a source-only page with content_not_public; body = %q", rec.Body.String())
+	// Per #450, "read" grants full visibility: a source-only (draft) page
+	// is no longer rejected with content_not_public.
+	if strings.Contains(rec.Body.String(), "content_not_public") {
+		t.Fatalf("read list_page_assets must allow a source-only page (full visibility per #450); body = %q", rec.Body.String())
 	}
 }
 
@@ -1143,21 +1157,20 @@ func TestReaderTokenListContentTypesOmitsPageCounts(t *testing.T) {
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_content_types","arguments":{}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader list_content_types status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read list_content_types status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "SecretDraftTitle") || strings.Contains(body, "secret-draft") {
-		t.Fatalf("reader list_content_types must not expose draft slugs/titles; body = %q", body)
-	}
-	if strings.Contains(body, `"page_count"`) {
-		t.Fatalf("reader list_content_types must omit page_count (source-derived); body = %q", body)
+	// Per #450, "read" grants full visibility: source-derived signals like
+	// page_count and draft-derived entries are now expected to be visible.
+	if !strings.Contains(body, `"page_count"`) {
+		t.Fatalf("read list_content_types must include page_count (full visibility per #450); body = %q", body)
 	}
 	if !strings.Contains(body, `"posts"`) || !strings.Contains(body, "archetype") {
-		t.Fatalf("reader list_content_types should still see the archetype-derived 'posts' entry; body = %q", body)
+		t.Fatalf("read list_content_types should still see the archetype-derived 'posts' entry; body = %q", body)
 	}
 }
 
@@ -1203,18 +1216,17 @@ func TestReaderTokenGetSiteHealthOmitsTaxonomyInconsistencyDetails(t *testing.T)
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_site_health","arguments":{}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader get_site_health status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read get_site_health status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if strings.Contains(body, "taxonomy_inconsistency_details") {
-		t.Fatalf("reader get_site_health must not expose taxonomy_inconsistency_details (source page slugs); body = %q", body)
-	}
-	if strings.Contains(body, "taxonomy_inconsistencies") {
-		t.Fatalf("reader get_site_health must not expose taxonomy_inconsistencies either (same source-derived signal); body = %q", body)
+	// Per #450, "read" grants full visibility: taxonomy_inconsistencies
+	// (source page slugs) is now expected to be visible, not stripped.
+	if !strings.Contains(body, "taxonomy_inconsistencies") {
+		t.Fatalf("read get_site_health must expose taxonomy_inconsistencies (full visibility per #450); body = %q", body)
 	}
 }
 
@@ -1248,14 +1260,19 @@ func TestReaderTokenGetFullPageMarkdownRejectsSourceOnlyPage(t *testing.T) {
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page_markdown","arguments":{"slug":"/drafts/fresh/"}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader get_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read get_page_markdown status = %d body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "content_not_public") {
-		t.Fatalf("reader get_page_markdown must reject source-only page with content_not_public; body = %q", rec.Body.String())
+	// Per #450, "read" grants full visibility: a source-only (draft) page
+	// is no longer rejected with content_not_public.
+	if strings.Contains(rec.Body.String(), "content_not_public") {
+		t.Fatalf("read get_page_markdown must allow a source-only page (full visibility per #450); body = %q", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Fresh body") {
+		t.Fatalf("read get_page_markdown missing draft body content; body = %q", rec.Body.String())
 	}
 }
 
@@ -1264,14 +1281,16 @@ func TestReaderTokenValidateSiteRejectsSourceDiagnostics(t *testing.T) {
 	srv := mustOAuthSQLiteServer(t, storePath)
 
 	const bearer = "reader-token"
-	addBearerToken(t, storePath, bearer, "reader")
+	addBearerToken(t, storePath, bearer, "read")
 
 	rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"validate_site","arguments":{}}}`))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("reader validate_site status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read validate_site status = %d body = %q", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "content_not_public") {
-		t.Fatalf("reader validate_site must reject source diagnostics with content_not_public; body = %q", rec.Body.String())
+	// Per #450, "read" grants full visibility: source diagnostics are no
+	// longer rejected with content_not_public.
+	if strings.Contains(rec.Body.String(), "content_not_public") {
+		t.Fatalf("read validate_site must allow source diagnostics (full visibility per #450); body = %q", rec.Body.String())
 	}
 }
 
@@ -1322,9 +1341,10 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	}
 }
 
-// TestContentReadCannotCallWriteTool proves that a content.read bearer cannot
-// invoke a content.write tool (issue #25 acceptance criterion 1).
-func TestContentReadCannotCallWriteTool(t *testing.T) {
+// TestReadCannotCallWriteTool proves that a read bearer cannot invoke a
+// write tool (issue #25 acceptance criterion 1; scope model collapsed to
+// read/write by #450).
+func TestReadCannotCallWriteTool(t *testing.T) {
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 
@@ -1332,16 +1352,17 @@ func TestContentReadCannotCallWriteTool(t *testing.T) {
 	rec := doMCPCall(t, srv, bearer, body)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("content.read must not call create_page: status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read must not call create_page: status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "forbidden_tool") {
 		t.Fatalf("expected forbidden_tool in response, got: %q", rec.Body.String())
 	}
 }
 
-// TestContentReadCannotCallSiteAdminTool proves that a content.read bearer cannot
-// invoke a site.admin tool (issue #25 acceptance criterion 2).
-func TestContentReadCannotCallSiteAdminTool(t *testing.T) {
+// TestReadCannotCallSiteAdminTool proves that a read bearer cannot invoke a
+// tool that used to require site.admin (issue #25 acceptance criterion 2;
+// site.admin folded into write by #450).
+func TestReadCannotCallSiteAdminTool(t *testing.T) {
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 
@@ -1349,7 +1370,7 @@ func TestContentReadCannotCallSiteAdminTool(t *testing.T) {
 	rec := doMCPCall(t, srv, bearer, body)
 
 	if rec.Code != http.StatusForbidden {
-		t.Fatalf("content.read must not call build_site: status = %d body = %q", rec.Code, rec.Body.String())
+		t.Fatalf("read must not call build_site: status = %d body = %q", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "forbidden_tool") {
 		t.Fatalf("expected forbidden_tool in response, got: %q", rec.Body.String())
@@ -1389,7 +1410,7 @@ func TestScopesSupported(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	wantScopes := []string{"content.read", "content.write", "site.admin"}
+	wantScopes := []string{"read", "write"}
 	for _, want := range wantScopes {
 		found := false
 		for _, got := range meta.ScopesSupported {
@@ -1482,8 +1503,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "site.admin" {
-		t.Fatalf("token scope = %q want site.admin", tokenResp.Scope)
+	if tokenResp.Scope != "write" {
+		t.Fatalf("token scope = %q want write", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
@@ -1498,10 +1519,10 @@ clients:
 		}
 	}
 	if !found {
-		t.Fatalf("site.admin token missing build_site; got %v", names)
+		t.Fatalf("write token missing build_site; got %v", names)
 	}
 	if !writeFound {
-		t.Fatalf("site.admin token missing create_page; got %v", names)
+		t.Fatalf("write token missing create_page; got %v", names)
 	}
 
 	callRec := doMCPCall(t, srv, tokenResp.AccessToken, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_site","arguments":{}}}`))
@@ -1585,8 +1606,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "site.admin" {
-		t.Fatalf("token scope = %q want site.admin", tokenResp.Scope)
+	if tokenResp.Scope != "write" {
+		t.Fatalf("token scope = %q want write", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
@@ -1601,24 +1622,43 @@ clients:
 		}
 	}
 	if !found {
-		t.Fatalf("site.admin token missing build_site; got %v", names)
+		t.Fatalf("write token missing build_site; got %v", names)
 	}
 	if !writeFound {
-		t.Fatalf("site.admin token missing create_page; got %v", names)
+		t.Fatalf("write token missing create_page; got %v", names)
 	}
 }
 
-// TestAnonymousServerDoesNotExposeAuthenticatedTools guards the scope boundary
-// between the anonymous server (no OAuth) and the content.read tier.
-// Tools like validate_site and validate_frontmatter require content.read and
-// must NEVER appear when the server runs without OAuth (anonymous mode).
-// If they appear here it means they were accidentally registered on anonServer.
-func TestAnonymousServerDoesNotExposeAuthenticatedTools(t *testing.T) {
-	srv := mustTestServer(t) // no OAuth — anonymous server
+// TestAnonymousServerExposesReadTools documents the #450 scope collapse:
+// "read" is capability-identical to anonymous (both ScopeRank 0), so tools
+// that used to require the "content.read" tier (rank 1, gated) are now
+// ungated and appear even when the server runs without OAuth (anonymous
+// mode). This test used to be TestAnonymousServerDoesNotExposeAuthenticatedTools,
+// asserting the opposite; that boundary no longer exists by design — read
+// requires no secret and is auto-registrable.
+func TestAnonymousServerExposesReadTools(t *testing.T) {
+	// Use a config with ContentRoot set (no OAuth) so source-index-backed
+	// read tools (validate_site, search_content, ...) are registered at
+	// all; mustTestServer's bare config.Default() has no ContentRoot, so
+	// those tools would be absent regardless of scope, and this test would
+	// not actually exercise the #450 scope boundary.
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.HugoRoot = t.TempDir()
+	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
 	names := doMCPToolsList(t, srv, "")
 
-	// These tools require content.read and must not be on the anonymous server.
-	authOnlyTools := []string{
+	// These tools used to require content.read; per #450 they are now
+	// ungated (same rank as anonymous) and must appear here.
+	formerlyAuthOnlyTools := []string{
 		"validate_site",
 		"validate_frontmatter",
 		"build_agent_context",
@@ -1628,11 +1668,16 @@ func TestAnonymousServerDoesNotExposeAuthenticatedTools(t *testing.T) {
 		"diff_page",
 		"search_content",
 	}
-	for _, bad := range authOnlyTools {
+	for _, want := range formerlyAuthOnlyTools {
+		found := false
 		for _, got := range names {
-			if got == bad {
-				t.Errorf("anonymous server must not expose content.read tool %q", bad)
+			if got == want {
+				found = true
+				break
 			}
+		}
+		if !found {
+			t.Errorf("public server must expose read tool %q (ungated per #450); got %v", want, names)
 		}
 	}
 
@@ -1658,8 +1703,8 @@ func TestAnonymousServerDoesNotExposeAuthenticatedTools(t *testing.T) {
 // regardless of what the server advertises. Before v1.2.10 this caused an
 // invalid_scope redirect (disguised as HTTP 302) and the token endpoint was
 // never called. This test locks in the correct behaviour: scope is clamped to
-// the client ceiling (site.admin), a code is issued, and the token exchange
-// returns site.admin with admin tools visible.
+// the client ceiling (write), a code is issued, and the token exchange
+// returns write with admin (now write-gated) tools visible.
 func TestRegressionClaudeAiScopeClamping(t *testing.T) {
 	mockDir := t.TempDir()
 	mockHugo := filepath.Join(mockDir, "hugo")
@@ -1737,16 +1782,20 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "site.admin" {
-		t.Fatalf("token scope = %q want site.admin (should be clamped from system.admin)", tokenResp.Scope)
+	if tokenResp.Scope != "write" {
+		t.Fatalf("token scope = %q want write (should be clamped from system.admin)", tokenResp.Scope)
 	}
 }
 
 // --- Regression: ChatGPT OAuth flow ---
 //
-// ChatGPT uses a wildcard redirect URI and requests scope=content.read+content.write.
-// It must receive a content.write token that exposes write tools (create_page)
-// but NOT admin tools (build_site, check_sri_versions).
+// ChatGPT uses a wildcard redirect URI and requests the legacy
+// scope=content.read+content.write string (still accepted via CanonicalScope,
+// #450). It must receive a canonical "write" token that exposes write tools
+// (create_page). Per #450, site.admin tools folded into write with no
+// exceptions, so build_site/check_sri_versions/preview_build are now also
+// expected to be visible — this is the intended behavior, not a boundary
+// violation.
 func TestRegressionChatGPTWriteScopeToolBoundary(t *testing.T) {
 	registryPath := filepath.Join(t.TempDir(), "oauth-clients.yaml")
 	if err := os.WriteFile(registryPath, []byte(`
@@ -1812,19 +1861,20 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "content.write" {
-		t.Fatalf("token scope = %q want content.write", tokenResp.Scope)
+	if tokenResp.Scope != "write" {
+		t.Fatalf("token scope = %q want write", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
 	// Must see write tools.
 	if !containsToolName(names, "create_page") {
-		t.Errorf("chatgpt content.write token missing create_page; got %v", names)
+		t.Errorf("chatgpt write token missing create_page; got %v", names)
 	}
-	// Must NOT see admin tools — this would mean the scope boundary is broken.
+	// Per #450, site.admin folded into write with no exceptions: a write
+	// token now also sees the tools that used to require site.admin.
 	for _, adminTool := range []string{"build_site", "check_sri_versions", "preview_build"} {
-		if containsToolName(names, adminTool) {
-			t.Errorf("chatgpt content.write token must not expose admin tool %q", adminTool)
+		if !containsToolName(names, adminTool) {
+			t.Errorf("chatgpt write token must expose formerly-admin tool %q (folded into write per #450)", adminTool)
 		}
 	}
 }
@@ -1977,8 +2027,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "site.admin" {
-		t.Fatalf("token scope = %q want site.admin", tokenResp.Scope)
+	if tokenResp.Scope != "write" {
+		t.Fatalf("token scope = %q want write", tokenResp.Scope)
 	}
 
 	cases := []struct {

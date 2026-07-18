@@ -130,9 +130,9 @@ call budget.
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
 | `rate_limit.anonymous_per_min` | int | `120` | Logical tool calls per minute for anonymous (no-auth) scope. |
-| `rate_limit.content_read_per_min` | int | `240` | Logical tool calls per minute for `content.read` scope. |
-| `rate_limit.content_write_per_min` | int | `60` | Logical tool calls per minute for `content.write` scope. |
-| `rate_limit.site_admin_per_min` | int | `60` | Logical tool calls per minute for `site.admin` scope. |
+| `rate_limit.content_read_per_min` | int | `240` | Logical tool calls per minute for the `read` scope (config key name predates #450's scope rename). |
+| `rate_limit.content_write_per_min` | int | `60` | Legacy key, effectively unreachable since #450: `write` (folding the old `content.write`/`site.admin` split into one scope) is rate-limited via `rate_limit.site_admin_per_min` instead. Kept only so a config carrying both old keys doesn't error. |
+| `rate_limit.site_admin_per_min` | int | `60` | Logical tool calls per minute for site-operation calls under the `write` scope (config key name predates #450's scope rename). |
 | `rate_limit.destructive_per_min` | int | `5` | Requests per minute for destructive operations. |
 
 ### OAuth Configuration
@@ -156,26 +156,31 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 
 ## Tool Access Scopes
 
-Externally, operators should think in two profiles:
+Since #450, the server enforces exactly two internal scopes, which map
+directly onto the two external profiles operators should think in:
 
-- `reader`: public-safe read-only tooling
-- `operator`: reader tooling plus mutations and site operations
+- `reader` / `read`: full visibility, including drafts and other
+  source-only/pre-publication content (an explicit operator
+  risk-acceptance decision — see `docs/mcp-contract.md` §6.12). Requires no
+  secret; auto-registrable.
+- `operator` / `write`: reader capability plus mutations and site
+  operations. Requires a registered OAuth client. `write` implies `read` —
+  there is no third tier; every tool that used to require a separate
+  `site.admin` scope now just requires `write`.
 
-Internally, the server still enforces anonymous, `content.read`,
-`content.write`, and `site.admin` tiers during v1.x. Each tier is a superset of
-lower tiers: agents with `content.write` access can call all `content.read`
-tools, and so on.
-
-Legacy clients may still send `mcp` as a scope. It is accepted as a deprecated alias for `content.read` for backward compatibility, but it is not advertised as a canonical scope and should not be used by new clients.
-
-Legacy clients may still send `system.admin`; it is accepted as a compatibility alias for `site.admin`, but it is not advertised as canonical.
+Legacy clients may still send any pre-#450 scope string (`mcp`, `reader`,
+`content.read`, `content.write`, `site.admin`, `system.admin`, and other
+aliases — see `docs/mcp-contract.md` §6.12 for the full table). They are
+accepted as deprecated compatibility aliases resolved to `read`/`write`, but
+are not advertised as canonical scopes and should not be used by new
+clients.
 
 Published discovery metadata now carries both:
 
-- canonical internal scope strings in `scopes_supported`
+- canonical internal scope strings (`read`, `write`) in `scopes_supported`
 - additive `access_profiles.reader` / `access_profiles.operator` metadata for the simplified external model
 
-To enable confidential OAuth clients for `content.write` or `site.admin`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
+To enable confidential OAuth clients for `write`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
 
 The server exposes a migration metric at `/metrics`:
 
@@ -383,7 +388,7 @@ The systemd service is installed to `/etc/systemd/system/mcp-hugo-server-go.serv
 - **Security**: `ProtectSystem=strict`, `ProtectHome=read-only`, `CapabilityBoundingSet=` (no capabilities).
 - **Write Paths**: `ReadWritePaths=/var/lib/mcp-hugo-server-go /srv/hugo-site/content /srv/hugo-site/resources /srv/hugo-site/public` (adjust to match your Hugo tree and OAuth storage path).
 
-To run in read-only mode (anonymous and `content.read` only):
+To run in read-only mode (anonymous and `read` only):
 1. Remove the `ReadWritePaths` lines.
 2. Change `ProtectSystem=full` to `ProtectSystem=strict`.
 3. Reload and restart: `sudo systemctl daemon-reload && sudo systemctl restart mcp-hugo-server-go`.
@@ -414,7 +419,7 @@ sudo systemctl reload mcp-hugo-server-go
 4. **Trigger a build** to test:
 
 ```bash
-# Call build_site (requires site.admin scope)
+# Call build_site (requires write scope)
 mcp-hugo-server-go <options>  # invoke build_site tool
 ```
 
@@ -490,7 +495,7 @@ oauth:
 sudo systemctl reload mcp-hugo-server-go
 ```
 
-When OAuth is disabled, all authenticated tools (`content.read`, `content.write`, `site.admin`) are rejected with a `not_authorized` error. Only anonymous tools remain available.
+When OAuth is disabled, `write` tools are rejected with a `not_authorized` error. `read` tools remain available without authentication — since #450, `read` is fully public (identical gating to the anonymous tier), so disabling OAuth does not hide them.
 
 ## Monitoring and Debugging
 

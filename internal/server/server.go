@@ -99,13 +99,13 @@ func openStore(cfg config.OAuthConfig) (storage.Store, error) {
 
 // ScopeExtension is a plug-and-play hook for registering additional MCP tools
 // without modifying core server packages. It is called once per scope server
-// (scopeName is one of "", "content.read", "content.write", "site.admin").
+// (scopeName is one of "", "write").
 // Implementations should call mcp.AddTool on s to add tools to that scope.
 //
 // Example:
 //
 //	ext := server.ScopeExtension(func(scope string, s *mcp.Server) {
-//	    if scope == "content.read" {
+//	    if scope == "" {
 //	        mcp.AddTool(s, &mcp.Tool{Name: "my_custom_tool", ...}, myHandler)
 //	    }
 //	})
@@ -170,28 +170,20 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		knownTools[d.Name] = true
 	}
 
-	anonServer := mcp.NewServer(impl, serverOpts)
-	anonServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "", knownTools))
-	registerSharedResources(anonServer)
-	anonymous.Register(anonServer, idx, cfg, srcIdx)
-	for _, ext := range extensions {
-		ext("", anonServer)
-	}
-
-	readServer := mcp.NewServer(impl, serverOpts)
-	readServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.read", knownTools))
-	registerSharedResources(readServer)
-	anonymous.Register(readServer, idx, cfg, srcIdx)
-	read.Register(readServer, idx, cfg, srcIdx)
+	publicServer := mcp.NewServer(impl, serverOpts)
+	publicServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "", knownTools))
+	registerSharedResources(publicServer)
+	anonymous.Register(publicServer, idx, cfg, srcIdx)
+	read.Register(publicServer, idx, cfg, srcIdx)
 	if srcIdx != nil {
-		read.RegisterWithSourceIndex(readServer, idx, srcIdx, cfg, siteDB)
+		read.RegisterWithSourceIndex(publicServer, idx, srcIdx, cfg, siteDB)
 	}
 	for _, ext := range extensions {
-		ext("content.read", readServer)
+		ext("", publicServer)
 	}
 
 	writeServer := mcp.NewServer(impl, serverOpts)
-	writeServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "content.write", knownTools))
+	writeServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "write", knownTools))
 	registerSharedResources(writeServer)
 	anonymous.Register(writeServer, idx, cfg, srcIdx)
 	read.Register(writeServer, idx, cfg, srcIdx)
@@ -202,24 +194,9 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		toolswrite.Register(writeServer, pg, srcIdx, cfg, siteDB, idx)
 	}
 	for _, ext := range extensions {
-		ext("content.write", writeServer)
+		ext("write", writeServer)
 	}
-
-	siteAdminServer := mcp.NewServer(impl, serverOpts)
-	siteAdminServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "site.admin", knownTools))
-	registerSharedResources(siteAdminServer)
-	anonymous.Register(siteAdminServer, idx, cfg, srcIdx)
-	read.Register(siteAdminServer, idx, cfg, srcIdx)
-	if srcIdx != nil {
-		read.RegisterWithSourceIndex(siteAdminServer, idx, srcIdx, cfg, siteDB)
-	}
-	if writeEnabled {
-		toolswrite.Register(siteAdminServer, pg, srcIdx, cfg, siteDB, idx)
-	}
-	for _, ext := range extensions {
-		ext("site.admin", siteAdminServer)
-	}
-	admin.Register(siteAdminServer, cfg,
+	admin.Register(writeServer, cfg,
 		func() error {
 			if err := idx.Reload(cfg); err != nil {
 				return err
@@ -258,11 +235,11 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			return nil
 		},
 	)
-	admin.RegisterVerifyPublication(siteAdminServer, idx, srcIdx, cfg)
+	admin.RegisterVerifyPublication(writeServer, idx, srcIdx, cfg)
 	previews := previewstore.New()
 	previewHandler := previews.HTTPHandler()
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
-	admin.RegisterCreatePreview(siteAdminServer, cfg, previews, previewBaseURL)
+	admin.RegisterCreatePreview(writeServer, cfg, previews, previewBaseURL)
 
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,
@@ -280,16 +257,10 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		scope, _ := r.Context().Value(oauth.CtxScope).(string)
 		rank := tools.ScopeRank(scope)
 		slog.Info("mcp: session created", "scope", scope, "rank", rank, "remote_addr", r.RemoteAddr)
-		switch rank {
-		case 3:
-			return siteAdminServer
-		case 2:
+		if rank >= 1 {
 			return writeServer
-		case 1:
-			return readServer
-		default:
-			return anonServer
 		}
+		return publicServer
 	}, opts)
 
 	var oauthSvc *oauth.Service

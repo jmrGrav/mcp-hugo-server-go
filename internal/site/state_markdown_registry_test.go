@@ -151,18 +151,18 @@ func TestExtractArticleHTMLPrefersContentIDOverArticleChrome(t *testing.T) {
 func TestToolsRegistryHelpers(t *testing.T) {
 	r := tools.NewRegistry()
 	r.Register(tools.ToolDef{Name: "public_tool"})
-	r.Register(tools.ToolDef{Name: "read_tool", RequiredScope: "content.read"})
-	r.Register(tools.ToolDef{Name: "admin_tool", RequiredScope: "site.admin"})
+	r.Register(tools.ToolDef{Name: "read_tool", RequiredScope: "read"})
+	r.Register(tools.ToolDef{Name: "admin_tool", RequiredScope: "write"})
 
 	all := r.All()
 	if len(all) != 3 || all[0].Name != "public_tool" || all[2].Name != "admin_tool" {
 		t.Fatalf("All() = %#v", all)
 	}
-	if got := tools.IsAdminScope("site.admin"); !got {
-		t.Fatal("IsAdminScope(site.admin) = false")
+	if got := tools.IsWriteScope("write"); !got {
+		t.Fatal("IsWriteScope(write) = false")
 	}
-	if got := tools.IsAdminScope("content.write"); got {
-		t.Fatal("IsAdminScope(content.write) = true")
+	if got := tools.IsWriteScope("read"); got {
+		t.Fatal("IsWriteScope(read) = true")
 	}
 }
 

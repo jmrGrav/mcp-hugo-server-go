@@ -92,8 +92,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode token response: %v", err)
 	}
-	if resp.Scope != "site.admin" {
-		t.Fatalf("scope = %q want site.admin", resp.Scope)
+	if resp.Scope != "write" {
+		t.Fatalf("scope = %q want write", resp.Scope)
 	}
 }
 
@@ -141,8 +141,8 @@ clients:
 	if clientID != "chatgpt-admin" {
 		t.Fatalf("client_id = %q want chatgpt-admin", clientID)
 	}
-	if effectiveScope != "site.admin" {
-		t.Fatalf("effective_scope = %q want site.admin", effectiveScope)
+	if effectiveScope != "write" {
+		t.Fatalf("effective_scope = %q want write", effectiveScope)
 	}
 	if enabled != 1 {
 		t.Fatalf("enabled = %d want 1", enabled)

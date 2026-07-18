@@ -9,7 +9,7 @@ import (
 func TestRegistryAllPreservesOrder(t *testing.T) {
 	r := tools.NewRegistry()
 	r.Register(tools.ToolDef{Name: "a"})
-	r.Register(tools.ToolDef{Name: "b", RequiredScope: "content.read"})
+	r.Register(tools.ToolDef{Name: "b", RequiredScope: "read"})
 
 	all := r.All()
 	if len(all) != 2 || all[0].Name != "a" || all[1].Name != "b" {
@@ -17,14 +17,14 @@ func TestRegistryAllPreservesOrder(t *testing.T) {
 	}
 }
 
-func TestIsAdminScope(t *testing.T) {
-	if !tools.IsAdminScope("site.admin") {
-		t.Fatal("IsAdminScope(site.admin) = false")
+func TestIsWriteScope(t *testing.T) {
+	if !tools.IsWriteScope("write") {
+		t.Fatal("IsWriteScope(write) = false")
 	}
-	if tools.IsAdminScope("content.write") {
-		t.Fatal("IsAdminScope(content.write) = true")
+	if tools.IsWriteScope("read") {
+		t.Fatal("IsWriteScope(read) = true")
 	}
-	if tools.IsAdminScope("unknown") {
-		t.Fatal("IsAdminScope(unknown) = true")
+	if tools.IsWriteScope("unknown") {
+		t.Fatal("IsWriteScope(unknown) = true")
 	}
 }

@@ -99,7 +99,7 @@ func TestDynamicClientRegistration(t *testing.T) {
 func TestDynamicClientRegistrationScopeInheritance(t *testing.T) {
 	// When DCR request uses a redirect URI that matches a pre-registered client,
 	// the new public client should inherit that client's scope instead of defaulting
-	// to content.read. This enables Claude.ai/ChatGPT to get their configured scopes
+	// to read. This enables Claude.ai/ChatGPT to get their configured scopes
 	// automatically through DCR without requiring manual credential entry.
 	svc, _ := newTestService(t)
 
@@ -129,9 +129,9 @@ func TestDynamicClientRegistrationScopeInheritance(t *testing.T) {
 		redirectURIs  []string
 		expectedScope string
 	}{
-		{"claude.ai primary callback → site.admin", []string{"https://claude.ai/api/oauth/callback"}, "site.admin"},
-		{"claude.ai alternate callback → site.admin", []string{"https://claude.ai/oauth/callback"}, "site.admin"},
-		{"chatgpt callback → content.write", []string{"https://chatgpt.com/aip/oauth/callback"}, "content.write"},
+		{"claude.ai primary callback → write", []string{"https://claude.ai/api/oauth/callback"}, "write"},
+		{"claude.ai alternate callback → write", []string{"https://claude.ai/oauth/callback"}, "write"},
+		{"chatgpt callback → write", []string{"https://chatgpt.com/aip/oauth/callback"}, "write"},
 		{"unknown client → anonymous", []string{"https://unknown.example.com/callback"}, ""},
 	}
 
@@ -897,11 +897,11 @@ func TestAgentTokenExchangeAllowsReaderSelfRegistrationWhenEnabled(t *testing.T)
 	if err := json.Unmarshal(identityRec.Body.Bytes(), &identity); err != nil {
 		t.Fatalf("identity: decode: %v", err)
 	}
-	if len(identity.PreClaimScopes) != 1 || identity.PreClaimScopes[0] != "reader" {
-		t.Fatalf("identity pre_claim_scopes = %#v want [reader]", identity.PreClaimScopes)
+	if len(identity.PreClaimScopes) != 1 || identity.PreClaimScopes[0] != "read" {
+		t.Fatalf("identity pre_claim_scopes = %#v want [read]", identity.PreClaimScopes)
 	}
-	if len(identity.PostClaimScopes) != 1 || identity.PostClaimScopes[0] != "reader" {
-		t.Fatalf("identity post_claim_scopes = %#v want [reader]", identity.PostClaimScopes)
+	if len(identity.PostClaimScopes) != 1 || identity.PostClaimScopes[0] != "read" {
+		t.Fatalf("identity post_claim_scopes = %#v want [read]", identity.PostClaimScopes)
 	}
 	if identity.ClaimToken != "" || identity.ClaimURL != "" || identity.Claim != nil {
 		t.Fatalf("reader self-registration must not advertise claim flow: %#v", identity)
@@ -926,24 +926,24 @@ func TestAgentTokenExchangeAllowsReaderSelfRegistrationWhenEnabled(t *testing.T)
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("token: decode: %v", err)
 	}
-	if tokenResp.Scope != "reader" {
-		t.Fatalf("token scope = %q want reader", tokenResp.Scope)
+	if tokenResp.Scope != "read" {
+		t.Fatalf("token scope = %q want read", tokenResp.Scope)
 	}
 
 	scope, legacy, ok := svc.ValidateBearerDetails(tokenResp.AccessToken)
 	if !ok {
 		t.Fatal("reader token must validate")
 	}
-	if scope != "reader" || legacy {
-		t.Fatalf("ValidateBearerDetails returned scope=%q legacy=%v; want reader false", scope, legacy)
+	if scope != "read" || legacy {
+		t.Fatalf("ValidateBearerDetails returned scope=%q legacy=%v; want read false", scope, legacy)
 	}
 
 	storedScope, ok := store.ValidateAccessToken(oauth.HashToken(tokenResp.AccessToken))
 	if !ok {
 		t.Fatal("reader token missing from store")
 	}
-	if storedScope != "reader" {
-		t.Fatalf("stored scope = %q want reader", storedScope)
+	if storedScope != "read" {
+		t.Fatalf("stored scope = %q want read", storedScope)
 	}
 }
 
@@ -1036,15 +1036,15 @@ func TestBearerValidation(t *testing.T) {
 	if !ok {
 		t.Fatal("valid token must validate")
 	}
-	if scope != "content.read" {
-		t.Fatalf("scope = %q want content.read", scope)
+	if scope != "read" {
+		t.Fatalf("scope = %q want read", scope)
 	}
 	scope, legacy, ok := svc.ValidateBearerDetails("validtoken")
 	if !ok {
 		t.Fatal("valid token must validate via ValidateBearerDetails")
 	}
-	if scope != "content.read" || !legacy {
-		t.Fatalf("ValidateBearerDetails returned scope=%q legacy=%v; want content.read true", scope, legacy)
+	if scope != "read" || !legacy {
+		t.Fatalf("ValidateBearerDetails returned scope=%q legacy=%v; want read true", scope, legacy)
 	}
 
 	_ = store.AddAccessToken(oauth.HashToken("expiredtoken"), "mcp", time.Now().Add(-time.Second))

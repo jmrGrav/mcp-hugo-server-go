@@ -174,10 +174,10 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	if operator.Acquisition == "" || len(operator.InternalScopes) == 0 {
 		t.Fatalf("access_profiles.operator = %#v, want acquisition and internal_scopes", operator)
 	}
-	if len(reader.InternalScopes) != 1 || reader.InternalScopes[0] != "content.read" {
-		t.Fatalf("reader internal_scopes = %v, want [content.read]", reader.InternalScopes)
+	if len(reader.InternalScopes) != 1 || reader.InternalScopes[0] != "read" {
+		t.Fatalf("reader internal_scopes = %v, want [read]", reader.InternalScopes)
 	}
-	wantOperatorScopes := []string{"content.read", "content.write", "site.admin"}
+	wantOperatorScopes := []string{"read", "write"}
 	for _, want := range wantOperatorScopes {
 		found := false
 		for _, got := range operator.InternalScopes {
@@ -453,7 +453,7 @@ func TestWellKnownProtectedResource(t *testing.T) {
 			}
 		}
 	}
-	wantScopes := []string{"content.read", "content.write", "site.admin"}
+	wantScopes := []string{"read", "write"}
 	for _, want := range wantScopes {
 		found := false
 		for _, s := range meta.ScopesSupported {

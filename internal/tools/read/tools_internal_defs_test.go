@@ -12,7 +12,7 @@ func TestDefs(t *testing.T) {
 	if len(defs) != 18 {
 		t.Fatalf("Defs() = %d, want 18", len(defs))
 	}
-	if defs[0].RequiredScope != "content.read" {
+	if defs[0].RequiredScope != "" {
 		t.Fatalf("Defs() first scope = %q", defs[0].RequiredScope)
 	}
 }

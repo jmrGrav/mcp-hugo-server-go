@@ -28,21 +28,22 @@ It is the unified successor of:
 
 ## Access model
 
-The external access story is intentionally converging toward two profiles:
+The server enforces exactly two internal scopes (#450):
 
-- `reader`: public-safe read-only discovery and content inspection
-- `operator`: reader capabilities plus write and site operations
+- `read`: full visibility, including drafts and other source-only/pre-publication
+  content. Requires no secret and is auto-registrable (self-service, the same
+  mechanism the old `reader` profile used).
+- `write`: requires a registered OAuth client (`client_id` + `client_secret`).
+  Implies `read` — a `write` token gets everything, including build/site/integrity/
+  diagnostic operations that used to require a separate `site.admin` scope.
 
-The runtime still enforces the current internal capability scopes during v1.x:
-
-- `anonymous`: public, safe, read-only discovery
-- `reader`: self-service safe read-only access for agent registrations
-- `content.read`: richer approved read-only access
-- `content.write`: create, update, and delete operations
-- `site.admin`: build, site-management, integrity, and diagnostic operations
-
-Legacy clients may still send `mcp` as a scope. The server accepts it as a deprecated compatibility alias for `content.read` only.
-Legacy clients may still send `system.admin`; the server accepts it as a compatibility alias for `site.admin`, but it is not advertised as a canonical scope.
+Legacy clients may still send any scope string from the pre-#450 four-tier model
+(`reader`, `content.read`, `content.write`, `site.admin`, `system.admin`, ...) or the
+original `mcp` alias. The server accepts all of them as deprecated compatibility
+aliases, resolved to `read`/`write` via `oauth.CanonicalScope`, but only `read` and
+`write` are ever advertised as canonical scopes. See
+[docs/mcp-contract.md §6.12](docs/mcp-contract.md#612-2-scope-model-readwrite-450)
+for the full mapping and rationale.
 
 ## Tool inventory
 
@@ -50,11 +51,11 @@ The current tool inventory is documented in [docs/tools.md](docs/tools.md) and s
 
 ## Security model
 
-- Anonymous callers only see public read-only tools.
+- Anonymous callers and `read`-scoped callers see the same tool set — `read` carries no additional visibility restriction (#450).
 - Reader-facing discovery is provider-neutral: capability differences depend on token trust, not on whether the client is ChatGPT, Claude, Gemini, Le Chat, Copilot, or another MCP consumer.
-- OAuth bearer tokens are required for non-public tiers.
-- `content.write` and `site.admin` are never exposed to anonymous callers.
-- The legacy `mcp` alias is accepted for compatibility, but it is not advertised as canonical.
+- An OAuth bearer token with `write` scope is required for mutating and operational tools.
+- `write` is never exposed to anonymous or `read`-scoped callers.
+- Legacy scope aliases (`mcp`, `reader`, `content.read`, `content.write`, `site.admin`, `system.admin`, ...) are accepted for compatibility, but only `read`/`write` are advertised as canonical.
 
 ## Claude and MCP
 
@@ -62,14 +63,13 @@ Claude Desktop and Claude.ai can connect directly to the public MCP endpoint abo
 
 The server card and OAuth discovery advertise canonical internal scopes only:
 
-- `reader`
-- `content.read`
-- `content.write`
-- `site.admin`
+- `read`
+- `write`
 
 They also publish additive `reader` / `operator` access-profile metadata so
 clients can understand the simplified external contract without treating those
-profile names as direct OAuth scope strings.
+profile names as direct OAuth scope strings. (`reader`'s `internal_scopes` is
+now `["read"]` and `operator`'s is `["read", "write"]`.)
 
 Public compatibility discovery for external scanners lives on the website
 surface as well:
@@ -119,11 +119,8 @@ Production promotion is intentionally split into three explicit stages:
 
 ```
 mcp.arleo.eu
-├── anonymous       public discovery and safe read-only tools
-├── reader          self-service safe read-only tokens
-├── content.read    richer approved read-only content access
-├── content.write   content creation and editing
-└── site.admin      build, site, integrity, and diagnostic operations
+├── read (anonymous or self-service token)   full content visibility, including drafts
+└── write (registered OAuth client only)     content creation/editing plus build, site, integrity, and diagnostic operations
 ```
 
 The MCP transport is streamable HTTP at `/mcp`.
@@ -137,17 +134,13 @@ To report a vulnerability, set `security_contact` in your server config (e.g., `
 Agents authenticate via the identity assertion flow:
 
 1. Agent POSTs to `/agent/identity` with `{"type":"anonymous"}`.
-2. If `oauth.allow_reader_self_registration` is enabled, the response is immediately exchangeable at `/token` (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) for a `reader` Bearer token.
-3. If self-registration is disabled, the response includes `claim_token` + `verification_uri`; the agent POSTs to `/agent/identity/claim`, then an operator visits the `verification_uri` (or POSTs to `/agent/identity/verify`) with a `site.admin` Bearer token and the `claim_token` to approve.
+2. If `oauth.allow_reader_self_registration` is enabled, the response is immediately exchangeable at `/token` (`grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer`) for a `read` Bearer token.
+3. If self-registration is disabled, the response includes `claim_token` + `verification_uri`; the agent POSTs to `/agent/identity/claim`, then an operator visits the `verification_uri` (or POSTs to `/agent/identity/verify`) with a `write` Bearer token and the `claim_token` to approve.
 4. The approved assertion then exchanges at `/token` for the configured read token.
 
-Today this flow still yields the internal `content.read` capability. The
-published `reader` / `operator` profile language is an external contract layer,
-not yet a replacement for the underlying scope strings.
-
-Today this flow still yields the internal `content.read` capability. The
-published `reader` / `operator` profile language is an external contract layer,
-not yet a replacement for the underlying scope strings.
+This flow yields the internal `read` scope. The published `reader` / `operator`
+profile language is an external contract layer over the same underlying
+`read`/`write` scope strings, not a separate mechanism.
 
 The POST to `/agent/identity/verify` requires operator authentication via the `Authorization: Bearer <admin-token>` header (or `admin_token` form field for browser submissions).
 

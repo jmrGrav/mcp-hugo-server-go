@@ -21,37 +21,37 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"get_sitemap":          "",
 		"get_feed":             "",
 		"get_site_information": "",
-		"get_page_markdown":    "content.read",
-		"get_page_frontmatter": "content.read",
-		"get_related_content":  "content.read",
-		"build_agent_context":  "content.read",
-		"export_agent_context": "content.read",
-		"get_page_for_edit":    "content.read",
-		"list_content_types":   "content.read",
-		"list_page_assets":     "content.read",
-		"search_content":       "content.read",
-		"explain_structure":    "content.read",
-		"get_site_health":      "content.read",
-		"get_broken_links":     "content.read",
-		"get_backlinks":        "content.read",
-		"suggest_links":        "content.read",
-		"diff_page":            "content.read",
-		"inspect_rendered":     "content.read",
-		"validate_frontmatter": "content.read",
-		"validate_site":        "content.read",
-		"create_page":          "content.write",
-		"update_page":          "content.write",
-		"delete_page":          "content.write",
-		"upload_page_asset":    "content.write",
-		"build_site":           "site.admin",
-		"preview_build":        "site.admin",
-		"run_post_build_hooks": "site.admin",
-		"generate_hero_image":  "site.admin",
-		"check_sri_versions":   "site.admin",
-		"get_runtime_status":   "site.admin",
-		"get_theme_status":     "site.admin",
-		"verify_publication":   "site.admin",
-		"create_preview":       "site.admin",
+		"get_page_markdown":    "",
+		"get_page_frontmatter": "",
+		"get_related_content":  "",
+		"build_agent_context":  "",
+		"export_agent_context": "",
+		"get_page_for_edit":    "",
+		"list_content_types":   "",
+		"list_page_assets":     "",
+		"search_content":       "",
+		"explain_structure":    "",
+		"get_site_health":      "",
+		"get_broken_links":     "",
+		"get_backlinks":        "",
+		"suggest_links":        "",
+		"diff_page":            "",
+		"inspect_rendered":     "",
+		"validate_frontmatter": "",
+		"validate_site":        "",
+		"create_page":          "write",
+		"update_page":          "write",
+		"delete_page":          "write",
+		"upload_page_asset":    "write",
+		"build_site":           "write",
+		"preview_build":        "write",
+		"run_post_build_hooks": "write",
+		"generate_hero_image":  "write",
+		"check_sri_versions":   "write",
+		"get_runtime_status":   "write",
+		"get_theme_status":     "write",
+		"verify_publication":   "write",
+		"create_preview":       "write",
 	}
 
 	got := make(map[string]string, len(want))
@@ -77,25 +77,23 @@ func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
 		t.Fatalf("anonymous tool count = %d, want 9", got)
 	}
 	if got := len(readpkg.Defs()); got != 18 {
-		t.Fatalf("content.read tool count = %d, want 18", got)
+		t.Fatalf("read tool count = %d, want 18", got)
 	}
 	if got := len(writepkg.Defs()); got != 4 {
-		t.Fatalf("content.write tool count = %d, want 4", got)
+		t.Fatalf("write tool count = %d, want 4", got)
 	}
 	if got := len(adminpkg.Defs()); got != 9 {
-		t.Fatalf("site.admin tool count = %d, want 9", got)
+		t.Fatalf("admin (folded into write) tool count = %d, want 9", got)
 	}
 
 	if got := tools.ScopeRank(""); got != 0 {
 		t.Fatalf("ScopeRank(anonymous) = %d, want 0", got)
 	}
-	if got := tools.ScopeRank("content.read"); got != 1 {
-		t.Fatalf("ScopeRank(content.read) = %d, want 1", got)
+	// Per #450, "read" is capability-identical to anonymous: both rank 0.
+	if got := tools.ScopeRank("read"); got != 0 {
+		t.Fatalf("ScopeRank(read) = %d, want 0", got)
 	}
-	if got := tools.ScopeRank("content.write"); got != 2 {
-		t.Fatalf("ScopeRank(content.write) = %d, want 2", got)
-	}
-	if got := tools.ScopeRank("site.admin"); got != 3 {
-		t.Fatalf("ScopeRank(site.admin) = %d, want 3", got)
+	if got := tools.ScopeRank("write"); got != 1 {
+		t.Fatalf("ScopeRank(write) = %d, want 1", got)
 	}
 }

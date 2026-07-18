@@ -54,7 +54,7 @@ func TestRegistryRequiredScopeFor(t *testing.T) {
 	if got, ok := reg.RequiredScopeFor("list_pages"); !ok || got != "" {
 		t.Fatalf("RequiredScopeFor(list_pages) = %q, %v", got, ok)
 	}
-	if got, ok := reg.RequiredScopeFor("validate_site"); !ok || got != "content.read" {
+	if got, ok := reg.RequiredScopeFor("validate_site"); !ok || got != "" {
 		t.Fatalf("RequiredScopeFor(validate_site) = %q, %v", got, ok)
 	}
 	if got, ok := reg.RequiredScopeFor("missing"); ok || got != "" {

@@ -1118,10 +1118,10 @@ func resolveExistingSource(contentRoot, slug, lang string) (contentmodel.Resolve
 // Defs returns the tool definitions for this package (used to build the global registry).
 func Defs() []tools.ToolDef {
 	return []tools.ToolDef{
-		{Name: "create_page", RequiredScope: "content.write"},
-		{Name: "update_page", RequiredScope: "content.write"},
-		{Name: "delete_page", RequiredScope: "content.write"},
-		{Name: "upload_page_asset", RequiredScope: "content.write"},
+		{Name: "create_page", RequiredScope: "write"},
+		{Name: "update_page", RequiredScope: "write"},
+		{Name: "delete_page", RequiredScope: "write"},
+		{Name: "upload_page_asset", RequiredScope: "write"},
 	}
 }
 

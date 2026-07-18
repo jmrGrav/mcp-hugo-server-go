@@ -50,41 +50,44 @@ func TestACLAllowsPublicToolAnonymous(t *testing.T) {
 	}
 }
 
-func TestACLBlocksReadToolForAnonymous(t *testing.T) {
+// TestACLAllowsReadToolForAnonymous documents the #450 scope collapse:
+// get_page_markdown (formerly gated behind "content.read", rank 1) is now
+// RequiredScope: "" (fully public, ungated) — the same rank as anonymous —
+// so it must be allowed even with no caller scope at all. This test used to
+// be TestACLBlocksReadToolForAnonymous, asserting the opposite; that
+// boundary no longer exists by design.
+func TestACLAllowsReadToolForAnonymous(t *testing.T) {
 	p := buildTestPolicy()
 	body := toolsCallBody("get_page_markdown")
-	if p.AllowRequest(body, "") {
-		t.Fatal("expected get_page_markdown to be blocked for anonymous")
+	if !p.AllowRequest(body, "") {
+		t.Fatal("expected get_page_markdown to be allowed for anonymous (ungated per #450)")
 	}
-	if reason := p.DenyReason(body, ""); reason != "forbidden_tool" {
+}
+
+func TestACLAllowsReadToolForRead(t *testing.T) {
+	p := buildTestPolicy()
+	body := toolsCallBody("get_page_markdown")
+	if !p.AllowRequest(body, "read") {
+		t.Fatal("expected get_page_markdown to be allowed for read")
+	}
+}
+
+func TestACLBlocksWriteToolForRead(t *testing.T) {
+	p := buildTestPolicy()
+	body := toolsCallBody("create_page")
+	if p.AllowRequest(body, "read") {
+		t.Fatal("expected create_page to be blocked for read")
+	}
+	if reason := p.DenyReason(body, "read"); reason != "forbidden_tool" {
 		t.Fatalf("expected forbidden_tool, got %q", reason)
 	}
 }
 
-func TestACLAllowsReadToolForContentRead(t *testing.T) {
-	p := buildTestPolicy()
-	body := toolsCallBody("get_page_markdown")
-	if !p.AllowRequest(body, "content.read") {
-		t.Fatal("expected get_page_markdown to be allowed for content.read")
-	}
-}
-
-func TestACLBlocksWriteToolForContentRead(t *testing.T) {
+func TestACLAllowsWriteToolForWrite(t *testing.T) {
 	p := buildTestPolicy()
 	body := toolsCallBody("create_page")
-	if p.AllowRequest(body, "content.read") {
-		t.Fatal("expected create_page to be blocked for content.read")
-	}
-	if reason := p.DenyReason(body, "content.read"); reason != "forbidden_tool" {
-		t.Fatalf("expected forbidden_tool, got %q", reason)
-	}
-}
-
-func TestACLAllowsWriteToolForContentWrite(t *testing.T) {
-	p := buildTestPolicy()
-	body := toolsCallBody("create_page")
-	if !p.AllowRequest(body, "content.write") {
-		t.Fatal("expected create_page to be allowed for content.write")
+	if !p.AllowRequest(body, "write") {
+		t.Fatal("expected create_page to be allowed for write")
 	}
 }
 
@@ -101,6 +104,9 @@ func TestACLUnknownTool(t *testing.T) {
 
 func TestACLBatchWithForbidden(t *testing.T) {
 	p := buildTestPolicy()
+	// get_page_markdown is ungated (RequiredScope: "") per #450, so it can no
+	// longer stand in for "forbidden for anonymous" — use a write tool
+	// instead, which still requires a "write" scope anonymous callers lack.
 	body := mustMarshal([]any{
 		map[string]any{
 			"jsonrpc": "2.0", "id": 1,
@@ -110,7 +116,7 @@ func TestACLBatchWithForbidden(t *testing.T) {
 		map[string]any{
 			"jsonrpc": "2.0", "id": 2,
 			"method": "tools/call",
-			"params": map[string]any{"name": "get_page_markdown"},
+			"params": map[string]any{"name": "create_page"},
 		},
 	})
 	if p.AllowRequest(body, "") {
@@ -206,12 +212,16 @@ func TestACLAllPublicToolsAllowedForAnonymous(t *testing.T) {
 func TestACLWriteScopeBlockedForRead(t *testing.T) {
 	p := buildTestPolicy()
 	body := toolsCallBody("delete_page")
-	if p.AllowRequest(body, "content.read") {
-		t.Fatal("content.read must not call delete_page (content.write scope required)")
+	if p.AllowRequest(body, "read") {
+		t.Fatal("read must not call delete_page (write scope required)")
 	}
 }
 
-func TestACLSiteAdminBlockedForWrite(t *testing.T) {
+// TestACLFormerSiteAdminToolNowRequiresWrite documents the #450 fold: tools
+// that used to require a separate "site.admin" scope (rank 3 in the old
+// 4-tier model) are now RequiredScope: "write" with no exceptions, and
+// "write" (rank 1, now the top rank) is the only scope that can call them.
+func TestACLFormerSiteAdminToolNowRequiresWrite(t *testing.T) {
 	reg := tools.NewRegistry()
 	for _, d := range toolsanon.Defs() {
 		reg.Register(d)
@@ -222,14 +232,14 @@ func TestACLSiteAdminBlockedForWrite(t *testing.T) {
 	for _, d := range toolswrite.Defs() {
 		reg.Register(d)
 	}
-	reg.Register(tools.ToolDef{Name: "build_site", RequiredScope: "site.admin"})
+	reg.Register(tools.ToolDef{Name: "build_site", RequiredScope: "write"})
 
 	p2 := oauth.NewScopePolicy(reg)
 	body := toolsCallBody("build_site")
-	if p2.AllowRequest(body, "content.write") {
-		t.Fatal("content.write must not call build_site (site.admin scope required)")
+	if p2.AllowRequest(body, "read") {
+		t.Fatal("read must not call build_site (write scope required)")
 	}
-	if !p2.AllowRequest(body, "site.admin") {
-		t.Fatal("site.admin must be able to call build_site")
+	if !p2.AllowRequest(body, "write") {
+		t.Fatal("write must be able to call build_site")
 	}
 }

@@ -160,7 +160,7 @@ func TestPreviewBuildRegisteredInSiteAdmin(t *testing.T) {
 	for _, d := range defs {
 		if d.Name == "preview_build" {
 			found = true
-			if d.RequiredScope != "site.admin" {
+			if d.RequiredScope != "write" {
 				t.Fatalf("preview_build scope = %q", d.RequiredScope)
 			}
 		}

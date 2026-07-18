@@ -6,8 +6,10 @@ by trial and error.
 
 Access terminology in this document:
 
-- `reader` = public-safe read-only access profile
-- `operator` = reader profile plus write and site operations
+- `reader` = read-only access profile (internal scope `read`; full
+  visibility, drafts included — see `docs/mcp-contract.md` §6.12)
+- `operator` = reader profile plus write and site operations (internal
+  scope `write`, which implies `read`)
 
 The per-tool notes below still reference the current internal scopes where that
 detail matters for runtime setup.
@@ -19,7 +21,7 @@ detail matters for runtime setup.
 | Scenario | Tool | Notes |
 |---|---|---|
 | Read a published page (summary + HTML) | `get_page` | No auth needed |
-| Read a page's source Markdown for editing | `get_page_markdown` | Needs `content.read`; includes `page.state` |
+| Read a page's source Markdown for editing | `get_page_markdown` | Needs a Bearer token (ungated, any scope works); includes `page.state` |
 | Get a full context bundle before editing | `build_agent_context` | Frontmatter + Markdown + related + `context.state` |
 | Get a compact edit bundle in one call | `get_page_for_edit` | Frontmatter + Markdown + `state` + `quality` + `revision`; shape with `include`/`max_body_chars` |
 | Bulk-export content for analysis | `export_agent_context` | Tag/category filter + pagination + per-page `state` |
@@ -47,7 +49,7 @@ detail matters for runtime setup.
 | **Build (publish changes)** | `build_site` | Required after write ops |
 | Preview the build output | `preview_build` | Dry-run build |
 | Run post-build hooks (CDN purge, etc.) | `run_post_build_hooks` | After `build_site` |
-| Generate a featured image | `generate_hero_image` | site.admin scope |
+| Generate a featured image | `generate_hero_image` | write scope |
 
 ---
 
@@ -141,7 +143,7 @@ Need to VALIDATE?
 
 | | `search_pages` | `search_content` |
 |---|---|---|
-| Auth | None required | `content.read` |
+| Auth | None required | None required (ungated per #450) |
 | Filters | Query only | type, tag, category, language, sort, order |
 | Pagination | None | limit, offset, total in response |
 | Envelope | Flat `{pages}` | Structured `{success, data, warnings, errors}` |
@@ -151,7 +153,7 @@ Need to VALIDATE?
 
 | | `get_page` | `get_page_markdown` | `build_agent_context` |
 |---|---|---|---|
-| Auth | None | `content.read` | `content.read` |
+| Auth | None | None required (ungated per #450) | None required (ungated per #450) |
 | Returns | Published HTML + metadata | Source Markdown + frontmatter | Frontmatter + Markdown + related pages |
 | Source fallback | Yes (`allow_source_fallback`) | Published only | Published only |
 | Use when | Reading/display | About to edit | Full context before editing/summarizing |

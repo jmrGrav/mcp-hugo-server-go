@@ -94,8 +94,8 @@ clients:
 		if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 			t.Fatalf("token(%s) decode: %v", redirectURI, err)
 		}
-		if tokenResp.Scope != "site.admin" {
-			t.Fatalf("token(%s) scope = %q want site.admin", redirectURI, tokenResp.Scope)
+		if tokenResp.Scope != "write" {
+			t.Fatalf("token(%s) scope = %q want write", redirectURI, tokenResp.Scope)
 		}
 	}
 }
@@ -182,8 +182,9 @@ clients:
 		t.Fatalf("LoadClientRegistry() error = %v", err)
 	}
 
-	// Request a wider scope (site.admin) than the client is allowed (content.read).
-	// Server must clamp to content.read and issue a code, not reject with invalid_scope.
+	// Request a wider scope (site.admin, a legacy alias for write) than the
+	// client is allowed (read). Server must clamp to read and issue a
+	// code, not reject with invalid_scope.
 	authReq := httptest.NewRequest(http.MethodGet, "/authorize?"+url.Values{
 		"response_type":         {"code"},
 		"client_id":             {"chatgpt-read"},
