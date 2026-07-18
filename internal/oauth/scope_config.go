@@ -120,6 +120,16 @@ func highestMatchedScope(scopes []string) string {
 	return highest
 }
 
+// requestedScope resolves a space-delimited scope string (from an /authorize
+// or /token request) to the single highest-ranked recognized scope. Per RFC
+// 6749 §3.3, an authorization server MAY ignore scope values it doesn't
+// recognize rather than rejecting the whole request: a token that fails
+// normalizeConfiguredScope is skipped, not fatal, so a request mixing valid
+// and not-yet-recognized tokens still resolves using the valid ones. Only
+// erroring when every single token is unrecognized avoids repeating the
+// 2026-07-18 "reader" outage class for the next value scopes_supported gains
+// before this switch is updated to match it (see normalizeConfiguredScope's
+// doc comment for that incident).
 func requestedScope(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -129,17 +139,20 @@ func requestedScope(raw string) (string, error) {
 	if len(parts) == 0 {
 		return "", nil
 	}
-	highest := "content.read"
-	highestRank := 0
+	highest := ""
+	highestRank := -1
 	for _, part := range parts {
 		scope, err := normalizeConfiguredScope(part)
 		if err != nil {
-			return "", err
+			continue
 		}
 		if rank := tools.ScopeRank(scope); rank > highestRank {
 			highest = scope
 			highestRank = rank
 		}
+	}
+	if highestRank < 0 {
+		return "", fmt.Errorf("invalid_scope: no recognized scope token in %q", raw)
 	}
 	return highest, nil
 }
