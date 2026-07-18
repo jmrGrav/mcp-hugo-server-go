@@ -267,7 +267,7 @@ func TestParseToolErrorRejectsNonMachinePrefix(t *testing.T) {
 
 func TestErrorResultPopulatesStructuredContent(t *testing.T) {
 	meta := NewMeta("1.4.0", time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC))
-	res := ErrorResult(fmt.Errorf("invalid_params: slug must not be empty"), meta, nil, nil)
+	res := ErrorResult(fmt.Errorf("invalid_params: slug must not be empty"), meta, nil, nil, nil)
 	if res == nil {
 		t.Fatal("ErrorResult() = nil")
 	}
@@ -303,7 +303,7 @@ func TestErrorResultPopulatesStructuredContent(t *testing.T) {
 
 func TestErrorResultUsesHumanReadableTextContent(t *testing.T) {
 	meta := NewMeta("1.4.0", time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC))
-	res := ErrorResult(fmt.Errorf("not_found: page not found"), meta, nil, nil)
+	res := ErrorResult(fmt.Errorf("not_found: page not found"), meta, nil, nil, nil)
 	if len(res.Content) != 1 {
 		t.Fatalf("len(Content) = %d, want 1", len(res.Content))
 	}
@@ -316,5 +316,29 @@ func TestErrorResultUsesHumanReadableTextContent(t *testing.T) {
 	}
 	if json.Valid([]byte(text.Text)) {
 		t.Fatalf("text = %q, want human-readable text not serialized JSON blob", text.Text)
+	}
+}
+
+func TestErrorResultMirrorsCompatFieldsIntoRootAndData(t *testing.T) {
+	meta := NewMeta("1.4.0", time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC))
+	fields := map[string]any{"rate_limit_remaining": 59}
+	res := ErrorResult(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"), meta, nil, fields, fields)
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal StructuredContent: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("unmarshal StructuredContent: %v", err)
+	}
+	if got := decoded["rate_limit_remaining"]; got != float64(59) {
+		t.Fatalf("root rate_limit_remaining = %v, want 59", got)
+	}
+	data, ok := decoded["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", decoded["data"])
+	}
+	if got := data["rate_limit_remaining"]; got != float64(59) {
+		t.Fatalf("data.rate_limit_remaining = %v, want 59", got)
 	}
 }

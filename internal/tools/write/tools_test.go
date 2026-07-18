@@ -117,6 +117,16 @@ func decodeWriteErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]
 	return m
 }
 
+func decodeWriteErrorData(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	env := decodeWriteErrorEnvelope(t, res)
+	data, ok := env["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("error data type = %T, want map[string]any", env["data"])
+	}
+	return data
+}
+
 func assertWritePageState(t *testing.T, raw any, source, build, public, index string) {
 	t.Helper()
 	state, ok := raw.(map[string]any)
@@ -940,6 +950,10 @@ func TestUpdatePageRequiresExpectedRevisionForWrite(t *testing.T) {
 	if got := m["rate_limit_remaining"]; got != wantRemaining {
 		t.Fatalf("update_page missing expected_revision rate_limit_remaining = %v, want %v", got, wantRemaining)
 	}
+	data := decodeWriteErrorData(t, res)
+	if got := data["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("update_page missing expected_revision data.rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
 }
 
 func TestUpdatePageRejectsStaleExpectedRevision(t *testing.T) {
@@ -975,6 +989,10 @@ func TestUpdatePageRejectsStaleExpectedRevision(t *testing.T) {
 	if got := m["rate_limit_remaining"]; got != wantRemaining {
 		t.Fatalf("update_page stale revision rate_limit_remaining = %v, want %v", got, wantRemaining)
 	}
+	data := decodeWriteErrorData(t, res)
+	if got := data["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("update_page stale revision data.rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
 }
 
 func TestDeletePageRequiresExpectedRevisionForWrite(t *testing.T) {
@@ -1005,6 +1023,10 @@ func TestDeletePageRequiresExpectedRevisionForWrite(t *testing.T) {
 	wantRemaining := float64(config.Default().RateLimit.DestructivePerMin) // limiter inspected but not consumed before this validation error
 	if got := m["rate_limit_remaining"]; got != wantRemaining {
 		t.Fatalf("delete_page missing expected_revision rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
+	data := decodeWriteErrorData(t, res)
+	if got := data["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("delete_page missing expected_revision data.rate_limit_remaining = %v, want %v", got, wantRemaining)
 	}
 }
 

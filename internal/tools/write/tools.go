@@ -443,9 +443,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithRootFields(wrapErr(err), map[string]any{
+			fields := map[string]any{
 				"rate_limit_remaining": rateLimitRemaining(limiter),
-			})
+			}
+			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
 		}
 		if !limiter.Allow() {
 			return nil, createPageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("create_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
@@ -656,9 +657,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithRootFields(wrapErr(err), map[string]any{
+			fields := map[string]any{
 				"rate_limit_remaining": rateLimitRemaining(limiter),
-			})
+			}
+			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
 		}
 		if !limiter.Allow() {
 			return nil, updatePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
@@ -905,9 +907,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithRootFields(wrapErr(err), map[string]any{
+			fields := map[string]any{
 				"rate_limit_remaining": rateLimitRemaining(limiter),
-			})
+			}
+			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
 		}
 
 		// dry_run: return page content + backlinks that would break, without touching disk (#267).
