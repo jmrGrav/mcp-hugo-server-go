@@ -320,7 +320,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"Pass content_only=true to return just the article body (prefers the theme's id=\"content\" wrapper when present, excluding title, TOC, post metadata, share buttons, and prev/next navigation; falls back to <article>/<main>/<body>-minus-chrome otherwise) from the rendered HTML of published pages "+
 			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; if `content_only=true` is also set, the `html` field is returned empty for source-only fallback results). "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
-			"For the raw Markdown source, use get_page_markdown (requires content.read). "+
+			"For the raw Markdown source, use get_page_markdown (requires content.read); for metadata only (no body), use get_page_frontmatter; if you're about to edit or delete this page, use get_page_for_edit instead — it bundles frontmatter, markdown, revision, and quality signals in one call. "+
 			"Does not require authentication.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
 			if idx == nil && srcIdx == nil {
