@@ -277,15 +277,31 @@ func (idx *SourceIndex) rebuildMaps() {
 	}
 }
 
+// langFromRel extracts the language code from a bundle-style filename
+// ("index.<lang>.md", possibly nested — "posts/slug/index.en.md") or a Hugo
+// section-index filename ("_index.<lang>.md", including at content root for
+// the site's homepage — "_index.en.md"). Both prefixes are checked against
+// the basename only, so this works regardless of directory depth.
 func langFromRel(rel string) string {
 	rel = filepath.ToSlash(rel)
-	if i := strings.LastIndex(rel, "/index."); i >= 0 {
-		after := rel[i+len("/index."):]
-		if strings.HasSuffix(after, ".md") {
-			lang := strings.TrimSuffix(after, ".md")
-			if len(lang) >= 2 && len(lang) <= 5 {
-				return lang
-			}
+	base := rel
+	if i := strings.LastIndex(rel, "/"); i >= 0 {
+		base = rel[i+1:]
+	}
+	var prefix string
+	switch {
+	case strings.HasPrefix(base, "index."):
+		prefix = "index."
+	case strings.HasPrefix(base, "_index."):
+		prefix = "_index."
+	default:
+		return ""
+	}
+	after := strings.TrimPrefix(base, prefix)
+	if strings.HasSuffix(after, ".md") {
+		lang := strings.TrimSuffix(after, ".md")
+		if len(lang) >= 2 && len(lang) <= 5 {
+			return lang
 		}
 	}
 	return ""

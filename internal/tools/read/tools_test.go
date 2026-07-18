@@ -365,6 +365,98 @@ func TestListContentTypesMergesArchetypeAndObservedSections(t *testing.T) {
 	}
 }
 
+// TestListContentTypesExcludesSectionIndexFiles is a regression test for
+// #457: _index.en/_index.fr section-index files must not appear in
+// content_types (an agent shouldn't be able to infer they're a creatable
+// content type), but must still be discoverable, now under special_files.
+func TestListContentTypesExcludesSectionIndexFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Root-level homepage section index, two languages.
+	write("content/_index.en.md", "---\ntitle: Home\n---\nHome EN.\n")
+	write("content/_index.fr.md", "---\ntitle: Accueil\n---\nHome FR.\n")
+	// "posts" section index, two languages, plus one real post.
+	write("content/posts/_index.en.md", "---\ntitle: Posts\n---\n")
+	write("content/posts/_index.fr.md", "---\ntitle: Articles\n---\n")
+	write("content/posts/a/index.en.md", "---\ntitle: A\n---\nBody A.\n")
+
+	src, err := hugosite.NewSourceIndex(filepath.Join(root, "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join(root, "content")
+	cfg.HugoRoot = root
+	session, done := newTestClientWithCfg(t, idx, cfg, src)
+	defer done()
+
+	res := callTool(t, session, "list_content_types", map[string]any{})
+	if res.IsError {
+		t.Fatalf("list_content_types returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	types, _ := m["content_types"].([]any)
+	for _, raw := range types {
+		ct, _ := raw.(map[string]any)
+		if name, _ := ct["name"].(string); strings.HasPrefix(name, "_index") {
+			t.Fatalf("list_content_types: %q must not appear as a content type", name)
+		}
+	}
+	posts, ok := func() (map[string]any, bool) {
+		for _, raw := range types {
+			ct, _ := raw.(map[string]any)
+			if ct["name"] == "posts" {
+				return ct, true
+			}
+		}
+		return nil, false
+	}()
+	if !ok {
+		t.Fatal("list_content_types: missing 'posts' (its section index must not have swallowed it)")
+	}
+	if count, _ := posts["page_count"].(float64); count != 1 {
+		t.Fatalf("list_content_types posts.page_count = %v, want 1 (section index excluded)", posts["page_count"])
+	}
+
+	special, ok := m["special_files"].([]any)
+	if !ok || len(special) != 2 {
+		t.Fatalf("list_content_types special_files = %v, want 2 entries (root + posts)", m["special_files"])
+	}
+	bySection := make(map[string]map[string]any, len(special))
+	for _, raw := range special {
+		sf, _ := raw.(map[string]any)
+		bySection[sf["section"].(string)] = sf
+	}
+	root0, ok := bySection[""]
+	if !ok {
+		t.Fatal("list_content_types special_files: missing root/home section index")
+	}
+	if root0["kind"] != "section_index" {
+		t.Fatalf("list_content_types special_files root.kind = %v, want section_index", root0["kind"])
+	}
+	rootLangs, _ := root0["languages"].([]any)
+	if len(rootLangs) != 2 {
+		t.Fatalf("list_content_types special_files root.languages = %v, want [en fr]", rootLangs)
+	}
+	postsIdx, ok := bySection["posts"]
+	if !ok {
+		t.Fatal("list_content_types special_files: missing posts section index")
+	}
+	postsLangs, _ := postsIdx["languages"].([]any)
+	if len(postsLangs) != 2 {
+		t.Fatalf("list_content_types special_files posts.languages = %v, want [en fr]", postsLangs)
+	}
+}
+
 func TestListPageAssetsListsSiblingFilesInBundle(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel string, data []byte) {

@@ -33,6 +33,13 @@ func TestSourceIndexTaxonomyAndLangHelpers(t *testing.T) {
 		"posts/a/index.en-US.md": "en-US",
 		"posts/a/index.md":       "",
 		"posts/a/flat.en.md":     "",
+		// Hugo section-index files (#457): must resolve the same as bundle
+		// index.<lang>.md, at any depth including content root (homepage).
+		"_index.en.md":       "en",
+		"_index.fr.md":       "fr",
+		"_index.md":          "",
+		"posts/_index.en.md": "en",
+		"posts/_index.md":    "",
 	}
 	for rel, want := range cases {
 		if got := langFromRel(rel); got != want {
