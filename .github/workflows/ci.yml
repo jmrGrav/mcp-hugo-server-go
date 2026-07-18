@@ -49,8 +49,9 @@ jobs:
 
   # Boot the real binary with a synthetic config and assert all 7 IsItAgentReady
   # discovery endpoints respond correctly, and that scopes_supported contains
-  # site.admin but NOT system.admin. This catches "compiles but panics on start"
-  # regressions and scope collapse regressions before any code reaches production.
+  # exactly read/write (#450) and none of the pre-#450 scope strings. This
+  # catches "compiles but panics on start" regressions and scope collapse
+  # regressions before any code reaches production.
   boot-check:
     runs-on: ubuntu-latest
     steps:
@@ -71,11 +72,14 @@ jobs:
               client_secret: boot-check-secret-long-enough-value
               redirect_uris:
                 - https://claude.ai/api/mcp/auth_callback
-              scope: site.admin
+              scope: write
             - client_id: chatgpt-write
               client_secret: boot-check-secret-long-enough-value
               redirect_uris:
                 - https://chatgpt.com/connector/oauth/*
+              # Deliberately kept as the pre-#450 legacy scope string here
+              # (not "write") to prove oauth.CanonicalScope's config-time
+              # aliasing still resolves an un-migrated yaml entry correctly.
               scope: content.write
           YAML
 
@@ -136,37 +140,45 @@ jobs:
           # /mcp with OAuth enabled → 401 challenge (correct behaviour)
           check "MCP endpoint (401=correct)" "$BASE/mcp"                                     "401"
           [[ $fail -eq 0 ]] || exit 1
-      - name: scopes_supported — site.admin present, system.admin absent
+      - name: scopes_supported — read/write present, pre-#450 scopes absent
         run: |
           SCOPES=$(curl -sf http://127.0.0.1:8765/.well-known/oauth-authorization-server | \
             python3 -c "import sys,json; d=json.load(sys.stdin); print(' '.join(d.get('scopes_supported',[])))")
           echo "scopes_supported: $SCOPES"
-          if echo "$SCOPES" | grep -qw "system.admin"; then
-            echo "FAIL scopes_supported must not contain system.admin (scope collapse regression)" >&2
-            exit 1
-          fi
-          echo "OK   system.admin absent from scopes_supported"
-          if ! echo "$SCOPES" | grep -qw "site.admin"; then
-            echo "FAIL scopes_supported must contain site.admin" >&2
-            exit 1
-          fi
-          echo "OK   site.admin present in scopes_supported"
-      - name: Scope clamping — claude-admin requesting system.admin gets code not error
+          for legacy in reader content.read content.write site.admin system.admin; do
+            if echo "$SCOPES" | grep -qw "$legacy"; then
+              echo "FAIL scopes_supported must not contain legacy scope '$legacy' (scope collapse regression, #450)" >&2
+              exit 1
+            fi
+          done
+          echo "OK   no pre-#450 legacy scopes advertised"
+          for want in read write; do
+            if ! echo "$SCOPES" | grep -qw "$want"; then
+              echo "FAIL scopes_supported must contain '$want'" >&2
+              exit 1
+            fi
+          done
+          echo "OK   read and write present in scopes_supported"
+      - name: Scope clamping — claude-admin requesting legacy scope tokens gets code not error
         run: |
           VERIFIER="boot-check-verifier-long-enough-value"
           CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | openssl base64 | tr '+/' '-_' | tr -d '=')
-          PARAMS="response_type=code&client_id=claude-admin&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback&state=boot&scope=content.read+content.write+site.admin+system.admin&code_challenge=${CHALLENGE}&code_challenge_method=S256"
+          # Deliberately requests the full pre-#450 legacy scope list (not
+          # "read write") to prove oauth.CanonicalScope's request-time
+          # aliasing still resolves an old/cached scope string correctly —
+          # this is the exact mechanism the #448/#449 outage broke.
+          PARAMS="response_type=code&client_id=claude-admin&redirect_uri=https%3A%2F%2Fclaude.ai%2Fapi%2Fmcp%2Fauth_callback&state=boot&scope=reader+content.read+content.write+site.admin+system.admin&code_challenge=${CHALLENGE}&code_challenge_method=S256"
           LOC=$(curl -sk -o /dev/null -w '%{redirect_url}' "http://127.0.0.1:8765/authorize?${PARAMS}")
           echo "Location: $LOC"
           if echo "$LOC" | grep -q "error="; then
-            echo "FAIL authorize returned error in Location (scope clamping broken)" >&2
+            echo "FAIL authorize returned error in Location (legacy scope aliasing broken)" >&2
             exit 1
           fi
           if ! echo "$LOC" | grep -q "code="; then
             echo "FAIL authorize Location missing code" >&2
             exit 1
           fi
-          echo "OK   scope clamping works — code issued, no error"
+          echo "OK   legacy scope tokens resolved — code issued, no error"
       - name: Agent-ready shell smoke matches canonical scope contract
         run: bash scripts/test-check-agent-ready.sh
       - name: Agent-ready www reference surface stays coherent

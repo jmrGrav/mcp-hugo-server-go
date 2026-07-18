@@ -66,12 +66,12 @@ func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 	assertion := "arleo_assert_" + randomString(32)
 	now := time.Now()
 	assertionExpires := now.Add(time.Hour)
-	issuedScope := "content.read"
+	issuedScope := "read"
 	claimed := false
 	claimToken := ""
 	claimExpires := time.Time{}
 	if s.cfg.AllowReaderSelfRegistration {
-		issuedScope = "reader"
+		issuedScope = "read"
 		claimed = true
 	} else {
 		claimToken = "clm_" + randomString(24)
@@ -107,8 +107,8 @@ func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 		PreClaimScopes:    []string{},
 		PostClaimScopes:   []string{issuedScope},
 	}
-	if issuedScope == "reader" {
-		resp.PreClaimScopes = []string{"reader"}
+	if claimed {
+		resp.PreClaimScopes = []string{"read"}
 		return resp, nil
 	}
 	resp.ClaimURL = issuer + "/agent/identity/claim"
@@ -141,7 +141,7 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 	token := randomString(32)
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
 	if reg.IssuedScope == "" {
-		reg.IssuedScope = "content.read"
+		reg.IssuedScope = "read"
 	}
 	if err := s.store.AddAccessToken(HashToken(token), reg.IssuedScope, time.Now().Add(ttl)); err != nil {
 		return nil, fmt.Errorf("server_error: store token: %w", err)
@@ -275,7 +275,7 @@ func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 <html lang="en"><head><meta charset="utf-8"><title>Agent Identity Verification</title></head>
 <body>
 <h1>Agent Identity Verification</h1>
-<p>An agent is requesting access. Operator approval is required (site.admin or system.admin token).</p>
+<p>An agent is requesting access. Operator approval is required (write token).</p>
 <form method="POST" action="/agent/identity/verify">
   <label>Admin token: <input type="password" name="admin_token" size="40" required></label><br>
   <label>Claim token: <input type="text" name="claim_token" value="%s" size="40" required></label><br>
@@ -283,7 +283,7 @@ func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 </form>
 </body></html>`, html.EscapeString(claimToken))
 	case http.MethodPost:
-		// Operator must authenticate with a site.admin or system.admin Bearer token.
+		// Operator must authenticate with a write-scope Bearer token.
 		// Accept it via Authorization header (API callers) or admin_token form field
 		// (browser form submissions, which cannot set custom headers).
 		adminToken := strings.TrimSpace(strings.TrimPrefix(
@@ -302,10 +302,10 @@ func (s *Service) HandleAgentVerify(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		scope, _, ok := s.ValidateBearerDetails(adminToken)
-		if !ok || !tools.IsAdminScope(scope) {
+		if !ok || !tools.IsWriteScope(scope) {
 			audit.Warn(audit.EventScopeDenied, "denied", "context", "agent_claim_verify", "scope", scope)
 			w.Header().Set("WWW-Authenticate", `Bearer realm="agent-verify", error="insufficient_scope"`)
-			http.Error(w, "forbidden: site.admin or system.admin scope required", http.StatusForbidden)
+			http.Error(w, "forbidden: write scope required", http.StatusForbidden)
 			return
 		}
 

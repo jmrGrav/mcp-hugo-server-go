@@ -1,7 +1,7 @@
 package tools
 
 // KnownScopes lists every scope this server may issue or enforce.
-var KnownScopes = []string{"reader", "content.read", "content.write", "site.admin"}
+var KnownScopes = []string{"read", "write"}
 
 type ToolDef struct {
 	Name          string
@@ -54,12 +54,10 @@ func scopeRank(scope string) int {
 	switch scope {
 	case "":
 		return 0
-	case "content.read", "reader":
+	case "read":
+		return 0
+	case "write":
 		return 1
-	case "content.write":
-		return 2
-	case "site.admin":
-		return 3
 	default:
 		return -1
 	}
@@ -67,10 +65,8 @@ func scopeRank(scope string) int {
 
 // ScopeRank returns the integer rank of a known scope:
 //
-//	0  anonymous / ""
-//	1  content.read
-//	2  content.write
-//	3  site.admin (highest; system.admin is an alias)
+//	0  anonymous / "" / read
+//	1  write (highest)
 //	0  unknown scope (treated as anonymous)
 func ScopeRank(scope string) int {
 	r := scopeRank(scope)
@@ -80,7 +76,7 @@ func ScopeRank(scope string) int {
 	return r
 }
 
-// IsAdminScope reports whether scope carries site.admin or system.admin privileges.
-func IsAdminScope(scope string) bool {
-	return ScopeRank(scope) >= 3
+// IsWriteScope reports whether scope carries write privileges.
+func IsWriteScope(scope string) bool {
+	return ScopeRank(scope) >= 1
 }

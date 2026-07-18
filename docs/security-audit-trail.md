@@ -64,11 +64,11 @@ of which line it's attached to, carries:
   when `allow_reader_self_registration` is enabled), `claim_approved` (an
   operator approved a pending claim), `claim_failed` (invalid/expired claim
   token, or an operator token with insufficient scope attempted approval).
-- **`mutation`** — a `content.write` tool call outcome (`create_page`,
+- **`mutation`** — a `write`-scoped tool call outcome on a content-mutation tool (`create_page`,
   `update_page`, `delete_page`). Tagged onto the existing per-call
   `tool_call` log line (see `internal/observability`) rather than a
   duplicate log entry.
-- **`admin_operation`** — a `site.admin` tool call outcome (`build_site`,
+- **`admin_operation`** — a `write`-scoped tool call outcome on a site-operation tool (`build_site`,
   `preview_build`, `run_post_build_hooks`, `generate_hero_image`,
   `check_sri_versions`, `get_runtime_status`, `get_theme_status`). Same
   tagging mechanism as `mutation`. Also carries `"degraded":true` when a
@@ -76,7 +76,7 @@ of which line it's attached to, carries:
   (e.g. `build_site` succeeding with a failed post-build callback) — this
   is the "degraded admin operation" the issue's scope explicitly asks for.
 
-`content.read`/anonymous tool calls are **not** tagged with an `event_type`
+`read`/anonymous tool calls are **not** tagged with an `event_type`
 — they still produce the existing `tool_call` log line (tool name, scope,
 duration, result class), but are not treated as security-audit events. This
 matches the issue's own non-goal: "no requirement to log every successful
@@ -87,7 +87,7 @@ security-relevant signal in noise.
 ## What is deliberately never logged
 
 - Raw bearer tokens or any other secret. Only `scope` (a coarse tier name
-  like `content.write`) is logged, never the token value.
+  like `write`) is logged, never the token value.
 - Absolute host filesystem paths. `target`-shaped fields are logical
   identifiers (a slug, a tool name), consistent with the rest of this
   server's response contract (see `docs/mcp-contract.md`).

@@ -118,7 +118,7 @@ follow-up (`#346`) since it requires the baseline checkout to mirror `content_ro
 
 ### `get_runtime_status` (landed via #344)
 
-`get_runtime_status` (`site.admin`) reports a `git` sub-object that honors
+`get_runtime_status` (`write`) reports a `git` sub-object that honors
 `git_baseline.mode`:
 
 - `mode: disabled` short-circuits before any host probing; `available` is

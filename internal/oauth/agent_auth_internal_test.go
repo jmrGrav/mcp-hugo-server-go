@@ -28,8 +28,8 @@ func newAgentTestService() (*Service, storage.Store) {
 
 func TestAgentAuthHelperBranches(t *testing.T) {
 	svc, store := newAgentTestService()
-	if !tools.IsAdminScope("site.admin") || tools.IsAdminScope("content.read") {
-		t.Fatal("tools.IsAdminScope() returned unexpected result")
+	if !tools.IsWriteScope("write") || tools.IsWriteScope("read") {
+		t.Fatal("tools.IsWriteScope() returned unexpected result")
 	}
 
 	resp, err := svc.registerAgentAnonymous()

@@ -1,5 +1,19 @@
 # Access Model Design
 
+> **Superseded by #450.** This document was the design anchor for the
+> pre-#450 migration path (issue `#352`) and described a *target* external
+> `reader`/`operator` model while still enforcing four internal scope tiers
+> (`content.read`, `content.write`, `site.admin`) during v1.x. #450 shipped a
+> different, simpler resolution than "Non-negotiable invariants" §2-4 below
+> anticipated: it collapsed straight to two internal scopes, `read`/`write`
+> (`read` = full visibility, drafts included — an explicit operator
+> risk-acceptance decision, not the "public-safe reader" profile this
+> document assumed), and **write** now implies **read** with no third tier.
+> See `docs/mcp-contract.md` §6.12 for the current, authoritative model.
+> The rest of this document is kept as historical design record — the tool
+> matrix below reflects the pre-#450 internal scopes and no longer matches
+> the live `RequiredScope` values.
+
 This document is the design anchor for issue `#352`.
 
 It does **not** change authorization semantics on its own. Its job is to pin

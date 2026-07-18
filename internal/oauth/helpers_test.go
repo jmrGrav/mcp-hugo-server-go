@@ -185,18 +185,20 @@ func TestPurgeExpired(t *testing.T) {
 }
 
 func TestScopeConfigurationHelpers(t *testing.T) {
-	// system.admin is an alias for site.admin; dedup produces 3 unique scopes
+	// Per #450, all legacy 4-tier scope strings (including "system.admin",
+	// an alias for the old "site.admin") canonicalize down to just "read"
+	// and "write"; dedup now produces exactly 2 unique scopes.
 	scopes, err := normalizeConfiguredScopes([]string{"system.admin", "content.write", "read"}, "site.admin")
 	if err != nil {
 		t.Fatalf("normalizeConfiguredScopes() error = %v", err)
 	}
-	if len(scopes) != 3 || scopes[0] != "content.read" || scopes[1] != "content.write" || scopes[2] != "site.admin" {
+	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "write" {
 		t.Fatalf("normalizeConfiguredScopes() = %#v", scopes)
 	}
-	if got := highestConfiguredScope(scopes); got != "site.admin" {
+	if got := highestConfiguredScope(scopes); got != "write" {
 		t.Fatalf("highestConfiguredScope() = %q", got)
 	}
-	if got, err := requestedScope("content.read content.write"); err != nil || got != "content.write" {
+	if got, err := requestedScope("content.read content.write"); err != nil || got != "write" {
 		t.Fatalf("requestedScope() = %q, %v", got, err)
 	}
 	if got, err := requestedScope("unknown"); err == nil || got != "" {
@@ -205,44 +207,43 @@ func TestScopeConfigurationHelpers(t *testing.T) {
 	// Reproduces a real production outage (2026-07-18): Claude.ai's
 	// /authorize request echoed the full advertised scopes_supported list
 	// back verbatim as its scope parameter — and "reader" (part of
-	// tools.KnownScopes, published in scopes_supported) was not accepted
-	// by requestedScope/normalizeConfiguredScope, so the whole authorize
-	// call failed with invalid_scope. "reader" must be accepted here, and
-	// a higher-ranked scope in the same list must still win.
-	if got, err := requestedScope("reader content.read content.write site.admin"); err != nil || got != "site.admin" {
-		t.Fatalf(`requestedScope("reader content.read content.write site.admin") = %q, %v, want "site.admin", nil`, got, err)
+	// tools.KnownScopes at the time, published in scopes_supported) was not
+	// accepted by requestedScope/normalizeConfiguredScope, so the whole
+	// authorize call failed with invalid_scope. "reader" must still be
+	// accepted here (now as a legacy alias resolved to "read" by
+	// CanonicalScope), and a higher-ranked scope in the same list must
+	// still win.
+	if got, err := requestedScope("reader content.read content.write site.admin"); err != nil || got != "write" {
+		t.Fatalf(`requestedScope("reader content.read content.write site.admin") = %q, %v, want "write", nil`, got, err)
 	}
-	// "reader" alone must stay "reader", NOT get folded into
-	// "content.read": site.IsReaderProfile and server.go's request-time
-	// reader-safe gate both key on the literal scope string being exactly
-	// "reader" (ScopeRank treats them as equal-rank, but they are not the
-	// same string) — collapsing them here would silently upgrade a
-	// self-service reader client out of the reader-safe profile the moment
-	// it explicitly requested scope=reader.
-	if got, err := requestedScope("reader"); err != nil || got != "reader" {
-		t.Fatalf(`requestedScope("reader") = %q, %v, want "reader", nil`, got, err)
+	// Per #450, "reader" is now a plain legacy alias for "read" (the
+	// dedicated reader-safe profile it used to key into no longer exists as
+	// a distinct scope — site.IsReaderProfile/ReaderSafeResolvedPage remain
+	// in the codebase but are never triggered by any live scope string).
+	if got, err := requestedScope("reader"); err != nil || got != "read" {
+		t.Fatalf(`requestedScope("reader") = %q, %v, want "read", nil`, got, err)
 	}
 	// #449 follow-up: a request mixing a not-yet-recognized token with valid
 	// ones must resolve using the valid tokens, not fail the whole request —
 	// the same outage class as "reader" (#448) but for a future scope value.
-	if got, err := requestedScope("future.scope content.write"); err != nil || got != "content.write" {
-		t.Fatalf(`requestedScope("future.scope content.write") = %q, %v, want "content.write", nil`, got, err)
+	if got, err := requestedScope("future.scope content.write"); err != nil || got != "write" {
+		t.Fatalf(`requestedScope("future.scope content.write") = %q, %v, want "write", nil`, got, err)
 	}
-	if got, err := requestedScope("reader future.scope"); err != nil || got != "reader" {
-		t.Fatalf(`requestedScope("reader future.scope") = %q, %v, want "reader", nil`, got, err)
+	if got, err := requestedScope("reader future.scope"); err != nil || got != "read" {
+		t.Fatalf(`requestedScope("reader future.scope") = %q, %v, want "read", nil`, got, err)
 	}
 	// Every token unrecognized must still error — there is no valid scope to
 	// resolve to.
 	if got, err := requestedScope("future.scope another.unknown"); err == nil || got != "" {
 		t.Fatalf(`requestedScope("future.scope another.unknown") = %q, %v, want error`, got, err)
 	}
-	if !allowedScope("content.read", "site.admin") {
+	if !allowedScope("read", "write") {
 		t.Fatal("allowedScope() should allow lower rank")
 	}
-	if allowedScope("site.admin", "content.write") {
+	if allowedScope("write", "read") {
 		t.Fatal("allowedScope() should reject higher rank")
 	}
-	if CanonicalScope("mcp") != "content.read" || !IsLegacyScope("mcp") {
+	if CanonicalScope("mcp") != "read" || !IsLegacyScope("mcp") {
 		t.Fatal("legacy scope alias not normalized correctly")
 	}
 }

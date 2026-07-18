@@ -219,7 +219,15 @@ breaking change since the parameters are optional and additive.
 | `get_feed`            | flat      | `items`                   |
 | `get_site_information`| flat      | `site`                    |
 
-### `content.read`
+### `read` (ungated — no scope required, see [§6.12](#612-2-scope-model-readwrite-450))
+
+Per [§6.12](#612-2-scope-model-readwrite-450), these tools require
+`RequiredScope: ""` — they are fully public, identical in gating to the
+Anonymous tier above. The per-tool notes below that once described
+reader-safe restrictions (`quality` omitted, `page_count` omitted, empty
+`assets` list, `content_not_public`) described the pre-#450 `reader` profile
+and no longer apply to any live caller: any caller now sees full source
+content, including drafts, for every tool in this table.
 
 | Tool                    | Envelope    | Notes                                        |
 |-------------------------|-------------|----------------------------------------------|
@@ -228,9 +236,9 @@ breaking change since the parameters are optional and additive.
 | `get_related_content`   | flat        | `related`                                    |
 | `build_agent_context`   | flat        | `context` + `context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337) |
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
-| `get_page_for_edit`     | flat        | `page.state`, `page.revision`, `page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` or unavailable for the caller's profile; `quality` requires source access and is omitted for `reader` (#339) |
-| `list_content_types`    | flat        | `content_types[*]` (`name`, `source`, `archetype_path?`, `expected_fields?`, `page_count?`); `expected_fields` is the union of the archetype's declared keys and keys observed on existing pages of that type; `page_count` and observed-page-derived fields (source-derived) are omitted for `reader`, archetype metadata is not (#347) |
-| `list_page_assets`      | flat        | `assets[*]` (`name`, `size_bytes`, `modified_at`); lists the sibling files in a leaf page bundle's directory; `not_a_bundle` for single-file pages; entirely source-derived, so `reader` gets an empty `assets` list for a public page and `content_not_public` for a non-public one (#348) |
+| `get_page_for_edit`     | flat        | `page.state`, `page.revision`, `page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` (#339) |
+| `list_content_types`    | flat        | `content_types[*]` (`name`, `source`, `archetype_path?`, `expected_fields?`, `page_count?`); `expected_fields` is the union of the archetype's declared keys and keys observed on existing pages of that type (#347) |
+| `list_page_assets`      | flat        | `assets[*]` (`name`, `size_bytes`, `modified_at`); lists the sibling files in a leaf page bundle's directory; `not_a_bundle` for single-file pages (#348) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state` |
 | `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
@@ -241,7 +249,11 @@ breaking change since the parameters are optional and additive.
 | `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`           |
 | `validate_site`         | structured  | `data.pages`, `data.pages_checked`           |
 
-### `content.write`
+### `write` (requires a registered OAuth client, see [§6.12](#612-2-scope-model-readwrite-450))
+
+Per [§6.12](#612-2-scope-model-readwrite-450), the tools formerly split
+between `content.write` and `site.admin` are now a single `write` scope with
+no exceptions — `write` implies full `read` access plus everything below.
 
 | Tool          | Envelope | Top-level key(s)                            |
 |---------------|----------|---------------------------------------------|
@@ -249,11 +261,6 @@ breaking change since the parameters are optional and additive.
 | `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`                 |
 | `delete_page` | flat     | `status`, `slug`, `warning?`                                      |
 | `upload_page_asset` | flat | `status`, `slug`, `filename`, `path`, `content_type`, `size_bytes`, `sha256`, `duplicate_of?` (advisory only), `dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`) |
-
-### `site.admin`
-
-| Tool                      | Envelope | Top-level key(s)                     |
-|---------------------------|----------|--------------------------------------|
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready` |
 | `preview_build`           | flat     | (build result)                       |
 | `run_post_build_hooks`    | flat     | (hook result)                        |
@@ -568,6 +575,67 @@ unrecognized token causing an otherwise-valid request to fail outright; this
 generalizes the fix so `scopes_supported` gaining a new value a client echoes
 back doesn't cause the same class of outage before `normalizeConfiguredScope`
 is updated to match it.
+
+## 6.12. 2-Scope Model: `read`/`write` (#450)
+
+Collapses the pre-#450 4-tier scope model (`reader`, `content.read`,
+`content.write`, `site.admin`) down to exactly two scopes:
+
+- **`read`** — full visibility, **including drafts and other
+  source-only/pre-publication content**. This is an explicit operator
+  risk-acceptance decision, not an oversight: drafts are short-lived
+  pre-publication content in this operator's workflow, and the prior
+  `reader`-safe restriction (public-only, no drafts) was judged to be
+  unnecessary risk for read-only access. `read` requires no secret and is
+  auto-registrable — the same self-service mechanism the old `reader`
+  profile used (`AllowReaderSelfRegistration`).
+- **`write`** — requires a registered OAuth client (`client_id` +
+  `client_secret` in `oauth-clients.yaml` or the equivalent SQLite-backed
+  registry), same as before #450. `write` **implies `read`**: a `write`
+  token gets everything a `read` token gets, plus every mutating and
+  operational tool. All 9 tools that used to require `site.admin`
+  (`build_site`, `preview_build`, `run_post_build_hooks`,
+  `generate_hero_image`, `check_sri_versions`, `get_runtime_status`,
+  `get_theme_status`, `verify_publication`, `create_preview`) now fold into
+  `write` with **no exceptions** — there is no longer a way to get write
+  access to content without also getting the operational tools, or vice
+  versa.
+
+`tools.KnownScopes` is now `{"read", "write"}`; `tools.ScopeRank` gives
+`read` the same rank (0) as anonymous — capability-identical, matching the
+"no gate" decision above — and `write` rank 1 (now the top rank).
+`tools.IsWriteScope` (renamed from `IsAdminScope`) reports whether a scope
+carries write privileges.
+
+**Backward compatibility**: every scope string from the pre-#450 model,
+plus the original `mcp` legacy alias, is still accepted — resolved via
+`oauth.CanonicalScope`, which is now the single source of truth for scope
+aliasing at both config time (client registry, `/authorize` requests) and
+request time (bearer token validation):
+
+| Legacy string                                                  | Canonical |
+|------------------------------------------------------------------|-----------|
+| `mcp`, `read`, `content.read`, `reader`                           | `read`    |
+| `write`, `content.write`, `site.admin`, `site_admin`, `siteadmin`, `system.admin`, `admin`, `system_admin`, `systemadmin` | `write`   |
+
+This mirrors the existing `mcp` legacy-alias pattern (§6.11): already-issued
+access tokens (up to `AccessTokenTTLSeconds` old) and OAuth clients with a
+stale cached copy of `scopes_supported` may present these old strings for a
+while after this migration ships, and rejecting them outright would repeat
+the exact "reader" outage class from #448/#449 — a request or token carrying
+a scope string the server no longer advertises must still resolve, not
+fail. `scopes_supported` in discovery documents only ever advertises the
+current canonical `["read", "write"]`; the table above is accepted on input
+but never re-advertised.
+
+**Dormant machinery, intentionally left in place**: `site.IsReaderProfile`,
+`site.ReaderSafeResolvedPage`, and `site.AccessProfileReader` (the
+reader-safe response-stripping logic from #354) remain in the codebase
+untouched. They are simply never triggered anymore, since no scope value
+the server issues or accepts will ever equal the literal string `"reader"`
+again (it is resolved to `"read"` by `CanonicalScope` before reaching any
+code that checks the access profile). This is intentional dead code, not an
+oversight — removing it is out of scope for #450.
 
 ## 7. New tools (v1.3.8+)
 

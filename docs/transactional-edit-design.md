@@ -31,8 +31,8 @@ reviewable, non-writing plan step** that:
 
 ## 2. `plan_content_change` (#338)
 
-**Read-only.** Requires `content.read` (not `content.write` — planning never
-writes). Takes the same target-resolution parameters as `get_page_for_edit`
+**Read-only.** Requires `read` (not `write` — planning never
+writes; per #450, `read` is fully public and requires no scope gate at all). Takes the same target-resolution parameters as `get_page_for_edit`
 (`slug`, optional `lang`) plus an `operations` list.
 
 ### Request shape
@@ -124,7 +124,7 @@ revision check again via a fresh `plan_content_change` call.
 
 ## 3. `apply_content_plan` (#338)
 
-**Mutating.** Requires `content.write`. Takes only `plan_id` (+ the same
+**Mutating.** Requires `write`. Takes only `plan_id` (+ the same
 `idempotency_key`/`dry_run` parameters every write tool already accepts).
 
 ### Request shape
@@ -221,11 +221,13 @@ distinct, separately-confirmed step; none of them collapse.
 implementation stays blocked — a design that only sequences the tools
 without resolving them isn't the deliverable the issue asks for.
 
-1. **What scope should be required?** `site.admin` for both
+1. **What scope should be required?** `write` for both
    `publish_changes` and `rollback_change` — matching `build_site`'s
-   existing scope, since publishing is fundamentally a build/deploy
-   operation, not a content edit (`content.write` covers `apply_content_plan`
-   already; publish is one tier up, same as `build_site` today).
+   existing scope. Per #450, `write` is now a single tier covering both
+   content mutation and build/deploy operations (the old `content.write`
+   vs `site.admin` split no longer exists), so this is simpler than it was
+   when this section was first written: every one of these tools just
+   requires `write`.
 
 2. **How should confirmation work?** No implicit confirmation and no
    auto-publish after apply. `publish_changes` is always a separate,

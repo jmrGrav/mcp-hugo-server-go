@@ -29,21 +29,25 @@ every registered tool going forward.
 
 ## External access profiles
 
-Public documentation uses two external profiles:
+Public documentation uses two external profiles, which map directly onto the
+internal `read`/`write` scopes (#450, see `docs/mcp-contract.md` §6.12):
 
-- `reader`: all public-safe read-only tools
+- `reader`: all read tools (full visibility, drafts included)
 - `operator`: reader tools plus write and site operations
 
-The registry below still lists the current internal scope tiers enforced by the
-runtime during v1.x so the mapping stays explicit and auditable.
+The registry below lists the current internal scope tiers enforced by the
+runtime so the mapping stays explicit and auditable. Since #450, there are
+only two: `read` (fully public — every tool below "read", plus the
+Anonymous tools, requires no scope at all) and `write` (requires a
+registered OAuth client).
 
 ## Search tool selection (#326)
 
 Two overlapping search tools exist: `search_pages` (anonymous) and
-`search_content` (`content.read`). If an agent has `content.read` scope,
-prefer `search_content` — it also matches body text and supports
-type/language/sort filtering that `search_pages` doesn't (both tools
-support `limit`/`offset` pagination).
+`search_content` (`read`, but ungated — see below). If calling with any
+Bearer token, prefer `search_content` — it also matches body text and
+supports type/language/sort filtering that `search_pages` doesn't (both
+tools support `limit`/`offset` pagination).
 `search_pages` exists for callers with no authentication at all; it is not
 a lighter-weight alternative to reach for when `search_content` is
 available.
@@ -60,7 +64,7 @@ available.
 - `get_feed` - Read feed
 - `get_site_information` - Read site metadata
 
-## `content.read`
+## `read` (ungated — no scope required, #450)
 
 - `get_page_markdown` - Get full page Markdown
 - `get_page_frontmatter` - Get page frontmatter
@@ -81,7 +85,10 @@ available.
 - `validate_frontmatter` - Validate front matter
 - `validate_site` - Validate site
 
-## `content.write`
+## `write` (requires a registered OAuth client)
+
+Per #450, `write` implies `read` and folds in every tool that used to
+require a separate `site.admin` scope, with no exceptions.
 
 - `create_page` - Publish page
 - `update_page` - Update page
@@ -93,8 +100,6 @@ Replaying the exact same mutation with the same key returns the original result
 without applying the write again. Reusing the same key for materially different
 input returns a structured `idempotency_conflict` error.
 
-## `site.admin`
-
 - `build_site` - Build website
 - `preview_build` - Preview build
 - `run_post_build_hooks` - Run post-build hooks
@@ -105,7 +110,10 @@ input returns a structured `idempotency_conflict` error.
 - `verify_publication` - Verify publication (compares source/build/public/index freshness for a page and checks the live public HTTP status; no SSH required)
 - `create_preview` - Create preview (builds source, optionally including drafts, into an isolated directory exposed at a temporary token-gated, non-indexable URL; see `docs/preview-workflow.md`)
 
-`system.admin` is accepted as a legacy compatibility alias for `site.admin`, but it is not advertised as a canonical tool tier.
+Legacy scope strings (`content.write`, `site.admin`, `system.admin`, `admin`,
+and others — see `docs/mcp-contract.md` §6.12 for the full table) are
+accepted as compatibility aliases for `write`, but only `read`/`write` are
+advertised as canonical tool tiers.
 
 ## Taxonomy Fields
 

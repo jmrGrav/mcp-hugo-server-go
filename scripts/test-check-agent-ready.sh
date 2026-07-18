@@ -137,12 +137,12 @@ run_expect_failure() {
   echo "PASS: $label"
 }
 
-write_fixture '["content.read","content.write","site.admin"]'
+write_fixture '["read","write"]'
 start_server
 run_expect_success "canonical scopes pass" "$SCRIPT" "$BASE_URL"
 cleanup
 SERVER_PID=""
 
-write_fixture '["content.read","content.write","site.admin","system.admin"]'
+write_fixture '["read","write","site.admin"]'
 start_server
-run_expect_failure "legacy system.admin advertised fails" "$SCRIPT" "$BASE_URL"
+run_expect_failure "legacy site.admin advertised fails" "$SCRIPT" "$BASE_URL"

@@ -80,15 +80,15 @@ func RegisterSiteAdmin(s *mcp.Server, cfg config.Config, siteReload ...func() er
 // Defs returns tool definitions for all admin tools (used to build the global registry).
 func Defs() []tools.ToolDef {
 	return []tools.ToolDef{
-		{Name: "build_site", RequiredScope: "site.admin"},
-		{Name: "preview_build", RequiredScope: "site.admin"},
-		{Name: "run_post_build_hooks", RequiredScope: "site.admin"},
-		{Name: "generate_hero_image", RequiredScope: "site.admin"},
-		{Name: "check_sri_versions", RequiredScope: "site.admin"},
-		{Name: "get_runtime_status", RequiredScope: "site.admin"},
-		{Name: "get_theme_status", RequiredScope: "site.admin"},
-		{Name: "verify_publication", RequiredScope: "site.admin"},
-		{Name: "create_preview", RequiredScope: "site.admin"},
+		{Name: "build_site", RequiredScope: "write"},
+		{Name: "preview_build", RequiredScope: "write"},
+		{Name: "run_post_build_hooks", RequiredScope: "write"},
+		{Name: "generate_hero_image", RequiredScope: "write"},
+		{Name: "check_sri_versions", RequiredScope: "write"},
+		{Name: "get_runtime_status", RequiredScope: "write"},
+		{Name: "get_theme_status", RequiredScope: "write"},
+		{Name: "verify_publication", RequiredScope: "write"},
+		{Name: "create_preview", RequiredScope: "write"},
 	}
 }
 

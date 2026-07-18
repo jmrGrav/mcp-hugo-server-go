@@ -76,9 +76,9 @@ expect_contains "$authorization_servers" "$BASE_URL" "authorization_servers"
 expect_eq "$transport_endpoint" "/mcp" "server_card transport.endpoint"
 expect_eq "$alias_transport_endpoint" "/mcp" "mcp alias transport.endpoint"
 
-expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "content.read" "auth scopes"
-expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "content.write" "auth scopes"
-expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "site.admin" "auth scopes"
+expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "read" "auth scopes"
+expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "write" "auth scopes"
+expect_not_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "site.admin" "auth scopes"
 expect_not_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "system.admin" "auth scopes"
 
 for needle in \

@@ -6,13 +6,14 @@
 Anonymous read-only access is available without registration when `oauth.enabled`
 is `false`. When OAuth is enabled, all `/mcp` requests require a Bearer token
 (the server returns `401` otherwise). Complete the PKCE flow once to obtain a
-token with `content.read` scope for read-only access. OAuth 2.0 unlocks richer tools.
+token with `read` scope for read-only access (full visibility, including
+drafts). OAuth 2.0 unlocks richer tools.
 
 ## Agent registration
 
 External access profiles:
 
-- `reader`: public-safe read-only access
+- `reader`: read-only access, no secret needed, self-service registration
 - `operator`: reader access plus write and site operations
 
 The OAuth scopes below are the current internal capability strings accepted by
@@ -50,7 +51,7 @@ the server during v1.x.
         "response_type": "code",
         "client_id": "<client_id from step 1>",
         "redirect_uri": "<your-redirect-uri>",
-        "scope": "content.read",
+        "scope": "read",
         "state": "<random-state>",
         "code_challenge": "<S256-pkce-challenge>",
         "code_challenge_method": "S256"
@@ -101,17 +102,17 @@ the server during v1.x.
     "token_endpoint": "https://mcp.arleo.eu/token",
     "mcp_endpoint": "https://mcp.arleo.eu/mcp"
   },
-  "scopes": ["content.read", "content.write", "site.admin"],
+  "scopes": ["read", "write"],
   "access_profiles": {
     "reader": {
-      "description": "Public-safe read-only access profile for discovery and content inspection.",
+      "description": "Read-only access profile for discovery and content inspection (full visibility, drafts included).",
       "acquisition": "anonymous or self-serve registration",
-      "internal_scopes": ["content.read"]
+      "internal_scopes": ["read"]
     },
     "operator": {
       "description": "Approved operator profile that bundles read, write, and site operation capabilities.",
       "acquisition": "approved token present in the server registry",
-      "internal_scopes": ["content.read", "content.write", "site.admin"]
+      "internal_scopes": ["read", "write"]
     }
   }
 }
