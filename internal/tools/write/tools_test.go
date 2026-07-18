@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
@@ -187,6 +188,62 @@ func TestCreatePage(t *testing.T) {
 	}
 	if got := decoded["resolved_lang"]; got != "" {
 		t.Fatalf("create_page resolved_lang = %v, want empty default lang", got)
+	}
+}
+
+// #467: create_page/update_page surface an advisory (never a failure) when
+// the most recent build_site attempt in this process failed, so an agent
+// notices a broken publish pipeline from the write call itself.
+func TestCreatePageWarnsWhenLastBuildFailed(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+	buildstatus.RecordFailure("permission_denied", time.Now())
+
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "build-warn-post",
+		"title":      "Build Warn Post",
+		"body":       "Hello world.",
+		"tags":       []any{"go"},
+		"categories": []any{"tutorials"},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	warning, _ := out["warning"].(string)
+	if !strings.Contains(warning, "permission_denied") {
+		t.Fatalf("create_page warning = %q, want it to mention the last failed build_site attempt", warning)
+	}
+}
+
+func TestCreatePageOmitsBuildWarningWhenLastBuildSucceeded(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+	buildstatus.RecordSuccess(time.Now())
+
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "build-ok-post",
+		"title":      "Build OK Post",
+		"body":       "Hello world.",
+		"tags":       []any{"go"},
+		"categories": []any{"tutorials"},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	if warning, _ := out["warning"].(string); warning != "" {
+		t.Fatalf("create_page warning = %q, want empty when the last build_site attempt succeeded", warning)
 	}
 }
 

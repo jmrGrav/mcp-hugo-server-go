@@ -637,6 +637,40 @@ again (it is resolved to `"read"` by `CanonicalScope` before reaching any
 code that checks the access profile). This is intentional dead code, not an
 oversight — removing it is out of scope for #450.
 
+## 6.13. Last Build Status Surfaced Proactively (#467)
+
+`get_runtime_status` now includes an optional `last_build` field reporting
+the outcome of the most recent `build_site` attempt in this process:
+
+```json
+{
+  "last_build": {
+    "status": "failed",
+    "error_class": "permission_denied",
+    "at": "2026-07-18T04:45:20Z"
+  }
+}
+```
+
+`last_build` is omitted entirely until `build_site` has been called at least
+once in this process's lifetime (there is nothing to report yet — a restart
+clears this state, since it's in-memory and process-lifetime only). When the
+last attempt failed, the same summary is also appended to `degraded`.
+
+`create_page` and `update_page` responses carry a lightweight `warning`
+advisory (never a hard failure — the write itself still succeeds) when the
+last known `build_site` attempt failed, so an agent notices a broken publish
+pipeline from the write call itself instead of only discovering it by
+calling `build_site` at the end of a write cycle:
+
+```
+"the last build_site attempt failed (permission_denied) — this write
+succeeded but may not go live until build_site is retried"
+```
+
+If a write's own DB-sync warning is also present, both are combined into one
+`warning` string rather than one silently overwriting the other.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.

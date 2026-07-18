@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -110,6 +111,24 @@ type deletePageOutput struct {
 
 func writeSuccessEnvelope() toolcontract.ToolResponse[map[string]any] {
 	return toolcontract.Success(map[string]any{}, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+}
+
+// appendLastBuildWarning appends a lightweight advisory to warning (#467) if
+// the most recent build_site attempt in this process failed — so an agent
+// writing content notices a broken publish pipeline from this write call
+// itself, instead of only discovering it by calling build_site at the end of
+// its write cycle. Never blocks the write; purely advisory. Existing/empty
+// warning is preserved and the two messages are combined if both are set.
+func appendLastBuildWarning(warning string) string {
+	snap := buildstatus.Last()
+	if !snap.Attempted || snap.Status != "failed" {
+		return warning
+	}
+	advisory := fmt.Sprintf("the last build_site attempt failed (%s) — this write succeeded but may not go live until build_site is retried", snap.ErrorClass)
+	if warning == "" {
+		return advisory
+	}
+	return warning + "; " + advisory
 }
 
 // normalizeInputSlug strips leading and trailing slashes so agents that pass
@@ -371,7 +390,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Path:               logicalPath,
 			ResolvedLang:       resolvedLang,
 			ResolvedSourcePath: logicalPath,
-			Warning:            warning,
+			Warning:            appendLastBuildWarning(warning),
 			State:              &state,
 		}
 		if idemHash != "" {
@@ -623,7 +642,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Slug:               in.Slug,
 			ResolvedLang:       resolvedSource.Lang,
 			ResolvedSourcePath: logicalPath,
-			Warning:            warning,
+			Warning:            appendLastBuildWarning(warning),
 			State:              &state,
 		}
 		if idemHash != "" {
