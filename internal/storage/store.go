@@ -56,6 +56,16 @@ func (m *memoryStore) ValidateAccessToken(token string) (string, bool) {
 	return e.scope, true
 }
 
+func (m *memoryStore) ValidateAccessTokenDetails(token string) (string, time.Time, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	e, ok := m.tokens[token]
+	if !ok || !time.Now().Before(e.expiresAt) {
+		return "", time.Time{}, false
+	}
+	return e.scope, e.expiresAt, true
+}
+
 func (m *memoryStore) AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

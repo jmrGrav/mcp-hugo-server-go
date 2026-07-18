@@ -664,7 +664,37 @@ again (it is resolved to `"read"` by `CanonicalScope` before reaching any
 code that checks the access profile). This is intentional dead code, not an
 oversight — removing it is out of scope for #450.
 
-## 6.13. Last Build Status Surfaced Proactively (#467)
+## 6.13. `/mcp` Bearer Verification Uses the SDK Primitive (#473)
+
+The `/mcp` route now delegates transport-level bearer-token verification to
+`github.com/modelcontextprotocol/go-sdk/auth.RequireBearerToken`, replacing the
+older fully hand-rolled Authorization-header parsing path in
+`internal/server/server.go`.
+
+This is intentionally **not** a full transfer of authorization ownership to the
+SDK. The server still keeps three project-specific responsibilities locally:
+
+1. **client-facing challenge compatibility** — preserve the already-validated
+   `WWW-Authenticate` shape (`realm=...`, `resource_metadata=...`,
+   `error="invalid_token"` when appropriate) used by ChatGPT, Claude, Le Chat,
+   and external MCP scanners;
+2. **body-aware MCP ACL** — `tools/call` authorization still depends on the
+   requested tool name inside the JSON-RPC body, which the SDK middleware does
+   not know about;
+3. **scope-aware context enrichment** — the project still injects its canonical
+   scope, caller IP, legacy-scope metric signal, and related audit context
+   after SDK authentication succeeds.
+
+So the runtime split is deliberate:
+
+- **SDK-owned:** bearer extraction + token-verification entry point
+- **project-owned:** challenge normalization, per-tool ACL, and request-context
+  enrichment
+
+A raw drop-in use of `RequireBearerToken` would have been smaller, but it would
+have changed on-wire behavior that current clients already rely on.
+
+## 6.14. Last Build Status Surfaced Proactively (#467)
 
 `get_runtime_status` now includes an optional `last_build` field reporting
 the outcome of the most recent `build_site` attempt in this process:

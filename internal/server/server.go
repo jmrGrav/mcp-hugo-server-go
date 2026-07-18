@@ -284,6 +284,73 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		maxBody = 1 << 20
 	}
 
+	mcpToolHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callerScope := ""
+		if oauthSvc != nil {
+			bearerResult, ok := bearerResultFromContext(r.Context())
+			if !ok {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			callerScope = bearerResult.scope
+			if bearerResult.legacy {
+				metrics.RecordLegacyScope(callerScope)
+				logger.Warn("accepted deprecated legacy scope alias", "scope", oauth.LegacyScopeAlias, "canonical_scope", callerScope, "issuer", strings.TrimRight(cfg.OAuth.Issuer, "/"), "path", r.URL.Path)
+			}
+			callerIP, _, _ := strings.Cut(r.RemoteAddr, ":")
+			ctx := context.WithValue(r.Context(), oauth.CtxScope, callerScope)
+			ctx = context.WithValue(ctx, oauth.CtxCallerIP, callerIP)
+			if callerScope == site.AccessProfileReader {
+				ctx = site.WithAccessProfile(ctx, site.AccessProfileReader)
+			}
+			r = r.WithContext(ctx)
+
+			// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
+			if r.Method == http.MethodPost {
+				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+				if err != nil {
+					http.Error(w, "bad request", http.StatusBadRequest)
+					return
+				}
+				if !scopePolicy.AllowRequest(body, callerScope) {
+					reason := scopePolicy.DenyReason(body, callerScope)
+					audit.Warn(audit.EventScopeDenied, "denied",
+						"scope", callerScope,
+						"reason", reason,
+						"path", r.URL.Path,
+						"remote_addr", r.RemoteAddr,
+					)
+					w.Header().Set("Content-Type", "application/json; charset=utf-8")
+					w.WriteHeader(http.StatusForbidden)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      nil,
+						"error":   map[string]any{"code": -32001, "message": reason},
+					})
+					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
+		}
+
+		// Prevent clients from caching scoped tool lists. Without these headers,
+		// a client that calls tools/list before OAuth (receiving the anonymous
+		// set) may cache and reuse that response after acquiring a token.
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Vary", "Authorization")
+		rateLimitedStreaming.ServeHTTP(w, r)
+	})
+
+	var protectedMCPHandler http.Handler = mcpToolHandler
+	if oauthSvc != nil {
+		issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
+		protectedMCPHandler = newMCPBearerAuthMiddleware(
+			oauthTokenVerifier(oauthSvc),
+			issuer,
+			issuer+"/.well-known/oauth-protected-resource",
+		)(mcpToolHandler)
+	}
+
 	// rateLimitedOAuth applies a simple per-IP call counter to allocation
 	// endpoints (/register, /agent/identity) to mitigate unbounded map growth
 	// (issue #30). The limit is coarse — 100 calls per unique remote addr.
@@ -410,84 +477,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 				return
 			}
-
-			callerScope := ""
-			if oauthSvc != nil {
-				issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
-				wwwAuth := fmt.Sprintf(`Bearer realm=%q, resource_metadata=%q`,
-					issuer, issuer+"/.well-known/oauth-protected-resource")
-				auth := strings.TrimSpace(r.Header.Get("Authorization"))
-				if auth == "" {
-					logMCPAuthRejection(r, "missing_bearer")
-					// No token: challenge so OAuth clients (Claude.ai, ChatGPT) discover
-					// the auth server and start the PKCE flow. Without this 401 they see
-					// 200 + anonymous tools and never learn auth is available (RFC 6750 §3.1).
-					w.Header().Set("WWW-Authenticate", wwwAuth)
-					w.Header().Set("Cache-Control", "no-store")
-					http.Error(w, "unauthorized", http.StatusUnauthorized)
-					return
-				}
-				if !strings.HasPrefix(auth, "Bearer ") {
-					logMCPAuthRejection(r, "invalid_bearer_format")
-					w.Header().Set("WWW-Authenticate", wwwAuth)
-					http.Error(w, "unauthorized", http.StatusUnauthorized)
-					return
-				}
-				token := strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-				scope, legacy, ok := oauthSvc.ValidateBearerDetails(token)
-				if !ok {
-					logMCPAuthRejection(r, "invalid_token")
-					w.Header().Set("WWW-Authenticate", wwwAuth+`, error="invalid_token"`)
-					http.Error(w, "unauthorized", http.StatusUnauthorized)
-					return
-				}
-				callerScope = scope
-				if legacy {
-					metrics.RecordLegacyScope(scope)
-					logger.Warn("accepted deprecated legacy scope alias", "scope", oauth.LegacyScopeAlias, "canonical_scope", callerScope, "issuer", strings.TrimRight(cfg.OAuth.Issuer, "/"), "path", r.URL.Path)
-				}
-				callerIP, _, _ := strings.Cut(r.RemoteAddr, ":")
-				ctx := context.WithValue(r.Context(), oauth.CtxScope, callerScope)
-				ctx = context.WithValue(ctx, oauth.CtxCallerIP, callerIP)
-				if callerScope == site.AccessProfileReader {
-					ctx = site.WithAccessProfile(ctx, site.AccessProfileReader)
-				}
-				r = r.WithContext(ctx)
-
-				// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
-				if r.Method == http.MethodPost {
-					body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
-					if err != nil {
-						http.Error(w, "bad request", http.StatusBadRequest)
-						return
-					}
-					if !scopePolicy.AllowRequest(body, callerScope) {
-						reason := scopePolicy.DenyReason(body, callerScope)
-						audit.Warn(audit.EventScopeDenied, "denied",
-							"scope", callerScope,
-							"reason", reason,
-							"path", r.URL.Path,
-							"remote_addr", r.RemoteAddr,
-						)
-						w.Header().Set("Content-Type", "application/json; charset=utf-8")
-						w.WriteHeader(http.StatusForbidden)
-						_ = json.NewEncoder(w).Encode(map[string]any{
-							"jsonrpc": "2.0",
-							"id":      nil,
-							"error":   map[string]any{"code": -32001, "message": reason},
-						})
-						return
-					}
-					r.Body = io.NopCloser(bytes.NewReader(body))
-				}
-			}
-
-			// Prevent clients from caching scoped tool lists. Without these headers,
-			// a client that calls tools/list before OAuth (receiving the anonymous
-			// set) may cache and reuse that response after acquiring a token.
-			w.Header().Set("Cache-Control", "no-store")
-			w.Header().Set("Vary", "Authorization")
-			rateLimitedStreaming.ServeHTTP(w, r)
+			protectedMCPHandler.ServeHTTP(w, r)
 		default:
 			// /preview/{id}/{token}/... (#345) isn't a fixed path, so it can't
 			// be a switch case above — the store itself enforces the token

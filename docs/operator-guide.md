@@ -182,6 +182,16 @@ Published discovery metadata now carries both:
 
 To enable confidential OAuth clients for `write`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
 
+`/mcp` bearer verification itself now goes through the Go MCP SDK's
+`auth.RequireBearerToken` middleware, but via a local compatibility adapter
+rather than a raw drop-in swap. That adapter deliberately preserves the
+existing `WWW-Authenticate` challenge shape (`realm`, `resource_metadata`,
+`error="invalid_token"`), because ChatGPT, Claude, Le Chat, and the external
+scanner workflows were already validated against that exact on-wire behavior.
+Per-tool ACL decisions still happen in this server after bearer verification,
+because the SDK middleware authenticates the request but does not know this
+project's JSON-RPC tool-scope model.
+
 The server exposes a migration metric at `/metrics`:
 
 - `mcp_legacy_scope_requests_total{scope="mcp"}` tracks legacy alias usage so the alias can be removed only after production usage reaches zero.

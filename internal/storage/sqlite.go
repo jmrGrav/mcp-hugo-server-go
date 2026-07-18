@@ -116,6 +116,19 @@ func (s *sqliteStore) ValidateAccessToken(token string) (string, bool) {
 	return scope, true
 }
 
+func (s *sqliteStore) ValidateAccessTokenDetails(token string) (string, time.Time, bool) {
+	var scope string
+	var expiresAtUnix int64
+	err := s.db.QueryRow(
+		`SELECT scope, expires_at FROM access_tokens WHERE token = ? AND expires_at > ?`,
+		token, time.Now().Unix(),
+	).Scan(&scope, &expiresAtUnix)
+	if err != nil {
+		return "", time.Time{}, false
+	}
+	return scope, time.Unix(expiresAtUnix, 0), true
+}
+
 func (s *sqliteStore) AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error {
 	_, err := s.db.Exec(
 		`INSERT OR REPLACE INTO refresh_tokens (token, client_id, scope, expires_at) VALUES (?, ?, ?, ?)`,
