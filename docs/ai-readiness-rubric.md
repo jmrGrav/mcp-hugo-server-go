@@ -40,7 +40,7 @@ below, not an independent heuristic.
 
 ## Deterministic checks
 
-### 1. `heading_hierarchy`
+## 1. `heading_hierarchy`
 
 Purpose:
 
