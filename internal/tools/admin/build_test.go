@@ -431,6 +431,47 @@ func TestBuildSitePermissionDeniedErrorIncludesSuggestion(t *testing.T) {
 	}
 }
 
+func TestBuildSiteOwnershipDriftErrorUsesOwnershipSuggestion(t *testing.T) {
+	siteRoot := t.TempDir()
+	stderr := fmt.Sprintf("Error: error copying static files: chtimes %s: operation not permitted", filepath.Join(siteRoot, "public", "auth.md"))
+	dir := writeMockHugo(t, "#!/bin/sh\necho '"+stderr+"' >&2\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error, got success")
+	}
+	text := resultText(res)
+	jsonStart := strings.Index(text, "{")
+	if jsonStart < 0 {
+		t.Fatalf("no JSON in error text: %q", text)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text[jsonStart:]), &out); err != nil {
+		t.Fatalf("error text not valid JSON: %v", err)
+	}
+	if out["error_class"] != "permission_denied" {
+		t.Fatalf("error_class: want permission_denied, got %v", out["error_class"])
+	}
+	suggestion, _ := out["suggestion"].(string)
+	if !strings.Contains(strings.ToLower(suggestion), "owner") && !strings.Contains(strings.ToLower(suggestion), "ownership") {
+		t.Fatalf("suggestion %q does not mention ownership drift", suggestion)
+	}
+	if strings.Contains(suggestion, "ReadWritePaths") {
+		t.Fatalf("suggestion %q incorrectly points only to ReadWritePaths", suggestion)
+	}
+}
+
 // TestBuildSiteCallbackTimeout verifies that a slow post-build callback does
 // not block build_site indefinitely, the response is partial_success with a
 // warning naming the first timed-out callback, and subsequent callbacks are
