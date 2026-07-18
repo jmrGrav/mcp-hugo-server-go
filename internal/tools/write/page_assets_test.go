@@ -43,6 +43,10 @@ func TestUploadPageAssetSuccess(t *testing.T) {
 	}
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "slug")
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "content_type")
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "size_bytes")
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
 	if out["content_type"] != "image/png" {
 		t.Fatalf("upload_page_asset content_type = %v, want image/png", out["content_type"])
 	}

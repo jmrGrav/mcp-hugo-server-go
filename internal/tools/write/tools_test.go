@@ -104,6 +104,13 @@ func decodeWriteData(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return data
 }
 
+func assertWriteSuccessCompatAlias(t *testing.T, root, data map[string]any, field string) {
+	t.Helper()
+	if got, want := root[field], data[field]; got != want {
+		t.Fatalf("%s root/data mismatch: root=%v data=%v", field, got, want)
+	}
+}
+
 func decodeWriteErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	t.Helper()
 	if res.StructuredContent != nil {
@@ -183,6 +190,9 @@ func TestCreatePage(t *testing.T) {
 	}
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "slug")
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "resolved_source_path")
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
 	assertWritePageState(t, out["state"], "present", "pending", "not_yet_available", "source_only")
 	if got := dataEnvelope["slug"]; got != "my-post" {
 		t.Fatalf("create_page data.slug = %v, want my-post", got)
@@ -1425,6 +1435,8 @@ func TestUpdatePageSuccess(t *testing.T) {
 	}
 	decoded := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
+	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "resolved_source_path")
+	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "rate_limit_remaining")
 	if got := decoded["resolved_source_path"]; got != "content/update-me/index.md" {
 		t.Fatalf("update_page resolved_source_path = %v, want content/update-me/index.md", got)
 	}
@@ -1465,6 +1477,8 @@ func TestDeletePageSuccess(t *testing.T) {
 	}
 	decoded := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
+	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "resolved_source_path")
+	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "rate_limit_remaining")
 	if got := decoded["resolved_source_path"]; got != "content/to-delete/index.md" {
 		t.Fatalf("delete_page resolved_source_path = %v, want content/to-delete/index.md", got)
 	}
