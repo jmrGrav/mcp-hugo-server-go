@@ -222,6 +222,20 @@ func TestScopeConfigurationHelpers(t *testing.T) {
 	if got, err := requestedScope("reader"); err != nil || got != "reader" {
 		t.Fatalf(`requestedScope("reader") = %q, %v, want "reader", nil`, got, err)
 	}
+	// #449 follow-up: a request mixing a not-yet-recognized token with valid
+	// ones must resolve using the valid tokens, not fail the whole request —
+	// the same outage class as "reader" (#448) but for a future scope value.
+	if got, err := requestedScope("future.scope content.write"); err != nil || got != "content.write" {
+		t.Fatalf(`requestedScope("future.scope content.write") = %q, %v, want "content.write", nil`, got, err)
+	}
+	if got, err := requestedScope("reader future.scope"); err != nil || got != "reader" {
+		t.Fatalf(`requestedScope("reader future.scope") = %q, %v, want "reader", nil`, got, err)
+	}
+	// Every token unrecognized must still error — there is no valid scope to
+	// resolve to.
+	if got, err := requestedScope("future.scope another.unknown"); err == nil || got != "" {
+		t.Fatalf(`requestedScope("future.scope another.unknown") = %q, %v, want error`, got, err)
+	}
 	if !allowedScope("content.read", "site.admin") {
 		t.Fatal("allowedScope() should allow lower rank")
 	}

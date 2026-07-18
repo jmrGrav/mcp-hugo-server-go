@@ -556,6 +556,19 @@ here), and the *real* GET/POST responses carry the same header too — a
 passing preflight alone isn't sufficient for a browser to let client-side
 JS read the actual response.
 
+## 6.11. Scope Resolution Skips Unrecognized Tokens (#449)
+
+`requestedScope` (internal/oauth/scope_config.go) resolves a request's
+space-delimited `scope` parameter to the single highest-ranked recognized
+scope. Per RFC 6749 §3.3, a token that doesn't normalize is now skipped, not
+fatal — the request still resolves using whatever valid tokens remain,
+erroring only if *every* token is unrecognized. Follow-up on the 2026-07-18
+"reader" scope outage (#448, §6.10's neighbor): that outage was one specific
+unrecognized token causing an otherwise-valid request to fail outright; this
+generalizes the fix so `scopes_supported` gaining a new value a client echoes
+back doesn't cause the same class of outage before `normalizeConfiguredScope`
+is updated to match it.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
