@@ -334,3 +334,283 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		return nil, out, nil
 	}))
 }
+
+// deleteAssetFilenamePattern mirrors assetFilenamePattern's single-path-
+// component/no-hidden-file safety guarantee, but doesn't restrict to image
+// extensions — delete_page_asset must be able to remove any file a caller
+// (or an older upload path) has left in a bundle directory, not just the
+// image types upload_page_asset currently allows.
+var deleteAssetFilenamePattern = assetFilenamePattern
+
+// validateDeleteAssetFilename checks name is a single safe path component
+// and rejects any index.<lang>.md filename — those are the page's own
+// content file, not an asset, and deleting one belongs to delete_page, not
+// this tool.
+func validateDeleteAssetFilename(name string) (string, error) {
+	clean := strings.TrimSpace(name)
+	if !deleteAssetFilenamePattern.MatchString(clean) {
+		return "", fmt.Errorf("invalid_params: filename must be a single path component matching %s", deleteAssetFilenamePattern.String())
+	}
+	if clean == "index.md" || (strings.HasPrefix(clean, "index.") && strings.HasSuffix(clean, ".md")) {
+		return "", fmt.Errorf("invalid_params: %q is the page's own content file, not an asset; use delete_page to remove the page itself", clean)
+	}
+	return clean, nil
+}
+
+// findAssetReferences scans every index.<lang>.md file in dir for a literal
+// occurrence of filename, returning the language files (or "" for the
+// language-less index.md) where it appears. Used to warn/guard against
+// deleting an asset a page still visibly links to (#460) — a plain
+// substring check is deliberately simple (an asset filename is already a
+// narrow, mostly-unique token like "hero.png") rather than a full Markdown
+// link parser, since a false positive only makes the guard slightly more
+// conservative, never lets a referenced asset through silently.
+func findAssetReferences(dir, filename string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var referencedIn []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name != "index.md" && !(strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md")) {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		if strings.Contains(string(raw), filename) {
+			referencedIn = append(referencedIn, name)
+		}
+	}
+	return referencedIn, nil
+}
+
+type deletePageAssetInput struct {
+	Slug             string `json:"slug"`
+	Filename         string `json:"filename"`
+	ExpectedSha256   string `json:"expected_sha256,omitempty"`
+	ExpectedRevision string `json:"expected_revision,omitempty"`
+	Force            bool   `json:"force,omitempty"`
+	IdempotencyKey   string `json:"idempotency_key,omitempty"`
+	DryRun           bool   `json:"dry_run,omitempty"`
+}
+
+type deletePageAssetOutput struct {
+	toolcontract.ToolResponse[map[string]any]
+	Status   string `json:"status,omitempty"`
+	Slug     string `json:"slug,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	Sha256   string `json:"sha256,omitempty"`
+	DryRun   bool   `json:"dry_run,omitempty"`
+	// Referenced/ReferencedIn report whether filename appears in any of the
+	// bundle's index.<lang>.md files at the time of this call — present on
+	// both the dry_run preview and a force-overridden real delete, so the
+	// caller has a record of what it chose to override. Referenced is a
+	// pointer so "computed and false" (present as `false`) stays
+	// distinguishable from "never computed" (omitted, e.g. on an error
+	// response) — a plain bool with omitempty would silently collapse both
+	// to "absent".
+	Referenced         *bool                        `json:"referenced,omitempty"`
+	ReferencedIn       []string                     `json:"referenced_in,omitempty"`
+	Warning            string                       `json:"warning,omitempty"`
+	RateLimitRemaining int                          `json:"rate_limit_remaining"`
+	RequestContext     *toolcontract.RequestContext `json:"request_context,omitempty"`
+}
+
+// registerDeletePageAsset registers delete_page_asset (#460). Shares
+// delete_page's own destructive per-caller budget (deleteMu/deleteLimiters),
+// not upload_page_asset's create/update quota — deleting is the destructive
+// operation here, matching delete_page's own DestructiveHint.
+func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, deleteMu *sync.Mutex, deleteLimiters map[string]*rate.Limiter) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:  "delete_page_asset",
+		Title: "Delete page asset",
+		Description: "Delete a file previously written into a Hugo page bundle directory by upload_page_asset. " +
+			"Non-dry-run calls require expected_sha256 (from upload_page_asset/list_page_assets) or expected_revision (the page bundle's own revision) as a concurrency guard; a mismatch fails with revision_conflict, telling the agent to re-check the current hash/revision via list_page_assets and retry. " +
+			"Before deleting, the asset filename is checked against every index.<lang>.md file in the bundle: if referenced, the call fails with asset_referenced unless force=true is passed, so a still-linked image isn't silently broken. " +
+			"dry_run previews the asset's sha256 and whether it's referenced, without requiring expected_sha256/expected_revision and without deleting anything. " +
+			"Callers may provide idempotency_key to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. " +
+			"This only removes the source asset, not any built public copy or CDN cache — unlike delete_page, it does not purge; the asset stays reachable at its old URL until the next build. " +
+			"rate_limit_remaining reports the caller's remaining budget on delete_page's own destructive quota (#466), separate from create_page/update_page/upload_page_asset's shared quota. Requires content.write.",
+		InputSchema:  tools.MustSchema[deletePageAssetInput](),
+		OutputSchema: tools.MustSchema[deletePageAssetOutput](),
+		Annotations: &mcp.ToolAnnotations{
+			ReadOnlyHint:    false,
+			DestructiveHint: fileutil.BoolPtr(true),
+			IdempotentHint:  false,
+			OpenWorldHint:   fileutil.BoolPtr(true),
+		},
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageAssetInput) (*mcp.CallToolResult, deletePageAssetOutput, error) {
+		slug := normalizeInputSlug(in.Slug)
+		wrapErr := func(err error) error {
+			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: slug})
+		}
+		if slug == "" {
+			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
+		}
+		filename, err := validateDeleteAssetFilename(in.Filename)
+		if err != nil {
+			return nil, deletePageAssetOutput{}, wrapErr(err)
+		}
+		if err := validateBundleSlug(idx, slug); err != nil {
+			return nil, deletePageAssetOutput{}, wrapErr(err)
+		}
+		dir, err := pg.SafeJoin(slug)
+		if err != nil {
+			slog.Warn("delete_page_asset: path validation failed", "slug", slug, "error", err)
+			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
+		}
+		filePath := filepath.Join(dir, filename)
+
+		// Fetching the limiter doesn't consume budget (#466's dry-run fix
+		// applies equally here).
+		callerKey := mutationCallerKey(ctx)
+		limiter := callerLimiter(deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
+
+		if in.DryRun {
+			data, readErr := os.ReadFile(filePath)
+			if readErr != nil {
+				if os.IsNotExist(readErr) {
+					return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug))
+				}
+				slog.Error("delete_page_asset: dry-run read failed", "slug", slug, "filename", filename, "error", readErr)
+				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("read_error: failed to read asset"))
+			}
+			referencedIn, refErr := findAssetReferences(dir, filename)
+			if refErr != nil {
+				slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
+			}
+			return nil, deletePageAssetOutput{
+				ToolResponse:       writeSuccessEnvelope(),
+				Status:             "ok",
+				Slug:               slug,
+				Filename:           filename,
+				Sha256:             contentmodel.SourceRevisionBytes(data),
+				DryRun:             true,
+				Referenced:         fileutil.BoolPtr(len(referencedIn) > 0),
+				ReferencedIn:       referencedIn,
+				RateLimitRemaining: rateLimitRemaining(limiter),
+			}, nil
+		}
+
+		if in.ExpectedSha256 == "" && in.ExpectedRevision == "" {
+			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: expected_sha256 or expected_revision is required for non-dry-run delete_page_asset"))
+		}
+
+		if !limiter.Allow() {
+			return nil, deletePageAssetOutput{}, wrapErr(rateLimitExceededErr("delete_page_asset", cfg.RateLimit.DestructivePerMin, limiter))
+		}
+
+		const lockWait = 10 * time.Second
+		deadline := time.Now().Add(lockWait)
+		for {
+			if hugosite.ContentMu.TryLock() {
+				slog.Debug("delete_page_asset: lock_acquired")
+				break
+			}
+			if time.Now().After(deadline) {
+				slog.Error("delete_page_asset: lock_timeout", "timeout_s", lockWait.Seconds())
+				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		defer func() {
+			hugosite.ContentMu.Unlock()
+			slog.Debug("delete_page_asset: lock_released")
+		}()
+
+		// Idempotency replay is checked before any file read below, using
+		// only the request's own params (slug/filename/expected_*/force) —
+		// a replay of an already-completed delete has nothing left to read
+		// on disk (the asset is genuinely gone), so replay must not depend
+		// on a not_found gate the way the fresh-attempt path below does.
+		idemHash := ""
+		if strings.TrimSpace(in.IdempotencyKey) != "" {
+			h, hashErr := requestHash(struct {
+				Slug             string `json:"slug"`
+				Filename         string `json:"filename"`
+				ExpectedSha256   string `json:"expected_sha256,omitempty"`
+				ExpectedRevision string `json:"expected_revision,omitempty"`
+				Force            bool   `json:"force,omitempty"`
+			}{Slug: slug, Filename: filename, ExpectedSha256: in.ExpectedSha256, ExpectedRevision: in.ExpectedRevision, Force: in.Force})
+			if hashErr != nil {
+				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("internal_error: failed to hash idempotency request"))
+			}
+			idemHash = h
+			var cached deletePageAssetOutput
+			hit, replayErr := idem.replay("delete_page_asset", in.IdempotencyKey, idemHash, &cached)
+			if replayErr != nil {
+				return nil, deletePageAssetOutput{}, wrapErr(replayErr)
+			}
+			if hit {
+				return nil, cached, nil
+			}
+		}
+
+		data, readErr := os.ReadFile(filePath)
+		if readErr != nil {
+			if os.IsNotExist(readErr) {
+				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug))
+			}
+			slog.Error("delete_page_asset: read failed", "slug", slug, "filename", filename, "error", readErr)
+			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("read_error: failed to read asset"))
+		}
+		actualHash := contentmodel.SourceRevisionBytes(data)
+		actualBundleRevision := ""
+		if resolvedSource := inspectDeleteSource(dir); resolvedSource.SourcePath != "" {
+			if rev, revErr := contentmodel.SourceRevision(resolvedSource.SourcePath); revErr == nil {
+				actualBundleRevision = rev
+			}
+		}
+		referencedIn, refErr := findAssetReferences(dir, filename)
+		if refErr != nil {
+			slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
+		}
+
+		if in.ExpectedSha256 != "" && in.ExpectedSha256 != actualHash {
+			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
+		}
+		if in.ExpectedRevision != "" && in.ExpectedRevision != actualBundleRevision {
+			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
+		}
+		if len(referencedIn) > 0 && !in.Force {
+			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("asset_referenced: %q is referenced in %v; pass force=true to delete anyway", filename, referencedIn))
+		}
+
+		if err := os.Remove(filePath); err != nil {
+			slog.Error("delete_page_asset: remove failed", "slug", slug, "filename", filename, "error", err)
+			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("delete_error: failed to delete asset"))
+		}
+
+		var warning string
+		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
+		entry := fmt.Sprintf("%s DELETE_ASSET %s/%s\n", time.Now().UTC().Format(time.RFC3339), slug, filename)
+		if auditErr := appendAuditLog(auditLog, entry); auditErr != nil {
+			slog.Warn("delete_page_asset: audit log write failed (delete already committed)", "slug", slug, "filename", filename, "error", auditErr)
+			warning = "audit_error: " + auditErr.Error()
+		}
+
+		out := deletePageAssetOutput{
+			ToolResponse:       writeSuccessEnvelope(),
+			Status:             "ok",
+			Slug:               slug,
+			Filename:           filename,
+			Sha256:             actualHash,
+			Referenced:         fileutil.BoolPtr(len(referencedIn) > 0),
+			ReferencedIn:       referencedIn,
+			Warning:            warning,
+			RateLimitRemaining: rateLimitRemaining(limiter),
+		}
+		if idemHash != "" {
+			if err := idem.remember("delete_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
+				slog.Warn("delete_page_asset: could not persist idempotency result", "slug", slug, "filename", filename, "error", err)
+			}
+		}
+		return nil, out, nil
+	}))
+}

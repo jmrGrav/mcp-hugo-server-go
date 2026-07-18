@@ -89,7 +89,8 @@ classification:
 | `content_not_found:` | Slug or resource does not exist                |
 | `ambiguous_language:`| Multiple language variants and no `lang` param |
 | `not_found:`         | File or path does not exist on disk            |
-| `rate_limit_exceeded:` | Per-caller budget exceeded (`create_page`/`update_page`/`upload_page_asset` share one budget, `delete_page` has its own — see §6.3) |
+| `rate_limit_exceeded:` | Per-caller budget exceeded (`create_page`/`update_page`/`upload_page_asset` share one budget, `delete_page`/`delete_page_asset` share their own, separate one — see §6.3) |
+| `asset_referenced:`  | `delete_page_asset`'s filename is still linked from the page's own body; pass `force=true` to delete anyway (#460) |
 
 ---
 
@@ -262,6 +263,7 @@ no exceptions — `write` implies full `read` access plus everything below.
 | `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455); same `new_revision` success-path contract as `create_page` (#464); same `rate_limit_remaining` contract as `create_page` (#466) |
 | `delete_page` | flat     | `status`, `slug`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455); `rate_limit_remaining` reports the caller's remaining budget on `delete_page`'s own, separate quota (#466) |
 | `upload_page_asset` | flat | `status`, `slug`, `filename`, `path`, `content_type`, `size_bytes`, `sha256`, `duplicate_of?` (advisory only), `dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`); `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466) |
+| `delete_page_asset` | flat | `status`, `slug`, `filename`, `sha256`, `dry_run?`, `referenced?` (pointer — present as `false` on success, omitted on error, so "not referenced" and "never checked" stay distinguishable), `referenced_in?`; requires `expected_sha256` or `expected_revision` on non-dry-run calls (a mismatch fails `revision_conflict`); fails `asset_referenced` if the filename is still linked from the page body, unless `force=true`; `dry_run` previews `sha256`/`referenced` without requiring the concurrency guard or deleting anything; `rate_limit_remaining` reports the caller's remaining budget on `delete_page`'s own destructive quota (#460). Only removes the source asset — unlike `delete_page`, it does not purge any built public copy or CDN cache; the asset stays reachable at its old URL until the next build |
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready` |
 | `preview_build`           | flat     | (build result)                       |
 | `run_post_build_hooks`    | flat     | (hook result)                        |
@@ -356,7 +358,7 @@ the runtime layer first because it is the one that cannot be skipped.
 Two independent layers protect the write surface:
 
 1. **Per-scope, per-IP, HTTP-layer** (`internal/oauth/ratelimit.go`, pre-existing): every `tools/call` request is throttled by `(caller IP, token scope)`, configured via `rate_limit.content_write_per_min` etc. — a single shared budget across every tool in that scope tier.
-2. **Per-tool-class, per-caller, in-process** (`internal/tools/write`, this section): `create_page`, `update_page`, and `upload_page_asset` share one budget, configured via `rate_limit.create_update_per_min` (default 60/min); `delete_page` has its own, separate budget via `rate_limit.destructive_per_min` (default 5/min, unchanged from before this issue). These are independent of each other and independent of the layer-1 limit above — exhausting one never blocks the other.
+2. **Per-tool-class, per-caller, in-process** (`internal/tools/write`, this section): `create_page`, `update_page`, and `upload_page_asset` share one budget, configured via `rate_limit.create_update_per_min` (default 60/min); `delete_page` and `delete_page_asset` share their own, separate budget via `rate_limit.destructive_per_min` (default 5/min, unchanged from before this issue). These are independent of each other and independent of the layer-1 limit above — exhausting one never blocks the other.
 
 Both layers key on caller IP (the only caller identity currently available in tool-handler context); a true per-`client_id` budget would need OAuth `client_id` propagated into context, which is a larger change tracked separately.
 
@@ -437,9 +439,10 @@ Every tool-facing error code, whether it carries a `resolution` and why:
 | `missing_required_parameter` | yes | `retry_with_parameter` on the missing field; `expected_revision` specifically recommends `get_page_for_edit` (its own message shape — "expected_revision is required for non-dry-run update_page/delete_page" — is matched separately from the generic "X must not be empty" pattern) |
 | `invalid_params` (other) | yes | `retry_with_parameter`, with `field`/`allowed_values` inferred from the message where possible |
 | `build_in_progress`, `rate_limit_exceeded` | yes | `retry_later`; `rate_limit_exceeded` additionally carries `resolution.retry_after_seconds` (a concrete wait time parsed from the message), `build_in_progress` does not (#466) |
-| `revision_conflict` | yes | `reread_then_retry` via `get_page_for_edit` |
+| `revision_conflict` | yes | `reread_then_retry` via `get_page_for_edit`, except `delete_page_asset`'s own "asset changed" message, which recommends `list_page_assets` instead (#460) — `get_page_for_edit` doesn't return an asset's hash |
 | `content_not_found`, `not_found` | yes | `search_then_retry` via `search_pages` — both mean the named slug doesn't resolve |
 | `already_exists` | conditional | `use_different_tool` → `update_page`, but only for `create_page`'s own "page already exists" message; `upload_page_asset`'s "asset already exists" message deliberately gets no hint, since there's no update path for an existing asset by design |
+| `asset_referenced` | yes | `retry_with_parameter` on `force` — `delete_page_asset`'s guard against deleting a still-linked asset is retryable via the documented override, not a caller mistake to fix by changing input shape (#460) |
 | `content_not_public` | no (deliberate) | overloaded across two meanings in this codebase — a draft the caller's profile can't see, vs. a diagnostics sub-feature unavailable to the reader profile. Only the first would benefit from "search again"; a single static hint would misguide the second, so neither gets one |
 | `not_a_bundle`, `build_precondition_failed`, `idempotency_conflict`, `validation_error`, `security_error` | no | caller-input-adjacent, but the fix is specific to the message text (e.g. which validation rule failed) in a way a single static action can't generalize |
 | `internal_error`, `read_error`, `write_error`, `delete_error`, `parse_error`, `scan_error`, `render_output_unavailable`, `git_metadata_unavailable`, `config_error`, `fetch_error`, `image_api_error`, `request_error`, `build_error` | no | opaque server-side faults, not caused by caller input — there's nothing for the caller to change, only something to report or retry blindly |

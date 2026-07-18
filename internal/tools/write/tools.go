@@ -985,6 +985,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	}))
 
 	registerUploadPageAsset(s, pg, idx, cfg, idem, &mutationMu, mutationLimiters)
+	registerDeletePageAsset(s, pg, idx, cfg, idem, &deleteMu, deleteLimiters)
 }
 
 func createPageState() site.LifecycleState {
@@ -1268,6 +1269,7 @@ func Defs() []tools.ToolDef {
 		{Name: "update_page", RequiredScope: "write"},
 		{Name: "delete_page", RequiredScope: "write"},
 		{Name: "upload_page_asset", RequiredScope: "write"},
+		{Name: "delete_page_asset", RequiredScope: "write"},
 	}
 }
 

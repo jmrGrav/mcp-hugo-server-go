@@ -100,6 +100,32 @@ func TestParseToolErrorRevisionConflict(t *testing.T) {
 	}
 }
 
+// TestParseToolErrorRevisionConflictAssetRecommendsListPageAssets is a
+// regression test for #460: delete_page_asset's own revision_conflict
+// message names "asset", not a page, so get_page_for_edit (which doesn't
+// return an asset's hash) would misguide the caller — list_page_assets is
+// the tool that actually re-supplies expected_sha256/expected_revision.
+func TestParseToolErrorRevisionConflictAssetRecommendsListPageAssets(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
+	if got.Resolution == nil || got.Resolution.RecommendedTool != "list_page_assets" {
+		t.Fatalf("Resolution = %#v, want RecommendedTool=list_page_assets", got.Resolution)
+	}
+}
+
+// TestParseToolErrorAssetReferencedRecommendsForce is a regression test for
+// #460: delete_page_asset's asset_referenced guard is retryable via the
+// documented force=true override, not a caller mistake to fix by changing
+// input shape.
+func TestParseToolErrorAssetReferencedRecommendsForce(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("asset_referenced: %q is referenced in %v; pass force=true to delete anyway", "cover.png", []string{"index.md"}))
+	if !got.Retryable {
+		t.Fatal("Retryable = false, want true")
+	}
+	if got.Resolution == nil || got.Resolution.Action != "retry_with_parameter" || got.Resolution.Parameter != "force" {
+		t.Fatalf("Resolution = %#v, want retry_with_parameter on force", got.Resolution)
+	}
+}
+
 func TestParseToolErrorContentNotFound(t *testing.T) {
 	got := ParseToolError(fmt.Errorf("content_not_found: no source or public page found for slug %q", "posts/gone"))
 	if got.Code != "content_not_found" {

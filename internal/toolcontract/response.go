@@ -224,10 +224,28 @@ func ParseToolError(err error) ToolError {
 	case "revision_conflict":
 		out.Field = "expected_revision"
 		out.Retryable = true
+		// delete_page_asset's own revision_conflict message (#460) names
+		// "asset", not a page — get_page_for_edit doesn't return an asset's
+		// hash, so recommending it would misguide the caller;
+		// list_page_assets is the tool that actually re-supplies
+		// expected_sha256/expected_revision for this case.
+		recommendedTool := "get_page_for_edit"
+		if strings.Contains(message, "asset") {
+			recommendedTool = "list_page_assets"
+		}
 		out.Resolution = &ErrorResolution{
 			Action:          "reread_then_retry",
 			Parameter:       "expected_revision",
-			RecommendedTool: "get_page_for_edit",
+			RecommendedTool: recommendedTool,
+		}
+	case "asset_referenced":
+		// delete_page_asset's guard against deleting an asset still linked
+		// from the page body (#460) — retryable via the documented override,
+		// not a caller mistake to fix by changing input shape.
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{
+			Action:    "retry_with_parameter",
+			Parameter: "force",
 		}
 	case "content_not_found", "not_found":
 		// not_found is update_page/delete_page's own not-indexed message —
