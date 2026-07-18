@@ -2,7 +2,9 @@
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
-LDFLAGS := -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=$(VERSION)
+COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo)
+BUILD_CHANNEL ?= $(if $(RELEASE_VERSION),release,$(firstword $(subst -, ,$(VERSION))))
+LDFLAGS := -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=$(VERSION) -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.ReleaseVersion=$(RELEASE_VERSION) -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Commit=$(COMMIT) -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.BuildChannel=$(BUILD_CHANNEL)
 BIN := mcp-hugo-server-go
 
 build:

@@ -39,7 +39,11 @@ type generateFeaturedImageInput struct {
 }
 
 type generateFeaturedImageOutput struct {
-	toolcontract.ToolResponse[map[string]any]
+	toolcontract.ToolResponse[generateFeaturedImageData]
+	Path string `json:"path"`
+}
+
+type generateFeaturedImageData struct {
 	Path string `json:"path"`
 }
 
@@ -52,8 +56,15 @@ type imageWriteErrorPayload struct {
 	Docs            string `json:"docs"`
 }
 
-func imageSuccessEnvelope() toolcontract.ToolResponse[map[string]any] {
-	return toolcontract.Success(map[string]any{}, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+func imageSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+}
+
+func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeaturedImageOutput {
+	return generateFeaturedImageOutput{
+		ToolResponse: imageSuccessEnvelope(data),
+		Path:         data.Path,
+	}
 }
 
 // Register wires all admin tools (site.admin scope).
@@ -195,7 +206,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 		}
 
-		return nil, generateFeaturedImageOutput{ToolResponse: imageSuccessEnvelope(), Path: destPath}, nil
+		return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: destPath}), nil
 	}))
 }
 
@@ -246,7 +257,7 @@ func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedI
 		return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 	}
 
-	return nil, generateFeaturedImageOutput{ToolResponse: imageSuccessEnvelope(), Path: destPath}, nil
+	return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: destPath}), nil
 }
 
 func imageWriteError(destPath string) error {

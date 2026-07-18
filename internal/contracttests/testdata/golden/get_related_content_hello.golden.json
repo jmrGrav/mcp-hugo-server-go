@@ -1,5 +1,4 @@
 {
-  "backlinks": [],
   "data": {
     "backlinks": [],
     "related_pages": [
@@ -36,40 +35,12 @@
   },
   "errors": [],
   "meta": {
+    "build_channel": "main",
+    "commit": "0123456789ab",
+    "release_version": "vtest",
     "schema_version": "v1.0.0",
     "server_version": "test-server-version"
   },
-  "related_pages": [
-    {
-      "lang": "fr",
-      "shared_tag_terms": [
-        {
-          "label": "Hugo",
-          "slug": "hugo",
-          "source": "Hugo"
-        }
-      ],
-      "shared_tags": [
-        "hugo"
-      ],
-      "slug": "/posts/bonjour/",
-      "title": "Bonjour",
-      "url": "https://example.test/posts/bonjour/"
-    }
-  ],
   "success": true,
-  "suggested_links": [
-    {
-      "anchor_text": "Bonjour",
-      "score": 2,
-      "shared_tags": [
-        "hugo"
-      ],
-      "slug": "/posts/bonjour/",
-      "title": "Bonjour",
-      "url": "https://example.test/posts/bonjour/"
-    }
-  ],
-  "translations": [],
   "warnings": []
 }

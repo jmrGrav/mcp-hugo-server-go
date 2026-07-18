@@ -94,6 +94,16 @@ func decodeWriteContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return m
 }
 
+func decodeWriteData(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	out := decodeWriteContent(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	return data
+}
+
 func decodeWriteErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	t.Helper()
 	if res.StructuredContent != nil {
@@ -162,7 +172,11 @@ func TestCreatePage(t *testing.T) {
 		t.Fatalf("create_page returned error: %s", raw)
 	}
 	out := decodeWriteContent(t, res)
+	dataEnvelope := decodeWriteData(t, res)
 	assertWritePageState(t, out["state"], "present", "pending", "not_yet_available", "source_only")
+	if got := dataEnvelope["slug"]; got != "my-post" {
+		t.Fatalf("create_page data.slug = %v, want my-post", got)
+	}
 
 	path := filepath.Join(contentRoot, "my-post", "index.md")
 	data, err := os.ReadFile(path)
@@ -1388,8 +1402,12 @@ func TestUpdatePageSuccess(t *testing.T) {
 		t.Errorf("updated file missing new title: %s", data)
 	}
 	decoded := decodeWriteContent(t, res)
+	dataEnvelope := decodeWriteData(t, res)
 	if got := decoded["resolved_source_path"]; got != "content/update-me/index.md" {
 		t.Fatalf("update_page resolved_source_path = %v, want content/update-me/index.md", got)
+	}
+	if got := dataEnvelope["resolved_source_path"]; got != "content/update-me/index.md" {
+		t.Fatalf("update_page data.resolved_source_path = %v, want content/update-me/index.md", got)
 	}
 }
 
@@ -1424,8 +1442,12 @@ func TestDeletePageSuccess(t *testing.T) {
 		t.Error("expected page directory to be fully removed")
 	}
 	decoded := decodeWriteContent(t, res)
+	dataEnvelope := decodeWriteData(t, res)
 	if got := decoded["resolved_source_path"]; got != "content/to-delete/index.md" {
 		t.Fatalf("delete_page resolved_source_path = %v, want content/to-delete/index.md", got)
+	}
+	if got := dataEnvelope["resolved_source_path"]; got != "content/to-delete/index.md" {
+		t.Fatalf("delete_page data.resolved_source_path = %v, want content/to-delete/index.md", got)
 	}
 }
 

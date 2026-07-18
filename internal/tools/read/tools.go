@@ -243,40 +243,22 @@ type exportAgentContextData = exportResultDTO
 
 type getFullPageMarkdownOutput struct {
 	toolcontract.ToolResponse[getFullPageMarkdownData]
-	Page pageMarkdownDTO `json:"page"`
 }
 
 type getPageFrontmatterOutput struct {
 	toolcontract.ToolResponse[getPageFrontmatterData]
-	Frontmatter frontmatterDTO `json:"frontmatter"`
 }
 
 type getRelatedContentOutput struct {
 	toolcontract.ToolResponse[getRelatedContentData]
-	Translations   []translationPageDTO       `json:"translations"`
-	RelatedPages   []relatedPageDTO           `json:"related_pages"`
-	Backlinks      []backlinkDTO              `json:"backlinks"`
-	SuggestedLinks []linkSuggestionDTO        `json:"suggested_links"`
-	EmptyReason    *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
-	Impact         *impactDTO                 `json:"impact,omitempty"`
 }
 
 type buildAgentContextOutput struct {
 	toolcontract.ToolResponse[buildAgentContextData]
-	Context any `json:"context"`
 }
 
 type exportAgentContextOutput struct {
 	toolcontract.ToolResponse[exportAgentContextData]
-	Export        exportResultDTO `json:"export"`
-	Pages         []pageExportDTO `json:"pages"`
-	Total         int             `json:"total"`
-	Limit         int             `json:"limit"`
-	Offset        int             `json:"offset"`
-	ReturnedCount int             `json:"returned_count"`
-	HasMore       bool            `json:"has_more"`
-	NextOffset    *int            `json:"next_offset,omitempty"`
-	IncludeBody   bool            `json:"include_body"`
 }
 
 type getPageForEditInput struct {
@@ -322,7 +304,6 @@ type getPageForEditData struct {
 
 type getPageForEditOutput struct {
 	toolcontract.ToolResponse[getPageForEditData]
-	Page pageForEditDTO `json:"page"`
 }
 
 // getPageForEditDefaultSections is what an empty/omitted `include` expands
@@ -374,7 +355,7 @@ func newGetPageForEditOutput(data getPageForEditData, warnings []string, now tim
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
-	return getPageForEditOutput{ToolResponse: resp, Page: data.Page}
+	return getPageForEditOutput{ToolResponse: resp}
 }
 
 func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
@@ -693,23 +674,15 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 }
 
 func newGetFullPageMarkdownOutput(data getFullPageMarkdownData, now time.Time) getFullPageMarkdownOutput {
-	return getFullPageMarkdownOutput{ToolResponse: successEnvelope(data, now), Page: data.Page}
+	return getFullPageMarkdownOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newGetPageFrontmatterOutput(data getPageFrontmatterData, now time.Time) getPageFrontmatterOutput {
-	return getPageFrontmatterOutput{ToolResponse: successEnvelope(data, now), Frontmatter: data.Frontmatter}
+	return getPageFrontmatterOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRelatedContentOutput {
-	return getRelatedContentOutput{
-		ToolResponse:   successEnvelope(data, now),
-		Translations:   data.Translations,
-		RelatedPages:   data.RelatedPages,
-		Backlinks:      data.Backlinks,
-		SuggestedLinks: data.SuggestedLinks,
-		EmptyReason:    data.EmptyReason,
-		Impact:         data.Impact,
-	}
+	return getRelatedContentOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newBuildAgentContextOutput(data buildAgentContextData, warnings []string, now time.Time) buildAgentContextOutput {
@@ -717,7 +690,7 @@ func newBuildAgentContextOutput(data buildAgentContextData, warnings []string, n
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
-	return buildAgentContextOutput{ToolResponse: resp, Context: data.Context}
+	return buildAgentContextOutput{ToolResponse: resp}
 }
 
 func newExportAgentContextOutput(data exportAgentContextData, warnings []string, now time.Time) exportAgentContextOutput {
@@ -725,18 +698,7 @@ func newExportAgentContextOutput(data exportAgentContextData, warnings []string,
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
-	return exportAgentContextOutput{
-		ToolResponse:  resp,
-		Export:        exportResultDTO(data),
-		Pages:         data.Pages,
-		Total:         data.Total,
-		Limit:         data.Limit,
-		Offset:        data.Offset,
-		ReturnedCount: data.ReturnedCount,
-		HasMore:       data.HasMore,
-		NextOffset:    data.NextOffset,
-		IncludeBody:   data.IncludeBody,
-	}
+	return exportAgentContextOutput{ToolResponse: resp}
 }
 
 func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revision string, state site.LifecycleState) pageMarkdownDTO {

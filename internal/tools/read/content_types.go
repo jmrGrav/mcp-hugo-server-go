@@ -46,12 +46,10 @@ type listContentTypesData struct {
 
 type listContentTypesOutput struct {
 	toolcontract.ToolResponse[listContentTypesData]
-	ContentTypes []contentTypeDTO `json:"content_types"`
-	SpecialFiles []specialFileDTO `json:"special_files,omitempty"`
 }
 
 func newListContentTypesOutput(data listContentTypesData, now time.Time) listContentTypesOutput {
-	return listContentTypesOutput{ToolResponse: successEnvelope(data, now), ContentTypes: data.ContentTypes, SpecialFiles: data.SpecialFiles}
+	return listContentTypesOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 // RegisterListContentTypes registers list_content_types. Separate function

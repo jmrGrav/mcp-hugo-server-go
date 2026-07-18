@@ -19,7 +19,10 @@ type ResponseMeta struct {
 	GeneratedAt string `json:"generated_at"`
 	// ServerVersion is the deployed server build (internal/buildinfo.Version)
 	// — what most callers actually want when they say "version".
-	ServerVersion string `json:"server_version"`
+	ServerVersion  string `json:"server_version"`
+	ReleaseVersion string `json:"release_version,omitempty"`
+	Commit         string `json:"commit,omitempty"`
+	BuildChannel   string `json:"build_channel,omitempty"`
 	// SchemaVersion is the response *shape* version (ToolResultVersion,
 	// currently "v1.0.0") — replaces the old root-level `version` field
 	// (#454), which was ambiguous: its name suggested the server version,
@@ -94,9 +97,12 @@ func ComputePagination(total, limit, offset, returned int) PaginationMeta {
 
 func NewMeta(serverVersion string, generatedAt time.Time) ResponseMeta {
 	return ResponseMeta{
-		GeneratedAt:   generatedAt.UTC().Format(time.RFC3339),
-		ServerVersion: serverVersion,
-		SchemaVersion: ToolResultVersion,
+		GeneratedAt:    generatedAt.UTC().Format(time.RFC3339),
+		ServerVersion:  serverVersion,
+		ReleaseVersion: buildinfo.EffectiveReleaseVersion(),
+		Commit:         buildinfo.Commit,
+		BuildChannel:   buildinfo.EffectiveBuildChannel(),
+		SchemaVersion:  ToolResultVersion,
 	}
 }
 

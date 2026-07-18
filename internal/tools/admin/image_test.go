@@ -111,6 +111,14 @@ func TestGenerateFeaturedImage_Success(t *testing.T) {
 	if !strings.Contains(text, expectedPath) {
 		t.Fatalf("result text %q does not contain path %q", text, expectedPath)
 	}
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	if got := data["path"]; got != expectedPath {
+		t.Fatalf("generate_hero_image data.path = %v, want %q", got, expectedPath)
+	}
 }
 
 func TestGenerateFeaturedImage_MIMEReject(t *testing.T) {
