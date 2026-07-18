@@ -716,7 +716,8 @@ func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 
 func identityFromGetPage(t *testing.T, res *mcp.CallToolResult) identity {
 	t.Helper()
-	page := mapAt(t, decodeContent(t, res), "page")
+	data := mapAt(t, decodeContent(t, res), "data")
+	page := mapAt(t, data, "page")
 	return identity{
 		Slug:               asString(page["slug"]),
 		Lang:               asString(page["lang"]),
@@ -787,7 +788,8 @@ func identityFromDiffPage(t *testing.T, res *mcp.CallToolResult) identity {
 
 func extractTopLevelPages(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
 	t.Helper()
-	return extractCollection(t, m, "pages")
+	data := mapAt(t, m, "data")
+	return extractCollection(t, data, "pages")
 }
 
 func assertLifecycleState(t *testing.T, state map[string]any, source, build, public, index string) {
@@ -808,12 +810,14 @@ func assertLifecycleState(t *testing.T, state map[string]any, source, build, pub
 
 func extractTopLevelItems(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
 	t.Helper()
-	return extractCollection(t, m, "items")
+	data := mapAt(t, m, "data")
+	return extractCollection(t, data, "items")
 }
 
 func extractTopLevelEntries(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
 	t.Helper()
-	return extractCollection(t, m, "entries")
+	data := mapAt(t, m, "data")
+	return extractCollection(t, data, "entries")
 }
 
 func extractSearchContentPages(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
@@ -1002,8 +1006,14 @@ func assertToolResponseEnvelopeMeta(t *testing.T, tool string, m map[string]any)
 	if !ok || metaGeneratedAt == "" {
 		t.Fatalf("%s meta.generated_at = %v, want non-empty string", tool, meta["generated_at"])
 	}
-	if got := asString(m["version"]); got != toolcontract.ToolResultVersion {
-		t.Fatalf("%s version = %q, want schema version %q", tool, got, toolcontract.ToolResultVersion)
+	// #454: the ambiguous root-level `version` field (schema version, easily
+	// mistaken for the server version) was removed; the schema-version
+	// signal now lives unambiguously at meta.schema_version instead.
+	if got := asString(meta["schema_version"]); got != toolcontract.ToolResultVersion {
+		t.Fatalf("%s meta.schema_version = %q, want schema version %q", tool, got, toolcontract.ToolResultVersion)
+	}
+	if _, ok := m["version"]; ok {
+		t.Fatalf("%s root-level version should be removed (#454), got %v", tool, m["version"])
 	}
 	if got := asString(m["generated_at"]); got != metaGeneratedAt {
 		t.Fatalf("%s generated_at = %q, want meta.generated_at %q", tool, got, metaGeneratedAt)

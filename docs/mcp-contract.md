@@ -37,11 +37,15 @@ partial-success signalling, or forward-compatible extension.
 ```json
 {
   "success": true,
-  "version": "v1.0.0",
   "generated_at": "2026-07-12T02:30:00Z",
   "data": { ... },
   "warnings": [],
-  "errors": []
+  "errors": [],
+  "meta": {
+    "generated_at": "2026-07-12T02:30:00Z",
+    "server_version": "v1.4.9",
+    "schema_version": "v1.0.0"
+  }
 }
 ```
 
@@ -50,11 +54,16 @@ Fields:
 | Field          | Type     | Always present | Notes                                              |
 |----------------|----------|---------------|----------------------------------------------------|
 | `success`      | bool     | yes           | `true` even when `errors` is non-empty if partial results are returned |
-| `version`      | string   | yes           | Schema version; currently `"v1.0.0"`               |
-| `generated_at` | string   | yes           | RFC 3339 UTC timestamp                             |
-| `data`         | object   | yes           | Tool-specific payload                              |
+| `generated_at` | string   | yes           | RFC 3339 UTC timestamp; duplicates `meta.generated_at` at the root for convenience |
+| `data`         | object   | yes           | Tool-specific payload — the sole location for a tool's fields; no top-level duplicates (#433) |
 | `warnings`     | string[] | yes           | Non-fatal observations (empty array when none)     |
 | `errors`       | string[] | yes           | Problems that degraded the result (empty array when none) |
+| `meta`         | object   | yes           | `generated_at`, `server_version` (deployed build), `schema_version` (this envelope's shape version, currently `"v1.0.0"`) — see [§5](#5-versioning) |
+
+A root-level `version` field existed through v1.4.x but was removed (#454):
+its name was ambiguous (it actually meant the schema version, not the server
+version, but read like it could mean either) and it duplicated information
+now available unambiguously at `meta.schema_version`.
 
 `success: false` means the call produced no usable result. `success: true`
 with non-empty `errors` means a partial result was returned.
@@ -134,11 +143,14 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 
 ## 5. Versioning
 
-- `version: "v1.0.0"` in structured envelopes refers to the **response schema
-  version**, not the server version.
+- `meta.schema_version: "v1.0.0"` refers to the **response schema version**,
+  not the server version. Through v1.4.x this lived at a root-level
+  `version` field instead; it moved under `meta` (#454) because the old
+  name was ambiguous — it read like it could mean either the schema or the
+  server version, and the two now live at unambiguous, adjacent names.
 - The deployed server version is carried separately in
   `meta.server_version` inside structured tool responses.
-- Flat envelope tools do not carry a `version` field; their schema is
+- Flat envelope tools do not carry either version field; their schema is
   implicitly v1.
 - `meta.server_version` and the MCP `initialize` response's `serverInfo.version`
   both come from `internal/buildinfo.Version`, injected at build time via
@@ -208,17 +220,25 @@ breaking change since the parameters are optional and additive.
 
 ### Anonymous (no auth required)
 
-| Tool                  | Envelope  | Top-level key(s)          |
-|-----------------------|-----------|---------------------------|
-| `list_pages`          | flat      | `pages`                   |
-| `get_page`            | flat      | `page`                    |
-| `search_pages`        | flat      | `pages`; supports `response_mode`/`fields` shaping (§5.2, #337); each page carries `score` (term-match count) and `match: "title_exact"` requests a strict full-title match instead of broad term matching (#332) |
-| `get_recent_posts`    | flat      | `pages`                   |
-| `list_tags`           | flat      | `tags`                    |
-| `list_categories`     | flat      | `categories`              |
-| `get_sitemap`         | flat      | `entries`                 |
-| `get_feed`            | flat      | `items`                   |
-| `get_site_information`| flat      | `site`                    |
+These 9 tools carry the full structured envelope (`success`/`data`/`errors`/
+`warnings`/`meta`) like every other tool in this document — their payload
+lives solely under `data.X` below. Through v1.4.x they *also* duplicated the
+same fields at the top level (`data.pages` **and** top-level `pages`,
+etc.), roughly doubling response size for no functional benefit; that
+duplication was removed (#433), so `data.X` is now the only place to read
+each field.
+
+| Tool                  | Envelope    | `data.X` key(s)          |
+|-----------------------|-------------|---------------------------|
+| `list_pages`          | structured  | `pages`                   |
+| `get_page`            | structured  | `page`                    |
+| `search_pages`        | structured  | `pages`; supports `response_mode`/`fields` shaping (§5.2, #337); each page carries `score` (term-match count) and `match: "title_exact"` requests a strict full-title match instead of broad term matching (#332) |
+| `get_recent_posts`    | structured  | `pages`                   |
+| `list_tags`           | structured  | `tags`                    |
+| `list_categories`     | structured  | `categories`              |
+| `get_sitemap`         | structured  | `entries`                 |
+| `get_feed`            | structured  | `items`                   |
+| `get_site_information`| structured  | `site`                    |
 
 ### `read` (ungated — no scope required, see [§6.12](#612-2-scope-model-readwrite-450))
 
@@ -234,7 +254,7 @@ content, including drafts, for every tool in this table.
 |-------------------------|-------------|----------------------------------------------|
 | `get_page_markdown`| flat        | `page` + `page.state`                        |
 | `get_page_frontmatter`  | flat        | `frontmatter` + `frontmatter.state`          |
-| `get_related_content`   | flat        | `related`; `related_pages` is canonical, `related` is a deprecated alias always identical to it, kept pending #433's live-client-verification question (#453); when `related_pages` is empty, `empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458) |
+| `get_related_content`   | flat        | `related_pages`; the deprecated `related` alias (#453) was removed once #433/#454 resolved the live-client-verification question — `related_pages` was always canonical; when `related_pages` is empty, `empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458) |
 | `build_agent_context`   | flat        | `context` + `context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337) |
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
 | `get_page_for_edit`     | flat        | `page.state`, `page.revision`, `page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` (#339); `page.backlinks` is a fifth, opt-in-only `include` value (identical data to a standalone `get_backlinks` call) — never part of the default bundle when `include` is omitted (#465) |
@@ -245,7 +265,7 @@ content, including drafts, for every tool in this table.
 | `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`            |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
-| `suggest_links`         | structured  | `data.suggested_links` is canonical, `data.suggestions` is a deprecated alias always identical to it, kept pending #433's live-client-verification question (#453); when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458) |
+| `suggest_links`         | structured  | `data.suggested_links` is canonical; the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458) |
 | `diff_page`             | structured  | `data` (diff result) + `data.state`          |
 | `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state` |
 | `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`           |

@@ -342,7 +342,7 @@ func TestComputeRelatedSlugMatching(t *testing.T) {
 		t.Fatalf("get_related_content error")
 	}
 	m := decodeContent(t, res)
-	related, _ := m["related"].([]any)
+	related, _ := m["related_pages"].([]any)
 
 	var bonjourFound bool
 	for _, r := range related {

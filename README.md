@@ -22,9 +22,9 @@ Public endpoint: `https://mcp.arleo.eu/mcp`
 
 It is the unified successor of:
 
-- `hugo-public-mcp` for public discovery, OAuth, and `auth.md`
-- `hugo-mcp-go` for content and administration tools
-- `mcp-runtime-go` for MCP transport/runtime behavior
+- [`hugo-public-mcp`](https://github.com/jmrGrav/hugo-public-mcp) for public discovery, OAuth, and `auth.md`
+- [`hugo-mcp-go`](https://github.com/jmrGrav/hugo-mcp-go) for content and administration tools
+- [`mcp-runtime-go`](https://github.com/jmrGrav/mcp-runtime-go) for MCP transport/runtime behavior
 
 ## Access model
 

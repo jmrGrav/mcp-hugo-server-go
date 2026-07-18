@@ -98,13 +98,6 @@ type getRelatedContentData struct {
 
 	SuggestedLinks []linkSuggestionDTO `json:"suggested_links"`
 
-	// Related always carries the exact same slice as RelatedPages (#453) —
-	// RelatedPages is canonical; Related is kept as a deprecated alias
-	// rather than removed until #433's live-client-verification question
-	// (does any connected client read this exact field name?) is resolved,
-	// since removing it would be a breaking wire change if so.
-	Related []relatedPageDTO `json:"related"`
-
 	// EmptyReason is populated only when RelatedPages is empty (#458), so an
 	// agent can tell "no other content shares enough tag/category overlap"
 	// from "the heuristic never even had candidates to evaluate" instead of
@@ -215,14 +208,11 @@ type getPageFrontmatterOutput struct {
 
 type getRelatedContentOutput struct {
 	toolcontract.ToolResponse[getRelatedContentData]
-	Translations   []translationPageDTO `json:"translations"`
-	RelatedPages   []relatedPageDTO     `json:"related_pages"`
-	Backlinks      []backlinkDTO        `json:"backlinks"`
-	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
-	// Related is a deprecated alias of RelatedPages (#453); see the comment
-	// on getRelatedContentData.Related for why it isn't simply removed.
-	Related     []relatedPageDTO           `json:"related"`
-	EmptyReason *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
+	Translations   []translationPageDTO       `json:"translations"`
+	RelatedPages   []relatedPageDTO           `json:"related_pages"`
+	Backlinks      []backlinkDTO              `json:"backlinks"`
+	SuggestedLinks []linkSuggestionDTO        `json:"suggested_links"`
+	EmptyReason    *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
 }
 
 type buildAgentContextOutput struct {
@@ -417,7 +407,6 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				RelatedPages:   related,
 				Backlinks:      backlinks,
 				SuggestedLinks: suggestedLinks,
-				Related:        related,
 			}
 			if len(related) == 0 {
 				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
@@ -664,7 +653,6 @@ func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRe
 		RelatedPages:   data.RelatedPages,
 		Backlinks:      data.Backlinks,
 		SuggestedLinks: data.SuggestedLinks,
-		Related:        data.Related,
 		EmptyReason:    data.EmptyReason,
 	}
 }

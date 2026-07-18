@@ -368,12 +368,6 @@ type suggestInternalLinksData struct {
 	Total        int                  `json:"total"`
 	Translations []translationPageDTO `json:"translations"`
 	// SuggestedLinks is canonical (matches the suggest_links tool name).
-	// Suggestions always carries the exact same slice (#453) — kept as a
-	// deprecated alias rather than removed until #433's live-client-
-	// verification question (does any connected client read this exact
-	// field name?) is resolved, since removing it would be a breaking
-	// wire change if so.
-	Suggestions    []linkSuggestionDTO `json:"suggestions"`
 	SuggestedLinks []linkSuggestionDTO `json:"suggested_links"`
 	// EmptyReason is populated only when SuggestedLinks is empty (#458); see
 	// the identically-named field on getRelatedContentData.
@@ -385,7 +379,6 @@ type suggestInternalLinksOutput struct {
 	Slug           string                     `json:"slug,omitempty"`
 	Total          int                        `json:"total"`
 	Translations   []translationPageDTO       `json:"translations"`
-	Suggestions    []linkSuggestionDTO        `json:"suggestions"`
 	SuggestedLinks []linkSuggestionDTO        `json:"suggested_links"`
 	EmptyReason    *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
 }
@@ -739,7 +732,6 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Slug:           resolvedSlug,
 				Total:          len(suggestions),
 				Translations:   translations,
-				Suggestions:    suggestions,
 				SuggestedLinks: suggestions,
 			}
 			if len(suggestions) == 0 {
@@ -1266,7 +1258,6 @@ func newSuggestInternalLinksOutput(data suggestInternalLinksData, now time.Time)
 		Slug:           data.Slug,
 		Total:          data.Total,
 		Translations:   data.Translations,
-		Suggestions:    data.Suggestions,
 		SuggestedLinks: data.SuggestedLinks,
 		EmptyReason:    data.EmptyReason,
 	}

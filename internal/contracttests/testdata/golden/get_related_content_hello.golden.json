@@ -2,24 +2,6 @@
   "backlinks": [],
   "data": {
     "backlinks": [],
-    "related": [
-      {
-        "lang": "fr",
-        "shared_tag_terms": [
-          {
-            "label": "Hugo",
-            "slug": "hugo",
-            "source": "Hugo"
-          }
-        ],
-        "shared_tags": [
-          "hugo"
-        ],
-        "slug": "/posts/bonjour/",
-        "title": "Bonjour",
-        "url": "https://example.test/posts/bonjour/"
-      }
-    ],
     "related_pages": [
       {
         "lang": "fr",
@@ -54,26 +36,9 @@
   },
   "errors": [],
   "meta": {
+    "schema_version": "v1.0.0",
     "server_version": "test-server-version"
   },
-  "related": [
-    {
-      "lang": "fr",
-      "shared_tag_terms": [
-        {
-          "label": "Hugo",
-          "slug": "hugo",
-          "source": "Hugo"
-        }
-      ],
-      "shared_tags": [
-        "hugo"
-      ],
-      "slug": "/posts/bonjour/",
-      "title": "Bonjour",
-      "url": "https://example.test/posts/bonjour/"
-    }
-  ],
   "related_pages": [
     {
       "lang": "fr",
@@ -106,6 +71,5 @@
     }
   ],
   "translations": [],
-  "version": "v1.0.0",
   "warnings": []
 }
