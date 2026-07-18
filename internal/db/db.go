@@ -320,16 +320,38 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 		return err
 	}
 
+	// publicSourceSlugs collects every source-slug candidate (bare and
+	// language-stripped, via the same site.SourceSlugCandidates lookup the
+	// page resolver uses) of each page just synced by SyncPublicPage. A
+	// source page whose own bare slug appears here already has a built
+	// public counterpart with its own pages/page_fts row — syncing it again
+	// under the bare source slug would create a second row for the same
+	// logical page (#475), which search_content's FTS path (keyed off the
+	// public index) can never reach anyway.
+	publicSourceSlugs := make(map[string]bool)
 	if siteIdx != nil {
 		for _, p := range siteIdx.Sitemap() {
 			delete(hashes, p.Slug)
 			if err := d.SyncPublicPage(p, siteIdx); err != nil {
 				slog.Warn("db: startup sync: public page", "slug", p.Slug, "error", err)
+				continue
+			}
+			for _, c := range site.SourceSlugCandidates(strings.Trim(p.Slug, "/")) {
+				publicSourceSlugs[c] = true
 			}
 		}
 	}
 	if srcIdx != nil {
 		for _, p := range srcIdx.ListPages(0, 0) {
+			if publicSourceSlugs[p.Slug] {
+				// Deliberately do NOT delete(hashes, p.Slug) here: if a
+				// duplicate row already exists under this bare slug from
+				// before this fix (or from a write-path call to
+				// SyncSourcePage while the page was still source-only), it
+				// must stay in `hashes` so the orphan-cleanup pass below
+				// deletes it, instead of being silently left behind forever.
+				continue
+			}
 			delete(hashes, p.Slug)
 			if err := d.SyncSourcePage(p); err != nil {
 				slog.Warn("db: startup sync: source page", "slug", p.Slug, "error", err)
