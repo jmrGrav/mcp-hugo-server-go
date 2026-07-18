@@ -259,7 +259,13 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		}
 	}
 	id := randomString(24)
-	scope := s.resolveRegistrationScope(req.RedirectURIs)
+	// Public DCR clients always get "read", never a privileged scope inherited
+	// from redirect_uri overlap with a pre-registered client. See the #497
+	// fix note below for why that inheritance was unsafe. Clients that need
+	// "write" must be pre-registered with a real client_secret in
+	// oauth-clients.yaml and authenticate directly with client_id+secret,
+	// never through this anonymous registration endpoint.
+	scope := "read"
 	s.mu.Lock()
 	s.clients[id] = client{
 		RedirectURIs: append([]string(nil), req.RedirectURIs...),
@@ -278,27 +284,6 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		CodeChallengeMethodsSupported: []string{"S256"},
 		Scope:                         scope,
 	}, nil
-}
-
-// resolveRegistrationScope determines the scope granted to a client created
-// via public Dynamic Client Registration (RFC 7591).
-//
-// A DCR request supplies nothing but a redirect_uri string chosen by the
-// caller — there is no secret, no proof of domain ownership, and no user
-// consent step at registration time. /authorize is a plain HTTP endpoint: a
-// caller who invokes it directly (rather than via real browser navigation)
-// reads the redirect's Location header themselves, so matching a
-// pre-registered privileged client's redirect_uri text proves nothing about
-// who is making the request (#497). Earlier versions of this function
-// inherited the matched pre-registered client's scope (including "write"),
-// which let any Internet caller mint a privileged token merely by echoing
-// back a known callback URL. Public DCR clients must therefore never receive
-// more than "read", regardless of redirect_uri overlap with a privileged
-// client. Genuine Claude.ai/ChatGPT write access continues to work because
-// those integrations use their pre-registered, secret-bearing client_id
-// directly — they do not rely on DCR to obtain write scope.
-func (s *Service) resolveRegistrationScope(redirectURIs []string) string {
-	return "read"
 }
 
 func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {

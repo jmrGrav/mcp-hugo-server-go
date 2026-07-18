@@ -333,6 +333,73 @@ func TestPreRegisteredClientStillGetsWriteDirectly(t *testing.T) {
 	}
 }
 
+// TestPreRegisteredClientSecretIsRequiredNotJustAccepted closes the gap left
+// by TestPreRegisteredClientStillGetsWriteDirectly: that test proves the
+// secret is *accepted*, not that it is *required*. If an attacker could reach
+// /token for a known, guessable client_id like "claude-admin" without ever
+// knowing its secret (e.g. by reading the code straight off the /authorize
+// redirect Location header, the same trick used in #497), the #497 fix would
+// be moot — the escalation would just move from DCR to direct client_id
+// impersonation. This proves the secret check is load-bearing.
+func TestPreRegisteredClientSecretIsRequiredNotJustAccepted(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	registryYAML := `clients:
+- client_id: claude-admin
+  client_secret: test-secret-abc
+  redirect_uris:
+    - https://claude.ai/api/oauth/callback
+  scope: site.admin
+`
+	registryPath := filepath.Join(t.TempDir(), "clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(registryYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.LoadClientRegistry(registryPath); err != nil {
+		t.Fatalf("LoadClientRegistry: %v", err)
+	}
+
+	verifier := "noauth-verifier-noauth-verifier-noauth-verifier0"
+	challenge := oauth.CodeChallengeS256(verifier)
+	authURL := "/authorize?" + url.Values{
+		"response_type": {"code"}, "client_id": {"claude-admin"},
+		"redirect_uri": {"https://claude.ai/api/oauth/callback"}, "state": {"s1"},
+		"scope": {"write"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, _ := url.Parse(authRec.Header().Get("Location"))
+	code := loc.Query().Get("code")
+
+	// Exchange the code WITHOUT client_secret — this must fail. Getting a
+	// write token here would mean knowing client_id="claude-admin" (a public,
+	// documented, guessable string) is sufficient by itself.
+	tokenForm := url.Values{
+		"grant_type": {"authorization_code"}, "client_id": {"claude-admin"},
+		"code": {code}, "redirect_uri": {"https://claude.ai/api/oauth/callback"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code == http.StatusOK {
+		t.Fatalf("token exchange without client_secret must fail, got 200 body = %q", tokenRec.Body.String())
+	}
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(tokenRec.Body.Bytes(), &errResp)
+	if errResp.Error != "invalid_client" {
+		t.Fatalf("error = %q want invalid_client", errResp.Error)
+	}
+}
+
 func TestPKCEFlow(t *testing.T) {
 	svc, _ := newTestService(t)
 	clientID := registerClient(t, svc, []string{"https://client.test/callback"})
