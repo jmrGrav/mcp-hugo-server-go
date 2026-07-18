@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
@@ -201,6 +202,56 @@ func TestStartupSync(t *testing.T) {
 	// Second call should skip unchanged pages (hash-gated).
 	if err := d.StartupSync(nil, srcIdx); err != nil {
 		t.Fatalf("StartupSync (2nd): %v", err)
+	}
+}
+
+// TestStartupSyncDoesNotDuplicateFTSRowForPageInBothIndexes is the
+// public-API-level counterpart to the row-count assertions in
+// internal_test.go's TestStartupSyncProducesOneRowPerLogicalPage (#475),
+// matching the issue's own acceptance criterion verbatim: a page present in
+// both the public and source index produces exactly one search hit. Note
+// this alone would pass even with the pre-fix duplicate bug present — the
+// source-keyed row is always published=0 and Search's own WHERE clause
+// already excludes it — so it documents the expected external behavior
+// rather than proving the fix; the internal test is what discriminates.
+func TestStartupSyncDoesNotDuplicateFTSRowForPageInBothIndexes(t *testing.T) {
+	d := openTestDB(t)
+
+	contentRoot := t.TempDir()
+	mdPath := filepath.Join(contentRoot, "hello.md")
+	content := "---\ntitle: UniqueDuplicationTitle\n---\nBody.\n"
+	if err := os.WriteFile(mdPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	siteIdx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	siteIdx.UpsertPage(site.Page{
+		Slug:  "/hello/",
+		Title: "UniqueDuplicationTitle",
+		URL:   "https://example.test/hello/",
+		Lang:  "en",
+	})
+
+	if err := d.StartupSync(siteIdx, srcIdx); err != nil {
+		t.Fatalf("StartupSync: %v", err)
+	}
+
+	results, err := d.Search("UniqueDuplicationTitle", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("Search(UniqueDuplicationTitle) = %d hits, want exactly 1 (one logical page, indexed once): %#v", len(results), results)
+	}
+	if results[0].Slug != "/hello/" {
+		t.Fatalf("Search hit slug = %q, want the canonical public slug /hello/", results[0].Slug)
 	}
 }
 
