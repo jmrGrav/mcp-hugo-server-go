@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.1] - 2026-07-18
+
+Consolidation release driven by three live connector audits (ChatGPT x2, Claude.ai, 2026-07-17/18), focused on OAuth scope simplification, response-contract cleanup, and token-cost reduction on high-traffic tools.
+
+### Changed
+- **OAuth scope model collapsed to 2 tiers: `read`/`write`** (#450, PR #472): replaces the older `content.read`/`content.write`/`site.admin` model. `read` is fully ungated (no client secret needed, includes tools that used to require authentication); `write` requires a registered OAuth client and implies `read` plus every build/admin tool. All older scope strings remain accepted as compatibility aliases. `requestedScope` also now skips unrecognized scope tokens in a multi-scope request instead of rejecting the whole request (#449, PR #471).
+- **`validate_site` defaults to invalid-only** (#456, PR #492): a no-argument call now returns only failing pages, instead of every page including all-valid ones — the common case (most pages pass) no longer pays full response cost to confirm nothing is wrong. `include_valid=true` (or `invalid_only=false`) opts into the full listing; `pages_checked`/`pages_passed`/`invalid` are unaffected.
+- **Duplicate envelope payloads removed from 9 anonymous tools** (#433, PR #494): `list_pages`, `get_page`, `search_pages`, `get_recent_posts`, `list_tags`, `list_categories`, `get_sitemap`, `get_feed`, `get_site_information` previously carried their payload twice (once under `data.X`, once as top-level convenience fields); `data.X` is now the sole canonical location.
+- **Root-level `version` field replaced with `meta.schema_version`** (#454, PR #494): the old `version` field was ambiguous — it read like it could mean the server version, but actually meant the response schema version. That signal now lives unambiguously alongside `meta.server_version`.
+- **Deprecated `related`/`suggestions` aliases removed** (#453, PR #494): `related_pages`/`suggested_links` were always canonical; the aliases were kept pending #433/#454's resolution and are now gone.
+
+### Added
+- **`get_related_content` pre-mutation impact facet** (#434, PR #500): `include: ["impact"]` returns `taxonomy_orphans` (tags/categories with no other carrier), `sitemap_present`/`feed_present`, and this page's own redirect `aliases` — advisory only, opt-in, never blocks a mutation.
+- **`inspect_rendered` pre-publish preview facet** (#435, PR #503): `include_preview: true` composes `diff_page`'s git-diff status, a page-scoped broken-link count (sharing the exact same doc-based scan as the tool's own `internal_links` check, so the two can never disagree), and `validate_frontmatter`'s per-page checks into one `risks` list — instead of chaining three separate calls before publishing.
+- **`delete_page_asset` tool** (#460, PR #489): removes a single asset from a page bundle, with hash/revision preconditions, a referenced-by-body guard (bypassable with `force`), dry-run preview, and idempotency-key replay.
+- **Rate-limit state surfaced on write tools** (#466, PR #488): `create_page`/`update_page`/`delete_page`/`upload_page_asset` responses report `rate_limit_remaining`; `rate_limit_exceeded` errors carry `resolution.retry_after_seconds`.
+- **`get_page_for_edit` backlinks facet** (#465, PR #486): opt-in `include: ["backlinks"]` returns impact-analysis data (pages linking here) in the same call, before a risky edit/delete.
+- **Structured empty-result explanations** (#458, PR #487): `get_related_content`/`suggest_links` return `empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) when their result list is empty, distinguishing "no qualifying candidates" from "nothing else exists to compare against."
+- **`new_revision` returned directly from `create_page`/`update_page`** (#464, PR #485): usable immediately as `expected_revision` on a following `update_page`/`delete_page`, without an intermediate read.
+- **Extended structured error resolution hints** (#461, PR #484) and **preserved request context on write-tool errors** (#455, PR #483).
+- **Proactive `build_site` health surfacing** (#467, PR #474) via `get_runtime_status`.
+
+### Fixed
+- **`StartupSync` duplicate FTS rows for the same page** (#475, PR #490): a page present in both the public (built) index and the source index was indexed twice, once under each slug form; now deduped, with orphan cleanup for any pre-existing legacy duplicate.
+- **`lang` populated immediately on unbuilt pages** (#476, PR #491): `get_page_for_edit`/`get_page_frontmatter`/`build_agent_context` no longer report an empty `lang` for a page read back right after `create_page`, before the next build — it no longer lags behind `resolved_lang`.
+- **`get_page` empty slug reports `invalid_params`, not `content_not_found`** (#470, PR #480).
+- **`explain_structure` no longer reports language prefixes as sections** (#459, PR #479).
+- **Hugo section-index files separated from creatable content types** (#457, PR #478).
+- **`search_content`/`get_page_frontmatter` categories regression coverage** (#463, PR #477).
+
+### Docs
+- Near-duplicate read tools cross-referenced instead of adding new ones (#436, PR #481).
+- Canonical vs. deprecated-alias sibling fields documented (#453, PR #482, superseded by the removal above).
+
 ## [v1.5.0] - 2026-07-18
 
 Consolidates v1.5.0-pre1 and v1.5.0-pre2 (see below for full detail) plus two live-production fixes found during connector interoperability testing (Claude.ai, ChatGPT, Le Chat):
