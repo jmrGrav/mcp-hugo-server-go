@@ -2320,6 +2320,92 @@ func TestExplainSiteStructureRecentPagesUseSourceCategoriesForLanguagePrefixedSl
 	}
 }
 
+// TestExplainSiteStructureSectionsExcludeLanguagePrefix is a regression test
+// for #459: a non-default-language page's slug carries its language route
+// prefix (e.g. /en/posts/hello/ on an fr-default site), which must not be
+// reported as if "en" were itself a content section.
+func TestExplainSiteStructureSectionsExcludeLanguagePrefix(t *testing.T) {
+	siteRoot := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(siteRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/bonjour/index.html", `<!doctype html><html lang="fr"><head>
+<title>Bonjour</title>
+<link rel="canonical" href="https://example.test/posts/bonjour/">
+</head><body><article>Bonjour</article></body></html>`)
+	write("en/posts/hello/index.html", `<!doctype html><html lang="en"><head>
+<title>Hello</title>
+<link rel="canonical" href="https://example.test/en/posts/hello/">
+</head><body><article>Hello</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "explain_structure", map[string]any{})
+	if res.IsError {
+		t.Fatalf("explain_structure returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("explain_structure data type = %T", m["data"])
+	}
+	sections, ok := data["sections"].([]any)
+	if !ok {
+		t.Fatalf("explain_structure sections type = %T", data["sections"])
+	}
+	var sawPosts, sawEn bool
+	var postsCount float64
+	for _, raw := range sections {
+		sec, _ := raw.(map[string]any)
+		switch sec["name"] {
+		case "posts":
+			sawPosts = true
+			postsCount, _ = sec["count"].(float64)
+		case "en":
+			sawEn = true
+		}
+	}
+	if sawEn {
+		t.Fatalf("explain_structure sections = %v, must not report the language prefix 'en' as a section", sections)
+	}
+	if !sawPosts {
+		t.Fatalf("explain_structure sections = %v, want 'posts' counted for both the fr and en pages", sections)
+	}
+	if postsCount != 2 {
+		t.Fatalf("explain_structure posts count = %v, want 2 (fr + en pages both merged under posts)", postsCount)
+	}
+	languages, _ := data["languages"].([]any)
+	var sawEnLang bool
+	for _, l := range languages {
+		if l == "en" {
+			sawEnLang = true
+		}
+	}
+	if !sawEnLang {
+		t.Fatalf("explain_structure languages = %v, want 'en' surfaced there instead", languages)
+	}
+}
+
 func TestExplainSiteStructureRecentPagesPreferSourceCategoriesOverStalePublicCategories(t *testing.T) {
 	contentRoot := t.TempDir()
 	pageDir := filepath.Join(contentRoot, "posts", "hello")
