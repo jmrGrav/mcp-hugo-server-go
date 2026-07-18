@@ -537,6 +537,25 @@ build/publish step itself; this is narrower — making the existing
 post-write settle time observable in one call instead of several, and
 applies today without depending on that design.
 
+## 6.10. CORS on `/register`, `/authorize`, `/token` (browser-based OAuth clients)
+
+Found live (Mistral Le Chat, 2026-07-18): these three endpoints had no CORS
+support at all — an OPTIONS preflight got a plain 405 with no
+`Access-Control-Allow-Origin`. A browser-based OAuth client calling one of
+them directly via `fetch()`/XHR (not just navigating to `/authorize`) would
+have its preflight rejected and the browser would block the real request
+before it ever reached this server — surfacing to the client as a generic
+connection failure, with nothing in this server's own request logs to
+explain it (confirmed: zero origin log entries for the failed attempt).
+
+All three now respond to `OPTIONS` with `204` and
+`Access-Control-Allow-Origin: *` (matching the existing policy on discovery
+endpoints — these are public metadata/registration surfaces, not
+authenticated data, so there's no per-origin access control to enforce
+here), and the *real* GET/POST responses carry the same header too — a
+passing preflight alone isn't sufficient for a browser to let client-side
+JS read the actual response.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.

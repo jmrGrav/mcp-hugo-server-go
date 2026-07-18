@@ -249,6 +249,66 @@ func TestUnknownPathReturns404(t *testing.T) {
 	}
 }
 
+// TestOAuthEndpointsSupportCORSPreflight covers a real bug found live
+// (Mistral Le Chat, 2026-07-18): a browser-based OAuth client calling
+// /register, /authorize, or /token directly (not just navigating to them)
+// sends a CORS preflight OPTIONS request first. Before this fix, these
+// endpoints had no CORS support at all — OPTIONS got a plain 405 with no
+// Access-Control-Allow-Origin — so a browser would block the real request
+// before it ever reached this server, showing the client a generic
+// "can't connect" with nothing in this server's own logs to explain it.
+// Confirmed live via curl against production before landing this fix.
+func TestOAuthEndpointsSupportCORSPreflight(t *testing.T) {
+	srv := mustOAuthServer(t)
+	for _, path := range []string{"/register", "/authorize", "/token"} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodOptions, path, nil)
+			req.Header.Set("Origin", "https://chat.mistral.ai")
+			req.Header.Set("Access-Control-Request-Method", http.MethodPost)
+			rec := httptest.NewRecorder()
+
+			srv.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("%s OPTIONS status = %d, want 204", path, rec.Code)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+				t.Fatalf("%s OPTIONS Access-Control-Allow-Origin = %q, want \"*\"", path, got)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Methods"); got == "" {
+				t.Fatalf("%s OPTIONS Access-Control-Allow-Methods missing", path)
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Headers"); got == "" {
+				t.Fatalf("%s OPTIONS Access-Control-Allow-Headers missing", path)
+			}
+		})
+	}
+}
+
+// TestOAuthEndpointsSetCORSOnRealResponseNotJustPreflight covers the other
+// half of the same fix: a passing preflight isn't enough for a browser to
+// accept the actual response — the real GET/POST response needs
+// Access-Control-Allow-Origin too, or client-side JS still can't read it.
+func TestOAuthEndpointsSetCORSOnRealResponseNotJustPreflight(t *testing.T) {
+	srv := mustOAuthServer(t)
+	regBody, _ := json.Marshal(map[string]any{
+		"redirect_uris": []string{"http://localhost:9999/cb"},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader(regBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "https://chat.mistral.ai")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("register status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("register real response Access-Control-Allow-Origin = %q, want \"*\"", got)
+	}
+}
+
 func TestACLBlocksProtectedToolAnonymous(t *testing.T) {
 	// With OAuth enabled, unauthenticated requests get 401 before reaching
 	// the ACL layer — the challenge is the guard, not a 403.
