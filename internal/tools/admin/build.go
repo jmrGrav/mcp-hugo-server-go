@@ -284,6 +284,14 @@ func classifyBuildFailure(ctx context.Context, summary string) string {
 	}
 }
 
+func ownershipDriftSuggestion(summary string) (string, bool) {
+	lower := strings.ToLower(summary)
+	if !strings.Contains(lower, "chtimes ") || !strings.Contains(lower, "operation not permitted") {
+		return "", false
+	}
+	return "A file in the build output is likely owned by a different local user than the MCP service account. Inspect the reported path under public/ or resources/, fix ownership, then rerun build_site.", true
+}
+
 func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
 	if s == nil {
 		return
@@ -391,7 +399,11 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 				LogHint:          "Search server logs for build_id=" + runID,
 			}
 			if errClass == "permission_denied" {
-				payload.Suggestion = "Verify that site_root and hugo_root/resources are listed in ReadWritePaths in the systemd service override. Run: systemctl cat mcp-hugo-server-go"
+				if suggestion, ok := ownershipDriftSuggestion(summary); ok {
+					payload.Suggestion = suggestion
+				} else {
+					payload.Suggestion = "Verify that site_root and hugo_root/resources are listed in ReadWritePaths in the systemd service override. Run: systemctl cat mcp-hugo-server-go"
+				}
 				payload.DocsURL = buildDocsURL
 			}
 			jsonPayload, _ := json.Marshal(payload)

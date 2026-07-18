@@ -761,11 +761,22 @@ Also ensure the service user has group write access to the relevant directories:
 sudo usermod -aG <site-owner-group> mcp-hugo-server-go
 ```
 
-If `build_site` still fails with `operation not permitted` on `public/`, fix the
-directory mode/ownership too. The live `mcp.arleo.eu` failure was:
+If `build_site` still fails with `operation not permitted` on a specific file
+under `public/` or `resources/`, do not assume `ReadWritePaths` is the only
+cause. Hugo calls `chtimes` on existing output files, and that requires the MCP
+service user to own those files. The live `mcp.arleo.eu` failure was:
 
 ```text
-Error: error copying static files: chtimes /home/jm/hugo-site/public: operation not permitted
+Error: error copying static files: chtimes /home/jm/hugo-site/public/auth.md: operation not permitted
+```
+
+That symptom usually means ownership drift inside the output tree, not a missing
+systemd write allowlist. Inspect the exact path from the error, then repair
+ownership recursively for the affected subtree before retrying `build_site`:
+
+```bash
+sudo chown -R $(systemctl show mcp-hugo-server-go -p User --value) /home/jm/hugo-site/public
+sudo systemctl restart mcp-hugo-server-go
 ```
 
 ---
