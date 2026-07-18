@@ -230,9 +230,10 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithRootFields(err, map[string]any{
+			fields := map[string]any{
 				"rate_limit_remaining": rateLimitRemaining(limiter),
-			})
+			}
+			return toolcontract.WithDataFields(toolcontract.WithRootFields(err, fields), fields)
 		}
 		if !limiter.Allow() {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("upload_page_asset", cfg.RateLimit.CreateUpdatePerMin, limiter))
@@ -533,9 +534,10 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithRootFields(wrapErr(err), map[string]any{
+			fields := map[string]any{
 				"rate_limit_remaining": rateLimitRemaining(limiter),
-			})
+			}
+			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
 		}
 
 		if in.DryRun {
