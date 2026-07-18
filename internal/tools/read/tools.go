@@ -763,7 +763,7 @@ func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
 		return site.Page{}
 	}
 	return site.Page{
-		Slug:       "/" + strings.Trim(src.Slug, "/") + "/",
+		Slug:       canonicalSourceSlug(src.Slug),
 		Title:      src.Title,
 		Date:       src.Date,
 		Tags:       src.Tags,
@@ -815,6 +815,31 @@ func resolvedRevision(resolved site.ResolvedPage) string {
 		return ""
 	}
 	return rev
+}
+
+func canonicalResolvedSlug(resolved site.ResolvedPage) string {
+	if resolved.Public != nil && strings.TrimSpace(resolved.Public.Slug) != "" {
+		return resolved.Public.Slug
+	}
+	if resolved.Source != nil {
+		return canonicalSourceSlug(resolved.Source.Slug)
+	}
+	return ""
+}
+
+func canonicalSourceSlug(slug string) string {
+	if section, ok := sectionIndexSection(slug); ok {
+		section = strings.Trim(section, "/")
+		if section == "" {
+			return "/"
+		}
+		return "/" + section + "/"
+	}
+	slug = strings.Trim(slug, "/")
+	if slug == "" {
+		return ""
+	}
+	return "/" + slug + "/"
 }
 
 func computeRelated(idx *site.Index, ref site.Page, limit int) ([]relatedPageDTO, int) {

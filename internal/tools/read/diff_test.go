@@ -67,6 +67,9 @@ func TestDiffPage(t *testing.T) {
 		t.Fatalf("diff_page returned error: %v", res.Content)
 	}
 	data := decodeContent(t, res)
+	if got := data["slug"]; got != "/posts/hello/" {
+		t.Fatalf("diff_page slug = %v, want canonical /posts/hello/", got)
+	}
 	if got := data["status"]; got != "modified" {
 		t.Fatalf("diff_page status = %v, want modified", got)
 	}
@@ -122,6 +125,9 @@ func TestDiffPageResolvesMultilingualBundleFromSourceIndex(t *testing.T) {
 		t.Fatalf("diff_page multilingual returned error: %v", res.Content)
 	}
 	data := decodeContent(t, res)
+	if got := data["slug"]; got != "/posts/bonjour/" {
+		t.Fatalf("diff_page multilingual slug = %v, want canonical /posts/bonjour/", got)
+	}
 	if got := data["path"]; got != "posts/bonjour/index.fr.md" {
 		t.Fatalf("diff_page multilingual path = %v, want posts/bonjour/index.fr.md", got)
 	}
@@ -153,6 +159,9 @@ func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
 		t.Fatalf("diff_page without git returned MCP error: %v", res.Content)
 	}
 	data := decodeContent(t, res)
+	if got := data["slug"]; got != "/posts/nogit/" {
+		t.Fatalf("diff_page no-git slug = %v, want canonical /posts/nogit/", got)
+	}
 	if got := data["status"]; got != "git_unavailable" {
 		t.Fatalf("diff_page status = %v, want git_unavailable", got)
 	}
@@ -213,6 +222,9 @@ func TestDiffPageUntrackedFileReturnsGitUntrackedStatus(t *testing.T) {
 		t.Fatalf("diff_page untracked returned error: %v", res.Content)
 	}
 	data := decodeContent(t, res)
+	if got := data["slug"]; got != "/posts/untracked/" {
+		t.Fatalf("diff_page untracked slug = %v, want canonical /posts/untracked/", got)
+	}
 	if got := data["status"]; got != "git_untracked" {
 		t.Fatalf("diff_page status = %v, want git_untracked", got)
 	}
