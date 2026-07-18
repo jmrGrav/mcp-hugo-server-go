@@ -207,10 +207,30 @@ type validateFrontMatterInput struct {
 	Offset int    `json:"offset,omitempty"`
 }
 
+// validateSiteInput's InvalidOnly/IncludeValid are pointers so the handler
+// can distinguish "omitted" (apply the new invalid-only-by-default behavior,
+// #456) from an explicit true/false (always honored verbatim, preserving any
+// caller that already depended on the old explicit invalid_only=false full
+// listing).
 type validateSiteInput struct {
-	Limit       int  `json:"limit,omitempty"`
-	Offset      int  `json:"offset,omitempty"`
-	InvalidOnly bool `json:"invalid_only,omitempty"`
+	Limit        int   `json:"limit,omitempty"`
+	Offset       int   `json:"offset,omitempty"`
+	InvalidOnly  *bool `json:"invalid_only,omitempty"`
+	IncludeValid *bool `json:"include_valid,omitempty"`
+}
+
+// effectiveInvalidOnly resolves validateSiteInput's default-flip precedence
+// (#456): an explicit include_valid wins if present, then an explicit
+// invalid_only, and only when both are omitted does the new default
+// (invalid-only) apply.
+func (in validateSiteInput) effectiveInvalidOnly() bool {
+	if in.IncludeValid != nil {
+		return !*in.IncludeValid
+	}
+	if in.InvalidOnly != nil {
+		return *in.InvalidOnly
+	}
+	return true
 }
 
 type frontMatterIssueDTO struct {
@@ -566,7 +586,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
 		})
 
-	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. Set `invalid_only=true` to skip passing pages in the `pages` view entirely — useful on a large site where most pages pass and returning all of them wastes context. Requires content.read.",
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateSiteInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -575,7 +595,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
 			pages := srcIdx.ListPages(0, 0)
-			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.InvalidOnly, aliases), nil
+			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), aliases), nil
 		})
 
 	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets and requires content.read.",

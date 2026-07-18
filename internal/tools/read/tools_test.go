@@ -2052,7 +2052,11 @@ func TestValidateSiteInvalidOnlyFiltersPassingPages(t *testing.T) {
 	}
 }
 
-func TestValidateSiteWithoutInvalidOnlyReturnsAllPages(t *testing.T) {
+// TestValidateSiteDefaultsToInvalidOnly is a regression test for #456: with
+// no arguments at all, validate_site's default flipped from "return every
+// page's detail row" to "return only invalid ones" — the common case (most
+// pages pass) no longer pays full response cost to confirm nothing is wrong.
+func TestValidateSiteDefaultsToInvalidOnly(t *testing.T) {
 	idx, srcIdx := mustSiteWithOneInvalidPage(t)
 	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
 	defer done()
@@ -2066,9 +2070,67 @@ func TestValidateSiteWithoutInvalidOnlyReturnsAllPages(t *testing.T) {
 	if !ok {
 		t.Fatalf("data type = %T", m["data"])
 	}
+	if pagesChecked, _ := data["pages_checked"].(float64); pagesChecked != 2 {
+		t.Fatalf("pages_checked = %v, want 2 (full scan scope unaffected by the invalid-only default)", pagesChecked)
+	}
+	if pagesPassed, _ := data["pages_passed"].(float64); pagesPassed != 1 {
+		t.Fatalf("pages_passed = %v, want 1 (full scan scope unaffected by the invalid-only default)", pagesPassed)
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 1 {
+		t.Fatalf("pages = %v, want only the 1 invalid page by default (#456)", pages)
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok || page["slug"] != "posts/broken" {
+		t.Fatalf("pages[0] = %v, want the broken page", pages[0])
+	}
+}
+
+// TestValidateSiteIncludeValidOptsIntoFullListing is a regression test for
+// #456: include_valid=true is the new opt-in for the pre-#456 behavior of
+// returning every page's detail row, not just the invalid ones.
+func TestValidateSiteIncludeValidOptsIntoFullListing(t *testing.T) {
+	idx, srcIdx := mustSiteWithOneInvalidPage(t)
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{"include_valid": true})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T", m["data"])
+	}
 	pages, _ := data["pages"].([]any)
 	if len(pages) != 2 {
-		t.Fatalf("pages = %v, want both pages when invalid_only is unset", pages)
+		t.Fatalf("pages = %v, want both pages when include_valid=true", pages)
+	}
+}
+
+// TestValidateSiteExplicitInvalidOnlyFalsePreservesFullListing is a
+// regression test for #456: a caller that already explicitly passed
+// invalid_only=false under the old default must keep getting the full
+// listing after the default flip — only omitting the field entirely picks
+// up the new default.
+func TestValidateSiteExplicitInvalidOnlyFalsePreservesFullListing(t *testing.T) {
+	idx, srcIdx := mustSiteWithOneInvalidPage(t)
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{"invalid_only": false})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T", m["data"])
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 2 {
+		t.Fatalf("pages = %v, want both pages when invalid_only is explicitly false", pages)
 	}
 }
 
@@ -2077,7 +2139,7 @@ func TestValidateSitePaginatesDetailRows(t *testing.T) {
 	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
 	defer done()
 
-	res := callTool(t, session, "validate_site", map[string]any{"limit": 1, "offset": 0})
+	res := callTool(t, session, "validate_site", map[string]any{"limit": 1, "offset": 0, "include_valid": true})
 	if res.IsError {
 		t.Fatalf("validate_site returned error: %v", res.Content)
 	}
