@@ -117,6 +117,19 @@ cannot produce any result:
 - Authorization failure → MCP 401 / 403
 - Index not initialized → `index not initialized`
 
+### Transport-level error flag
+
+The Go MCP SDK also carries a transport-level boolean on `CallToolResult`
+named `IsError`. That flag is **not** part of the canonical JSON payload
+documented in this contract. Clients that inspect raw MCP transport objects
+may see it, but JSON callers should rely on the structured envelope instead:
+
+- `success: false`
+- non-empty `errors`
+
+The server must not mirror `IsError` into the JSON body as a separate
+`is_error` field.
+
 ### In-band errors
 
 Structured-envelope tools may include degraded results with error strings in
