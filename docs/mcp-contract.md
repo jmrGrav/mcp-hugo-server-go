@@ -30,7 +30,7 @@ that tool:
   "data": { "pages": [ ... ], "total": 42 },
   "errors": [],
   "warnings": [],
-  "meta": { "generated_at": "...", "server_version": "...", "schema_version": "v1.0.0" }
+  "meta": { "generated_at": "...", "server_version": "...", "release_version": "...", "commit": "...", "build_channel": "...", "schema_version": "v1.0.0" }
 }
 ```
 
@@ -55,7 +55,10 @@ partial-success signalling, or forward-compatible extension.
   "errors": [],
   "meta": {
     "generated_at": "2026-07-12T02:30:00Z",
-    "server_version": "v1.4.9",
+    "server_version": "v1.5.1",
+    "release_version": "v1.5.1",
+    "commit": "50cbc9fe4217",
+    "build_channel": "release",
     "schema_version": "v1.0.0"
   }
 }
@@ -70,7 +73,7 @@ Fields:
 | `data`         | object   | yes           | Tool-specific payload — the sole location for a tool's fields; no top-level duplicates (#433) |
 | `warnings`     | string[] | yes           | Non-fatal observations (empty array when none)     |
 | `errors`       | string[] | yes           | Problems that degraded the result (empty array when none) |
-| `meta`         | object   | yes           | `generated_at`, `server_version` (deployed build), `schema_version` (this envelope's shape version, currently `"v1.0.0"`) — see [§5](#5-versioning) |
+| `meta`         | object   | yes           | `generated_at`, `server_version` (deployed build identifier), `release_version` (named release when applicable), `commit`, `build_channel`, `schema_version` (this envelope's shape version, currently `"v1.0.0"`) — see [§5](#5-versioning) |
 
 A root-level `version` field existed through v1.4.x but was removed (#454):
 its name was ambiguous (it actually meant the schema version, not the server
@@ -162,6 +165,12 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
   server version, and the two now live at unambiguous, adjacent names.
 - The deployed server version is carried separately in
   `meta.server_version` inside structured tool responses.
+- `meta.release_version` is the named product release when the build was cut
+  from one (for example `v1.5.1`). It is omitted for non-release builds.
+- `meta.commit` is the VCS revision embedded by Go's build info.
+- `meta.build_channel` identifies the deployment line (for example
+  `release`, `main`, `staging`) and is derived or injected separately from
+  `meta.release_version`.
 - Flat envelope tools do not carry either version field; their schema is
   implicitly v1.
 - `meta.server_version` and the MCP `initialize` response's `serverInfo.version`
