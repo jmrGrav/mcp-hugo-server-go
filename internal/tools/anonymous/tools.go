@@ -327,7 +327,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, getPageOutput{}, fmt.Errorf("index not initialized")
 			}
 			if in.Slug == "" {
-				return nil, getPageOutput{}, fmt.Errorf("content_not_found: slug must not be empty")
+				return nil, getPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 			}
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
