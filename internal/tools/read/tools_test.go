@@ -1326,6 +1326,64 @@ func TestSearchContentInvalidTypeStructuredError(t *testing.T) {
 	}
 }
 
+// TestSearchContentCategoriesMatchGetPageFrontmatter is a regression test for
+// #463: search_content previously risked returning empty categories for a
+// page whose public/rendered HTML carries no category metadata (Hugo never
+// emits article:category), even when get_page_frontmatter correctly enriches
+// from the source index for the same slug. Both tools must agree — this is
+// the "shared regression test" #463's acceptance criteria asked for, so a
+// fifth endpoint doesn't need a fourth live audit to catch the same class of
+// bug (see #182/#264/#163 for the prior endpoint-by-endpoint recurrences).
+func TestSearchContentCategoriesMatchGetPageFrontmatter(t *testing.T) {
+	idx := mustTestIndex(t)
+	srcIdx := mustTestSourceIndex(t)
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	fm := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/posts/hello/"})
+	if fm.IsError {
+		t.Fatalf("get_page_frontmatter returned error: %v", fm.Content)
+	}
+	fmData := decodeContent(t, fm)
+	fmFrontmatter, ok := fmData["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_frontmatter frontmatter type = %T", fmData["frontmatter"])
+	}
+	fmCategories, _ := fmFrontmatter["categories"].([]any)
+	if len(fmCategories) == 0 {
+		t.Fatal("get_page_frontmatter categories empty — fixture content/posts/hello.md declares categories: [tutorials]")
+	}
+
+	res := callTool(t, session, "search_content", map[string]any{"query": "hello", "limit": 5})
+	if res.IsError {
+		t.Fatalf("search_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("search_content data type = %T", m["data"])
+	}
+	pages, _ := data["pages"].([]any)
+	var hello map[string]any
+	for _, raw := range pages {
+		page, _ := raw.(map[string]any)
+		if page["slug"] == "/posts/hello/" {
+			hello = page
+			break
+		}
+	}
+	if hello == nil {
+		t.Fatalf("search_content expected /posts/hello/ result, got %v", pages)
+	}
+	searchCategories, _ := hello["categories"].([]any)
+	if len(searchCategories) == 0 {
+		t.Fatalf("search_content categories empty for /posts/hello/, want to match get_page_frontmatter's %v", fmCategories)
+	}
+	if len(searchCategories) != len(fmCategories) || searchCategories[0] != fmCategories[0] {
+		t.Fatalf("search_content categories = %v, get_page_frontmatter categories = %v — must match", searchCategories, fmCategories)
+	}
+}
+
 func TestExplainSiteStructure(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
