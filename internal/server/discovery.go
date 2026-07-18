@@ -39,9 +39,10 @@ type discoveryAgentAuth struct {
 }
 
 type discoveryAccessProfile struct {
-	Description    string   `json:"description"`
-	Acquisition    string   `json:"acquisition"`
-	InternalScopes []string `json:"internal_scopes"`
+	Description     string   `json:"description"`
+	Acquisition     string   `json:"acquisition"`
+	AcquisitionMode string   `json:"acquisition_mode,omitempty"`
+	InternalScopes  []string `json:"internal_scopes"`
 }
 
 type authServerMeta struct {
@@ -68,17 +69,35 @@ type protectedResourceMeta struct {
 	ResourceDocumentation  string                            `json:"resource_documentation"`
 }
 
-func discoveryAccessProfiles() map[string]discoveryAccessProfile {
+func readerAcquisitionProfile(cfg config.Config) (mode, description string) {
+	switch {
+	case !cfg.OAuth.Enabled:
+		return "anonymous_mcp_access", "anonymous MCP access"
+	case cfg.OAuth.DynamicClientEnabled && cfg.OAuth.AllowReaderSelfRegistration:
+		return "self_serve_oauth_or_agent_identity_registration", "self-serve OAuth registration or anonymous agent identity registration"
+	case cfg.OAuth.DynamicClientEnabled:
+		return "self_serve_oauth_registration", "self-serve OAuth registration"
+	case cfg.OAuth.AllowReaderSelfRegistration:
+		return "self_serve_agent_identity_registration", "anonymous agent identity registration"
+	default:
+		return "operator_approved_claim_or_pre_registered_oauth_client", "operator-approved anonymous claim or pre-registered OAuth client"
+	}
+}
+
+func discoveryAccessProfiles(cfg config.Config) map[string]discoveryAccessProfile {
+	readerMode, readerAcquisition := readerAcquisitionProfile(cfg)
 	return map[string]discoveryAccessProfile{
 		"reader": {
-			Description:    "Read-only access profile for discovery and content inspection (full visibility, drafts included).",
-			Acquisition:    "anonymous or self-serve registration",
-			InternalScopes: []string{"read"},
+			Description:     "Read-only access profile for discovery and content inspection (full visibility, drafts included).",
+			Acquisition:     readerAcquisition,
+			AcquisitionMode: readerMode,
+			InternalScopes:  []string{"read"},
 		},
 		"operator": {
-			Description:    "Approved operator profile that bundles read, write, and site operation capabilities.",
-			Acquisition:    "approved token present in the server registry",
-			InternalScopes: []string{"read", "write"},
+			Description:     "Approved operator profile that bundles read, write, and site operation capabilities.",
+			Acquisition:     "approved token present in the server registry",
+			AcquisitionMode: "approved_token",
+			InternalScopes:  []string{"read", "write"},
 		},
 	}
 }
@@ -104,7 +123,7 @@ func buildAuthServerMeta(cfg config.Config) authServerMeta {
 		CodeChallengeMethodsSupported:     []string{"S256"},
 		TokenEndpointAuthMethodsSupported: tokenEndpointAuthMethods(cfg),
 		ScopesSupported:                   tools.KnownScopes,
-		AccessProfiles:                    discoveryAccessProfiles(),
+		AccessProfiles:                    discoveryAccessProfiles(cfg),
 		ServiceDocumentation:              resource,
 		AgentAuth: discoveryAgentAuth{
 			Skill:                  issuer + "/auth.md",
@@ -152,7 +171,7 @@ func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
 		AuthorizationServers:   []string{issuer},
 		BearerMethodsSupported: []string{"header"},
 		ScopesSupported:        tools.KnownScopes,
-		AccessProfiles:         discoveryAccessProfiles(),
+		AccessProfiles:         discoveryAccessProfiles(cfg),
 		ResourceDocumentation:  issuer + "/auth.md",
 	}
 }
@@ -392,6 +411,7 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 	}
 
 	var block strings.Builder
+	readerProfile := discoveryAccessProfiles(cfg)["reader"]
 	if !hasRegistrationFlow {
 		block.WriteString(fmt.Sprintf(
 			"## Agent registration\n\n"+
@@ -426,26 +446,29 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 		if block.Len() > 0 {
 			block.WriteByte('\n')
 		}
-		block.WriteString(
-			"### Access profiles\n\n" +
-				"These profiles are the public access story. The OAuth scopes remain the internal capability strings accepted by the server during v1.x.\n\n" +
-				"```json\n" +
-				"{\n" +
-				"  \"access_profiles\": {\n" +
-				"    \"reader\": {\n" +
-				"      \"description\": \"Read-only access profile for discovery and content inspection (full visibility, drafts included).\",\n" +
-				"      \"acquisition\": \"anonymous or self-serve registration\",\n" +
-				"      \"internal_scopes\": [\"read\"]\n" +
-				"    },\n" +
-				"    \"operator\": {\n" +
-				"      \"description\": \"Approved operator profile that bundles read, write, and site operation capabilities.\",\n" +
-				"      \"acquisition\": \"approved token present in the server registry\",\n" +
-				"      \"internal_scopes\": [\"read\", \"write\"]\n" +
-				"    }\n" +
-				"  }\n" +
-				"}\n" +
+		block.WriteString(fmt.Sprintf(
+			"### Access profiles\n\n"+
+				"These profiles are the public access story. The OAuth scopes remain the internal capability strings accepted by the server during v1.x.\n\n"+
+				"```json\n"+
+				"{\n"+
+				"  \"access_profiles\": {\n"+
+				"    \"reader\": {\n"+
+				"      \"description\": %q,\n"+
+				"      \"acquisition\": %q,\n"+
+				"      \"acquisition_mode\": %q,\n"+
+				"      \"internal_scopes\": [\"read\"]\n"+
+				"    },\n"+
+				"    \"operator\": {\n"+
+				"      \"description\": \"Approved operator profile that bundles read, write, and site operation capabilities.\",\n"+
+				"      \"acquisition\": \"approved token present in the server registry\",\n"+
+				"      \"acquisition_mode\": \"approved_token\",\n"+
+				"      \"internal_scopes\": [\"read\", \"write\"]\n"+
+				"    }\n"+
+				"  }\n"+
+				"}\n"+
 				"```\n",
-		)
+			readerProfile.Description, readerProfile.Acquisition, readerProfile.AcquisitionMode,
+		))
 	}
 	if !hasAgentAuthMetadata {
 		if block.Len() > 0 {

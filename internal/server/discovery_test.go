@@ -23,6 +23,11 @@ func mustDiscoveryServer(t *testing.T, siteRoot string) *server.Server {
 	cfg.OAuth.Enabled = true
 	cfg.OAuth.Issuer = "https://mcp.arleo.eu"
 	cfg.OAuth.Resource = "https://mcp.arleo.eu/mcp"
+	return mustDiscoveryServerWithConfig(t, cfg)
+}
+
+func mustDiscoveryServerWithConfig(t *testing.T, cfg config.Config) *server.Server {
+	t.Helper()
 	idx, err := site.NewIndex(cfg)
 	if err != nil {
 		t.Fatalf("NewIndex() error = %v", err)
@@ -153,9 +158,10 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	}
 
 	var accessProfiles map[string]struct {
-		Description    string   `json:"description"`
-		Acquisition    string   `json:"acquisition"`
-		InternalScopes []string `json:"internal_scopes"`
+		Description     string   `json:"description"`
+		Acquisition     string   `json:"acquisition"`
+		AcquisitionMode string   `json:"acquisition_mode"`
+		InternalScopes  []string `json:"internal_scopes"`
 	}
 	if err := json.Unmarshal(got["access_profiles"], &accessProfiles); err != nil {
 		t.Fatalf("access_profiles is not an object: %v", err)
@@ -167,12 +173,18 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	if reader.Acquisition == "" || len(reader.InternalScopes) == 0 {
 		t.Fatalf("access_profiles.reader = %#v, want acquisition and internal_scopes", reader)
 	}
+	if reader.AcquisitionMode == "" {
+		t.Fatalf("access_profiles.reader = %#v, want acquisition_mode", reader)
+	}
 	operator, ok := accessProfiles["operator"]
 	if !ok {
 		t.Fatal("access_profiles.operator missing")
 	}
 	if operator.Acquisition == "" || len(operator.InternalScopes) == 0 {
 		t.Fatalf("access_profiles.operator = %#v, want acquisition and internal_scopes", operator)
+	}
+	if operator.AcquisitionMode != "approved_token" {
+		t.Fatalf("operator acquisition_mode = %q, want approved_token", operator.AcquisitionMode)
 	}
 	if len(reader.InternalScopes) != 1 || reader.InternalScopes[0] != "read" {
 		t.Fatalf("reader internal_scopes = %v, want [read]", reader.InternalScopes)
@@ -190,6 +202,45 @@ func TestWellKnownOAuthServer(t *testing.T) {
 			t.Fatalf("operator internal_scopes missing %q: %v", want, operator.InternalScopes)
 		}
 	}
+}
+
+func TestProtectedResourceReaderAcquisitionMetadataReflectsDeploymentMode(t *testing.T) {
+	t.Run("dynamic client registration only", func(t *testing.T) {
+		cfg := config.Default()
+		cfg.SiteRoot = t.TempDir()
+		cfg.SiteURL = "https://www.arleo.eu"
+		cfg.SiteName = "arleo.eu"
+		cfg.OAuth.Enabled = true
+		cfg.OAuth.Issuer = "https://mcp.arleo.eu"
+		cfg.OAuth.Resource = "https://mcp.arleo.eu/mcp"
+		cfg.OAuth.DynamicClientEnabled = true
+		cfg.OAuth.AllowReaderSelfRegistration = false
+		srv := mustDiscoveryServerWithConfig(t, cfg)
+
+		req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d want 200", rec.Code)
+		}
+
+		var meta struct {
+			AccessProfiles map[string]struct {
+				Acquisition     string `json:"acquisition"`
+				AcquisitionMode string `json:"acquisition_mode"`
+			} `json:"access_profiles"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		reader := meta.AccessProfiles["reader"]
+		if reader.AcquisitionMode != "self_serve_oauth_registration" {
+			t.Fatalf("reader acquisition_mode = %q, want self_serve_oauth_registration", reader.AcquisitionMode)
+		}
+		if reader.Acquisition != "self-serve OAuth registration" {
+			t.Fatalf("reader acquisition = %q, want self-serve OAuth registration", reader.Acquisition)
+		}
+	})
 }
 
 func TestWellKnownOAuthServerWithClientRegistry(t *testing.T) {
