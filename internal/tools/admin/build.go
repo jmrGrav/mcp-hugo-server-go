@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -310,6 +311,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 		defer hugosite.ContentMu.Unlock()
 
 		if err := checkBuildWritable(cfg.SiteRoot, filepath.Join(cfg.HugoRoot, "resources")); err != nil {
+			buildstatus.RecordFailure("permission_denied", time.Now())
 			return nil, buildSiteOutput{}, err
 		}
 
@@ -393,8 +395,10 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 				payload.DocsURL = buildDocsURL
 			}
 			jsonPayload, _ := json.Marshal(payload)
+			buildstatus.RecordFailure(errClass, time.Now())
 			return nil, buildSiteOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
 		}
+		buildstatus.RecordSuccess(time.Now())
 
 		// Run post-build callbacks within a bounded deadline (#241). Optional
 		// side-effect callbacks (CDN purge, search indexing) swallow their errors

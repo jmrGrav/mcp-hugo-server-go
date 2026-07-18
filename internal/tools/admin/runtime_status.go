@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
@@ -52,16 +53,29 @@ type siteRuntimeStatus struct {
 	PublicRevision        string `json:"public_revision,omitempty"`
 }
 
+// lastBuildRuntimeStatus reports the outcome of the most recent build_site
+// attempt in this process (#467), so an agent can notice a broken publish
+// pipeline from a read-only status check instead of only discovering it by
+// calling build_site itself at the end of a write cycle. Omitted entirely
+// (via omitempty on the pointer) until build_site has been called at least
+// once in this process's lifetime — there is no attempt to report yet.
+type lastBuildRuntimeStatus struct {
+	Status     string `json:"status"`
+	ErrorClass string `json:"error_class,omitempty"`
+	At         string `json:"at"`
+}
+
 type runtimeStatusData struct {
-	ServerVersion string            `json:"server_version"`
-	SchemaVersion string            `json:"schema_version"`
-	Commit        string            `json:"commit,omitempty"`
-	CommitTime    string            `json:"commit_time,omitempty"`
-	BuildDirty    bool              `json:"build_dirty"`
-	Hugo          hugoRuntimeStatus `json:"hugo"`
-	Git           gitRuntimeStatus  `json:"git"`
-	Site          siteRuntimeStatus `json:"site"`
-	Degraded      []string          `json:"degraded,omitempty"`
+	ServerVersion string                  `json:"server_version"`
+	SchemaVersion string                  `json:"schema_version"`
+	Commit        string                  `json:"commit,omitempty"`
+	CommitTime    string                  `json:"commit_time,omitempty"`
+	BuildDirty    bool                    `json:"build_dirty"`
+	Hugo          hugoRuntimeStatus       `json:"hugo"`
+	Git           gitRuntimeStatus        `json:"git"`
+	Site          siteRuntimeStatus       `json:"site"`
+	LastBuild     *lastBuildRuntimeStatus `json:"last_build,omitempty"`
+	Degraded      []string                `json:"degraded,omitempty"`
 }
 
 type getRuntimeStatusOutput struct {
@@ -79,10 +93,11 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
 		Name:  "get_runtime_status",
 		Title: "Get runtime status",
 		Description: "Report the actual runtime/build/git/site status of this server in one compact structured surface: " +
-			"server version and build commit, whether the hugo and git binaries are usable, and (opt-in via " +
-			"include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. " +
-			"Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment " +
-			"health from error messages on other tools.",
+			"server version and build commit, whether the hugo and git binaries are usable, the outcome of the most " +
+			"recent build_site attempt (last_build, omitted until build_site has been called at least once), and " +
+			"(opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public " +
+			"revision hashes. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of " +
+			"inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -112,6 +127,17 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
 		}
 		if !data.Git.Available {
 			data.Degraded = append(data.Degraded, "diff_page: git-backed source diffs are unavailable — "+data.Git.Error)
+		}
+
+		if snap := buildstatus.Last(); snap.Attempted {
+			data.LastBuild = &lastBuildRuntimeStatus{
+				Status:     snap.Status,
+				ErrorClass: snap.ErrorClass,
+				At:         snap.At.UTC().Format(time.RFC3339),
+			}
+			if snap.Status == "failed" {
+				data.Degraded = append(data.Degraded, "build_site: last attempt failed ("+snap.ErrorClass+") at "+data.LastBuild.At)
+			}
 		}
 
 		if in.IncludeRevisions {

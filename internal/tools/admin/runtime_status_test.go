@@ -5,7 +5,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 )
 
@@ -18,6 +20,9 @@ func runGitCmd(t *testing.T, dir string, args ...string) {
 }
 
 func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
 	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0+extended linux/amd64 BuildDate=2026-07-01T00:00:00Z VendorInfo=gohugoio'\n")
 	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
 
@@ -108,6 +113,9 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 }
 
 func TestGetRuntimeStatusOmitsRevisionsByDefault(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
 	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0 linux/amd64'\n")
 	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
 
@@ -150,6 +158,9 @@ func TestGetRuntimeStatusOmitsRevisionsByDefault(t *testing.T) {
 }
 
 func TestGetRuntimeStatusReportsDegradedSurfacesWhenHugoAndGitUnavailable(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
 	emptyPathDir := t.TempDir() // no hugo binary here
 	t.Setenv("PATH", emptyPathDir)
 
@@ -197,6 +208,9 @@ func TestGetRuntimeStatusReportsDegradedSurfacesWhenHugoAndGitUnavailable(t *tes
 }
 
 func TestGetRuntimeStatusRespectsGitBaselineDisabledMode(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
 	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0 linux/amd64'\n")
 	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
 
@@ -236,5 +250,75 @@ func TestGetRuntimeStatusRespectsGitBaselineDisabledMode(t *testing.T) {
 	errText, _ := git["error"].(string)
 	if errText == "" {
 		t.Fatal("expected git.error explaining baseline is disabled")
+	}
+}
+
+// #467: get_runtime_status surfaces the outcome of the most recent
+// build_site attempt via last_build, without requiring the caller to invoke
+// build_site itself to discover a broken publish pipeline.
+func TestGetRuntimeStatusOmitsLastBuildBeforeAnyBuildAttempt(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
+	cfg := config.Default()
+	cfg.ContentRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.GitBaseline.Mode = "disabled"
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	if _, present := data["last_build"]; present {
+		t.Fatalf("last_build = %v, want omitted before any build_site attempt", data["last_build"])
+	}
+}
+
+func TestGetRuntimeStatusReportsLastBuildFailure(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+	at := time.Now().UTC()
+	buildstatus.RecordFailure("permission_denied", at)
+
+	cfg := config.Default()
+	cfg.ContentRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.GitBaseline.Mode = "disabled"
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	lastBuild, ok := data["last_build"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_build type = %T, want present after a recorded failure", data["last_build"])
+	}
+	if lastBuild["status"] != "failed" {
+		t.Fatalf("last_build.status = %v, want failed", lastBuild["status"])
+	}
+	if lastBuild["error_class"] != "permission_denied" {
+		t.Fatalf("last_build.error_class = %v, want permission_denied", lastBuild["error_class"])
+	}
+	degraded, _ := data["degraded"].([]any)
+	found := false
+	for _, d := range degraded {
+		if s, _ := d.(string); s != "" && s == "build_site: last attempt failed (permission_denied) at "+lastBuild["at"].(string) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("degraded = %v, want an entry about the failed last build attempt", degraded)
 	}
 }
