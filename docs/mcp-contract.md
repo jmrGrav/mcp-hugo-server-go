@@ -254,7 +254,7 @@ each field.
 | Tool                  | Envelope    | `data.X` key(s)          |
 |-----------------------|-------------|---------------------------|
 | `list_pages`          | structured  | `pages`                   |
-| `get_page`            | structured  | `page`                    |
+| `get_page`            | structured  | `page`; `page.html_origin` (`rendered_public`/`source_fallback`/`none`) and `page.rendered_html_available` (bool) disambiguate whether `page.html` is real rendered public HTML or a source-fallback/empty value, so a caller never has to infer that from `page.state` alone (#502) |
 | `search_pages`        | structured  | `pages`; supports `response_mode`/`fields` shaping (§5.2, #337); each page carries `score` (term-match count) and `match: "title_exact"` requests a strict full-title match instead of broad term matching (#332) |
 | `get_recent_posts`    | structured  | `pages`                   |
 | `list_tags`           | structured  | `tags`                    |

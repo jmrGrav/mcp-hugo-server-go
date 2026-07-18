@@ -232,6 +232,12 @@ func TestGetPageBySlug(t *testing.T) {
 	if got, _ := page["resolved_source_path"].(string); got != "content/posts/hello.md" {
 		t.Fatalf("get_page: resolved_source_path = %v, want content/posts/hello.md", page["resolved_source_path"])
 	}
+	if got := page["html_origin"]; got != "rendered_public" {
+		t.Fatalf("get_page: html_origin = %v, want rendered_public", got)
+	}
+	if got := page["rendered_html_available"]; got != true {
+		t.Fatalf("get_page: rendered_html_available = %v, want true", got)
+	}
 }
 
 func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
@@ -286,6 +292,12 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	if page["resolved_source_path"] != "content/drafts/fresh/index.md" {
 		t.Fatalf("get_page source-only resolved_source_path = %#v, want content/drafts/fresh/index.md", page["resolved_source_path"])
 	}
+	if got := page["html_origin"]; got != "source_fallback" {
+		t.Fatalf("get_page source-only html_origin = %#v, want source_fallback", got)
+	}
+	if got := page["rendered_html_available"]; got != false {
+		t.Fatalf("get_page source-only rendered_html_available = %#v, want false", got)
+	}
 
 	resContentOnly := callTool(t, session, "get_page", map[string]any{
 		"slug":                  "/drafts/fresh/",
@@ -298,6 +310,12 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	contentOnlyPage := decodeContent(t, resContentOnly)["page"].(map[string]any)
 	if contentOnlyPage["html"] != "" {
 		t.Fatalf("get_page source-only with content_only html = %#v, want empty string", contentOnlyPage["html"])
+	}
+	if got := contentOnlyPage["html_origin"]; got != "none" {
+		t.Fatalf("get_page source-only with content_only html_origin = %#v, want none", got)
+	}
+	if got := contentOnlyPage["rendered_html_available"]; got != false {
+		t.Fatalf("get_page source-only with content_only rendered_html_available = %#v, want false", got)
 	}
 }
 
