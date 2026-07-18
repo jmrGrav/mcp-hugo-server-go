@@ -104,6 +104,37 @@ type getRelatedContentData struct {
 	// (does any connected client read this exact field name?) is resolved,
 	// since removing it would be a breaking wire change if so.
 	Related []relatedPageDTO `json:"related"`
+
+	// EmptyReason is populated only when RelatedPages is empty (#458), so an
+	// agent can tell "no other content shares enough tag/category overlap"
+	// from "the heuristic never even had candidates to evaluate" instead of
+	// just seeing an empty array with no explanation.
+	EmptyReason *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
+}
+
+// emptyResultExplanationDTO is additive context returned alongside an empty
+// result list (#458) — it never replaces the empty array, only explains it.
+type emptyResultExplanationDTO struct {
+	Reason              string `json:"reason"`
+	CandidatesEvaluated int    `json:"candidates_evaluated"`
+	MinimumScore        int    `json:"minimum_score"`
+}
+
+// minTaxonomyAffinityScore is the lowest shared-tag/category score that
+// qualifies a candidate for related_pages/suggest_links output; both
+// computeRelated and scoreLinkSuggestions discard score-0 candidates.
+const minTaxonomyAffinityScore = 1
+
+func newEmptyResultExplanation(candidatesEvaluated, minimumScore int) *emptyResultExplanationDTO {
+	reason := "no_candidates_with_sufficient_taxonomy_affinity"
+	if candidatesEvaluated == 0 {
+		reason = "no_other_published_content_to_compare"
+	}
+	return &emptyResultExplanationDTO{
+		Reason:              reason,
+		CandidatesEvaluated: candidatesEvaluated,
+		MinimumScore:        minimumScore,
+	}
 }
 
 type buildAgentContextInput struct {
@@ -190,7 +221,8 @@ type getRelatedContentOutput struct {
 	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
 	// Related is a deprecated alias of RelatedPages (#453); see the comment
 	// on getRelatedContentData.Related for why it isn't simply removed.
-	Related []relatedPageDTO `json:"related"`
+	Related     []relatedPageDTO           `json:"related"`
+	EmptyReason *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
 }
 
 type buildAgentContextOutput struct {
@@ -358,7 +390,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
-		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. Input: indexed slug only.",
+		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRelatedContentInput) (*mcp.CallToolResult, getRelatedContentOutput, error) {
 			if idx == nil {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("index not initialized")
@@ -377,16 +409,20 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				ref = *resolved.Public
 			}
 			translations := collectTranslations(idx, ref)
-			related := computeRelated(idx, ref, limit)
+			related, evaluated := computeRelated(idx, ref, limit)
 			backlinks := collectBacklinks(idx, ref.Slug)
-			suggestedLinks := scoreLinkSuggestions(idx, ref.Slug, ref.Tags, ref.Categories, "", limit)
-			return nil, newGetRelatedContentOutput(getRelatedContentData{
+			suggestedLinks, _ := scoreLinkSuggestions(idx, ref.Slug, ref.Tags, ref.Categories, "", limit)
+			data := getRelatedContentData{
 				Translations:   translations,
 				RelatedPages:   related,
 				Backlinks:      backlinks,
 				SuggestedLinks: suggestedLinks,
 				Related:        related,
-			}, time.Now().UTC()), nil
+			}
+			if len(related) == 0 {
+				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
+			}
+			return nil, newGetRelatedContentOutput(data, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 20) })
 
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
@@ -422,12 +458,13 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				if resolved.Public != nil {
 					ref = *resolved.Public
 				}
+				relatedPages, _ := computeRelated(idx, ref, 5)
 				ac = agentContextDTO{
 					Frontmatter:  fm,
 					Markdown:     md,
 					State:        state,
 					Translations: collectTranslations(idx, ref),
-					RelatedPages: computeRelated(idx, ref, 5),
+					RelatedPages: relatedPages,
 				}
 			}
 			var warnings []string
@@ -628,6 +665,7 @@ func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRe
 		Backlinks:      data.Backlinks,
 		SuggestedLinks: data.SuggestedLinks,
 		Related:        data.Related,
+		EmptyReason:    data.EmptyReason,
 	}
 }
 
@@ -773,7 +811,7 @@ func resolvedRevision(resolved site.ResolvedPage) string {
 	return rev
 }
 
-func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO {
+func computeRelated(idx *site.Index, ref site.Page, limit int) ([]relatedPageDTO, int) {
 	refTagSlugs := make(map[string]bool, len(ref.Tags))
 	for _, t := range ref.Tags {
 		if s := taxonomy.Slug(t); s != "" {
@@ -793,14 +831,25 @@ func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO 
 		dto   relatedPageDTO
 	}
 	var candidates []scored
+	evaluated := 0
+	classifier := site.NewClassifierFromPages(idx.Sitemap())
 	refTranslationKey := translationKey(ref.Slug)
 	for _, pg := range idx.Sitemap() {
+		// Only count actual content candidates (#458) — matches
+		// scoreLinkSuggestions' IsContent filter so candidates_evaluated
+		// means the same thing across both tools, excluding structural
+		// pages (home, taxonomy/term lists) that could never be a real
+		// related-content match.
+		if !classifier.IsContent(pg) {
+			continue
+		}
 		if pg.Slug == ref.Slug {
 			continue
 		}
 		if isTranslationVariant(refTranslationKey, pg.Slug) {
 			continue
 		}
+		evaluated++
 		sharedTagTerms := taxonomy.SharedTerms(pg.Tags, ref.Tags)
 		sharedCatTerms := taxonomy.SharedTerms(pg.Categories, ref.Categories)
 		score := len(sharedTagTerms) + len(sharedCatTerms)
@@ -835,7 +884,7 @@ func computeRelated(idx *site.Index, ref site.Page, limit int) []relatedPageDTO 
 	for i, c := range candidates {
 		out[i] = c.dto
 	}
-	return out
+	return out, evaluated
 }
 
 func collectTranslations(idx *site.Index, ref site.Page) []translationPageDTO {
