@@ -269,3 +269,288 @@ func TestUploadPageAssetRejectsPathTraversalFilename(t *testing.T) {
 		}
 	}
 }
+
+func TestDeletePageAssetSuccess(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	upload := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	})
+	if upload.IsError {
+		raw, _ := json.Marshal(upload.Content)
+		t.Fatalf("upload_page_asset returned error: %s", raw)
+	}
+	sha256 := decodeWriteContent(t, upload)["sha256"].(string)
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/article",
+		"filename":        "cover.png",
+		"expected_sha256": sha256,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page_asset returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	if out["sha256"] != sha256 {
+		t.Fatalf("delete_page_asset sha256 = %v, want %v", out["sha256"], sha256)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); !os.IsNotExist(err) {
+		t.Fatal("delete_page_asset must remove the file")
+	}
+}
+
+func TestDeletePageAssetHashMismatchFailsWithRevisionConflict(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	if res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("upload_page_asset returned error: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/article",
+		"filename":        "cover.png",
+		"expected_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	if !res.IsError {
+		t.Fatal("delete_page_asset: want error for hash mismatch, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "revision_conflict") {
+		t.Fatalf("delete_page_asset hash-mismatch error = %s, want revision_conflict", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); err != nil {
+		t.Fatalf("delete_page_asset must not delete the file on a hash mismatch: %v", err)
+	}
+}
+
+func TestDeletePageAssetRequiresExpectedHashOrRevision(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	if res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("upload_page_asset returned error: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":     "posts/article",
+		"filename": "cover.png",
+	})
+	if !res.IsError {
+		t.Fatal("delete_page_asset: want error when neither expected_sha256 nor expected_revision is given, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("delete_page_asset missing-guard error = %s, want invalid_params", raw)
+	}
+}
+
+func TestDeletePageAssetReferencedGuardBlocksUnlessForced(t *testing.T) {
+	contentRoot := t.TempDir()
+	dir := filepath.Join(contentRoot, "posts", "article")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Body references cover.png directly — the guard must detect this.
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte("---\ntitle: Article\n---\n![cover](cover.png)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	upload := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	})
+	if upload.IsError {
+		raw, _ := json.Marshal(upload.Content)
+		t.Fatalf("upload_page_asset returned error: %s", raw)
+	}
+	sha256 := decodeWriteContent(t, upload)["sha256"].(string)
+
+	blocked := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/article",
+		"filename":        "cover.png",
+		"expected_sha256": sha256,
+	})
+	if !blocked.IsError {
+		t.Fatal("delete_page_asset: want asset_referenced error, got success")
+	}
+	raw, _ := json.Marshal(blocked.Content)
+	if !strings.Contains(string(raw), "asset_referenced") {
+		t.Fatalf("delete_page_asset referenced-guard error = %s, want asset_referenced", raw)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cover.png")); err != nil {
+		t.Fatalf("delete_page_asset must not delete a referenced asset without force=true: %v", err)
+	}
+
+	forced := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/article",
+		"filename":        "cover.png",
+		"expected_sha256": sha256,
+		"force":           true,
+	})
+	if forced.IsError {
+		raw, _ := json.Marshal(forced.Content)
+		t.Fatalf("delete_page_asset with force=true returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, forced)
+	if out["referenced"] != true {
+		t.Fatalf("delete_page_asset referenced = %v, want true (force overrides the guard, doesn't hide the fact)", out["referenced"])
+	}
+	if _, err := os.Stat(filepath.Join(dir, "cover.png")); !os.IsNotExist(err) {
+		t.Fatal("delete_page_asset with force=true must delete the file")
+	}
+}
+
+func TestDeletePageAssetDryRunPreviewsWithoutDeleting(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	if res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("upload_page_asset returned error: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":     "posts/article",
+		"filename": "cover.png",
+		"dry_run":  true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page_asset dry_run returned error: %s", raw)
+	}
+	out := decodeWriteContent(t, res)
+	if out["dry_run"] != true {
+		t.Fatalf("delete_page_asset dry_run response dry_run = %v, want true", out["dry_run"])
+	}
+	if sha, _ := out["sha256"].(string); sha == "" {
+		t.Fatal("delete_page_asset dry_run must report the asset's sha256")
+	}
+	if out["referenced"] == true {
+		t.Fatalf("delete_page_asset dry_run referenced = %v, want false (fixture body doesn't mention cover.png)", out["referenced"])
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); err != nil {
+		t.Fatalf("delete_page_asset dry_run must not delete the file: %v", err)
+	}
+}
+
+func TestDeletePageAssetIdempotencyKeyReturnsOriginalResultWithoutDeletingTwice(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	upload := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	})
+	if upload.IsError {
+		raw, _ := json.Marshal(upload.Content)
+		t.Fatalf("upload_page_asset returned error: %s", raw)
+	}
+	sha256 := decodeWriteContent(t, upload)["sha256"].(string)
+
+	args := map[string]any{
+		"slug":            "posts/article",
+		"filename":        "cover.png",
+		"expected_sha256": sha256,
+		"idempotency_key": "delete-cover-once",
+	}
+	first := callTool(t, session, "delete_page_asset", args)
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("first delete_page_asset returned error: %s", raw)
+	}
+
+	// This is the actual uncertain-delivery scenario the idempotency_key
+	// promise exists for: the file is genuinely gone (deleted by the first
+	// call) and the caller never gets to see the first response, so it
+	// retries with nothing recreated at the path. The idempotency replay
+	// lookup must be reachable without the file existing — if it depended
+	// on a not_found gate the way a fresh delete attempt does, this replay
+	// would incorrectly fail with not_found instead of returning the cached
+	// original result.
+	replay := callTool(t, session, "delete_page_asset", args)
+	if replay.IsError {
+		raw, _ := json.Marshal(replay.Content)
+		t.Fatalf("replayed delete_page_asset (file genuinely gone, nothing recreated) returned error: %s", raw)
+	}
+	firstOut := decodeWriteContent(t, first)
+	replayOut := decodeWriteContent(t, replay)
+	if firstOut["sha256"] != replayOut["sha256"] {
+		t.Fatalf("replay sha256 = %v, want %v (identical to original result)", replayOut["sha256"], firstOut["sha256"])
+	}
+}
+
+func TestDeletePageAssetNotFound(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/article",
+		"filename":        "does-not-exist.png",
+		"expected_sha256": "irrelevant",
+	})
+	if !res.IsError {
+		t.Fatal("delete_page_asset: want not_found for a missing asset, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "not_found") {
+		t.Fatalf("delete_page_asset missing-asset error = %s, want not_found", raw)
+	}
+}
+
+func TestDeletePageAssetRejectsIndexFile(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/article",
+		"filename":        "index.md",
+		"expected_sha256": "irrelevant",
+	})
+	if !res.IsError {
+		t.Fatal("delete_page_asset: want error when filename names the page's own content file, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("delete_page_asset index.md error = %s, want invalid_params", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "index.md")); err != nil {
+		t.Fatalf("delete_page_asset must not delete index.md: %v", err)
+	}
+}
