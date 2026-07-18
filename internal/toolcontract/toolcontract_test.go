@@ -80,6 +80,48 @@ func TestSuccessInitializesSlicesAndMeta(t *testing.T) {
 	}
 }
 
+func TestSuccessOmitsReleaseVersionForMainlineBuilds(t *testing.T) {
+	origVersion := buildinfo.Version
+	origRelease := buildinfo.ReleaseVersion
+	origCommit := buildinfo.Commit
+	origChannel := buildinfo.BuildChannel
+	buildinfo.Version = "main-3fb254677090"
+	buildinfo.ReleaseVersion = ""
+	buildinfo.Commit = "3fb25467709019d1611a252f2ccfc9376677031d"
+	buildinfo.BuildChannel = ""
+	defer func() {
+		buildinfo.Version = origVersion
+		buildinfo.ReleaseVersion = origRelease
+		buildinfo.Commit = origCommit
+		buildinfo.BuildChannel = origChannel
+	}()
+
+	meta := NewMeta(buildinfo.Version, time.Date(2026, 7, 18, 18, 0, 0, 0, time.UTC))
+	got := Success(map[string]string{"status": "ok"}, meta)
+
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	metaMap, ok := decoded["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("meta = %T, want map", decoded["meta"])
+	}
+	if _, present := metaMap["release_version"]; present {
+		t.Fatalf("meta.release_version = %v, want omitted for mainline build without explicit release mapping", metaMap["release_version"])
+	}
+	if got := metaMap["server_version"]; got != "main-3fb254677090" {
+		t.Fatalf("meta.server_version = %v, want main-3fb254677090", got)
+	}
+	if got := metaMap["build_channel"]; got != "main" {
+		t.Fatalf("meta.build_channel = %v, want main", got)
+	}
+}
+
 func TestParseToolErrorAmbiguousLanguage(t *testing.T) {
 	got := ParseToolError(fmt.Errorf("ambiguous_language: page %q has multiple language files; specify lang (available: en, fr)", "posts/hello"))
 	if got.Code != "ambiguous_language" {

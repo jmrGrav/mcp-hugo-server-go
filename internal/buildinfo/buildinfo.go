@@ -12,7 +12,10 @@ var Version = "dev"
 
 // ReleaseVersion is the human-facing product/release identifier (e.g.
 // v1.5.1) when known at build time. Empty means "this build is not tied to
-// a named release"; callers can still inspect Version/Commit.
+// a named release"; callers can still inspect Version/Commit. Mainline
+// production deploys intentionally use this empty state today: they expose
+// Version like "main-<sha>" plus Commit/BuildChannel instead of inventing a
+// release alias that was never cut from a tag.
 var ReleaseVersion = ""
 
 // BuildChannel identifies the deployment line the binary came from when it

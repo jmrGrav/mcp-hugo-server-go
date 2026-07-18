@@ -184,6 +184,10 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
   `meta.server_version` inside structured tool responses.
 - `meta.release_version` is the named product release when the build was cut
   from one (for example `v1.5.1`). It is omitted for non-release builds.
+  Concretely, the current deploy workflow sets it only for exact-tag
+  deployments; a normal production deploy from `main` reports
+  `meta.server_version = "main-<sha>"`, `meta.build_channel = "main"`, and
+  no `meta.release_version`.
 - `meta.commit` is the VCS revision embedded by Go's build info.
 - `meta.build_channel` identifies the deployment line (for example
   `release`, `main`, `staging`) and is derived or injected separately from
