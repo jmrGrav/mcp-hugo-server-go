@@ -921,6 +921,11 @@ func TestUpdatePageRequiresExpectedRevisionForWrite(t *testing.T) {
 	if !strings.Contains(raw, "expected_revision is required") {
 		t.Fatalf("update_page missing expected_revision error = %s", raw)
 	}
+	m := decodeWriteErrorEnvelope(t, res)
+	wantRemaining := float64(config.Default().RateLimit.CreateUpdatePerMin - 2) // create_page + failed update_page each consume one token
+	if got := m["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("update_page missing expected_revision rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
 }
 
 func TestUpdatePageRejectsStaleExpectedRevision(t *testing.T) {
@@ -951,6 +956,11 @@ func TestUpdatePageRejectsStaleExpectedRevision(t *testing.T) {
 	if !strings.Contains(raw, "revision_conflict") {
 		t.Fatalf("update_page stale revision error = %s", raw)
 	}
+	m := decodeWriteErrorEnvelope(t, res)
+	wantRemaining := float64(config.Default().RateLimit.CreateUpdatePerMin - 2) // create_page + failed stale update_page
+	if got := m["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("update_page stale revision rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
 }
 
 func TestDeletePageRequiresExpectedRevisionForWrite(t *testing.T) {
@@ -976,6 +986,11 @@ func TestDeletePageRequiresExpectedRevisionForWrite(t *testing.T) {
 	raw := marshalContent(t, res)
 	if !strings.Contains(raw, "expected_revision is required") {
 		t.Fatalf("delete_page missing expected_revision error = %s", raw)
+	}
+	m := decodeWriteErrorEnvelope(t, res)
+	wantRemaining := float64(config.Default().RateLimit.DestructivePerMin) // limiter inspected but not consumed before this validation error
+	if got := m["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("delete_page missing expected_revision rate_limit_remaining = %v, want %v", got, wantRemaining)
 	}
 }
 
