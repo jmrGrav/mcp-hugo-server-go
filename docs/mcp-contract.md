@@ -15,19 +15,31 @@ tools on the structured envelope; flat envelopes are not changed in v1.x
 
 ### 1.1 Flat envelope
 
-Used by discovery and simple data tools. The top-level object **is** the
-result; field names are the natural nouns for that tool.
+Every tool response — "flat" and "structured" alike — carries the same
+`success`/`data`/`errors`/`warnings`/`meta` envelope described in
+[Section 1.2](#12-structured-envelope). "Flat" does **not** mean the envelope
+is skipped; it means the tool's payload is *also* mirrored as top-level
+convenience field(s), in addition to `data.X`, using the natural noun for
+that tool:
 
 ```json
-{ "pages": [ ... ], "total": 42 }
-{ "page": { "slug": "/posts/hello/", ... } }
-{ "tags": ["go", "hugo"] }
-{ "entries": [ ... ] }
-{ "slug": "/posts/new/", "path": "content/posts/new/index.md" }
+{
+  "pages": [ ... ],
+  "total": 42,
+  "success": true,
+  "data": { "pages": [ ... ], "total": 42 },
+  "errors": [],
+  "warnings": [],
+  "meta": { "generated_at": "...", "server_version": "...", "schema_version": "v1.0.0" }
+}
 ```
 
-There are no `success`, `errors`, or `warnings` fields. Tool-level errors are
-reported as MCP protocol errors (non-zero result code), not inside the JSON.
+A "structured" tool (Section 1.2) omits the top-level `pages`/`total`
+duplication and exposes the payload only via `data.pages`/`data.total`. Both
+shapes always carry `success`/`errors`/`warnings`/`meta` — that part of the
+contract does not vary. #433 removed this top-level duplication from 9
+anonymous tools; #495 tracks doing the same for the remaining tools still
+listed as "flat" in [Section 6](#6-tool-inventory).
 
 ### 1.2 Structured envelope
 
