@@ -66,11 +66,7 @@ func TestDiffPage(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("diff_page returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("diff_page data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if got := data["status"]; got != "modified" {
 		t.Fatalf("diff_page status = %v, want modified", got)
 	}
@@ -125,8 +121,7 @@ func TestDiffPageResolvesMultilingualBundleFromSourceIndex(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("diff_page multilingual returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	if got := data["path"]; got != "posts/bonjour/index.fr.md" {
 		t.Fatalf("diff_page multilingual path = %v, want posts/bonjour/index.fr.md", got)
 	}
@@ -157,8 +152,7 @@ func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("diff_page without git returned MCP error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	if got := data["status"]; got != "git_unavailable" {
 		t.Fatalf("diff_page status = %v, want git_unavailable", got)
 	}
@@ -175,7 +169,8 @@ func TestDiffPageWithoutGitReturnsSourceContent(t *testing.T) {
 		t.Fatalf("diff_page no-git resolved_source_path = %v, want content/posts/nogit/index.md", got)
 	}
 	assertReadPageState(t, data["state"], "present", "pending", "not_yet_available", "source_only")
-	warnings := m["warnings"].([]any)
+	envelope := decodeEnvelope(t, res)
+	warnings := envelope["warnings"].([]any)
 	if len(warnings) == 0 {
 		t.Fatal("expected warning explaining git is unavailable")
 	}
@@ -217,8 +212,7 @@ func TestDiffPageUntrackedFileReturnsGitUntrackedStatus(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("diff_page untracked returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	if got := data["status"]; got != "git_untracked" {
 		t.Fatalf("diff_page status = %v, want git_untracked", got)
 	}
@@ -231,7 +225,7 @@ func TestDiffPageUntrackedFileReturnsGitUntrackedStatus(t *testing.T) {
 	if got, want := data["source_content"], "---\ntitle: Untracked\ndate: 2026-07-03\n---\nJust created, not committed.\n"; got != want {
 		t.Fatalf("source_content = %q, want %q", got, want)
 	}
-	warnings := m["warnings"].([]any)
+	warnings := decodeEnvelope(t, res)["warnings"].([]any)
 	if len(warnings) == 0 || !strings.Contains(warnings[0].(string), "not yet tracked by git") {
 		t.Fatalf("expected actionable git_untracked warning, got %v", warnings)
 	}
@@ -281,12 +275,11 @@ func TestDiffPageGitBaselineDisabledSkipsHostProbing(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("diff_page disabled baseline returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	if got := data["status"]; got != "git_unavailable" {
 		t.Fatalf("diff_page status = %v, want git_unavailable", got)
 	}
-	warnings := m["warnings"].([]any)
+	warnings := decodeEnvelope(t, res)["warnings"].([]any)
 	if len(warnings) == 0 || !strings.Contains(warnings[0].(string), "disabled by configuration") {
 		t.Fatalf("expected warning explaining git_baseline is disabled, got %v", warnings)
 	}

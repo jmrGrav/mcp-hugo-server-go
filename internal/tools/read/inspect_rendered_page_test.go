@@ -103,11 +103,7 @@ func TestInspectRenderedPageCleanPagePassesAllChecks(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if got := data["status"]; got != "ok" {
 		t.Fatalf("status = %v, want ok; checks = %v", got, data["checks"])
 	}
@@ -139,8 +135,7 @@ func TestInspectRenderedPageFlagsMissingSEOFields(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	if got := data["status"]; got != "issues_found" {
 		t.Fatalf("status = %v, want issues_found", got)
 	}
@@ -171,8 +166,7 @@ func TestInspectRenderedPageFlagsBrokenLinkAndMissingImage(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["internal_links"]["status"] != "fail" {
 		t.Fatalf("internal_links status = %v, want fail", checks["internal_links"]["status"])
@@ -198,8 +192,7 @@ func TestInspectRenderedPageFlagsRenderErrorMarker(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["render_errors"]["status"] != "fail" {
 		t.Fatalf("render_errors status = %v, want fail", checks["render_errors"]["status"])
@@ -227,8 +220,7 @@ func TestInspectRenderedPageMultilingualWarnsMissingHreflang(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["hreflang"]["status"] != "warn" {
 		t.Fatalf("hreflang status = %v, want warn (site is multilingual, no hreflang tags present)", checks["hreflang"]["status"])
@@ -274,8 +266,7 @@ func TestInspectRenderedPageHreflangDetectionAttributeOrderCaseAndRelCombining(t
 			if res.IsError {
 				t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 			}
-			m := decodeContent(t, res)
-			data := m["data"].(map[string]any)
+			data := decodeContent(t, res)
 			checks := findChecks(t, data)
 			if checks["hreflang"]["status"] != "pass" {
 				t.Fatalf("hreflang status = %v, want pass (%s)", checks["hreflang"]["status"], tc.name)
@@ -308,8 +299,7 @@ func TestInspectRenderedPageHreflangWithEmptyHrefIsIncomplete(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["hreflang"]["status"] != "warn" {
 		t.Fatalf("hreflang status = %v, want warn (href is empty, must not be accepted as a valid alternate)", checks["hreflang"]["status"])
@@ -348,8 +338,7 @@ func TestInspectRenderedPageHreflangMultipleTranslationsAllFound(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["hreflang"]["status"] != "pass" {
 		t.Fatalf("hreflang status = %v, want pass", checks["hreflang"]["status"])
@@ -378,8 +367,7 @@ func TestInspectRenderedPageHreflangMonolingualSiteDoesNotFalsePositive(t *testi
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["hreflang"]["status"] != "pass" {
 		t.Fatalf("hreflang status = %v, want pass (single-language site, hreflang not applicable)", checks["hreflang"]["status"])
@@ -412,8 +400,7 @@ func TestInspectRenderedPageFlagsCanonicalMismatch(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["canonical"]["status"] != "warn" {
 		t.Fatalf("canonical status = %v, want warn (rendered canonical host %q differs from configured cfg.SiteURL)", checks["canonical"]["status"], "staging.example.test")
@@ -506,11 +493,7 @@ func TestInspectRenderedPageIncludePreviewSurfacesRisks(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	preview, ok := data["preview"].(map[string]any)
 	if !ok {
 		t.Fatalf("preview type = %T, want map[string]any", data["preview"])
@@ -555,11 +538,7 @@ func TestInspectRenderedPageOmitsPreviewByDefault(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if _, ok := data["preview"]; ok {
 		t.Fatalf("preview = %#v, want omitted when include_preview is not requested", data["preview"])
 	}
