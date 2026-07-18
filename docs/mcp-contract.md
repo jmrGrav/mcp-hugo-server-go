@@ -1,5 +1,14 @@
 # MCP Contract — hugo-public-mcp
 
+Issue note for `#520`:
+
+As of `v1.5.3`, successful **write/mutation** tools still expose a transitional
+v1.x compatibility shape: the canonical payload lives under `data`, and a
+mirrored copy of the same machine fields remains available at the root for
+older clients. This duplication is intentional for v1.x compatibility and is
+not shared by the read-only tools anymore. New clients must read `data.*`
+first; the root write fields are compatibility aliases only.
+
 This document specifies the observable contract for all tools exposed by the
 server: response envelopes, error model, pagination, naming conventions, and
 versioning. Agents may use this as a stable reference; deviations are bugs.
@@ -40,11 +49,17 @@ shapes always carry `success`/`errors`/`warnings`/`meta` — that part of the
 contract does not vary. #433 removed this top-level duplication from 9
 anonymous tools; #495 removed it from the remaining read tools that still
 had it. As of #495, no read or anonymous tool duplicates `data.X` at the top
-level — every row in [Section 6](#6-tool-inventory) that is still labeled
-"flat" (the write/mutation tools) uses a genuinely different, older
-convention instead: `data` is a placeholder empty object and the real
-payload lives only at the top level. That convention is tracked separately
-(#508) and is not the same problem #433/#495 fixed.
+level. As of `v1.5.2`, the write/mutation tools no longer use the older
+`data:{}` placeholder convention (#508): their canonical payload is now
+present under `data`. However, unlike the read tools, successful write
+responses still mirror those same payload fields at the root during the v1.x
+compatibility window (#520). That means:
+
+- **read tools**: canonical `data.*` only
+- **write success responses**: canonical `data.*` plus temporary root aliases
+- **write error responses**: canonical `data.*` plus temporary root aliases for
+  selected compatibility/telemetry fields where documented (for example
+  `rate_limit_remaining`, #522)
 
 ### 1.2 Structured envelope
 

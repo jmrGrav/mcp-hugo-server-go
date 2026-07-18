@@ -90,6 +90,16 @@ available.
 Per #450, `write` implies `read` and folds in every tool that used to
 require a separate `site.admin` scope, with no exceptions.
 
+Successful write-tool responses currently use a **v1.x compatibility**
+convention (#520):
+
+- the canonical machine payload lives under `data`
+- a mirrored copy of the same write-result fields still exists at the root
+
+New clients should read `data.*` first. The root write fields remain accepted
+as compatibility aliases during v1.x; they are not the preferred contract for
+new integrations.
+
 - `create_page` - Publish page
 - `update_page` - Update page
 - `delete_page` - Delete page
