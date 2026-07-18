@@ -35,4 +35,6 @@ need_pattern "$OPENRESTY_CONF" "location = /.well-known/mcp.json {" "www alias r
 need_pattern "$HOWTO" "https://www.arleo.eu/.well-known/oauth-protected-resource/mcp" "howto documents www protected-resource alias"
 need_pattern "$HOWTO" "https://www.arleo.eu/.well-known/mcp/server-card.json" "howto documents www server card alias"
 forbid_pattern "$AUTH_MD" '"system.admin"' "auth.md canonical scope list excludes system.admin"
+forbid_pattern "$AUTH_MD" '"site.admin"' "auth.md canonical scope list excludes site.admin"
 forbid_pattern "$RESOURCE_JSON" '"system.admin"' "website protected-resource excludes system.admin"
+forbid_pattern "$RESOURCE_JSON" '"site.admin"' "website protected-resource excludes site.admin"

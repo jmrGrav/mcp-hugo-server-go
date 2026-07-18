@@ -2,6 +2,6 @@
   "resource": "https://mcp.arleo.eu/mcp",
   "authorization_servers": ["https://mcp.arleo.eu"],
   "bearer_methods_supported": ["header"],
-  "scopes_supported": ["content.read", "content.write", "site.admin"],
+  "scopes_supported": ["read", "write"],
   "resource_documentation": "https://mcp.arleo.eu/auth.md"
 }
