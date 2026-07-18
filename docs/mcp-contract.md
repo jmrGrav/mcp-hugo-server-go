@@ -233,7 +233,7 @@ content, including drafts, for every tool in this table.
 |-------------------------|-------------|----------------------------------------------|
 | `get_page_markdown`| flat        | `page` + `page.state`                        |
 | `get_page_frontmatter`  | flat        | `frontmatter` + `frontmatter.state`          |
-| `get_related_content`   | flat        | `related`                                    |
+| `get_related_content`   | flat        | `related`; `related_pages` is canonical, `related` is a deprecated alias always identical to it, kept pending #433's live-client-verification question (#453) |
 | `build_agent_context`   | flat        | `context` + `context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337) |
 | `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
 | `get_page_for_edit`     | flat        | `page.state`, `page.revision`, `page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` (#339) |
@@ -244,6 +244,7 @@ content, including drafts, for every tool in this table.
 | `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`            |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
+| `suggest_links`         | structured  | `data.suggested_links` is canonical, `data.suggestions` is a deprecated alias always identical to it, kept pending #433's live-client-verification question (#453) |
 | `diff_page`             | structured  | `data` (diff result) + `data.state`          |
 | `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state` |
 | `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`           |

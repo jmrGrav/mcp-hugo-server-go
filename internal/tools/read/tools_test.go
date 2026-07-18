@@ -1228,6 +1228,13 @@ func TestGetRelatedContentSeparatesTranslations(t *testing.T) {
 	if !ok || len(legacyRelated) == 0 {
 		t.Fatalf("related = %#v, want legacy compatibility alias", m["related"])
 	}
+	// #453: related must stay byte-identical to related_pages — it's a
+	// deprecated alias, not an independently-populated field.
+	relatedJSON, _ := json.Marshal(relatedPages)
+	legacyRelatedJSON, _ := json.Marshal(legacyRelated)
+	if string(relatedJSON) != string(legacyRelatedJSON) {
+		t.Fatalf("related = %s, want identical to related_pages = %s", legacyRelatedJSON, relatedJSON)
+	}
 	for _, raw := range append(append(relatedPages, legacyRelated...), suggestedLinks...) {
 		related := raw.(map[string]any)
 		if got := related["slug"]; got == "/en/posts/hello/" {
@@ -1295,6 +1302,13 @@ func TestSuggestInternalLinksSeparatesTranslations(t *testing.T) {
 	suggestedLinks, ok := data["suggested_links"].([]any)
 	if !ok || len(suggestedLinks) == 0 {
 		t.Fatalf("suggested_links = %#v, want compatibility alias", data["suggested_links"])
+	}
+	// #453: suggestions is a deprecated alias of the canonical
+	// suggested_links — must stay byte-identical, not independently populated.
+	suggestionsJSON, _ := json.Marshal(legacySuggestions)
+	suggestedLinksJSON, _ := json.Marshal(suggestedLinks)
+	if string(suggestionsJSON) != string(suggestedLinksJSON) {
+		t.Fatalf("suggestions = %s, want identical to suggested_links = %s", suggestionsJSON, suggestedLinksJSON)
 	}
 	for _, raw := range append(legacySuggestions, suggestedLinks...) {
 		suggestion := raw.(map[string]any)
