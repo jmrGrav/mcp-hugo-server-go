@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.2] - 2026-07-18
+
+Security-driven release from a same-day live production audit (external ChatGPT/Codex audit + Claude Code, 2026-07-18) of the v1.5.1 deploy, plus the resulting envelope-contract and observability follow-ups.
+
+### Security
+- **P0: public Dynamic Client Registration could mint `write`-scope tokens** (#497, PR #505): `resolveRegistrationScope` inherited the scope of any pre-registered client (e.g. `claude-admin`/`chatgpt-write`) whose redirect URI textually overlapped a DCR request — with no secret and no proof of redirect-URI ownership required. A caller could register a public client with a known privileged client's callback URI and obtain a `write` token directly. Public DCR clients now always get `read`; `write` is only obtainable by authenticating with a pre-registered client's own secret. Verified live (registering with Claude.ai's exact callback now returns `read`, not `write`) and covered by a new regression test proving a known `client_id` cannot mint a token without its secret.
+
+### Changed
+- **`/mcp` bearer verification now uses the Go MCP SDK's `auth.RequireBearerToken`** (#473, PR #493), via a local compatibility adapter that preserves the existing `WWW-Authenticate` challenge shape, per-tool JSON-RPC ACL, and scope/audit context enrichment — moves the riskiest parsing path onto the actively-maintained upstream primitive with no observable behavior change for existing clients.
+- **Remaining top-level envelope duplication removed from 13 read tools** (#495, PR #511): `get_page_markdown`, `get_page_frontmatter`, `get_related_content`, `build_agent_context`, `export_agent_context`, `get_page_for_edit`, `list_content_types`, `list_page_assets`, `search_content`, `explain_structure`, `get_site_health`, `get_broken_links`, `get_backlinks`, `suggest_links`, `diff_page`, `inspect_rendered`, `validate_frontmatter`, `validate_site` now expose their payload only via `data.X` — continues #433's dedup to the rest of the read surface.
+- **Mutation tools now populate `data.X` additively** (#508, PR #512): `create_page`/`update_page`/`delete_page`/`upload_page_asset`/`delete_page_asset`/`generate_hero_image` previously left `data` as an empty placeholder with the real payload only at the top level; `data.X` now mirrors the same fields, alongside the unchanged top-level fields (non-breaking, interim state).
+- **`meta` now carries release identity** (#509, PR #513): `meta.release_version`, `meta.commit`, and `meta.build_channel` are exposed alongside the existing `meta.server_version`/`meta.schema_version`, so an external audit can confirm which named release it's testing without out-of-band GitHub context.
+- **Reader-acquisition discovery metadata now reflects actual deployment mode** (#498, PR #516): `access_profiles.reader.acquisition`/`acquisition_mode` in OAuth discovery metadata previously said "anonymous or self-serve registration" unconditionally; it now derives from the live `oauth.dynamic_client_enabled`/`allow_reader_self_registration` config, so it never overstates bearerless anonymous access when the deployment actually requires self-serve OAuth registration.
+
+### Fixed
+- **`rate_limit_remaining` no longer reports a stale/zero value on write-tool error paths** (#510, PR #514): error responses from `create_page`/`update_page`/`delete_page`/`upload_page_asset`/`delete_page_asset` previously left the field at its Go zero value; it now always reflects the caller's real remaining quota, matching the success-path contract.
+- **`get_page`'s source-fallback `html` field is now explicitly labeled** (#502, PR #515): new `html_origin` (`rendered_public`/`source_fallback`/`none`) and `rendered_html_available` fields let a caller distinguish real rendered public HTML from source-fallback content without inferring it from `state` alone.
+- **Token response omitting granted scope on silent reader downgrade** (#499): resolved as a side effect of #505 — DCR clients always getting an explicit `read` scope (never the previously possible empty string) means `/token`'s `scope` field is never omitted by `omitempty`.
+- **`docs/mcp-contract.md` §1.1 "flat envelope" description corrected** (#496, PR #507): the doc claimed flat tools have no `success`/`errors`/`warnings` fields, which was never true for any tool — clarified that "flat" only ever meant a top-level convenience-field duplicate of `data.X`.
+
 ## [v1.5.1] - 2026-07-18
 
 Consolidation release driven by three live connector audits (ChatGPT x2, Claude.ai, 2026-07-17/18), focused on OAuth scope simplification, response-contract cleanup, and token-cost reduction on high-traffic tools.
