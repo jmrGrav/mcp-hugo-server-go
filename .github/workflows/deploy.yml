@@ -65,6 +65,9 @@ jobs:
             BUILD_CHANNEL="release"
           else
             BUILD_VERSION="main-$SHORT_SHA"
+            # Mainline production deploys intentionally omit release_version:
+            # callers should use server_version=main-<sha> plus commit/build_channel
+            # unless the build came from an exact release tag.
             RELEASE_VERSION=""
             BUILD_CHANNEL="main"
           fi
