@@ -192,6 +192,11 @@ func buildCommandArgs(cacheDir string, preview bool) []string {
 	args := []string{"--noBuildLock", "--cacheDir", cacheDir}
 	if preview {
 		args = append(args, "--renderToMemory")
+	} else {
+		// Without this flag Hugo never removes output files whose source
+		// page was deleted since the last build; they linger in site_root
+		// indefinitely (#524).
+		args = append(args, "--cleanDestinationDir")
 	}
 	return args
 }
