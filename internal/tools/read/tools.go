@@ -69,8 +69,30 @@ type getPageFrontmatterData struct {
 }
 
 type getRelatedContentInput struct {
-	Slug  string `json:"slug"`
-	Limit int    `json:"limit,omitempty"`
+	Slug    string   `json:"slug"`
+	Limit   int      `json:"limit,omitempty"`
+	Include []string `json:"include,omitempty"`
+}
+
+// getRelatedContentAllInclude is the allowed vocabulary for get_related_content's
+// opt-in `include` param (#434). The four base facets (translations,
+// related_pages, backlinks, suggested_links) are always returned regardless
+// of `include` — impact is a fifth, opt-in-only facet, the same pattern
+// get_page_for_edit's `include=["backlinks"]` established (#465): it costs
+// an extra taxonomy scan, so it isn't part of the always-returned bundle.
+var getRelatedContentAllInclude = map[string]bool{
+	"impact": true,
+}
+
+func resolveRelatedContentInclude(raw []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(raw))
+	for _, r := range raw {
+		if !getRelatedContentAllInclude[r] {
+			return nil, fmt.Errorf("invalid_params: include must be a subset of impact (got %q)", r)
+		}
+		out[r] = true
+	}
+	return out, nil
 }
 
 type relatedPageDTO struct {
@@ -98,18 +120,34 @@ type getRelatedContentData struct {
 
 	SuggestedLinks []linkSuggestionDTO `json:"suggested_links"`
 
-	// Related always carries the exact same slice as RelatedPages (#453) —
-	// RelatedPages is canonical; Related is kept as a deprecated alias
-	// rather than removed until #433's live-client-verification question
-	// (does any connected client read this exact field name?) is resolved,
-	// since removing it would be a breaking wire change if so.
-	Related []relatedPageDTO `json:"related"`
-
 	// EmptyReason is populated only when RelatedPages is empty (#458), so an
 	// agent can tell "no other content shares enough tag/category overlap"
 	// from "the heuristic never even had candidates to evaluate" instead of
 	// just seeing an empty array with no explanation.
 	EmptyReason *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
+
+	// Impact is populated only when include=["impact"] is requested (#434):
+	// a pre-mutation impact summary answering "what does changing this
+	// page affect?" — taxonomy terms that would be orphaned, sitemap/feed
+	// presence, and any redirect aliases pointing at this slug.
+	Impact *impactDTO `json:"impact,omitempty"`
+}
+
+// impactDTO is the pre-mutation impact summary for get_related_content's
+// opt-in impact facet (#434). Advisory only, same posture as
+// get_broken_links — never blocks a mutation.
+type impactDTO struct {
+	// TaxonomyOrphans lists this page's own tags/categories for which no
+	// other published content page carries the same (alias-normalized)
+	// term — removing the term from this page would leave it with zero
+	// carriers.
+	TaxonomyOrphans []string `json:"taxonomy_orphans"`
+	SitemapPresent  bool     `json:"sitemap_present"`
+	FeedPresent     bool     `json:"feed_present"`
+	// Aliases is this page's own front-matter `aliases:` list (Hugo's
+	// redirect-alias convention) — unrelated to the taxonomy package's
+	// tag/category alias concept.
+	Aliases []string `json:"aliases"`
 }
 
 // emptyResultExplanationDTO is additive context returned alongside an empty
@@ -205,42 +243,22 @@ type exportAgentContextData = exportResultDTO
 
 type getFullPageMarkdownOutput struct {
 	toolcontract.ToolResponse[getFullPageMarkdownData]
-	Page pageMarkdownDTO `json:"page"`
 }
 
 type getPageFrontmatterOutput struct {
 	toolcontract.ToolResponse[getPageFrontmatterData]
-	Frontmatter frontmatterDTO `json:"frontmatter"`
 }
 
 type getRelatedContentOutput struct {
 	toolcontract.ToolResponse[getRelatedContentData]
-	Translations   []translationPageDTO `json:"translations"`
-	RelatedPages   []relatedPageDTO     `json:"related_pages"`
-	Backlinks      []backlinkDTO        `json:"backlinks"`
-	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
-	// Related is a deprecated alias of RelatedPages (#453); see the comment
-	// on getRelatedContentData.Related for why it isn't simply removed.
-	Related     []relatedPageDTO           `json:"related"`
-	EmptyReason *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
 }
 
 type buildAgentContextOutput struct {
 	toolcontract.ToolResponse[buildAgentContextData]
-	Context any `json:"context"`
 }
 
 type exportAgentContextOutput struct {
 	toolcontract.ToolResponse[exportAgentContextData]
-	Export        exportResultDTO `json:"export"`
-	Pages         []pageExportDTO `json:"pages"`
-	Total         int             `json:"total"`
-	Limit         int             `json:"limit"`
-	Offset        int             `json:"offset"`
-	ReturnedCount int             `json:"returned_count"`
-	HasMore       bool            `json:"has_more"`
-	NextOffset    *int            `json:"next_offset,omitempty"`
-	IncludeBody   bool            `json:"include_body"`
 }
 
 type getPageForEditInput struct {
@@ -286,7 +304,6 @@ type getPageForEditData struct {
 
 type getPageForEditOutput struct {
 	toolcontract.ToolResponse[getPageForEditData]
-	Page pageForEditDTO `json:"page"`
 }
 
 // getPageForEditDefaultSections is what an empty/omitted `include` expands
@@ -338,7 +355,7 @@ func newGetPageForEditOutput(data getPageForEditData, warnings []string, now tim
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
-	return getPageForEditOutput{ToolResponse: resp, Page: data.Page}
+	return getPageForEditOutput{ToolResponse: resp}
 }
 
 func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
@@ -390,16 +407,20 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
-		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Input: indexed slug only.",
+		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Pass `include: [\"impact\"]` for a pre-mutation impact summary (`impact.taxonomy_orphans`, `impact.sitemap_present`, `impact.feed_present`, `impact.aliases`) answering \"what does changing this page affect?\" before a risky edit/delete — advisory only, never blocks a mutation, same posture as get_broken_links (#434). Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRelatedContentInput) (*mcp.CallToolResult, getRelatedContentOutput, error) {
 			if idx == nil {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("index not initialized")
+			}
+			include, err := resolveRelatedContentInclude(in.Include)
+			if err != nil {
+				return nil, getRelatedContentOutput{}, err
 			}
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			resolved, err = readerSafeResolvedPage(ctx, resolved, in.Slug)
 			if err != nil {
 				return nil, getRelatedContentOutput{}, err
 			}
@@ -417,10 +438,13 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				RelatedPages:   related,
 				Backlinks:      backlinks,
 				SuggestedLinks: suggestedLinks,
-				Related:        related,
 			}
 			if len(related) == 0 {
 				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
+			}
+			if include["impact"] {
+				impact := computeImpact(idx, resolved, ref, aliases)
+				data.Impact = &impact
 			}
 			return nil, newGetRelatedContentOutput(data, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 20) })
@@ -650,23 +674,15 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 }
 
 func newGetFullPageMarkdownOutput(data getFullPageMarkdownData, now time.Time) getFullPageMarkdownOutput {
-	return getFullPageMarkdownOutput{ToolResponse: successEnvelope(data, now), Page: data.Page}
+	return getFullPageMarkdownOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newGetPageFrontmatterOutput(data getPageFrontmatterData, now time.Time) getPageFrontmatterOutput {
-	return getPageFrontmatterOutput{ToolResponse: successEnvelope(data, now), Frontmatter: data.Frontmatter}
+	return getPageFrontmatterOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRelatedContentOutput {
-	return getRelatedContentOutput{
-		ToolResponse:   successEnvelope(data, now),
-		Translations:   data.Translations,
-		RelatedPages:   data.RelatedPages,
-		Backlinks:      data.Backlinks,
-		SuggestedLinks: data.SuggestedLinks,
-		Related:        data.Related,
-		EmptyReason:    data.EmptyReason,
-	}
+	return getRelatedContentOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newBuildAgentContextOutput(data buildAgentContextData, warnings []string, now time.Time) buildAgentContextOutput {
@@ -674,7 +690,7 @@ func newBuildAgentContextOutput(data buildAgentContextData, warnings []string, n
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
-	return buildAgentContextOutput{ToolResponse: resp, Context: data.Context}
+	return buildAgentContextOutput{ToolResponse: resp}
 }
 
 func newExportAgentContextOutput(data exportAgentContextData, warnings []string, now time.Time) exportAgentContextOutput {
@@ -682,18 +698,7 @@ func newExportAgentContextOutput(data exportAgentContextData, warnings []string,
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
-	return exportAgentContextOutput{
-		ToolResponse:  resp,
-		Export:        exportResultDTO(data),
-		Pages:         data.Pages,
-		Total:         data.Total,
-		Limit:         data.Limit,
-		Offset:        data.Offset,
-		ReturnedCount: data.ReturnedCount,
-		HasMore:       data.HasMore,
-		NextOffset:    data.NextOffset,
-		IncludeBody:   data.IncludeBody,
-	}
+	return exportAgentContextOutput{ToolResponse: resp}
 }
 
 func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revision string, state site.LifecycleState) pageMarkdownDTO {
@@ -997,6 +1002,89 @@ func nullsafeStrings(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// frontmatterStringSlice extracts a []string from a raw front-matter value
+// decoded by yaml.v3 (either []string or []any of scalars) — the same
+// permissive shape hugosite.SourceIndex's own unexported stringSlice
+// handles when parsing tags/categories, needed here for the `aliases:`
+// field, which nothing in the codebase reads today (#434).
+func frontmatterStringSlice(v any) []string {
+	switch x := v.(type) {
+	case []string:
+		return x
+	case []any:
+		out := make([]string, 0, len(x))
+		for _, item := range x {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		return []string{x}
+	default:
+		return nil
+	}
+}
+
+// computeImpact builds get_related_content's opt-in impact facet (#434):
+// a pre-mutation summary of what changing ref would affect. Advisory only
+// — never blocks a mutation, same posture as get_broken_links.
+func computeImpact(idx *site.Index, resolved site.ResolvedPage, ref site.Page, aliases map[string]string) impactDTO {
+	impact := impactDTO{
+		TaxonomyOrphans: []string{},
+		Aliases:         []string{},
+	}
+
+	if idx != nil {
+		// Hoisted out of the per-term loop below (design budget: one
+		// ContentPages() scan per call, not one per term).
+		contentPages := idx.ContentPages()
+		for _, term := range append(append([]string{}, ref.Tags...), ref.Categories...) {
+			target := taxonomy.ResolveAlias(taxonomy.Slug(term), aliases)
+			if target == "" {
+				continue
+			}
+			orphaned := true
+			for _, pg := range contentPages {
+				if pg.Slug == ref.Slug {
+					continue
+				}
+				if taxonomy.MatchesSlugWithAliases(pg.Tags, target, aliases) ||
+					taxonomy.MatchesSlugWithAliases(pg.Categories, target, aliases) {
+					orphaned = false
+					break
+				}
+			}
+			if orphaned {
+				impact.TaxonomyOrphans = append(impact.TaxonomyOrphans, term)
+			}
+		}
+		for _, pg := range idx.Sitemap() {
+			if pg.Slug == ref.Slug {
+				impact.SitemapPresent = true
+				break
+			}
+		}
+		for _, pg := range idx.GetFeed(0) {
+			if pg.Slug == ref.Slug {
+				impact.FeedPresent = true
+				break
+			}
+		}
+	}
+
+	if resolved.Source != nil {
+		if raw, ok := resolved.Source.FrontmatterRaw["aliases"]; ok {
+			impact.Aliases = frontmatterStringSlice(raw)
+			if impact.Aliases == nil {
+				impact.Aliases = []string{}
+			}
+		}
+	}
+
+	return impact
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).

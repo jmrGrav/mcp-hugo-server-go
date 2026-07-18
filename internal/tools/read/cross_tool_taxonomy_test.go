@@ -107,14 +107,12 @@ func TestCrossToolTaxonomyConsistency(t *testing.T) {
 	}
 
 	// search_content — find the bonjour page by tag slug.
-	// search_content wraps its output in a {"data": {"pages": [...]}} envelope.
 	{
 		res := callTool(t, session, "search_content", map[string]any{"tag": "security", "limit": 5})
 		if res.IsError {
 			t.Fatalf("search_content error")
 		}
-		m := decodeContent(t, res)
-		data, _ := m["data"].(map[string]any)
+		data := decodeContent(t, res)
 		pages, _ := data["pages"].([]any)
 		var found map[string]any
 		for _, p := range pages {
@@ -156,8 +154,7 @@ func TestCrossToolTaxonomyConsistency(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("export_agent_context error")
 		}
-		m := decodeContent(t, res)
-		export, _ := m["export"].(map[string]any)
+		export := decodeContent(t, res)
 		exportPages, _ := export["pages"].([]any)
 		var found map[string]any
 		for _, p := range exportPages {
@@ -290,8 +287,7 @@ func TestCrossToolTaxonomySourceOverride(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("export_agent_context error")
 		}
-		m := decodeContent(t, res)
-		export, _ := m["export"].(map[string]any)
+		export := decodeContent(t, res)
 		exportPages, _ := export["pages"].([]any)
 		var found map[string]any
 		for _, p := range exportPages {
@@ -342,7 +338,7 @@ func TestComputeRelatedSlugMatching(t *testing.T) {
 		t.Fatalf("get_related_content error")
 	}
 	m := decodeContent(t, res)
-	related, _ := m["related"].([]any)
+	related, _ := m["related_pages"].([]any)
 
 	var bonjourFound bool
 	for _, r := range related {
@@ -393,8 +389,7 @@ func TestExportAgentContextCategoryRoundTrip(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("export_agent_context(category=tutorials) returned error")
 	}
-	m := decodeContent(t, res)
-	export, _ := m["export"].(map[string]any)
+	export := decodeContent(t, res)
 	pages, _ := export["pages"].([]any)
 	if len(pages) == 0 {
 		t.Fatal("export_agent_context(category=tutorials) returned 0 pages; source index fallback broken")
@@ -426,8 +421,7 @@ func TestExportAgentContextCategoryRoundTrip(t *testing.T) {
 	if res2.IsError {
 		t.Fatalf("search_content(category=tutorials) returned error")
 	}
-	m2 := decodeContent(t, res2)
-	data, _ := m2["data"].(map[string]any)
+	data := decodeContent(t, res2)
 	pages2, _ := data["pages"].([]any)
 	var found2 bool
 	for _, p := range pages2 {

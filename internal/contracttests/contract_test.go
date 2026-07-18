@@ -33,6 +33,9 @@ type identity struct {
 }
 
 func TestContractAnonymousReadToolsUseToolResponseEnvelope(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -67,6 +70,9 @@ func TestContractAnonymousReadToolsUseToolResponseEnvelope(t *testing.T) {
 }
 
 func TestContractContentReadToolsUseToolResponseEnvelope(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -110,6 +116,9 @@ func TestContractContentReadToolsUseToolResponseEnvelope(t *testing.T) {
 // meta.server_version instead of the actual server build version, on every
 // successful create_page/update_page/delete_page/upload_page_asset call.
 func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	contentRoot := t.TempDir()
 	writeFile(t, filepath.Join(contentRoot, "posts", "existing", "index.md"), "---\ntitle: Existing\n---\nBody.\n")
 
@@ -128,7 +137,11 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("create_page returned error: %s", marshalAny(t, res.Content))
 	}
-	assertToolResponseEnvelope(t, "create_page", decodeContent(t, res))
+	m := decodeContent(t, res)
+	assertToolResponseEnvelope(t, "create_page", m)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/envelope-check" {
+		t.Fatalf("create_page data.slug = %q, want posts/envelope-check", got)
+	}
 
 	revision := func() string {
 		t.Helper()
@@ -148,7 +161,11 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("update_page returned error: %s", marshalAny(t, res.Content))
 	}
-	assertToolResponseEnvelope(t, "update_page", decodeContent(t, res))
+	m = decodeContent(t, res)
+	assertToolResponseEnvelope(t, "update_page", m)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/existing" {
+		t.Fatalf("update_page data.slug = %q, want posts/existing", got)
+	}
 
 	res = callTool(t, session, "delete_page", map[string]any{
 		"slug":              "posts/existing",
@@ -157,10 +174,17 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("delete_page returned error: %s", marshalAny(t, res.Content))
 	}
-	assertToolResponseEnvelope(t, "delete_page", decodeContent(t, res))
+	m = decodeContent(t, res)
+	assertToolResponseEnvelope(t, "delete_page", m)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/existing" {
+		t.Fatalf("delete_page data.slug = %q, want posts/existing", got)
+	}
 }
 
 func TestContractDiffPageErrorUsesStructuredEnvelope(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -177,6 +201,9 @@ func TestContractDiffPageErrorUsesStructuredEnvelope(t *testing.T) {
 }
 
 func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -240,6 +267,9 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 }
 
 func TestContractRichReadToolsExposeLifecycleState(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -314,6 +344,9 @@ func TestContractRichReadToolsExposeLifecycleState(t *testing.T) {
 }
 
 func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -376,6 +409,9 @@ func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *test
 }
 
 func TestContractDryRunMutationsDoNotWriteToDisk(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	contentRoot := t.TempDir()
 	originalPath := filepath.Join(contentRoot, "posts", "existing", "index.md")
 	original := "---\ntitle: Existing\n---\nOriginal body.\n"
@@ -430,6 +466,9 @@ func TestContractDryRunMutationsDoNotWriteToDisk(t *testing.T) {
 }
 
 func TestContractPaginationWalksToEndWithoutGaps(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -559,6 +598,9 @@ func TestContractPaginationWalksToEndWithoutGaps(t *testing.T) {
 }
 
 func TestContractGetPageMatchesGolden(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -574,6 +616,9 @@ func TestContractGetPageMatchesGolden(t *testing.T) {
 }
 
 func TestContractListPagesMatchesGolden(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -589,6 +634,9 @@ func TestContractListPagesMatchesGolden(t *testing.T) {
 }
 
 func TestContractGetRelatedContentMatchesGolden(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -716,7 +764,8 @@ func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 
 func identityFromGetPage(t *testing.T, res *mcp.CallToolResult) identity {
 	t.Helper()
-	page := mapAt(t, decodeContent(t, res), "page")
+	data := mapAt(t, decodeContent(t, res), "data")
+	page := mapAt(t, data, "page")
 	return identity{
 		Slug:               asString(page["slug"]),
 		Lang:               asString(page["lang"]),
@@ -787,7 +836,8 @@ func identityFromDiffPage(t *testing.T, res *mcp.CallToolResult) identity {
 
 func extractTopLevelPages(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
 	t.Helper()
-	return extractCollection(t, m, "pages")
+	data := mapAt(t, m, "data")
+	return extractCollection(t, data, "pages")
 }
 
 func assertLifecycleState(t *testing.T, state map[string]any, source, build, public, index string) {
@@ -808,12 +858,14 @@ func assertLifecycleState(t *testing.T, state map[string]any, source, build, pub
 
 func extractTopLevelItems(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
 	t.Helper()
-	return extractCollection(t, m, "items")
+	data := mapAt(t, m, "data")
+	return extractCollection(t, data, "items")
 }
 
 func extractTopLevelEntries(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
 	t.Helper()
-	return extractCollection(t, m, "entries")
+	data := mapAt(t, m, "data")
+	return extractCollection(t, data, "entries")
 }
 
 func extractSearchContentPages(t *testing.T, m map[string]any) ([]string, int, int, bool, *int) {
@@ -869,6 +921,11 @@ func termSlugs(raw any) []string {
 func mapAt(t *testing.T, m map[string]any, key string) map[string]any {
 	t.Helper()
 	raw, ok := m[key]
+	if !ok {
+		if data, okData := m["data"].(map[string]any); okData {
+			raw, ok = data[key]
+		}
+	}
 	if !ok {
 		t.Fatalf("missing key %q", key)
 	}
@@ -1002,8 +1059,20 @@ func assertToolResponseEnvelopeMeta(t *testing.T, tool string, m map[string]any)
 	if !ok || metaGeneratedAt == "" {
 		t.Fatalf("%s meta.generated_at = %v, want non-empty string", tool, meta["generated_at"])
 	}
-	if got := asString(m["version"]); got != toolcontract.ToolResultVersion {
-		t.Fatalf("%s version = %q, want schema version %q", tool, got, toolcontract.ToolResultVersion)
+	// #454: the ambiguous root-level `version` field (schema version, easily
+	// mistaken for the server version) was removed; the schema-version
+	// signal now lives unambiguously at meta.schema_version instead.
+	if got := asString(meta["schema_version"]); got != toolcontract.ToolResultVersion {
+		t.Fatalf("%s meta.schema_version = %q, want schema version %q", tool, got, toolcontract.ToolResultVersion)
+	}
+	if got := asString(meta["commit"]); got == "" {
+		t.Fatalf("%s meta.commit = %q, want non-empty string", tool, got)
+	}
+	if got := asString(meta["build_channel"]); got == "" {
+		t.Fatalf("%s meta.build_channel = %q, want non-empty string", tool, got)
+	}
+	if _, ok := m["version"]; ok {
+		t.Fatalf("%s root-level version should be removed (#454), got %v", tool, m["version"])
 	}
 	if got := asString(m["generated_at"]); got != metaGeneratedAt {
 		t.Fatalf("%s generated_at = %q, want meta.generated_at %q", tool, got, metaGeneratedAt)
@@ -1066,6 +1135,26 @@ func normalizeSourcePaths(v any) {
 		for _, item := range x {
 			normalizeSourcePaths(item)
 		}
+	}
+}
+
+func setContractBuildInfo(t *testing.T) func() {
+	t.Helper()
+	origVersion := buildinfo.Version
+	origRelease := buildinfo.ReleaseVersion
+	origCommit := buildinfo.Commit
+	origChannel := buildinfo.BuildChannel
+
+	buildinfo.Version = "main-testbuild"
+	buildinfo.ReleaseVersion = "vtest"
+	buildinfo.Commit = "0123456789ab"
+	buildinfo.BuildChannel = "main"
+
+	return func() {
+		buildinfo.Version = origVersion
+		buildinfo.ReleaseVersion = origRelease
+		buildinfo.Commit = origCommit
+		buildinfo.BuildChannel = origChannel
 	}
 }
 

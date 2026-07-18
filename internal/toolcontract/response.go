@@ -16,8 +16,21 @@ import (
 const ToolResultVersion = buildinfo.SchemaVersion
 
 type ResponseMeta struct {
-	GeneratedAt   string `json:"generated_at"`
-	ServerVersion string `json:"server_version"`
+	GeneratedAt string `json:"generated_at"`
+	// ServerVersion is the deployed server build (internal/buildinfo.Version)
+	// — what most callers actually want when they say "version".
+	ServerVersion  string `json:"server_version"`
+	ReleaseVersion string `json:"release_version,omitempty"`
+	Commit         string `json:"commit,omitempty"`
+	BuildChannel   string `json:"build_channel,omitempty"`
+	// SchemaVersion is the response *shape* version (ToolResultVersion,
+	// currently "v1.0.0") — replaces the old root-level `version` field
+	// (#454), which was ambiguous: its name suggested the server version,
+	// but it actually meant the schema version, while the real server
+	// version lived one level down in server_version. Nesting both under
+	// meta with unambiguous names removes that confusion instead of leaving
+	// two same-named-sounding fields at different levels.
+	SchemaVersion string `json:"schema_version"`
 }
 
 type ErrorResolution struct {
@@ -40,13 +53,17 @@ type ToolError struct {
 }
 
 type ToolResponse[T any] struct {
-	Success     bool         `json:"success"`
-	Data        T            `json:"data"`
-	Errors      []ToolError  `json:"errors"`
-	Warnings    []string     `json:"warnings"`
-	Meta        ResponseMeta `json:"meta"`
-	Version     string       `json:"version,omitempty"`
-	GeneratedAt string       `json:"generated_at,omitempty"`
+	Success  bool         `json:"success"`
+	Data     T            `json:"data"`
+	Errors   []ToolError  `json:"errors"`
+	Warnings []string     `json:"warnings"`
+	Meta     ResponseMeta `json:"meta"`
+	// GeneratedAt duplicates Meta.GeneratedAt at the root for backward
+	// compatibility with existing callers; see #454 for why the analogous
+	// root-level `version` field (schema-version, easily confused with the
+	// server version) was removed instead of kept — that one was ambiguous
+	// naming, not just harmless duplication like this one.
+	GeneratedAt string `json:"generated_at,omitempty"`
 }
 
 type PaginatedResponse[T any] struct {
@@ -80,8 +97,12 @@ func ComputePagination(total, limit, offset, returned int) PaginationMeta {
 
 func NewMeta(serverVersion string, generatedAt time.Time) ResponseMeta {
 	return ResponseMeta{
-		GeneratedAt:   generatedAt.UTC().Format(time.RFC3339),
-		ServerVersion: serverVersion,
+		GeneratedAt:    generatedAt.UTC().Format(time.RFC3339),
+		ServerVersion:  serverVersion,
+		ReleaseVersion: buildinfo.EffectiveReleaseVersion(),
+		Commit:         buildinfo.Commit,
+		BuildChannel:   buildinfo.EffectiveBuildChannel(),
+		SchemaVersion:  ToolResultVersion,
 	}
 }
 
@@ -100,7 +121,6 @@ func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 		Errors:      []ToolError{},
 		Warnings:    []string{},
 		Meta:        meta,
-		Version:     ToolResultVersion,
 		GeneratedAt: meta.GeneratedAt,
 	}
 }
@@ -155,7 +175,6 @@ func Failure(meta ResponseMeta, errs ...ToolError) ToolResponse[map[string]any] 
 		Errors:      errs,
 		Warnings:    []string{},
 		Meta:        meta,
-		Version:     ToolResultVersion,
 		GeneratedAt: meta.GeneratedAt,
 	}
 }

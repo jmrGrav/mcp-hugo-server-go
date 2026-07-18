@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -23,6 +24,18 @@ func TestNewError(t *testing.T) {
 }
 
 func TestSuccessInitializesSlicesAndMeta(t *testing.T) {
+	origRelease := buildinfo.ReleaseVersion
+	origCommit := buildinfo.Commit
+	origChannel := buildinfo.BuildChannel
+	buildinfo.ReleaseVersion = "v1.5.1"
+	buildinfo.Commit = "50cbc9fe4217"
+	buildinfo.BuildChannel = "main"
+	defer func() {
+		buildinfo.ReleaseVersion = origRelease
+		buildinfo.Commit = origCommit
+		buildinfo.BuildChannel = origChannel
+	}()
+
 	meta := NewMeta("1.4.0", time.Date(2026, 7, 13, 8, 0, 0, 0, time.UTC))
 	got := Success(map[string]string{"status": "ok"}, meta)
 
@@ -50,8 +63,20 @@ func TestSuccessInitializesSlicesAndMeta(t *testing.T) {
 	if metaMap["server_version"] != "1.4.0" {
 		t.Fatalf("meta.server_version = %v, want 1.4.0", metaMap["server_version"])
 	}
-	if decoded["version"] != ToolResultVersion {
-		t.Fatalf("version = %v, want schema version %q", decoded["version"], ToolResultVersion)
+	if metaMap["release_version"] != "v1.5.1" {
+		t.Fatalf("meta.release_version = %v, want v1.5.1", metaMap["release_version"])
+	}
+	if metaMap["commit"] != "50cbc9fe4217" {
+		t.Fatalf("meta.commit = %v, want 50cbc9fe4217", metaMap["commit"])
+	}
+	if metaMap["build_channel"] != "main" {
+		t.Fatalf("meta.build_channel = %v, want main", metaMap["build_channel"])
+	}
+	if metaMap["schema_version"] != ToolResultVersion {
+		t.Fatalf("meta.schema_version = %v, want %q", metaMap["schema_version"], ToolResultVersion)
+	}
+	if _, ok := decoded["version"]; ok {
+		t.Fatalf("root-level version should be removed (#454), got %v", decoded["version"])
 	}
 }
 

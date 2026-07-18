@@ -45,7 +45,7 @@ type createPageInput struct {
 }
 
 type createPageOutput struct {
-	toolcontract.ToolResponse[map[string]any]
+	toolcontract.ToolResponse[createPageData]
 	Status string `json:"status,omitempty"`
 	// Slug is never legitimately empty on success (an empty slug fails
 	// invalid_params before any write happens); omitempty so a failure
@@ -80,6 +80,20 @@ type createPageOutput struct {
 	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
+type createPageData struct {
+	Status             string               `json:"status,omitempty"`
+	Slug               string               `json:"slug,omitempty"`
+	Path               string               `json:"path,omitempty"`
+	ResolvedLang       *string              `json:"resolved_lang,omitempty"`
+	ResolvedSourcePath *string              `json:"resolved_source_path,omitempty"`
+	DryRun             bool                 `json:"dry_run,omitempty"`
+	Content            string               `json:"content,omitempty"`
+	Warning            string               `json:"warning,omitempty"`
+	NewRevision        string               `json:"new_revision,omitempty"`
+	State              *site.LifecycleState `json:"state,omitempty"`
+	RateLimitRemaining int                  `json:"rate_limit_remaining"`
+}
+
 type updatePageInput struct {
 	Slug             string   `json:"slug"`
 	Lang             string   `json:"lang,omitempty"`
@@ -95,7 +109,7 @@ type updatePageInput struct {
 }
 
 type updatePageOutput struct {
-	toolcontract.ToolResponse[map[string]any]
+	toolcontract.ToolResponse[updatePageData]
 	Status string `json:"status,omitempty"`
 	// Slug is never legitimately empty on success — see the same reasoning
 	// on createPageOutput.Slug (#455).
@@ -120,6 +134,19 @@ type updatePageOutput struct {
 	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
+type updatePageData struct {
+	Status             string               `json:"status,omitempty"`
+	Slug               string               `json:"slug,omitempty"`
+	ResolvedLang       *string              `json:"resolved_lang,omitempty"`
+	ResolvedSourcePath *string              `json:"resolved_source_path,omitempty"`
+	DryRun             bool                 `json:"dry_run,omitempty"`
+	Diff               string               `json:"diff,omitempty"`
+	Warning            string               `json:"warning,omitempty"`
+	NewRevision        string               `json:"new_revision,omitempty"`
+	State              *site.LifecycleState `json:"state,omitempty"`
+	RateLimitRemaining int                  `json:"rate_limit_remaining"`
+}
+
 type deletePageInput struct {
 	Slug             string `json:"slug"`
 	ExpectedRevision string `json:"expected_revision,omitempty"`
@@ -134,7 +161,7 @@ type deletePageBacklinkDTO struct {
 }
 
 type deletePageOutput struct {
-	toolcontract.ToolResponse[map[string]any]
+	toolcontract.ToolResponse[deletePageData]
 	Status string `json:"status,omitempty"`
 	// Slug is never legitimately empty on success — see the same reasoning
 	// on createPageOutput.Slug (#455).
@@ -155,6 +182,19 @@ type deletePageOutput struct {
 	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
+type deletePageData struct {
+	Status             string                   `json:"status,omitempty"`
+	Slug               string                   `json:"slug,omitempty"`
+	ResolvedLang       *string                  `json:"resolved_lang,omitempty"`
+	ResolvedSourcePath *string                  `json:"resolved_source_path,omitempty"`
+	DryRun             bool                     `json:"dry_run,omitempty"`
+	Content            string                   `json:"content,omitempty"`
+	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
+	Warning            string                   `json:"warning,omitempty"`
+	State              *site.LifecycleState     `json:"state,omitempty"`
+	RateLimitRemaining int                      `json:"rate_limit_remaining"`
+}
+
 // strPtr distinguishes "resolved to the empty string" (e.g. the default
 // language, which legitimately has no lang code) from "resolution never
 // happened" (#455) — a plain string can't carry that distinction since both
@@ -162,8 +202,57 @@ type deletePageOutput struct {
 // only ever set via this helper once resolution actually succeeds.
 func strPtr(s string) *string { return &s }
 
-func writeSuccessEnvelope() toolcontract.ToolResponse[map[string]any] {
-	return toolcontract.Success(map[string]any{}, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+func writeSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+}
+
+func newCreatePageOutput(data createPageData) createPageOutput {
+	return createPageOutput{
+		ToolResponse:       writeSuccessEnvelope(data),
+		Status:             data.Status,
+		Slug:               data.Slug,
+		Path:               data.Path,
+		ResolvedLang:       data.ResolvedLang,
+		ResolvedSourcePath: data.ResolvedSourcePath,
+		DryRun:             data.DryRun,
+		Content:            data.Content,
+		Warning:            data.Warning,
+		NewRevision:        data.NewRevision,
+		State:              data.State,
+		RateLimitRemaining: data.RateLimitRemaining,
+	}
+}
+
+func newUpdatePageOutput(data updatePageData) updatePageOutput {
+	return updatePageOutput{
+		ToolResponse:       writeSuccessEnvelope(data),
+		Status:             data.Status,
+		Slug:               data.Slug,
+		ResolvedLang:       data.ResolvedLang,
+		ResolvedSourcePath: data.ResolvedSourcePath,
+		DryRun:             data.DryRun,
+		Diff:               data.Diff,
+		Warning:            data.Warning,
+		NewRevision:        data.NewRevision,
+		State:              data.State,
+		RateLimitRemaining: data.RateLimitRemaining,
+	}
+}
+
+func newDeletePageOutput(data deletePageData) deletePageOutput {
+	return deletePageOutput{
+		ToolResponse:       writeSuccessEnvelope(data),
+		Status:             data.Status,
+		Slug:               data.Slug,
+		ResolvedLang:       data.ResolvedLang,
+		ResolvedSourcePath: data.ResolvedSourcePath,
+		DryRun:             data.DryRun,
+		Content:            data.Content,
+		Backlinks:          data.Backlinks,
+		Warning:            data.Warning,
+		State:              data.State,
+		RateLimitRemaining: data.RateLimitRemaining,
+	}
 }
 
 // appendLastBuildWarning appends a lightweight advisory to warning (#467) if
@@ -382,8 +471,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				return nil, createPageOutput{}, wrapErr(fmt.Errorf("read_error: failed to inspect destination path"))
 			}
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-			return nil, createPageOutput{
-				ToolResponse:       writeSuccessEnvelope(),
+			return nil, newCreatePageOutput(createPageData{
 				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       strPtr(resolvedLang),
@@ -391,7 +479,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				DryRun:             true,
 				Content:            content,
 				RateLimitRemaining: rateLimitRemaining(limiter),
-			}, nil
+			}), nil
 		}
 
 		const lockWait = 10 * time.Second
@@ -488,8 +576,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		state := createPageState()
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-		out := createPageOutput{
-			ToolResponse:       writeSuccessEnvelope(),
+		out := newCreatePageOutput(createPageData{
 			Status:             status,
 			Slug:               in.Slug,
 			Path:               logicalPath,
@@ -499,7 +586,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Warning:            appendLastBuildWarning(warning),
 			State:              &state,
 			RateLimitRemaining: rateLimitRemaining(limiter),
-		}
+		})
 		if idemHash != "" {
 			if err := idem.remember("create_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("create_page: could not persist idempotency result", "slug", in.Slug, "error", err)
@@ -680,8 +767,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			diffLabel := in.Slug + "/" + filepath.Base(filePath)
 			diff := simpleDiff(diffLabel, string(raw), content)
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-			return nil, updatePageOutput{
-				ToolResponse:       writeSuccessEnvelope(),
+			return nil, newUpdatePageOutput(updatePageData{
 				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       strPtr(resolvedSource.Lang),
@@ -689,7 +775,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				DryRun:             true,
 				Diff:               diff,
 				RateLimitRemaining: rateLimitRemaining(limiter),
-			}, nil
+			}), nil
 		}
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("update_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
@@ -749,8 +835,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		state := updatePageState(siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-		out := updatePageOutput{
-			ToolResponse:       writeSuccessEnvelope(),
+		out := newUpdatePageOutput(updatePageData{
 			Status:             status,
 			Slug:               in.Slug,
 			ResolvedLang:       strPtr(resolvedSource.Lang),
@@ -759,7 +844,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Warning:            appendLastBuildWarning(warning),
 			State:              &state,
 			RateLimitRemaining: rateLimitRemaining(limiter),
-		}
+		})
 		if idemHash != "" {
 			if err := idem.remember("update_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("update_page: could not persist idempotency result", "slug", in.Slug, "error", err)
@@ -824,8 +909,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 					bls = append(bls, deletePageBacklinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL})
 				}
 			}
-			return nil, deletePageOutput{
-				ToolResponse:       writeSuccessEnvelope(),
+			return nil, newDeletePageOutput(deletePageData{
 				Status:             "ok",
 				Slug:               in.Slug,
 				ResolvedLang:       strPtr(resolvedSource.Lang),
@@ -834,7 +918,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Content:            content,
 				Backlinks:          &bls,
 				RateLimitRemaining: rateLimitRemaining(limiter),
-			}, nil
+			}), nil
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
 			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
@@ -966,8 +1050,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if deleteWarning != "" {
 			status = "partial_success"
 		}
-		out := deletePageOutput{
-			ToolResponse:       writeSuccessEnvelope(),
+		out := newDeletePageOutput(deletePageData{
 			Status:             status,
 			Slug:               in.Slug,
 			ResolvedLang:       strPtr(resolvedSource.Lang),
@@ -975,7 +1058,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Warning:            deleteWarning,
 			State:              &state,
 			RateLimitRemaining: rateLimitRemaining(limiter),
-		}
+		})
 		if idemHash != "" {
 			if err := idem.remember("delete_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("delete_page: could not persist idempotency result", "slug", in.Slug, "error", err)

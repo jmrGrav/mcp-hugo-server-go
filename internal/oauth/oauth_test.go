@@ -96,11 +96,15 @@ func TestDynamicClientRegistration(t *testing.T) {
 	}
 }
 
-func TestDynamicClientRegistrationScopeInheritance(t *testing.T) {
-	// When DCR request uses a redirect URI that matches a pre-registered client,
-	// the new public client should inherit that client's scope instead of defaulting
-	// to read. This enables Claude.ai/ChatGPT to get their configured scopes
-	// automatically through DCR without requiring manual credential entry.
+func TestDynamicClientRegistrationNeverGrantsPrivilegedScope(t *testing.T) {
+	// #497: DCR is unauthenticated (no secret, no proof of redirect_uri
+	// ownership) and /authorize is a plain HTTP endpoint, so a caller can read
+	// the redirect Location header themselves without controlling the target
+	// domain. A public DCR client must therefore always get "read", even when
+	// its requested redirect_uri textually matches a privileged pre-registered
+	// client's (e.g. claude-admin's or chatgpt-write's) callback URI. Write
+	// access is only obtainable via the pre-registered, secret-bearing
+	// client_id directly, never inherited through DCR.
 	svc, _ := newTestService(t)
 
 	registryYAML := `clients:
@@ -129,10 +133,10 @@ func TestDynamicClientRegistrationScopeInheritance(t *testing.T) {
 		redirectURIs  []string
 		expectedScope string
 	}{
-		{"claude.ai primary callback → write", []string{"https://claude.ai/api/oauth/callback"}, "write"},
-		{"claude.ai alternate callback → write", []string{"https://claude.ai/oauth/callback"}, "write"},
-		{"chatgpt callback → write", []string{"https://chatgpt.com/aip/oauth/callback"}, "write"},
-		{"unknown client → anonymous", []string{"https://unknown.example.com/callback"}, ""},
+		{"claude.ai primary callback → read only, not write", []string{"https://claude.ai/api/oauth/callback"}, "read"},
+		{"claude.ai alternate callback → read only, not write", []string{"https://claude.ai/oauth/callback"}, "read"},
+		{"chatgpt callback → read only, not write", []string{"https://chatgpt.com/aip/oauth/callback"}, "read"},
+		{"unknown client → read", []string{"https://unknown.example.com/callback"}, "read"},
 	}
 
 	for _, tc := range tests {
@@ -188,12 +192,12 @@ func TestDynamicClientRegistrationDisabled(t *testing.T) {
 
 func TestDCRAnonymousScopePreservedThroughTokenExchange(t *testing.T) {
 	// A DCR client whose redirect_uri matches no pre-registered client must get
-	// anonymous scope ("") all the way through: registration → authorize → token.
-	// The token exchange must NOT promote "" to "content.read" (#249).
+	// read-only scope all the way through: registration → authorize → token.
+	// The token exchange must NOT promote "read" to "write" (#249, #497).
 	svc, store := newTestService(t)
 	clientID := registerClient(t, svc, []string{"https://scanner.example.com/callback"})
 
-	// Registration should return scope "".
+	// Registration should return scope "read".
 	body, _ := json.Marshal(map[string]any{"redirect_uris": []string{"https://scanner.example.com/callback"}})
 	regReq := httptest.NewRequest(http.MethodPost, "/register", bytes.NewReader(body))
 	regReq.Header.Set("Content-Type", "application/json")
@@ -206,8 +210,8 @@ func TestDCRAnonymousScopePreservedThroughTokenExchange(t *testing.T) {
 		Scope string `json:"scope"`
 	}
 	_ = json.Unmarshal(regRec.Body.Bytes(), &regResp)
-	if regResp.Scope != "" {
-		t.Errorf("registration scope = %q want \"\" (anonymous)", regResp.Scope)
+	if regResp.Scope != "read" {
+		t.Errorf("registration scope = %q want \"read\"", regResp.Scope)
 	}
 
 	// Complete PKCE flow.
@@ -245,17 +249,154 @@ func TestDCRAnonymousScopePreservedThroughTokenExchange(t *testing.T) {
 		Scope       string `json:"scope"`
 	}
 	_ = json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp)
-	if tokenResp.Scope != "" {
-		t.Errorf("token scope = %q want \"\" (anonymous)", tokenResp.Scope)
+	if tokenResp.Scope != "read" {
+		t.Errorf("token scope = %q want \"read\"", tokenResp.Scope)
 	}
 
-	// Token must validate as anonymous scope.
+	// Token must validate as read scope, never write.
 	scope, ok := store.ValidateAccessToken(oauth.HashToken(tokenResp.AccessToken))
 	if !ok {
 		t.Fatal("token: not found in store")
 	}
-	if scope != "" {
-		t.Errorf("stored scope = %q want \"\" (anonymous)", scope)
+	if scope != "read" {
+		t.Errorf("stored scope = %q want \"read\"", scope)
+	}
+}
+
+// TestPreRegisteredClientStillGetsWriteDirectly proves the #497 fix does not
+// break the legitimate path: a pre-registered, secret-bearing client (not
+// created via DCR) must still be able to obtain a write-scope token by
+// authenticating with its own client_id/secret, since #497's fix only removes
+// scope *inheritance* through DCR redirect_uri matching.
+func TestPreRegisteredClientStillGetsWriteDirectly(t *testing.T) {
+	svc, store := newTestService(t)
+
+	registryYAML := `clients:
+- client_id: claude-admin
+  client_secret: test-secret-abc
+  redirect_uris:
+    - https://claude.ai/api/oauth/callback
+  scope: site.admin
+`
+	registryPath := filepath.Join(t.TempDir(), "clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(registryYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.LoadClientRegistry(registryPath); err != nil {
+		t.Fatalf("LoadClientRegistry: %v", err)
+	}
+
+	verifier := "admin-verifier-admin-verifier-admin-verifier-a0"
+	challenge := oauth.CodeChallengeS256(verifier)
+	authURL := "/authorize?" + url.Values{
+		"response_type": {"code"}, "client_id": {"claude-admin"},
+		"redirect_uri": {"https://claude.ai/api/oauth/callback"}, "state": {"s1"},
+		"scope": {"write"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, _ := url.Parse(authRec.Header().Get("Location"))
+	code := loc.Query().Get("code")
+
+	tokenForm := url.Values{
+		"grant_type": {"authorization_code"}, "client_id": {"claude-admin"},
+		"client_secret": {"test-secret-abc"},
+		"code":          {code}, "redirect_uri": {"https://claude.ai/api/oauth/callback"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		AccessToken string `json:"access_token"`
+		Scope       string `json:"scope"`
+	}
+	_ = json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp)
+	if tokenResp.Scope != "write" {
+		t.Errorf("token scope = %q want \"write\"", tokenResp.Scope)
+	}
+	scope, ok := store.ValidateAccessToken(oauth.HashToken(tokenResp.AccessToken))
+	if !ok {
+		t.Fatal("token: not found in store")
+	}
+	if scope != "write" {
+		t.Errorf("stored scope = %q want \"write\"", scope)
+	}
+}
+
+// TestPreRegisteredClientSecretIsRequiredNotJustAccepted closes the gap left
+// by TestPreRegisteredClientStillGetsWriteDirectly: that test proves the
+// secret is *accepted*, not that it is *required*. If an attacker could reach
+// /token for a known, guessable client_id like "claude-admin" without ever
+// knowing its secret (e.g. by reading the code straight off the /authorize
+// redirect Location header, the same trick used in #497), the #497 fix would
+// be moot — the escalation would just move from DCR to direct client_id
+// impersonation. This proves the secret check is load-bearing.
+func TestPreRegisteredClientSecretIsRequiredNotJustAccepted(t *testing.T) {
+	svc, _ := newTestService(t)
+
+	registryYAML := `clients:
+- client_id: claude-admin
+  client_secret: test-secret-abc
+  redirect_uris:
+    - https://claude.ai/api/oauth/callback
+  scope: site.admin
+`
+	registryPath := filepath.Join(t.TempDir(), "clients.yaml")
+	if err := os.WriteFile(registryPath, []byte(registryYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.LoadClientRegistry(registryPath); err != nil {
+		t.Fatalf("LoadClientRegistry: %v", err)
+	}
+
+	verifier := "noauth-verifier-noauth-verifier-noauth-verifier0"
+	challenge := oauth.CodeChallengeS256(verifier)
+	authURL := "/authorize?" + url.Values{
+		"response_type": {"code"}, "client_id": {"claude-admin"},
+		"redirect_uri": {"https://claude.ai/api/oauth/callback"}, "state": {"s1"},
+		"scope": {"write"}, "code_challenge": {challenge}, "code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	if authRec.Code != http.StatusFound {
+		t.Fatalf("authorize: status = %d body = %q", authRec.Code, authRec.Body.String())
+	}
+	loc, _ := url.Parse(authRec.Header().Get("Location"))
+	code := loc.Query().Get("code")
+
+	// Exchange the code WITHOUT client_secret — this must fail. Getting a
+	// write token here would mean knowing client_id="claude-admin" (a public,
+	// documented, guessable string) is sufficient by itself.
+	tokenForm := url.Values{
+		"grant_type": {"authorization_code"}, "client_id": {"claude-admin"},
+		"code": {code}, "redirect_uri": {"https://claude.ai/api/oauth/callback"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code == http.StatusOK {
+		t.Fatalf("token exchange without client_secret must fail, got 200 body = %q", tokenRec.Body.String())
+	}
+	var errResp struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(tokenRec.Body.Bytes(), &errResp)
+	if errResp.Error != "invalid_client" {
+		t.Fatalf("error = %q want invalid_client", errResp.Error)
 	}
 }
 
@@ -1092,9 +1233,9 @@ func TestBearerValidationViaTokenEndpoint(t *testing.T) {
 	if !ok {
 		t.Fatal("freshly issued token must validate")
 	}
-	// Unmatched DCR client gets anonymous scope ("") per #249.
-	if scope != "" {
-		t.Fatalf("scope = %q want \"\" (anonymous — unmatched DCR redirect URI)", scope)
+	// DCR clients always get "read", never more, per #497.
+	if scope != "read" {
+		t.Fatalf("scope = %q want \"read\" (DCR redirect URI never grants more than read)", scope)
 	}
 
 	if _, ok := svc.ValidateBearer("completely-wrong-token"); ok {

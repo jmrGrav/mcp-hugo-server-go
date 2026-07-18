@@ -37,11 +37,10 @@ type listPageAssetsData struct {
 
 type listPageAssetsOutput struct {
 	toolcontract.ToolResponse[listPageAssetsData]
-	Assets []pageAssetDTO `json:"assets"`
 }
 
 func newListPageAssetsOutput(data listPageAssetsData, now time.Time) listPageAssetsOutput {
-	return listPageAssetsOutput{ToolResponse: successEnvelope(data, now), Assets: data.Assets}
+	return listPageAssetsOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 // RegisterListPageAssets registers list_page_assets. Separate function

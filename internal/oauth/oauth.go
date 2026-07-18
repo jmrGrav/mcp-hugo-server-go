@@ -280,7 +280,13 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		}
 	}
 	id := randomString(24)
-	scope := s.resolveRegistrationScope(req.RedirectURIs)
+	// Public DCR clients always get "read", never a privileged scope inherited
+	// from redirect_uri overlap with a pre-registered client. See the #497
+	// fix note below for why that inheritance was unsafe. Clients that need
+	// "write" must be pre-registered with a real client_secret in
+	// oauth-clients.yaml and authenticate directly with client_id+secret,
+	// never through this anonymous registration endpoint.
+	scope := "read"
 	s.mu.Lock()
 	s.clients[id] = client{
 		RedirectURIs: append([]string(nil), req.RedirectURIs...),
@@ -299,34 +305,6 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 		CodeChallengeMethodsSupported: []string{"S256"},
 		Scope:                         scope,
 	}, nil
-}
-
-// resolveRegistrationScope returns the highest scope among all pre-registered
-// (secret-bearing) clients whose redirect URIs overlap with the DCR request.
-// This lets Claude.ai and ChatGPT inherit the scope of their pre-registered
-// counterparts when they do Dynamic Client Registration. Falls back to
-// "" (anonymous) when no pre-registered client matches, so public tools like
-// MCP scanners that self-register via RFC 7591 get anonymous read-only access
-// without automatically gaining content.read privileges.
-func (s *Service) resolveRegistrationScope(redirectURIs []string) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var scopes []string
-clientLoop:
-	for _, c := range s.clients {
-		if c.SecretHash == "" {
-			continue // public DCR client — skip, only match pre-registered clients
-		}
-		for _, reqURI := range redirectURIs {
-			for _, regURI := range c.RedirectURIs {
-				if matchRedirectURI(regURI, reqURI) {
-					scopes = append(scopes, c.Scope)
-					continue clientLoop
-				}
-			}
-		}
-	}
-	return highestMatchedScope(scopes)
 }
 
 func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {

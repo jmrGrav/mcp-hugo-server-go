@@ -3,9 +3,11 @@ package read_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -101,11 +103,7 @@ func TestInspectRenderedPageCleanPagePassesAllChecks(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if got := data["status"]; got != "ok" {
 		t.Fatalf("status = %v, want ok; checks = %v", got, data["checks"])
 	}
@@ -137,8 +135,7 @@ func TestInspectRenderedPageFlagsMissingSEOFields(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	if got := data["status"]; got != "issues_found" {
 		t.Fatalf("status = %v, want issues_found", got)
 	}
@@ -169,8 +166,7 @@ func TestInspectRenderedPageFlagsBrokenLinkAndMissingImage(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["internal_links"]["status"] != "fail" {
 		t.Fatalf("internal_links status = %v, want fail", checks["internal_links"]["status"])
@@ -196,8 +192,7 @@ func TestInspectRenderedPageFlagsRenderErrorMarker(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["render_errors"]["status"] != "fail" {
 		t.Fatalf("render_errors status = %v, want fail", checks["render_errors"]["status"])
@@ -225,8 +220,7 @@ func TestInspectRenderedPageMultilingualWarnsMissingHreflang(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["hreflang"]["status"] != "warn" {
 		t.Fatalf("hreflang status = %v, want warn (site is multilingual, no hreflang tags present)", checks["hreflang"]["status"])
@@ -272,8 +266,7 @@ func TestInspectRenderedPageHreflangDetectionAttributeOrderCaseAndRelCombining(t
 			if res.IsError {
 				t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 			}
-			m := decodeContent(t, res)
-			data := m["data"].(map[string]any)
+			data := decodeContent(t, res)
 			checks := findChecks(t, data)
 			if checks["hreflang"]["status"] != "pass" {
 				t.Fatalf("hreflang status = %v, want pass (%s)", checks["hreflang"]["status"], tc.name)
@@ -306,8 +299,7 @@ func TestInspectRenderedPageHreflangWithEmptyHrefIsIncomplete(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["hreflang"]["status"] != "warn" {
 		t.Fatalf("hreflang status = %v, want warn (href is empty, must not be accepted as a valid alternate)", checks["hreflang"]["status"])
@@ -346,8 +338,7 @@ func TestInspectRenderedPageHreflangMultipleTranslationsAllFound(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["hreflang"]["status"] != "pass" {
 		t.Fatalf("hreflang status = %v, want pass", checks["hreflang"]["status"])
@@ -376,8 +367,7 @@ func TestInspectRenderedPageHreflangMonolingualSiteDoesNotFalsePositive(t *testi
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["hreflang"]["status"] != "pass" {
 		t.Fatalf("hreflang status = %v, want pass (single-language site, hreflang not applicable)", checks["hreflang"]["status"])
@@ -410,8 +400,7 @@ func TestInspectRenderedPageFlagsCanonicalMismatch(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 	checks := findChecks(t, data)
 	if checks["canonical"]["status"] != "warn" {
 		t.Fatalf("canonical status = %v, want warn (rendered canonical host %q differs from configured cfg.SiteURL)", checks["canonical"]["status"], "staging.example.test")
@@ -439,5 +428,118 @@ func TestInspectRenderedPageEmptySlugIsInvalidParams(t *testing.T) {
 	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "   "})
 	if !res.IsError {
 		t.Fatalf("inspect_rendered with blank slug: want error, got success")
+	}
+}
+
+// newInspectRenderedPagePreviewClient wires inspect_rendered with both a
+// built site.Index (rendered HTML on disk, for the checks) and a real
+// hugosite.SourceIndex backed by a git repository (for #435's
+// include_preview facet, which needs diff_page's git logic and
+// validate_frontmatter's per-page checks to have something real to read).
+func newInspectRenderedPagePreviewClient(t *testing.T, siteRoot, contentRoot string) (*mcp.ClientSession, func()) {
+	t.Helper()
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	cfg := inspectRenderedPageConfig(siteRoot)
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
+// TestInspectRenderedPageIncludePreviewSurfacesRisks is a regression test
+// for #435: include_preview=true composes diff_page's git-diff status,
+// get_broken_links' per-page scan, and validate_frontmatter's checks into
+// one risks list, on a page that has all three at once (uncommitted
+// change, a broken internal link, and a missing title in front matter).
+func TestInspectRenderedPageIncludePreviewSurfacesRisks(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/hello/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Hello World</title>
+<meta name="description" content="A short, valid description of this page.">
+<link rel="canonical" href="https://example.test/posts/hello/">
+</head>
+<body>
+<p>Hello. <a href="/posts/missing/">a broken link</a></p>
+</body>
+</html>`)
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	pagePath := filepath.Join(contentRoot, "posts", "hello", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// No title in front matter (missing_title issue for validate_frontmatter).
+	if err := os.WriteFile(pagePath, []byte("---\ndate: 2026-07-03\n---\nHello world.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.email", "test@example.test")
+	runGit(t, root, "config", "user.name", "Test User")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+	if err := os.WriteFile(pagePath, []byte("---\ndate: 2026-07-03\n---\nHello brave new world.\n"), 0o644); err != nil {
+		t.Fatalf("rewrite page: %v", err)
+	}
+
+	session, done := newInspectRenderedPagePreviewClient(t, siteRoot, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/hello/", "include_preview": true})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	data := decodeContent(t, res)
+	preview, ok := data["preview"].(map[string]any)
+	if !ok {
+		t.Fatalf("preview type = %T, want map[string]any", data["preview"])
+	}
+	if got := preview["diff_status"]; got != "modified" {
+		t.Fatalf("preview.diff_status = %v, want modified", got)
+	}
+	if summary, _ := preview["diff_summary"].(string); !strings.Contains(summary, "added") {
+		t.Fatalf("preview.diff_summary = %q, want a line-count summary", summary)
+	}
+	if got := preview["broken_links_count"]; got != float64(1) {
+		t.Fatalf("preview.broken_links_count = %v, want 1", got)
+	}
+	if got := preview["frontmatter_valid"]; got != false {
+		t.Fatalf("preview.frontmatter_valid = %v, want false (missing title)", got)
+	}
+	issues, ok := preview["frontmatter_issues"].([]any)
+	if !ok || len(issues) == 0 {
+		t.Fatalf("preview.frontmatter_issues = %#v, want at least one issue", preview["frontmatter_issues"])
+	}
+	risks, ok := preview["risks"].([]any)
+	if !ok || len(risks) != 3 {
+		t.Fatalf("preview.risks = %#v, want exactly 3 (diff, broken link, frontmatter)", preview["risks"])
+	}
+}
+
+// TestInspectRenderedPageOmitsPreviewByDefault is a regression test for
+// #435: omitting include_preview must not add the preview field at all,
+// preserving every existing caller's response shape and cost.
+func TestInspectRenderedPageOmitsPreviewByDefault(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/hello/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Hello World</title><meta name="description" content="A short, valid description of this page."><link rel="canonical" href="https://example.test/posts/hello/"></head>
+<body><p>Hello.</p></body>
+</html>`)
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/hello/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	data := decodeContent(t, res)
+	if _, ok := data["preview"]; ok {
+		t.Fatalf("preview = %#v, want omitted when include_preview is not requested", data["preview"])
 	}
 }

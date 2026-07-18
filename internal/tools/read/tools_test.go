@@ -100,7 +100,11 @@ func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[st
 	return res
 }
 
-func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
+// decodeEnvelope decodes the full response envelope
+// (success/data/errors/warnings/meta), unmodified. Use this when a test
+// needs an envelope-level field; use decodeContent for the tool's data
+// payload.
+func decodeEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(res.StructuredContent)
 	if err != nil {
@@ -113,10 +117,25 @@ func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return m
 }
 
+// decodeContent returns the tool's data payload (envelope.data), unwrapped.
+// #433/#495 removed the top-level duplicate of data.X from every tool in
+// this package, so data is the sole location for tool-specific fields —
+// this must fatal, not silently fall back to the envelope root, or a
+// regression that empties data would go unnoticed.
+func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	envelope := decodeEnvelope(t, res)
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("structured content missing data object: %#v", envelope)
+	}
+	return data
+}
+
 func decodeErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	t.Helper()
 	if res.StructuredContent != nil {
-		return decodeContent(t, res)
+		return decodeEnvelope(t, res)
 	}
 	text := res.Content[0].(*mcp.TextContent).Text
 	var m map[string]any
@@ -301,16 +320,144 @@ func TestGetRelatedContent(t *testing.T) {
 		t.Fatalf("get_related_content returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
-	relVal, ok := m["related"]
+	relVal, ok := m["related_pages"]
 	if !ok {
-		t.Fatal("get_related_content: missing 'related' key")
+		t.Fatal("get_related_content: missing 'related_pages' key")
 	}
 	related, ok := relVal.([]any)
 	if !ok {
-		t.Fatalf("get_related_content: 'related' is %T, want []any", relVal)
+		t.Fatalf("get_related_content: 'related_pages' is %T, want []any", relVal)
 	}
 	if len(related) == 0 {
 		t.Fatal("get_related_content: expected at least one related page (bonjour shares Hugo tag)")
+	}
+}
+
+// newImpactFixtureSession builds a two-page site for #434's impact facet:
+// /posts/hello/ carries a shared tag ("Hugo", also on /posts/guide/) and an
+// unshared tag ("UniqueOrphanTag", nowhere else) plus a shared category
+// ("Infrastructure") and a redirect alias, so a single get_related_content
+// call can assert orphan detection, non-orphan exclusion, sitemap/feed
+// presence, and the aliases passthrough all at once.
+func newImpactFixtureSession(t *testing.T) (*mcp.ClientSession, func()) {
+	t.Helper()
+	htmlDir := t.TempDir()
+	writeHTML := func(rel, html string) {
+		t.Helper()
+		full := filepath.Join(htmlDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeHTML(filepath.Join("posts", "hello", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/hello/">
+<meta property="og:title" content="Hello">
+<meta property="article:tag" content="Hugo">
+<meta property="article:tag" content="UniqueOrphanTag">
+<meta property="article:section" content="Infrastructure">
+</head><body><article>Hello public body</article></body></html>`)
+	writeHTML(filepath.Join("posts", "guide", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/guide/">
+<meta property="og:title" content="Guide">
+<meta property="article:tag" content="Hugo">
+<meta property="article:section" content="Infrastructure">
+</head><body><article>Guide public body</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	writeSource := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeSource("posts/hello/index.md", "---\ntitle: Hello\ntags: [Hugo, UniqueOrphanTag]\ncategories: [Infrastructure]\naliases: [/old-hello/]\n---\nHello body.\n")
+	writeSource("posts/guide/index.md", "---\ntitle: Guide\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nGuide body.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
+// Both tests below read m["impact"] via decodeContent's data unwrap — #495
+// removed the top-level duplicate of data.impact, so this is data.impact,
+// not a top-level field.
+func TestGetRelatedContentImpactDetectsTaxonomyOrphans(t *testing.T) {
+	session, done := newImpactFixtureSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/", "include": []any{"impact"}})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	impact, ok := m["impact"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_related_content impact type = %T, want map[string]any", m["impact"])
+	}
+	orphans, ok := impact["taxonomy_orphans"].([]any)
+	if !ok || len(orphans) != 1 || orphans[0] != "UniqueOrphanTag" {
+		t.Fatalf("impact.taxonomy_orphans = %#v, want exactly [UniqueOrphanTag] (Hugo/Infrastructure are shared with /posts/guide/)", impact["taxonomy_orphans"])
+	}
+	if got, ok := impact["sitemap_present"].(bool); !ok || !got {
+		t.Fatalf("impact.sitemap_present = %v, want true", impact["sitemap_present"])
+	}
+	if got, ok := impact["feed_present"].(bool); !ok || !got {
+		t.Fatalf("impact.feed_present = %v, want true", impact["feed_present"])
+	}
+	aliases, ok := impact["aliases"].([]any)
+	if !ok || len(aliases) != 1 || aliases[0] != "/old-hello/" {
+		t.Fatalf("impact.aliases = %#v, want exactly [/old-hello/]", impact["aliases"])
+	}
+}
+
+func TestGetRelatedContentOmitsImpactByDefault(t *testing.T) {
+	session, done := newImpactFixtureSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/"})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	if _, ok := m["impact"]; ok {
+		t.Fatalf("get_related_content impact = %#v, want omitted when include is not requested (#434)", m["impact"])
+	}
+}
+
+func TestGetRelatedContentInvalidIncludeRejected(t *testing.T) {
+	session, done := newImpactFixtureSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/", "include": []any{"bogus"}})
+	if !res.IsError {
+		t.Fatal("get_related_content with invalid include value should return an error")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("expected invalid_params error, got: %s", raw)
 	}
 }
 
@@ -669,6 +816,7 @@ func TestGetPageForEditMaxBodyCharsTruncatesAndWarns(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("get_page_for_edit returned error: %v", res.Content)
 	}
+	envelope := decodeEnvelope(t, res)
 	m := decodeContent(t, res)
 	page, ok := m["page"].(map[string]any)
 	if !ok {
@@ -678,7 +826,7 @@ func TestGetPageForEditMaxBodyCharsTruncatesAndWarns(t *testing.T) {
 	if len(md) != 10 {
 		t.Fatalf("get_page_for_edit max_body_chars=10: markdown length = %d, want 10", len(md))
 	}
-	warnings, _ := m["warnings"].([]any)
+	warnings, _ := envelope["warnings"].([]any)
 	if len(warnings) == 0 {
 		t.Fatal("get_page_for_edit max_body_chars=10: expected a truncation warning")
 	}
@@ -910,6 +1058,7 @@ func TestBuildAgentContextMaxBodyCharsTruncatesAndWarns(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("build_agent_context returned error: %v", res.Content)
 	}
+	envelope := decodeEnvelope(t, res)
 	m := decodeContent(t, res)
 	ctx, ok := m["context"].(map[string]any)
 	if !ok {
@@ -919,7 +1068,7 @@ func TestBuildAgentContextMaxBodyCharsTruncatesAndWarns(t *testing.T) {
 	if len(md) != 10 {
 		t.Fatalf("build_agent_context max_body_chars=10: markdown length = %d, want 10", len(md))
 	}
-	warnings, _ := m["warnings"].([]any)
+	warnings, _ := envelope["warnings"].([]any)
 	if len(warnings) == 0 {
 		t.Fatal("build_agent_context max_body_chars=10: expected a truncation warning")
 	}
@@ -945,15 +1094,7 @@ func TestExportAgentContext(t *testing.T) {
 	if res0.IsError {
 		t.Fatalf("export_agent_context offset=0 returned error: %v", res0.Content)
 	}
-	m0 := decodeContent(t, res0)
-	exportVal0, ok := m0["export"]
-	if !ok {
-		t.Fatal("export_agent_context: missing 'export' key")
-	}
-	exp0, ok := exportVal0.(map[string]any)
-	if !ok {
-		t.Fatalf("export_agent_context: 'export' is %T, want map", exportVal0)
-	}
+	exp0 := decodeContent(t, res0)
 	pages0, _ := exp0["pages"].([]any)
 	if len(pages0) != 1 {
 		t.Fatalf("export_agent_context limit=1 offset=0: expected 1 page, got %d", len(pages0))
@@ -963,8 +1104,7 @@ func TestExportAgentContext(t *testing.T) {
 	if res1.IsError {
 		t.Fatalf("export_agent_context offset=1 returned error: %v", res1.Content)
 	}
-	m1 := decodeContent(t, res1)
-	exp1, _ := m1["export"].(map[string]any)
+	exp1 := decodeContent(t, res1)
 	pages1, _ := exp1["pages"].([]any)
 	if len(pages1) == 0 {
 		t.Fatal("export_agent_context offset=1: expected at least one page (fixture has 2+ pages)")
@@ -987,11 +1127,7 @@ func TestExportAgentContextPaginationMetadata(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("export_agent_context returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	exportVal, ok := m["export"].(map[string]any)
-	if !ok {
-		t.Fatalf("export_agent_context export type = %T", m["export"])
-	}
+	exportVal := decodeContent(t, res)
 	assertReadPaginationMetadata(t, exportVal, 2, 1, 0, 1, true, 1, true)
 }
 
@@ -1004,11 +1140,7 @@ func TestExportAgentContextPaginationMetadataTerminalPage(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("export_agent_context returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	exportVal, ok := m["export"].(map[string]any)
-	if !ok {
-		t.Fatalf("export_agent_context export type = %T", m["export"])
-	}
+	exportVal := decodeContent(t, res)
 	assertReadPaginationMetadata(t, exportVal, 2, 10, 1, 1, false, 0, false)
 }
 
@@ -1021,10 +1153,10 @@ func TestExportAgentContextDefaultCapsLimitWhenIncludeBody(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("export_agent_context returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	exportVal, ok := m["export"].(map[string]any)
+	envelope := decodeEnvelope(t, res)
+	exportVal, ok := envelope["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("export_agent_context export type = %T", m["export"])
+		t.Fatalf("export_agent_context data type = %T", envelope["data"])
 	}
 	if got := exportVal["limit"]; got != float64(10) {
 		t.Fatalf("export_agent_context limit=15 with include_body default: effective limit = %v, want 10 (capped)", got)
@@ -1032,7 +1164,7 @@ func TestExportAgentContextDefaultCapsLimitWhenIncludeBody(t *testing.T) {
 	if got := exportVal["include_body"]; got != true {
 		t.Fatalf("export_agent_context include_body = %v, want true (default)", got)
 	}
-	warnings, _ := m["warnings"].([]any)
+	warnings, _ := envelope["warnings"].([]any)
 	if len(warnings) == 0 {
 		t.Fatal("export_agent_context limit=15 with include_body default: expected a warning that the limit was capped")
 	}
@@ -1047,10 +1179,10 @@ func TestExportAgentContextIncludeBodyFalseOmitsMarkdownAndRaisesCap(t *testing.
 	if res.IsError {
 		t.Fatalf("export_agent_context returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	exportVal, ok := m["export"].(map[string]any)
+	envelope := decodeEnvelope(t, res)
+	exportVal, ok := envelope["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("export_agent_context export type = %T", m["export"])
+		t.Fatalf("export_agent_context data type = %T", envelope["data"])
 	}
 	if got := exportVal["limit"]; got != float64(15) {
 		t.Fatalf("export_agent_context limit=15 with include_body=false: effective limit = %v, want 15 (not capped)", got)
@@ -1058,7 +1190,7 @@ func TestExportAgentContextIncludeBodyFalseOmitsMarkdownAndRaisesCap(t *testing.
 	if got := exportVal["include_body"]; got != false {
 		t.Fatalf("export_agent_context include_body = %v, want false", got)
 	}
-	warnings, _ := m["warnings"].([]any)
+	warnings, _ := envelope["warnings"].([]any)
 	if len(warnings) != 0 {
 		t.Fatalf("export_agent_context limit=15 with include_body=false: unexpected warnings %v", warnings)
 	}
@@ -1086,11 +1218,7 @@ func TestExportAgentContextUsesSourceMarkdownForPublicLanguageSlug(t *testing.T)
 	if res.IsError {
 		t.Fatalf("export_agent_context returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	exportVal, ok := m["export"].(map[string]any)
-	if !ok {
-		t.Fatalf("export_agent_context: 'export' is %T, want map", m["export"])
-	}
+	exportVal := decodeContent(t, res)
 	pages, ok := exportVal["pages"].([]any)
 	if !ok || len(pages) != 1 {
 		t.Fatalf("export_agent_context pages = %#v, want one page", exportVal["pages"])
@@ -1240,11 +1368,7 @@ func TestExportAgentContextPrefersMatchingLanguageSource(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("export_agent_context returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	exportVal, ok := m["export"].(map[string]any)
-	if !ok {
-		t.Fatalf("export_agent_context export type = %T", m["export"])
-	}
+	exportVal := decodeContent(t, res)
 	pages, ok := exportVal["pages"].([]any)
 	if !ok || len(pages) != 1 {
 		t.Fatalf("export_agent_context pages = %#v, want one page", exportVal["pages"])
@@ -1380,18 +1504,12 @@ func TestGetRelatedContentSeparatesTranslations(t *testing.T) {
 	if !ok || len(suggestedLinks) == 0 {
 		t.Fatalf("suggested_links = %#v, want populated editorial suggestions", m["suggested_links"])
 	}
-	legacyRelated, ok := m["related"].([]any)
-	if !ok || len(legacyRelated) == 0 {
-		t.Fatalf("related = %#v, want legacy compatibility alias", m["related"])
+	// The deprecated "related" alias (#453) was removed once #433/#454 were
+	// resolved (related_pages is canonical and was never actually removed).
+	if _, ok := m["related"]; ok {
+		t.Fatalf("related = %#v, want the deprecated alias removed", m["related"])
 	}
-	// #453: related must stay byte-identical to related_pages — it's a
-	// deprecated alias, not an independently-populated field.
-	relatedJSON, _ := json.Marshal(relatedPages)
-	legacyRelatedJSON, _ := json.Marshal(legacyRelated)
-	if string(relatedJSON) != string(legacyRelatedJSON) {
-		t.Fatalf("related = %s, want identical to related_pages = %s", legacyRelatedJSON, relatedJSON)
-	}
-	for _, raw := range append(append(relatedPages, legacyRelated...), suggestedLinks...) {
+	for _, raw := range append(relatedPages, suggestedLinks...) {
 		related := raw.(map[string]any)
 		if got := related["slug"]; got == "/en/posts/hello/" {
 			t.Fatalf("translation leaked into related content: %#v", related)
@@ -1442,37 +1560,27 @@ func TestSuggestInternalLinksSeparatesTranslations(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("suggest_links returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	translations, ok := data["translations"].([]any)
 	if !ok || len(translations) != 1 {
 		t.Fatalf("translations = %#v, want one translation", data["translations"])
 	}
-	legacySuggestions, ok := data["suggestions"].([]any)
-	if !ok || len(legacySuggestions) == 0 {
-		t.Fatalf("suggestions = %#v, want at least one suggestion", data["suggestions"])
-	}
 	suggestedLinks, ok := data["suggested_links"].([]any)
 	if !ok || len(suggestedLinks) == 0 {
-		t.Fatalf("suggested_links = %#v, want compatibility alias", data["suggested_links"])
+		t.Fatalf("suggested_links = %#v, want at least one suggestion", data["suggested_links"])
 	}
-	// #453: suggestions is a deprecated alias of the canonical
-	// suggested_links — must stay byte-identical, not independently populated.
-	suggestionsJSON, _ := json.Marshal(legacySuggestions)
-	suggestedLinksJSON, _ := json.Marshal(suggestedLinks)
-	if string(suggestionsJSON) != string(suggestedLinksJSON) {
-		t.Fatalf("suggestions = %s, want identical to suggested_links = %s", suggestionsJSON, suggestedLinksJSON)
+	// The deprecated "suggestions" alias (#453) was removed once #433/#454
+	// were resolved (suggested_links is canonical and was never removed).
+	if _, ok := data["suggestions"]; ok {
+		t.Fatalf("suggestions = %#v, want the deprecated alias removed", data["suggestions"])
 	}
-	for _, raw := range append(legacySuggestions, suggestedLinks...) {
+	for _, raw := range suggestedLinks {
 		suggestion := raw.(map[string]any)
 		if got := suggestion["slug"]; got == "/en/posts/hello/" {
 			t.Fatalf("translation leaked into suggested links: %#v", suggestion)
 		}
 	}
-	if got := legacySuggestions[0].(map[string]any)["slug"]; got != "/posts/guide/" {
+	if got := suggestedLinks[0].(map[string]any)["slug"]; got != "/posts/guide/" {
 		t.Fatalf("top suggestion slug = %v, want /posts/guide/", got)
 	}
 }
@@ -1523,11 +1631,7 @@ func TestSuggestLinksEmptyResultIncludesExplanation(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("suggest_links returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	suggestedLinks, ok := data["suggested_links"].([]any)
 	if !ok || len(suggestedLinks) != 0 {
 		t.Fatalf("suggested_links = %#v, want empty array", data["suggested_links"])
@@ -1632,13 +1736,13 @@ func TestSearchContent(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("search_content returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	if m["success"] != true {
-		t.Fatalf("search_content success = %v, want true", m["success"])
+	envelope := decodeEnvelope(t, res)
+	if envelope["success"] != true {
+		t.Fatalf("search_content success = %v, want true", envelope["success"])
 	}
-	data, ok := m["data"].(map[string]any)
+	data, ok := envelope["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("search_content data type = %T", m["data"])
+		t.Fatalf("search_content data type = %T", envelope["data"])
 	}
 	if data["total"] == nil {
 		t.Fatal("search_content missing total")
@@ -1685,11 +1789,7 @@ func TestSearchContentPaginationMetadata(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("search_content returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("search_content data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	assertReadPaginationMetadata(t, data, 2, 1, 0, 1, true, 1, true)
 }
 
@@ -1761,11 +1861,7 @@ func TestSearchContentCategoriesMatchGetPageFrontmatter(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("search_content returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("search_content data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	pages, _ := data["pages"].([]any)
 	var hello map[string]any
 	for _, raw := range pages {
@@ -1856,11 +1952,7 @@ func TestSearchContentCategoriesMatchGetPageFrontmatterNonDefaultLang(t *testing
 	if res.IsError {
 		t.Fatalf("search_content returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("search_content data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	pages, _ := data["pages"].([]any)
 	var hello map[string]any
 	for _, raw := range pages {
@@ -1891,11 +1983,7 @@ func TestExplainSiteStructure(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("explain_structure data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if _, ok := data["sections"]; !ok {
 		t.Fatal("explain_structure missing sections")
 	}
@@ -1918,11 +2006,7 @@ func TestValidateFrontMatter(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("validate_frontmatter data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if _, ok := data["pages"]; !ok {
 		t.Fatal("validate_frontmatter missing pages")
 	}
@@ -1937,11 +2021,7 @@ func TestValidateFrontMatterGlobalPaginationDistinguishesScanFromDetailPage(t *t
 	if res.IsError {
 		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("validate_frontmatter data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	pagesChecked, _ := data["pages_checked"].(float64)
 	returnedCount, _ := data["returned_count"].(float64)
 	pages, _ := data["pages"].([]any)
@@ -1972,11 +2052,7 @@ func TestValidateSite(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("validate_site returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("validate_site data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if _, ok := data["pages_checked"]; !ok {
 		t.Fatal("validate_site missing pages_checked")
 	}
@@ -2028,11 +2104,7 @@ func TestValidateSiteInvalidOnlyFiltersPassingPages(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("validate_site returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if pagesChecked, _ := data["pages_checked"].(float64); pagesChecked != 2 {
 		t.Fatalf("pages_checked = %v, want 2 (full scan scope unaffected by invalid_only)", pagesChecked)
 	}
@@ -2065,11 +2137,7 @@ func TestValidateSiteDefaultsToInvalidOnly(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("validate_site returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if pagesChecked, _ := data["pages_checked"].(float64); pagesChecked != 2 {
 		t.Fatalf("pages_checked = %v, want 2 (full scan scope unaffected by the invalid-only default)", pagesChecked)
 	}
@@ -2098,11 +2166,7 @@ func TestValidateSiteIncludeValidOptsIntoFullListing(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("validate_site returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	pages, _ := data["pages"].([]any)
 	if len(pages) != 2 {
 		t.Fatalf("pages = %v, want both pages when include_valid=true", pages)
@@ -2123,11 +2187,7 @@ func TestValidateSiteExplicitInvalidOnlyFalsePreservesFullListing(t *testing.T) 
 	if res.IsError {
 		t.Fatalf("validate_site returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	pages, _ := data["pages"].([]any)
 	if len(pages) != 2 {
 		t.Fatalf("pages = %v, want both pages when invalid_only is explicitly false", pages)
@@ -2143,11 +2203,7 @@ func TestValidateSitePaginatesDetailRows(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("validate_site returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if pagesChecked, _ := data["pages_checked"].(float64); pagesChecked != 2 {
 		t.Fatalf("pages_checked = %v, want 2 (full scan scope unaffected by limit)", pagesChecked)
 	}
@@ -2186,11 +2242,7 @@ func TestGetSiteHealthTaxonomyInconsistencyDetailsIncludeAffectedPages(t *testin
 	if res.IsError {
 		t.Fatalf("get_site_health returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("get_site_health data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	strs, ok := data["taxonomy_inconsistencies"].([]any)
 	if !ok || len(strs) == 0 {
 		t.Fatalf("get_site_health: taxonomy_inconsistencies = %#v, want at least one legacy string entry (#210/#328 backward compat)", data["taxonomy_inconsistencies"])
@@ -2249,8 +2301,7 @@ func TestGetSiteHealthTranslationPairInfoFindingDoesNotMoveScore(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("get_site_health returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 
 	score, _ := data["score"].(float64)
 	if score != 100 {
@@ -2315,8 +2366,7 @@ func TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly(t *testin
 	if res.IsError {
 		t.Fatalf("get_site_health returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 
 	status, _ := data["status"].(string)
 	if status != "healthy" {
@@ -2373,8 +2423,7 @@ func TestGetSiteHealthFrontmatterIssueReducesScore(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("get_site_health returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data := m["data"].(map[string]any)
+	data := decodeContent(t, res)
 
 	status, _ := data["status"].(string)
 	if status != "degraded" {
@@ -2429,23 +2478,24 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		}
 	}
 	for _, tc := range []struct {
-		tool string
-		keys []string
+		tool       string
+		keys       []string
+		noTopLevel []string
 	}{
-		{tool: "get_page_markdown", keys: []string{"success", "data", "errors", "warnings", "meta", "page"}},
-		{tool: "get_page_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "frontmatter"}},
-		{tool: "get_related_content", keys: []string{"success", "data", "errors", "warnings", "meta", "translations", "related_pages", "related"}},
-		{tool: "build_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "context"}},
-		{tool: "export_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "export", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
-		{tool: "search_content", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
-		{tool: "explain_structure", keys: []string{"success", "data", "errors", "warnings", "meta", "summary", "sections", "languages"}},
-		{tool: "get_site_health", keys: []string{"success", "data", "errors", "warnings", "meta", "status", "score", "published_pages"}},
-		{tool: "get_broken_links", keys: []string{"success", "data", "errors", "warnings", "meta", "links", "broken_links", "total_pages"}},
-		{tool: "get_backlinks", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "count", "backlinks"}},
-		{tool: "suggest_links", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "total", "translations", "suggestions", "suggested_links"}},
-		{tool: "diff_page", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "path", "status", "diff_available"}},
-		{tool: "validate_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
-		{tool: "validate_site", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
+		{tool: "get_page_markdown", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"page"}},
+		{tool: "get_page_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"frontmatter"}},
+		{tool: "get_related_content", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"translations", "related_pages", "backlinks", "suggested_links", "empty_reason", "impact"}},
+		{tool: "build_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"context"}},
+		{tool: "export_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"export", "pages", "total", "limit", "offset", "returned_count", "has_more", "next_offset", "include_body"}},
+		{tool: "search_content", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"pages", "total", "limit", "offset", "returned_count", "has_more", "next_offset", "sort", "order", "query", "type", "tag", "category", "language"}},
+		{tool: "explain_structure", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"summary", "sections", "languages", "recent_pages", "notes"}},
+		{tool: "get_site_health", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"status", "score", "score_breakdown", "published_pages", "source_pages", "draft_pages", "tags", "categories", "missing_titles", "missing_dates", "validation_errors", "taxonomy_inconsistencies", "taxonomy_inconsistency_details", "orphan_pages"}},
+		{tool: "get_broken_links", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"links", "broken_links", "total_pages", "limit", "offset"}},
+		{tool: "get_backlinks", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"slug", "count", "backlinks"}},
+		{tool: "suggest_links", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"slug", "total", "translations", "suggested_links", "empty_reason"}},
+		{tool: "diff_page", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"slug", "path", "resolved_lang", "resolved_source_path", "status", "diff_available", "fallback_mode", "base_commit", "head_commit", "diff", "source_content"}},
+		{tool: "validate_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"pages", "pages_checked", "pages_passed", "invalid", "returned_count", "limit", "offset", "has_more", "next_offset"}},
+		{tool: "validate_site", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"pages", "pages_checked", "pages_passed", "invalid", "returned_count", "limit", "offset", "has_more", "next_offset"}},
 	} {
 		tool, ok := got[tc.tool]
 		if !ok {
@@ -2453,6 +2503,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		}
 		assertSchemaHasProperties(t, tool, "outputSchema", tc.keys...)
 		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "server_version")
+		assertSchemaLacksProperties(t, tool, "outputSchema", tc.noTopLevel...)
 	}
 }
 
@@ -2513,6 +2564,20 @@ func assertSchemaHasProperties(t *testing.T, tool *mcp.Tool, field string, want 
 	}
 }
 
+func assertSchemaLacksProperties(t *testing.T, tool *mcp.Tool, field string, wantAbsent ...string) {
+	t.Helper()
+	schema := schemaAt(t, tool, field)
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: %s.properties type = %T, want map[string]any", tool.Name, field, schema["properties"])
+	}
+	for _, key := range wantAbsent {
+		if _, ok := props[key]; ok {
+			t.Fatalf("tool %q: %s.properties unexpectedly contains %q", tool.Name, field, key)
+		}
+	}
+}
+
 func schemaAt(t *testing.T, tool *mcp.Tool, field string) map[string]any {
 	t.Helper()
 	parts := strings.Split(field, ".")
@@ -2561,11 +2626,7 @@ func TestExplainSiteStructureUsesSourceIndexCategories(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("explain_structure data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	gotCats, ok := data["categories"].(float64)
 	if !ok {
 		t.Fatalf("explain_structure categories type = %T, value = %v", data["categories"], data["categories"])
@@ -2584,11 +2645,7 @@ func TestExplainSiteStructureRecentPagesUseSourceCategories(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("explain_structure data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok {
 		t.Fatalf("recent_pages type = %T", data["recent_pages"])
@@ -2674,11 +2731,7 @@ func TestExplainSiteStructureRecentPagesUseSourceCategoriesForLanguagePrefixedSl
 	if res.IsError {
 		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("explain_structure data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok || len(recentPages) != 1 {
 		t.Fatalf("recent_pages = %#v, want one page", data["recent_pages"])
@@ -2737,11 +2790,7 @@ func TestExplainSiteStructureSectionsExcludeLanguagePrefix(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("explain_structure data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	sections, ok := data["sections"].([]any)
 	if !ok {
 		t.Fatalf("explain_structure sections type = %T", data["sections"])
@@ -2831,11 +2880,7 @@ func TestExplainSiteStructureRecentPagesPreferSourceCategoriesOverStalePublicCat
 	if res.IsError {
 		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("explain_structure data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok || len(recentPages) != 1 {
 		t.Fatalf("recent_pages = %#v, want one page", data["recent_pages"])
@@ -2902,11 +2947,7 @@ func TestExplainSiteStructureRecentPagesPreferEmptySourceCategoriesOverStalePubl
 	if res.IsError {
 		t.Fatalf("explain_structure returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("explain_structure data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	recentPages, ok := data["recent_pages"].([]any)
 	if !ok || len(recentPages) != 1 {
 		t.Fatalf("recent_pages = %#v, want one page", data["recent_pages"])
@@ -2957,11 +2998,7 @@ func TestGetBrokenLinks(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("get_broken_links returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("get_broken_links data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if _, ok := data["total_pages"]; !ok {
 		t.Fatal("get_broken_links missing total_pages")
 	}
@@ -2979,11 +3016,7 @@ func TestValidateFrontMatterOutputFields(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("validate_frontmatter data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	if _, ok := data["pages_checked"]; !ok {
 		t.Fatal("validate_frontmatter: pages_checked field missing (was 'total')")
 	}
@@ -3020,11 +3053,7 @@ func TestValidateFrontMatterDTOHasLangField(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
 	}
-	m := decodeContent(t, res)
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		t.Fatalf("validate_frontmatter data type = %T", m["data"])
-	}
+	data := decodeContent(t, res)
 	pages, ok := data["pages"].([]any)
 	if !ok || len(pages) == 0 {
 		t.Skip("no pages in validate_frontmatter output; cannot check DTO shape")
