@@ -110,6 +110,18 @@ func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatalf("unmarshal structured content: %v", err)
 	}
+	if data, ok := m["data"].(map[string]any); ok {
+		for k, v := range data {
+			if _, exists := m[k]; !exists {
+				m[k] = v
+			}
+		}
+		if _, exists := m["export"]; !exists {
+			if _, hasPages := data["pages"]; hasPages {
+				m["export"] = data
+			}
+		}
+	}
 	return m
 }
 
@@ -2548,21 +2560,22 @@ func TestExtendedReadAnnotations(t *testing.T) {
 	for _, tc := range []struct {
 		tool string
 		keys []string
+		noTopLevel []string
 	}{
-		{tool: "get_page_markdown", keys: []string{"success", "data", "errors", "warnings", "meta", "page"}},
-		{tool: "get_page_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "frontmatter"}},
-		{tool: "get_related_content", keys: []string{"success", "data", "errors", "warnings", "meta", "translations", "related_pages"}},
-		{tool: "build_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "context"}},
-		{tool: "export_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "export", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
-		{tool: "search_content", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
-		{tool: "explain_structure", keys: []string{"success", "data", "errors", "warnings", "meta", "summary", "sections", "languages"}},
-		{tool: "get_site_health", keys: []string{"success", "data", "errors", "warnings", "meta", "status", "score", "published_pages"}},
-		{tool: "get_broken_links", keys: []string{"success", "data", "errors", "warnings", "meta", "links", "broken_links", "total_pages"}},
-		{tool: "get_backlinks", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "count", "backlinks"}},
-		{tool: "suggest_links", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "total", "translations", "suggested_links"}},
-		{tool: "diff_page", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "path", "status", "diff_available"}},
-		{tool: "validate_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
-		{tool: "validate_site", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
+		{tool: "get_page_markdown", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"page"}},
+		{tool: "get_page_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"frontmatter"}},
+		{tool: "get_related_content", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"translations", "related_pages", "backlinks", "suggested_links", "empty_reason", "impact"}},
+		{tool: "build_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"context"}},
+		{tool: "export_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"export", "pages", "total", "limit", "offset", "returned_count", "has_more", "next_offset", "include_body"}},
+		{tool: "search_content", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"pages", "total", "limit", "offset", "returned_count", "has_more", "next_offset", "sort", "order", "query", "type", "tag", "category", "language"}},
+		{tool: "explain_structure", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"summary", "sections", "languages", "recent_pages", "notes"}},
+		{tool: "get_site_health", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"status", "score", "score_breakdown", "published_pages", "source_pages", "draft_pages", "tags", "categories", "missing_titles", "missing_dates", "validation_errors", "taxonomy_inconsistencies", "taxonomy_inconsistency_details", "orphan_pages"}},
+		{tool: "get_broken_links", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"links", "broken_links", "total_pages", "limit", "offset"}},
+		{tool: "get_backlinks", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"slug", "count", "backlinks"}},
+		{tool: "suggest_links", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"slug", "total", "translations", "suggested_links", "empty_reason"}},
+		{tool: "diff_page", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"slug", "path", "resolved_lang", "resolved_source_path", "status", "diff_available", "fallback_mode", "base_commit", "head_commit", "diff", "source_content"}},
+		{tool: "validate_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"pages", "pages_checked", "pages_passed", "invalid", "returned_count", "limit", "offset", "has_more", "next_offset"}},
+		{tool: "validate_site", keys: []string{"success", "data", "errors", "warnings", "meta"}, noTopLevel: []string{"pages", "pages_checked", "pages_passed", "invalid", "returned_count", "limit", "offset", "has_more", "next_offset"}},
 	} {
 		tool, ok := got[tc.tool]
 		if !ok {
@@ -2570,6 +2583,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		}
 		assertSchemaHasProperties(t, tool, "outputSchema", tc.keys...)
 		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "server_version")
+		assertSchemaLacksProperties(t, tool, "outputSchema", tc.noTopLevel...)
 	}
 }
 
@@ -2626,6 +2640,20 @@ func assertSchemaHasProperties(t *testing.T, tool *mcp.Tool, field string, want 
 	for _, key := range want {
 		if _, ok := props[key]; !ok {
 			t.Fatalf("tool %q: %s.properties missing %q", tool.Name, field, key)
+		}
+	}
+}
+
+func assertSchemaLacksProperties(t *testing.T, tool *mcp.Tool, field string, wantAbsent ...string) {
+	t.Helper()
+	schema := schemaAt(t, tool, field)
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: %s.properties type = %T, want map[string]any", tool.Name, field, schema["properties"])
+	}
+	for _, key := range wantAbsent {
+		if _, ok := props[key]; ok {
+			t.Fatalf("tool %q: %s.properties unexpectedly contains %q", tool.Name, field, key)
 		}
 	}
 }
