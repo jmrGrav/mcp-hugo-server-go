@@ -174,6 +174,36 @@ func TestParseToolErrorAlreadyExistsAssetHasNoResolution(t *testing.T) {
 	}
 }
 
+// TestParseToolErrorRateLimitExceededIncludesRetryAfterSeconds is a
+// regression test for #466: rateLimitExceededErr's embedded
+// retry_after_seconds must be parsed into the structured resolution, not
+// just left in the free-text message.
+func TestParseToolErrorRateLimitExceededIncludesRetryAfterSeconds(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("rate_limit_exceeded: delete_page is limited to 5 per minute (retry_after_seconds=3.2)"))
+	if got.Resolution == nil {
+		t.Fatal("Resolution = nil, want present")
+	}
+	if got.Resolution.Action != "retry_later" {
+		t.Fatalf("Resolution.Action = %q, want retry_later", got.Resolution.Action)
+	}
+	if got.Resolution.RetryAfterSeconds == nil || *got.Resolution.RetryAfterSeconds != 3.2 {
+		t.Fatalf("Resolution.RetryAfterSeconds = %#v, want 3.2", got.Resolution.RetryAfterSeconds)
+	}
+}
+
+// TestParseToolErrorBuildInProgressHasNoRetryAfterSeconds pins that
+// build_in_progress (which shares the "retry_later" action but has no
+// numeric retry hint) doesn't spuriously get a retry_after_seconds value.
+func TestParseToolErrorBuildInProgressHasNoRetryAfterSeconds(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+	if got.Resolution == nil || got.Resolution.Action != "retry_later" {
+		t.Fatalf("Resolution = %#v, want retry_later action", got.Resolution)
+	}
+	if got.Resolution.RetryAfterSeconds != nil {
+		t.Fatalf("Resolution.RetryAfterSeconds = %#v, want nil", got.Resolution.RetryAfterSeconds)
+	}
+}
+
 func TestParseToolErrorRejectsNonMachinePrefix(t *testing.T) {
 	got := ParseToolError(fmt.Errorf("unexpected content-type: text/html"))
 	if got.Code != "tool_error" {

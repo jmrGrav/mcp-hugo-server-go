@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,6 +25,10 @@ type ErrorResolution struct {
 	Parameter       string   `json:"parameter,omitempty"`
 	AllowedValues   []string `json:"allowed_values,omitempty"`
 	RecommendedTool string   `json:"recommended_tool,omitempty"`
+	// RetryAfterSeconds is populated only for rate_limit_exceeded (#466), so
+	// an agent can self-regulate pacing instead of inferring a safe retry
+	// delay from the tool description alone.
+	RetryAfterSeconds *float64 `json:"retry_after_seconds,omitempty"`
 }
 
 type ToolError struct {
@@ -211,6 +216,11 @@ func ParseToolError(err error) ToolError {
 	case "build_in_progress", "rate_limit_exceeded":
 		out.Retryable = true
 		out.Resolution = &ErrorResolution{Action: "retry_later"}
+		if code == "rate_limit_exceeded" {
+			if secs := parseRetryAfterSeconds(message); secs != nil {
+				out.Resolution.RetryAfterSeconds = secs
+			}
+		}
 	case "revision_conflict":
 		out.Field = "expected_revision"
 		out.Retryable = true
@@ -365,6 +375,25 @@ func parseAllowedValues(message string) []string {
 		return splitValues(tail)
 	}
 	return nil
+}
+
+// parseRetryAfterSeconds extracts the retry_after_seconds=N.N value embedded
+// in a rate_limit_exceeded message by rateLimitExceededErr (#466), mirroring
+// the parseAllowedValues message-embedding convention above.
+func parseRetryAfterSeconds(message string) *float64 {
+	_, tail, ok := strings.Cut(message, "retry_after_seconds=")
+	if !ok {
+		return nil
+	}
+	tail = strings.TrimSuffix(strings.TrimSpace(tail), ")")
+	if idx := strings.IndexAny(tail, ") "); idx >= 0 {
+		tail = tail[:idx]
+	}
+	secs, err := strconv.ParseFloat(tail, 64)
+	if err != nil {
+		return nil
+	}
+	return &secs
 }
 
 func splitValues(raw string) []string {

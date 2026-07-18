@@ -68,6 +68,10 @@ type uploadPageAssetOutput struct {
 	DuplicateOf string `json:"duplicate_of,omitempty"`
 	DryRun      bool   `json:"dry_run,omitempty"`
 	Warning     string `json:"warning,omitempty"`
+	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466).
+	// upload_page_asset shares the same per-caller mutation budget as
+	// create_page/update_page, so the field means the same thing here.
+	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
 // validateAssetFilename checks that name is a single safe path component
@@ -190,7 +194,8 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			"Content is provided as base64 in content_base64 (max 10MB decoded); the bytes are sniffed to confirm they actually match the declared extension, never trusting a caller-supplied content type. " +
 			"This tool never overwrites: fails with already_exists if filename is already taken in this bundle. " +
 			"If identical content already exists under a different filename in the same bundle, the response includes duplicate_of as an advisory only — the file is still written under the requested name. " +
-			"Callers may provide idempotency_key to safely replay the exact same upload after a timeout or uncertain delivery. Requires content.write.",
+			"Callers may provide idempotency_key to safely replay the exact same upload after a timeout or uncertain delivery. " +
+				"rate_limit_remaining reports the caller's remaining budget on the shared create_page/update_page/upload_page_asset quota (#466); if exceeded, the error's resolution.retry_after_seconds gives a concrete wait time instead of forcing you to guess a safe pacing. Requires content.write.",
 		InputSchema:  tools.MustSchema[uploadPageAssetInput](),
 		OutputSchema: tools.MustSchema[uploadPageAssetOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -209,8 +214,9 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			return nil, uploadPageAssetOutput{}, err
 		}
 		callerKey := mutationCallerKey(ctx)
-		if !callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin).Allow() {
-			return nil, uploadPageAssetOutput{}, fmt.Errorf("rate_limit_exceeded: upload_page_asset is limited to %d per minute", cfg.RateLimit.CreateUpdatePerMin)
+		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+		if !limiter.Allow() {
+			return nil, uploadPageAssetOutput{}, rateLimitExceededErr("upload_page_asset", cfg.RateLimit.CreateUpdatePerMin, limiter)
 		}
 		data, err := decodeAndValidateAssetContent(in.ContentBase64, ext, wantMIME)
 		if err != nil {
@@ -282,16 +288,17 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		if in.DryRun {
 			return nil, uploadPageAssetOutput{
-				ToolResponse: writeSuccessEnvelope(),
-				Status:       "ok",
-				Slug:         slug,
-				Filename:     filename,
-				Path:         logicalPath,
-				ContentType:  wantMIME,
-				SizeBytes:    len(data),
-				Sha256:       hash,
-				DuplicateOf:  duplicateOf,
-				DryRun:       true,
+				ToolResponse:       writeSuccessEnvelope(),
+				Status:             "ok",
+				Slug:               slug,
+				Filename:           filename,
+				Path:               logicalPath,
+				ContentType:        wantMIME,
+				SizeBytes:          len(data),
+				Sha256:             hash,
+				DuplicateOf:        duplicateOf,
+				DryRun:             true,
+				RateLimitRemaining: rateLimitRemaining(limiter),
 			}, nil
 		}
 
@@ -308,15 +315,16 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		out := uploadPageAssetOutput{
-			ToolResponse: writeSuccessEnvelope(),
-			Status:       "ok",
-			Slug:         slug,
-			Filename:     filename,
-			Path:         logicalPath,
-			ContentType:  wantMIME,
-			SizeBytes:    len(data),
-			Sha256:       hash,
-			DuplicateOf:  duplicateOf,
+			ToolResponse:       writeSuccessEnvelope(),
+			Status:             "ok",
+			Slug:               slug,
+			Filename:           filename,
+			Path:               logicalPath,
+			ContentType:        wantMIME,
+			SizeBytes:          len(data),
+			Sha256:             hash,
+			DuplicateOf:        duplicateOf,
+			RateLimitRemaining: rateLimitRemaining(limiter),
 		}
 		if idemHash != "" {
 			if err := idem.remember("upload_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
