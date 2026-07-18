@@ -521,7 +521,8 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if err != nil {
 				return nil, validateOutput{}, err
 			}
-			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases), nil
+			resolver := site.NewPageResolver(idx, srcIdx, cfg)
+			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases, resolver), nil
 		})
 
 	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. Requires content.read.",
@@ -533,7 +534,8 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
 			pages := srcIdx.ListPages(0, 0)
-			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), aliases), nil
+			resolver := site.NewPageResolver(idx, srcIdx, cfg)
+			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), aliases, resolver), nil
 		})
 
 	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets and requires content.read.",
@@ -1055,8 +1057,8 @@ func sliceBrokenLinks(issues []brokenLinkDTO, offset, limit int) []brokenLinkDTO
 	return out
 }
 
-func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, aliases map[string]string) validateOutput {
-	return validatePagesWithIssuesFiltered(pages, offset, limit, false, aliases)
+func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, aliases map[string]string, resolver *site.PageResolver) validateOutput {
+	return validatePagesWithIssuesFiltered(pages, offset, limit, false, aliases, resolver)
 }
 
 // validatePagesWithIssuesFiltered is validatePagesWithIssues plus an
@@ -1064,7 +1066,7 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 // describe the full scan scope regardless of invalidOnly — only the
 // paginated `pages` detail rows (and the has_more/next_offset pagination
 // built from them) are affected by the filter.
-func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit int, invalidOnly bool, aliases map[string]string) validateOutput {
+func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit int, invalidOnly bool, aliases map[string]string, resolver *site.PageResolver) validateOutput {
 	total := len(pages)
 	if offset < 0 {
 		offset = 0
@@ -1077,7 +1079,7 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 		if len(issues) > 0 {
 			invalid++
 		}
-		allResults = append(allResults, frontMatterIssueDTO{Slug: p.Slug, Lang: p.Lang, Issues: issues})
+		allResults = append(allResults, frontMatterIssueDTO{Slug: canonicalValidationSlug(p, resolver), Lang: p.Lang, Issues: issues})
 	}
 
 	filtered := allResults
@@ -1115,6 +1117,17 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 		NextOffset:   meta.NextOffset,
 		Pages:        results,
 	}, time.Now().UTC())
+}
+
+func canonicalValidationSlug(p hugosite.SourcePage, resolver *site.PageResolver) string {
+	if resolver != nil {
+		if resolved, ok := resolver.Resolve(p.Slug); ok {
+			if slug := canonicalResolvedSlug(resolved); slug != "" {
+				return slug
+			}
+		}
+	}
+	return canonicalSourceSlug(p.Slug)
 }
 
 func newContentEnvelope(data contentEnvelopeData, now time.Time) contentEnvelope {

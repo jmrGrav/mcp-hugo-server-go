@@ -75,7 +75,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 					}
 				}
 				resp := newDiffPageOutput(diffPageData{
-					Slug:          resolved.Source.Slug,
+					Slug:          canonicalResolvedSlug(resolved),
 					Path:          relPath,
 					ResolvedLang:  resolved.Source.Lang,
 					ResolvedPath:  resolvedLogicalPath(contentRoot, resolved.SourcePath, relPath),
@@ -126,7 +126,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			status := diffStatus(baseExists, currentContent, baseContent)
 			if status == "git_untracked" {
 				resp := newDiffPageOutput(diffPageData{
-					Slug:          resolved.Source.Slug,
+					Slug:          canonicalResolvedSlug(resolved),
 					Path:          relPath,
 					ResolvedLang:  resolved.Source.Lang,
 					ResolvedPath:  resolvedLogicalPath(contentRoot, absPath, relPath),
@@ -146,7 +146,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: unable to compute diff")
 			}
 			return nil, newDiffPageOutput(diffPageData{
-				Slug:          resolved.Source.Slug,
+				Slug:          canonicalResolvedSlug(resolved),
 				Path:          relPath,
 				ResolvedLang:  resolved.Source.Lang,
 				ResolvedPath:  resolvedLogicalPath(contentRoot, absPath, relPath),

@@ -2012,6 +2012,29 @@ func TestValidateFrontMatter(t *testing.T) {
 	}
 }
 
+func TestValidateFrontMatterReturnsCanonicalSlugs(t *testing.T) {
+	idx, srcIdx := mustSiteWithOneInvalidPage(t)
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_frontmatter", map[string]any{"limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	pages, _ := data["pages"].([]any)
+	if len(pages) == 0 {
+		t.Fatal("validate_frontmatter returned no pages")
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_frontmatter page type = %T", pages[0])
+	}
+	if got := page["slug"]; got != "/posts/broken/" {
+		t.Fatalf("validate_frontmatter slug = %v, want canonical /posts/broken/", got)
+	}
+}
+
 func TestValidateFrontMatterGlobalPaginationDistinguishesScanFromDetailPage(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -2116,7 +2139,7 @@ func TestValidateSiteInvalidOnlyFiltersPassingPages(t *testing.T) {
 		t.Fatalf("pages = %v, want exactly the 1 invalid page's detail row", pages)
 	}
 	page, ok := pages[0].(map[string]any)
-	if !ok || page["slug"] != "posts/broken" {
+	if !ok || page["slug"] != "/posts/broken/" {
 		t.Fatalf("pages[0] = %v, want the broken page", pages[0])
 	}
 	if hasMore, _ := data["has_more"].(bool); hasMore {
@@ -2149,7 +2172,7 @@ func TestValidateSiteDefaultsToInvalidOnly(t *testing.T) {
 		t.Fatalf("pages = %v, want only the 1 invalid page by default (#456)", pages)
 	}
 	page, ok := pages[0].(map[string]any)
-	if !ok || page["slug"] != "posts/broken" {
+	if !ok || page["slug"] != "/posts/broken/" {
 		t.Fatalf("pages[0] = %v, want the broken page", pages[0])
 	}
 }
@@ -2213,6 +2236,53 @@ func TestValidateSitePaginatesDetailRows(t *testing.T) {
 	}
 	if hasMore, _ := data["has_more"].(bool); !hasMore {
 		t.Fatal("has_more = false, want true (1 more page beyond limit=1)")
+	}
+}
+
+func TestValidateSiteCanonicalizesSectionIndexSlugs(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("content/_index.en.md", "---\n---\n")
+	write("content/posts/_index.fr.md", "---\n---\n")
+
+	src, err := hugosite.NewSourceIndex(filepath.Join(root, "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join(root, "content")
+	cfg.HugoRoot = root
+	session, done := newTestClientWithCfg(t, idx, cfg, src)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{"include_valid": true, "limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 2 {
+		t.Fatalf("validate_site pages = %v, want 2", pages)
+	}
+	got := map[string]bool{}
+	for _, raw := range pages {
+		page, _ := raw.(map[string]any)
+		got[asString(t, page["slug"])] = true
+	}
+	if !got["/"] {
+		t.Fatalf("validate_site slugs = %v, want canonical root slug /", got)
+	}
+	if !got["/posts/"] {
+		t.Fatalf("validate_site slugs = %v, want canonical section slug /posts/", got)
 	}
 }
 
