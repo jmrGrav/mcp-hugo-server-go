@@ -314,6 +314,135 @@ func TestGetRelatedContent(t *testing.T) {
 	}
 }
 
+// newImpactFixtureSession builds a two-page site for #434's impact facet:
+// /posts/hello/ carries a shared tag ("Hugo", also on /posts/guide/) and an
+// unshared tag ("UniqueOrphanTag", nowhere else) plus a shared category
+// ("Infrastructure") and a redirect alias, so a single get_related_content
+// call can assert orphan detection, non-orphan exclusion, sitemap/feed
+// presence, and the aliases passthrough all at once.
+func newImpactFixtureSession(t *testing.T) (*mcp.ClientSession, func()) {
+	t.Helper()
+	htmlDir := t.TempDir()
+	writeHTML := func(rel, html string) {
+		t.Helper()
+		full := filepath.Join(htmlDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeHTML(filepath.Join("posts", "hello", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/hello/">
+<meta property="og:title" content="Hello">
+<meta property="article:tag" content="Hugo">
+<meta property="article:tag" content="UniqueOrphanTag">
+<meta property="article:section" content="Infrastructure">
+</head><body><article>Hello public body</article></body></html>`)
+	writeHTML(filepath.Join("posts", "guide", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/guide/">
+<meta property="og:title" content="Guide">
+<meta property="article:tag" content="Hugo">
+<meta property="article:section" content="Infrastructure">
+</head><body><article>Guide public body</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	writeSource := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeSource("posts/hello/index.md", "---\ntitle: Hello\ntags: [Hugo, UniqueOrphanTag]\ncategories: [Infrastructure]\naliases: [/old-hello/]\n---\nHello body.\n")
+	writeSource("posts/guide/index.md", "---\ntitle: Guide\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nGuide body.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
+// Both tests below read m["impact"] via decodeContent's full-envelope
+// unwrap, i.e. the top-level duplicate of data.impact — get_related_content
+// still has that duplication (deliberately out of scope for #433/#494).
+// When #495 removes it, these become m["data"].(map[string]any)["impact"].
+func TestGetRelatedContentImpactDetectsTaxonomyOrphans(t *testing.T) {
+	session, done := newImpactFixtureSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/", "include": []any{"impact"}})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	impact, ok := m["impact"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_related_content impact type = %T, want map[string]any", m["impact"])
+	}
+	orphans, ok := impact["taxonomy_orphans"].([]any)
+	if !ok || len(orphans) != 1 || orphans[0] != "UniqueOrphanTag" {
+		t.Fatalf("impact.taxonomy_orphans = %#v, want exactly [UniqueOrphanTag] (Hugo/Infrastructure are shared with /posts/guide/)", impact["taxonomy_orphans"])
+	}
+	if got, ok := impact["sitemap_present"].(bool); !ok || !got {
+		t.Fatalf("impact.sitemap_present = %v, want true", impact["sitemap_present"])
+	}
+	if got, ok := impact["feed_present"].(bool); !ok || !got {
+		t.Fatalf("impact.feed_present = %v, want true", impact["feed_present"])
+	}
+	aliases, ok := impact["aliases"].([]any)
+	if !ok || len(aliases) != 1 || aliases[0] != "/old-hello/" {
+		t.Fatalf("impact.aliases = %#v, want exactly [/old-hello/]", impact["aliases"])
+	}
+}
+
+func TestGetRelatedContentOmitsImpactByDefault(t *testing.T) {
+	session, done := newImpactFixtureSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/"})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	if _, ok := m["impact"]; ok {
+		t.Fatalf("get_related_content impact = %#v, want omitted when include is not requested (#434)", m["impact"])
+	}
+}
+
+func TestGetRelatedContentInvalidIncludeRejected(t *testing.T) {
+	session, done := newImpactFixtureSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/", "include": []any{"bogus"}})
+	if !res.IsError {
+		t.Fatal("get_related_content with invalid include value should return an error")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("expected invalid_params error, got: %s", raw)
+	}
+}
+
 func TestListContentTypesMergesArchetypeAndObservedSections(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, raw string) {
