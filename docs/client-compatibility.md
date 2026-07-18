@@ -67,6 +67,11 @@ Without a Bearer token the server returns `HTTP 401` with a
 forces the client through the PKCE flow so that consent is captured once,
 even for read-only access.
 
+Implementation note: as of issue `#473`, that `/mcp` bearer gate is enforced
+through the Go MCP SDK's `auth.RequireBearerToken` middleware, wrapped by a
+small local compatibility adapter so the observed challenge shape stays stable
+for ChatGPT, Claude, Le Chat, `isitagentready`, and `mcptest`.
+
 **Implication for tool developers:** If you are testing against a server with
 `oauth.enabled: true`, you cannot call anonymous tools without first completing
 the authorization code + PKCE flow. Use a server with `oauth.enabled: false`

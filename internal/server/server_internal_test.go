@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +17,7 @@ import (
 	toolsanon "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	toolsread "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	toolswrite "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
+	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 func TestOpenStoreBranches(t *testing.T) {
@@ -212,5 +216,56 @@ func TestServerRunWithOAuthEnabled(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run() did not return after context cancellation")
+	}
+}
+
+func TestMCPBearerAuthMiddlewareMissingBearerPreservesChallengeShape(t *testing.T) {
+	mw := newMCPBearerAuthMiddleware(func(context.Context, string, *http.Request) (*sdkauth.TokenInfo, error) {
+		t.Fatal("verifier should not run when bearer header is missing")
+		return nil, nil
+	}, "https://mcp.test", "https://mcp.test/.well-known/oauth-protected-resource")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("next handler should not run on missing bearer")
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d want 401", rec.Code)
+	}
+	if got := strings.TrimSpace(rec.Body.String()); got != "unauthorized" {
+		t.Fatalf("body = %q want unauthorized", got)
+	}
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(wwwAuth, `realm="https://mcp.test"`) {
+		t.Fatalf("WWW-Authenticate = %q, want realm", wwwAuth)
+	}
+	if !strings.Contains(wwwAuth, `resource_metadata="https://mcp.test/.well-known/oauth-protected-resource"`) {
+		t.Fatalf("WWW-Authenticate = %q, want resource_metadata", wwwAuth)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q want no-store", got)
+	}
+}
+
+func TestMCPBearerAuthMiddlewareInvalidBearerPreservesInvalidTokenMarker(t *testing.T) {
+	mw := newMCPBearerAuthMiddleware(func(context.Context, string, *http.Request) (*sdkauth.TokenInfo, error) {
+		return nil, errors.Join(sdkauth.ErrInvalidToken, errors.New("wrapped verifier detail"))
+	}, "https://mcp.test", "https://mcp.test/.well-known/oauth-protected-resource")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer broken")
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("next handler should not run on invalid bearer")
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d want 401", rec.Code)
+	}
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(wwwAuth, `error="invalid_token"`) {
+		t.Fatalf("WWW-Authenticate = %q, want invalid_token marker", wwwAuth)
 	}
 }

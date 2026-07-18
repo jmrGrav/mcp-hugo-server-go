@@ -22,6 +22,10 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 )
 
+type accessTokenDetailsStore interface {
+	ValidateAccessTokenDetails(token string) (scope string, expiresAt time.Time, ok bool)
+}
+
 type ctxKey string
 
 const CtxScope ctxKey = "oauth_scope"
@@ -207,6 +211,23 @@ func (s *Service) ValidateBearerDetails(token string) (string, bool, bool) {
 		return "", false, false
 	}
 	return CanonicalScope(scope), IsLegacyScope(scope), true
+}
+
+// ValidateBearerInfo returns the canonical scope, the stored token expiration,
+// whether the persisted scope used a deprecated alias, and whether the token
+// was accepted. It is the richer variant used by the SDK bearer adapter in
+// internal/server when TokenInfo.Expiration must reflect the actual access
+// token TTL instead of a synthetic value.
+func (s *Service) ValidateBearerInfo(token string) (string, time.Time, bool, bool) {
+	detailedStore, ok := s.store.(accessTokenDetailsStore)
+	if !ok {
+		return "", time.Time{}, false, false
+	}
+	scope, expiresAt, ok := detailedStore.ValidateAccessTokenDetails(HashToken(token))
+	if !ok {
+		return "", time.Time{}, false, false
+	}
+	return CanonicalScope(scope), expiresAt, IsLegacyScope(scope), true
 }
 
 func firstNonEmpty(values ...string) string {

@@ -111,6 +111,16 @@ func (s *jsonStore) ValidateAccessToken(token string) (string, bool) {
 	return e.Scope, true
 }
 
+func (s *jsonStore) ValidateAccessTokenDetails(token string) (string, time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.tokens[token]
+	if !ok || time.Now().Unix() >= e.ExpiresAt {
+		return "", time.Time{}, false
+	}
+	return e.Scope, time.Unix(e.ExpiresAt, 0), true
+}
+
 func (s *jsonStore) AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

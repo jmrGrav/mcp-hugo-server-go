@@ -614,8 +614,17 @@ func TestUnauthenticatedMCPReturns401WithWWWAuthenticate(t *testing.T) {
 	if wwwAuth == "" {
 		t.Fatal("missing WWW-Authenticate header on unauthenticated /mcp")
 	}
+	if !strings.Contains(wwwAuth, `realm="`) {
+		t.Fatalf("WWW-Authenticate missing realm parameter: %q", wwwAuth)
+	}
 	if !strings.Contains(wwwAuth, "resource_metadata=") {
 		t.Fatalf("WWW-Authenticate missing resource_metadata: %q", wwwAuth)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q want %q", got, "no-store")
+	}
+	if body := strings.TrimSpace(rec.Body.String()); body != "unauthorized" {
+		t.Fatalf("body = %q want %q", body, "unauthorized")
 	}
 }
 
@@ -666,6 +675,13 @@ func TestInSessionInvalidBearerEmitsStructuredLog(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d want 401", rec.Code)
+	}
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(wwwAuth, `realm="`) {
+		t.Fatalf("WWW-Authenticate missing realm parameter: %q", wwwAuth)
+	}
+	if !strings.Contains(wwwAuth, `error="invalid_token"`) {
+		t.Fatalf("WWW-Authenticate missing invalid_token marker: %q", wwwAuth)
 	}
 	raw := logBuf.String()
 	if !strings.Contains(raw, `"msg":"audit"`) {
