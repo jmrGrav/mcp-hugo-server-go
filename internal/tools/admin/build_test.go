@@ -69,6 +69,39 @@ func TestBuildSiteSucceeds(t *testing.T) {
 	}
 }
 
+func TestBuildSitePassesCleanDestinationDirFlag(t *testing.T) {
+	capturedArgsPath := filepath.Join(t.TempDir(), "captured-args.txt")
+	dir := writeMockHugo(t, "#!/bin/sh\necho \"$@\" > \""+capturedArgsPath+"\"\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+
+	raw, err := os.ReadFile(capturedArgsPath)
+	if err != nil {
+		t.Fatalf("reading captured hugo args: %v", err)
+	}
+	// Without --cleanDestinationDir, output for a page deleted since the
+	// last build lingers in site_root forever (#524): the taxonomy/list
+	// pages that referenced it never get regenerated without it, since
+	// Hugo only writes/updates pages for content that still exists.
+	if !strings.Contains(string(raw), "--cleanDestinationDir") {
+		t.Fatalf("hugo invocation args = %q, want --cleanDestinationDir present", raw)
+	}
+}
+
 func TestBuildSiteConcurrentReject(t *testing.T) {
 	dir := writeMockHugo(t, "#!/bin/sh\nsleep 5\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
