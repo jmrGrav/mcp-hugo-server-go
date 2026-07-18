@@ -182,6 +182,23 @@ func ParseToolError(err error) ToolError {
 			}
 			return out
 		}
+		// expected_revision's own message ("expected_revision is required
+		// for non-dry-run update_page/delete_page") doesn't match
+		// missingRequiredField's "X must not be empty" phrasing, but it's
+		// still a missing-required-parameter case (#461) — and specifically
+		// one where the caller needs a tool recommendation (get_page_for_edit
+		// returns the current revision), not just "retry with this field".
+		if strings.HasPrefix(message, "expected_revision is required") {
+			out.Code = "missing_required_parameter"
+			out.Field = "expected_revision"
+			out.Retryable = true
+			out.Resolution = &ErrorResolution{
+				Action:          "retry_with_parameter",
+				Parameter:       "expected_revision",
+				RecommendedTool: "get_page_for_edit",
+			}
+			return out
+		}
 		out.Retryable = true
 		out.Resolution = &ErrorResolution{Action: "retry_with_parameter"}
 		if field := inferField(message); field != "" {
@@ -202,10 +219,33 @@ func ParseToolError(err error) ToolError {
 			Parameter:       "expected_revision",
 			RecommendedTool: "get_page_for_edit",
 		}
-	case "content_not_found":
+	case "content_not_found", "not_found":
+		// not_found is update_page/delete_page's own not-indexed message —
+		// same recovery shape as content_not_found (#461): the slug the
+		// caller named doesn't resolve, so re-searching is the path
+		// forward. content_not_public is deliberately NOT included here:
+		// it's overloaded across two different meanings in this codebase
+		// (a draft the caller's profile can't see vs. a diagnostics
+		// sub-feature unavailable to the reader profile), and only the
+		// first would actually benefit from "search again" — a single
+		// static hint would misguide the second case, so it's left with
+		// no resolution rather than a guess.
 		out.Resolution = &ErrorResolution{
 			Action:          "search_then_retry",
 			RecommendedTool: "search_pages",
+		}
+	case "already_exists":
+		// already_exists is also emitted by upload_page_asset ("asset
+		// already exists at ..."), where update_page is not the right
+		// recommendation — there's no update path for an existing asset by
+		// design (assets are never silently overwritten). Only recommend
+		// update_page for create_page's own "page already exists" message
+		// (#461); otherwise leave the resolution unset rather than guess.
+		if strings.Contains(message, "page already exists") {
+			out.Resolution = &ErrorResolution{
+				Action:          "use_different_tool",
+				RecommendedTool: "update_page",
+			}
 		}
 	}
 

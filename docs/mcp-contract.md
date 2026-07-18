@@ -427,6 +427,29 @@ Populated in `toolcontract.ParseToolError` for `ambiguous_language`,
 every error code carries a `resolution` — absence means there's no more
 specific recovery action than "read `message` and adjust."
 
+### Per-code resolution audit (#461)
+
+Every tool-facing error code, whether it carries a `resolution` and why:
+
+| Code | Resolution? | Reasoning |
+|---|---|---|
+| `ambiguous_language` | yes | `retry_with_parameter` on `lang`, with `allowed_values` |
+| `missing_required_parameter` | yes | `retry_with_parameter` on the missing field; `expected_revision` specifically recommends `get_page_for_edit` (its own message shape — "expected_revision is required for non-dry-run update_page/delete_page" — is matched separately from the generic "X must not be empty" pattern) |
+| `invalid_params` (other) | yes | `retry_with_parameter`, with `field`/`allowed_values` inferred from the message where possible |
+| `build_in_progress`, `rate_limit_exceeded` | yes | `retry_later` |
+| `revision_conflict` | yes | `reread_then_retry` via `get_page_for_edit` |
+| `content_not_found`, `not_found` | yes | `search_then_retry` via `search_pages` — both mean the named slug doesn't resolve |
+| `already_exists` | conditional | `use_different_tool` → `update_page`, but only for `create_page`'s own "page already exists" message; `upload_page_asset`'s "asset already exists" message deliberately gets no hint, since there's no update path for an existing asset by design |
+| `content_not_public` | no (deliberate) | overloaded across two meanings in this codebase — a draft the caller's profile can't see, vs. a diagnostics sub-feature unavailable to the reader profile. Only the first would benefit from "search again"; a single static hint would misguide the second, so neither gets one |
+| `not_a_bundle`, `build_precondition_failed`, `idempotency_conflict`, `validation_error`, `security_error` | no | caller-input-adjacent, but the fix is specific to the message text (e.g. which validation rule failed) in a way a single static action can't generalize |
+| `internal_error`, `read_error`, `write_error`, `delete_error`, `parse_error`, `scan_error`, `render_output_unavailable`, `git_metadata_unavailable`, `config_error`, `fetch_error`, `image_api_error`, `request_error`, `build_error` | no | opaque server-side faults, not caused by caller input — there's nothing for the caller to change, only something to report or retry blindly |
+
+Out of scope for this table: `server`/`server_error`-prefixed errors from
+`internal/server` (process startup/config validation) and `internal/oauth`
+(the `/token`/`/register` HTTP endpoints) never reach `ParseToolError` at
+all — they're outside the MCP tool-call error path entirely, not a tool
+response code an agent would ever see.
+
 ## 6.7. Published Schema Constraints (#418)
 
 `tools.MustSchema[T]()` (via `github.com/google/jsonschema-go`) infers a
