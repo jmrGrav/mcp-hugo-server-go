@@ -380,18 +380,27 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		case "/auth.md":
 			handleAuthMd(w, r, cfg)
 		case "/register":
+			if applyOAuthCORS(w, r, http.MethodPost) {
+				return
+			}
 			if oauthSvc == nil {
 				http.NotFound(w, r)
 				return
 			}
 			rateLimitOAuth(oauthSvc.HandleRegister)(w, r)
 		case "/authorize":
+			if applyOAuthCORS(w, r, http.MethodGet+", "+http.MethodPost) {
+				return
+			}
 			if oauthSvc == nil {
 				http.NotFound(w, r)
 				return
 			}
 			oauthSvc.HandleAuthorize(w, r)
 		case "/token":
+			if applyOAuthCORS(w, r, http.MethodPost) {
+				return
+			}
 			if oauthSvc == nil {
 				http.NotFound(w, r)
 				return
@@ -532,6 +541,38 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		resetIPCounts: resetIP,
 		siteDB:        siteDB,
 	}, nil
+}
+
+// applyOAuthCORS sets CORS headers for browser-based OAuth clients calling
+// /register, /authorize, or /token directly (not just navigating to them),
+// and short-circuits an OPTIONS preflight with a 204. Before this existed,
+// these three endpoints had no CORS support at all: an OPTIONS preflight
+// got a plain 405 with no Access-Control-Allow-Origin header, so a
+// browser-based OAuth client's cross-origin fetch()/XHR would fail the
+// preflight and the browser would block the real request before it ever
+// reached this server — surfacing to the client as a generic "can't
+// connect" with nothing in this server's own request logs to explain it
+// (observed: Mistral Le Chat, 2026-07-18). Discovery endpoints
+// (serveDiscoveryJSON in discovery.go) already had this; "*" matches that
+// same policy — these are public server metadata/registration surfaces,
+// not authenticated data, so there's no per-origin access control to
+// enforce here.
+//
+// Returns true if the request was an OPTIONS preflight (already fully
+// handled — the caller must return immediately without invoking the real
+// handler). Callers still get Access-Control-Allow-Origin set on their own
+// actual GET/POST response too, since a preflight passing isn't enough —
+// browsers also require CORS headers on the real response before letting
+// client-side JS read it.
+func applyOAuthCORS(w http.ResponseWriter, r *http.Request, allowedMethods string) bool {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", allowedMethods)
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return true
+	}
+	return false
 }
 
 func defaultServerCapabilities() *mcp.ServerCapabilities {
