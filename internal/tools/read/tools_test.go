@@ -1384,6 +1384,101 @@ func TestSearchContentCategoriesMatchGetPageFrontmatter(t *testing.T) {
 	}
 }
 
+// TestSearchContentCategoriesMatchGetPageFrontmatterNonDefaultLang covers the
+// specific class of bug #463 originally reported: a non-default-language,
+// language-prefixed slug (e.g. /en/posts/foo/) where the source index stores
+// the page without the language prefix (posts/foo). This is the exact shape
+// that historically broke source enrichment (#182/#264/#163) — the fixture
+// used by TestSearchContentCategoriesMatchGetPageFrontmatter above uses a
+// default-language slug and would not catch a regression in the lang-prefix
+// stripping path.
+func TestSearchContentCategoriesMatchGetPageFrontmatterNonDefaultLang(t *testing.T) {
+	htmlDir := t.TempDir()
+	htmlPage := filepath.Join(htmlDir, "en", "posts", "hello")
+	if err := os.MkdirAll(htmlPage, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	const html = `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/en/posts/hello/">
+<meta property="og:title" content="Hello">
+</head><body><article>Body</article></body></html>`
+	if err := os.WriteFile(filepath.Join(htmlPage, "index.html"), []byte(html), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	src := filepath.Join(contentRoot, "posts", "hello", "index.en.md")
+	if err := os.MkdirAll(filepath.Dir(src), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(src, []byte("---\ntitle: Hello\ncategories: [tutorials, go]\n---\nBody\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	fm := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/en/posts/hello/"})
+	if fm.IsError {
+		t.Fatalf("get_page_frontmatter returned error: %v", fm.Content)
+	}
+	fmData := decodeContent(t, fm)
+	fmFrontmatter, ok := fmData["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_frontmatter frontmatter type = %T", fmData["frontmatter"])
+	}
+	fmCategories, _ := fmFrontmatter["categories"].([]any)
+	if len(fmCategories) == 0 {
+		t.Fatal("get_page_frontmatter categories empty — expected [tutorials, go] from source")
+	}
+
+	res := callTool(t, session, "search_content", map[string]any{"query": "hello", "limit": 5})
+	if res.IsError {
+		t.Fatalf("search_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("search_content data type = %T", m["data"])
+	}
+	pages, _ := data["pages"].([]any)
+	var hello map[string]any
+	for _, raw := range pages {
+		page, _ := raw.(map[string]any)
+		if page["slug"] == "/en/posts/hello/" {
+			hello = page
+			break
+		}
+	}
+	if hello == nil {
+		t.Fatalf("search_content expected /en/posts/hello/ result, got %v", pages)
+	}
+	searchCategories, _ := hello["categories"].([]any)
+	if len(searchCategories) == 0 {
+		t.Fatalf("search_content categories empty for /en/posts/hello/, want to match get_page_frontmatter's %v", fmCategories)
+	}
+	if len(searchCategories) != len(fmCategories) || searchCategories[0] != fmCategories[0] {
+		t.Fatalf("search_content categories = %v, get_page_frontmatter categories = %v — must match", searchCategories, fmCategories)
+	}
+}
+
 func TestExplainSiteStructure(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
