@@ -1430,6 +1430,147 @@ func TestSuggestInternalLinksSeparatesTranslations(t *testing.T) {
 	}
 }
 
+// TestSuggestLinksEmptyResultIncludesExplanation is a regression test for
+// #458: when suggested_links comes back empty, the response must explain
+// why (candidates evaluated, minimum score required) instead of just an
+// empty array with no context.
+func TestSuggestLinksEmptyResultIncludesExplanation(t *testing.T) {
+	htmlDir := t.TempDir()
+	writeHTML := func(rel, html string) {
+		t.Helper()
+		full := filepath.Join(htmlDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeHTML(filepath.Join("posts", "alpha", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/alpha/">
+<meta property="og:title" content="Alpha">
+<meta property="article:tag" content="go">
+</head><body><article>Alpha body</article></body></html>`)
+	writeHTML(filepath.Join("posts", "beta", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/beta/">
+<meta property="og:title" content="Beta">
+<meta property="article:tag" content="rust">
+</head><body><article>Beta body</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "suggest_links", map[string]any{"tags": []string{"no-such-tag"}, "limit": 10})
+	if res.IsError {
+		t.Fatalf("suggest_links returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T", m["data"])
+	}
+	suggestedLinks, ok := data["suggested_links"].([]any)
+	if !ok || len(suggestedLinks) != 0 {
+		t.Fatalf("suggested_links = %#v, want empty array", data["suggested_links"])
+	}
+	emptyReason, ok := data["empty_reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("empty_reason = %#v, want present alongside empty suggested_links", data["empty_reason"])
+	}
+	if got := emptyReason["reason"]; got != "no_candidates_with_sufficient_taxonomy_affinity" {
+		t.Fatalf("empty_reason.reason = %v, want no_candidates_with_sufficient_taxonomy_affinity", got)
+	}
+	if got := emptyReason["candidates_evaluated"]; got != float64(2) {
+		t.Fatalf("empty_reason.candidates_evaluated = %v, want 2", got)
+	}
+	if got := emptyReason["minimum_score"]; got != float64(1) {
+		t.Fatalf("empty_reason.minimum_score = %v, want 1", got)
+	}
+}
+
+// TestGetRelatedContentEmptyResultIncludesExplanationForSoleContentPage is a
+// regression test for #458's "no other content to compare" branch: with only
+// one published page in the whole site, related_pages must come back empty
+// with candidates_evaluated=0, distinguishing "nothing else exists" from
+// "other pages exist but none matched".
+func TestGetRelatedContentEmptyResultIncludesExplanationForSoleContentPage(t *testing.T) {
+	htmlDir := t.TempDir()
+	write := func(rel, html string) {
+		t.Helper()
+		full := filepath.Join(htmlDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	// A home page and a /posts/ section-list page are structural, not
+	// content candidates — they must NOT count toward candidates_evaluated
+	// (#458), so this fixture deliberately includes both alongside the sole
+	// real article to prove the classifier filter actually excludes them.
+	write(filepath.Join("index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/">
+<meta property="og:title" content="Home">
+</head><body><article>Home body</article></body></html>`)
+	write(filepath.Join("posts", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/">
+<meta property="og:title" content="Posts">
+</head><body><article>Posts section list</article></body></html>`)
+	write(filepath.Join("posts", "solo", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/solo/">
+<meta property="og:title" content="Solo">
+<meta property="article:tag" content="go">
+</head><body><article>Solo body</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/solo/", "limit": 10})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	relatedPages, ok := m["related_pages"].([]any)
+	if !ok || len(relatedPages) != 0 {
+		t.Fatalf("related_pages = %#v, want empty array", m["related_pages"])
+	}
+	emptyReason, ok := m["empty_reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("empty_reason = %#v, want present alongside empty related_pages", m["empty_reason"])
+	}
+	if got := emptyReason["reason"]; got != "no_other_published_content_to_compare" {
+		t.Fatalf("empty_reason.reason = %v, want no_other_published_content_to_compare", got)
+	}
+	if got := emptyReason["candidates_evaluated"]; got != float64(0) {
+		t.Fatalf("empty_reason.candidates_evaluated = %v, want 0", got)
+	}
+}
+
 func TestSearchContent(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

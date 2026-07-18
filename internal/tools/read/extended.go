@@ -355,15 +355,19 @@ type suggestInternalLinksData struct {
 	// wire change if so.
 	Suggestions    []linkSuggestionDTO `json:"suggestions"`
 	SuggestedLinks []linkSuggestionDTO `json:"suggested_links"`
+	// EmptyReason is populated only when SuggestedLinks is empty (#458); see
+	// the identically-named field on getRelatedContentData.
+	EmptyReason *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
 }
 
 type suggestInternalLinksOutput struct {
 	toolcontract.ToolResponse[suggestInternalLinksData]
-	Slug           string               `json:"slug,omitempty"`
-	Total          int                  `json:"total"`
-	Translations   []translationPageDTO `json:"translations"`
-	Suggestions    []linkSuggestionDTO  `json:"suggestions"`
-	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
+	Slug           string                     `json:"slug,omitempty"`
+	Total          int                        `json:"total"`
+	Translations   []translationPageDTO       `json:"translations"`
+	Suggestions    []linkSuggestionDTO        `json:"suggestions"`
+	SuggestedLinks []linkSuggestionDTO        `json:"suggested_links"`
+	EmptyReason    *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
 }
 
 // RegisterWithSourceIndex wires additional read-only tools that benefit from the
@@ -660,7 +664,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		"Recommend existing published pages to link from a draft or existing page, based on shared tags and categories. "+
 			"Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. "+
 			"Optionally include body to detect pages whose titles already appear in the text (body_mention: true). "+
-			"Returns ranked suggestions with anchor_text and shared taxonomy context. Use this specifically for a draft not yet indexed (via tags/categories/body); for an already-published page, get_related_content's suggested_links field covers the same case alongside backlinks/related_pages/translations in one call. Requires content.read.",
+			"Returns ranked suggestions with anchor_text and shared taxonomy context. Use this specifically for a draft not yet indexed (via tags/categories/body); for an already-published page, get_related_content's suggested_links field covers the same case alongside backlinks/related_pages/translations in one call. When suggested_links comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in suggestInternalLinksInput) (*mcp.CallToolResult, suggestInternalLinksOutput, error) {
 			if idx == nil {
 				return nil, suggestInternalLinksOutput{}, fmt.Errorf("index not initialized")
@@ -710,14 +714,18 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					translations = collectTranslations(idx, *ref)
 				}
 			}
-			suggestions := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, limit)
-			resp := newSuggestInternalLinksOutput(suggestInternalLinksData{
+			suggestions, evaluated := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, limit)
+			data := suggestInternalLinksData{
 				Slug:           resolvedSlug,
 				Total:          len(suggestions),
 				Translations:   translations,
 				Suggestions:    suggestions,
 				SuggestedLinks: suggestions,
-			}, time.Now().UTC())
+			}
+			if len(suggestions) == 0 {
+				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
+			}
+			resp := newSuggestInternalLinksOutput(data, time.Now().UTC())
 			resp.Warnings = warnings
 			return nil, resp, nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 20) })
@@ -744,7 +752,7 @@ func isWordRune(r rune) bool {
 	return r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
 }
 
-func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats []string, body string, limit int) []linkSuggestionDTO {
+func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats []string, body string, limit int) ([]linkSuggestionDTO, int) {
 	type scored struct {
 		dto  linkSuggestionDTO
 		date string
@@ -753,6 +761,7 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 	classifier := site.NewClassifierFromPages(idx.Sitemap())
 	excludeTranslationKey := translationKey(excludeSlug)
 	var candidates []scored
+	evaluated := 0
 	for _, pg := range idx.Sitemap() {
 		// Skip taxonomy list pages, home page, and the source page itself (N1).
 		if !classifier.IsContent(pg) {
@@ -764,6 +773,7 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 		if isTranslationVariant(excludeTranslationKey, pg.Slug) {
 			continue
 		}
+		evaluated++
 		sharedTagTerms := taxonomy.SharedTerms(pg.Tags, refTags)
 		sharedCatTerms := taxonomy.SharedTerms(pg.Categories, refCats)
 		score := len(sharedTagTerms)*2 + len(sharedCatTerms)
@@ -807,7 +817,7 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 	for i, c := range candidates {
 		out[i] = c.dto
 	}
-	return out
+	return out, evaluated
 }
 
 func sourceIndexForProfile(srcIdx *hugosite.SourceIndex, readerSafe bool) *hugosite.SourceIndex {
@@ -1238,6 +1248,7 @@ func newSuggestInternalLinksOutput(data suggestInternalLinksData, now time.Time)
 		Translations:   data.Translations,
 		Suggestions:    data.Suggestions,
 		SuggestedLinks: data.SuggestedLinks,
+		EmptyReason:    data.EmptyReason,
 	}
 }
 

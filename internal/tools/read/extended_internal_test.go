@@ -196,7 +196,7 @@ func TestReadHelperBranches(t *testing.T) {
 	}
 
 	idx := &site.Index{}
-	related := computeRelated(idx, site.Page{Slug: "/posts/a/", Tags: []string{"go"}, Categories: []string{"docs"}}, 5)
+	related, _ := computeRelated(idx, site.Page{Slug: "/posts/a/", Tags: []string{"go"}, Categories: []string{"docs"}}, 5)
 	if len(related) != 0 {
 		t.Fatalf("computeRelated() = %#v", related)
 	}
@@ -251,8 +251,8 @@ func TestScoreLinkSuggestions(t *testing.T) {
 		t.Fatalf("NewIndex: %v", err)
 	}
 	// Empty index returns empty slice
-	if got := scoreLinkSuggestions(emptyIdx, "", []string{"go"}, nil, "", 5); len(got) != 0 {
-		t.Fatalf("scoreLinkSuggestions(empty index) = %v", got)
+	if got, evaluated := scoreLinkSuggestions(emptyIdx, "", []string{"go"}, nil, "", 5); len(got) != 0 || evaluated != 0 {
+		t.Fatalf("scoreLinkSuggestions(empty index) = %v, evaluated=%d", got, evaluated)
 	}
 
 	realIdx, err := site.NewIndex(cfg)
@@ -269,25 +269,25 @@ func TestScoreLinkSuggestions(t *testing.T) {
 	}
 
 	// refTags=["go"] matches A (score 2) and B (score 2); C has no overlap
-	got := scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "", 10)
+	got, _ := scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "", 10)
 	if len(got) != 2 {
 		t.Fatalf("want 2 suggestions, got %d: %v", len(got), got)
 	}
 
 	// excluding /posts/a/ should return only B
-	got = scoreLinkSuggestions(realIdx, "/posts/a/", []string{"go"}, nil, "", 10)
+	got, _ = scoreLinkSuggestions(realIdx, "/posts/a/", []string{"go"}, nil, "", 10)
 	if len(got) != 1 || got[0].Slug != "/posts/b/" {
 		t.Fatalf("exclude slug: want [/posts/b/], got %v", got)
 	}
 
 	// body mention bumps to top (W2: phrase-boundary, not substring)
-	got = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "check out Alpha for more", 10)
+	got, _ = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "check out Alpha for more", 10)
 	if len(got) == 0 || !got[0].BodyMention || got[0].Slug != "/posts/a/" {
 		t.Fatalf("body_mention: want /posts/a/ first, got %v", got)
 	}
 
 	// W2: "Beta" must NOT match "Alphabeta" (substring but not word-boundary)
-	got = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "Alphabeta context", 10)
+	got, _ = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "Alphabeta context", 10)
 	for _, s := range got {
 		if s.Slug == "/posts/b/" && s.BodyMention {
 			t.Fatal("body_mention false positive: 'Beta' should not match inside 'Alphabeta'")
@@ -297,7 +297,7 @@ func TestScoreLinkSuggestions(t *testing.T) {
 	// E1: empty-title page must not produce false body_mention
 	emptyTitleIdx, _ := site.NewIndex(cfg)
 	emptyTitleIdx.UpsertPage(site.Page{Slug: "/posts/notitle/", Title: "", Tags: []string{"go"}, URL: "https://example.test/posts/notitle/"})
-	got = scoreLinkSuggestions(emptyTitleIdx, "", []string{"go"}, nil, "anything goes here", 10)
+	got, _ = scoreLinkSuggestions(emptyTitleIdx, "", []string{"go"}, nil, "anything goes here", 10)
 	for _, s := range got {
 		if s.BodyMention {
 			t.Fatalf("E1: empty-title page must not have body_mention=true, got %#v", s)
@@ -305,7 +305,7 @@ func TestScoreLinkSuggestions(t *testing.T) {
 	}
 
 	// limit respected
-	got = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "", 1)
+	got, _ = scoreLinkSuggestions(realIdx, "", []string{"go"}, nil, "", 1)
 	if len(got) != 1 {
 		t.Fatalf("limit=1: want 1, got %d", len(got))
 	}
