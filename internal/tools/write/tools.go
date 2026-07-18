@@ -60,6 +60,12 @@ type createPageOutput struct {
 	DryRun             bool    `json:"dry_run,omitempty"`
 	Content            string  `json:"content,omitempty"`
 	Warning            string  `json:"warning,omitempty"`
+	// NewRevision is the resulting page's revision immediately after this
+	// write (#464), usable directly as expected_revision on a following
+	// update_page/delete_page without an intermediate read call. Omitted on
+	// dry_run (nothing was actually written) and on error (see
+	// ResolvedSourcePath's reasoning above).
+	NewRevision string `json:"new_revision,omitempty"`
 	// RequestContext echoes the caller's normalized slug/lang on failure
 	// (#455) — always populated by toolcontract.WrapTool when the handler
 	// wraps its error via toolcontract.WithRequestContext, independent of
@@ -98,6 +104,9 @@ type updatePageOutput struct {
 	DryRun             bool    `json:"dry_run,omitempty"`
 	Diff               string  `json:"diff,omitempty"`
 	Warning            string  `json:"warning,omitempty"`
+	// NewRevision is the resulting page's revision immediately after this
+	// write (#464) — see the comment on createPageOutput.NewRevision.
+	NewRevision string `json:"new_revision,omitempty"`
 	// RequestContext echoes the caller's normalized slug/lang on failure
 	// (#455) — see the comment on createPageOutput.RequestContext.
 	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
@@ -428,6 +437,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Path:               logicalPath,
 			ResolvedLang:       strPtr(resolvedLang),
 			ResolvedSourcePath: strPtr(logicalPath),
+			NewRevision:        contentmodel.SourceRevisionBytes([]byte(content)),
 			Warning:            appendLastBuildWarning(warning),
 			State:              &state,
 		}
@@ -683,6 +693,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Slug:               in.Slug,
 			ResolvedLang:       strPtr(resolvedSource.Lang),
 			ResolvedSourcePath: strPtr(logicalPath),
+			NewRevision:        contentmodel.SourceRevisionBytes([]byte(content)),
 			Warning:            appendLastBuildWarning(warning),
 			State:              &state,
 		}

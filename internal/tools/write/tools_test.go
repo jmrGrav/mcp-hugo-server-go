@@ -620,6 +620,14 @@ func TestCreatePageIdempotencyKeyReturnsOriginalResultWithoutRewriting(t *testin
 	if string(raw) != "tampered" {
 		t.Fatalf("create_page replay should not rewrite file, got %q", string(raw))
 	}
+	// #464: new_revision must survive an idempotency replay since the cached
+	// output (including new_revision) is stored and returned verbatim, not
+	// recomputed against the (now-tampered) file on disk.
+	firstOut := decodeWriteContent(t, first)
+	secondOut := decodeWriteContent(t, second)
+	if firstOut["new_revision"] == "" || firstOut["new_revision"] != secondOut["new_revision"] {
+		t.Fatalf("new_revision changed across replay: first=%v second=%v", firstOut["new_revision"], secondOut["new_revision"])
+	}
 }
 
 // TestCreatePageIdempotencyKeyRaceOnConcurrentRetries proves the idempotency
@@ -1171,6 +1179,69 @@ func TestDeletePageNotFoundPreservesRequestContext(t *testing.T) {
 	}
 	if _, present := m["slug"]; present {
 		t.Fatalf("top-level slug = %v, want omitted on error (real value lives in request_context.slug)", m["slug"])
+	}
+}
+
+// TestCreateUpdateDeleteChainUsesNewRevisionWithoutIntermediateRead is a
+// regression test for #464: create_page/update_page must return the
+// resulting page's revision directly, so a following update_page/delete_page
+// can use it as expected_revision without an intermediate read call
+// (get_page, build_agent_context, etc.) just to discover it.
+func TestCreateUpdateDeleteChainUsesNewRevisionWithoutIntermediateRead(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	created := callTool(t, session, "create_page", map[string]any{
+		"slug":       "chain-me",
+		"title":      "Original",
+		"body":       "Original body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if created.IsError {
+		raw, _ := json.Marshal(created.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+	createdOut := decodeWriteContent(t, created)
+	createRevision, _ := createdOut["new_revision"].(string)
+	if createRevision == "" {
+		t.Fatalf("create_page new_revision missing: %#v", createdOut)
+	}
+	wantAfterCreate := currentRevision(t, filepath.Join(contentRoot, "chain-me", "index.md"))
+	if createRevision != wantAfterCreate {
+		t.Fatalf("create_page new_revision = %q, want %q (matching the file actually on disk)", createRevision, wantAfterCreate)
+	}
+
+	updated := callTool(t, session, "update_page", map[string]any{
+		"slug":              "chain-me",
+		"title":             "Updated",
+		"expected_revision": createRevision, // no intermediate read
+	})
+	if updated.IsError {
+		raw, _ := json.Marshal(updated.Content)
+		t.Fatalf("update_page failed using create_page's new_revision: %s", raw)
+	}
+	updatedOut := decodeWriteContent(t, updated)
+	updateRevision, _ := updatedOut["new_revision"].(string)
+	if updateRevision == "" {
+		t.Fatalf("update_page new_revision missing: %#v", updatedOut)
+	}
+	if updateRevision == createRevision {
+		t.Fatal("update_page new_revision must differ from create_page's — content changed")
+	}
+	wantAfterUpdate := currentRevision(t, filepath.Join(contentRoot, "chain-me", "index.md"))
+	if updateRevision != wantAfterUpdate {
+		t.Fatalf("update_page new_revision = %q, want %q (matching the file actually on disk)", updateRevision, wantAfterUpdate)
+	}
+
+	deleted := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "chain-me",
+		"expected_revision": updateRevision, // no intermediate read
+	})
+	if deleted.IsError {
+		raw, _ := json.Marshal(deleted.Content)
+		t.Fatalf("delete_page failed using update_page's new_revision: %s", raw)
 	}
 }
 
