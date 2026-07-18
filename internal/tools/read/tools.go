@@ -92,11 +92,18 @@ type translationPageDTO struct {
 }
 
 type getRelatedContentData struct {
-	Translations   []translationPageDTO `json:"translations"`
-	RelatedPages   []relatedPageDTO     `json:"related_pages"`
-	Backlinks      []backlinkDTO        `json:"backlinks"`
-	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
-	Related        []relatedPageDTO     `json:"related"`
+	Translations []translationPageDTO `json:"translations"`
+	RelatedPages []relatedPageDTO     `json:"related_pages"`
+	Backlinks    []backlinkDTO        `json:"backlinks"`
+
+	SuggestedLinks []linkSuggestionDTO `json:"suggested_links"`
+
+	// Related always carries the exact same slice as RelatedPages (#453) —
+	// RelatedPages is canonical; Related is kept as a deprecated alias
+	// rather than removed until #433's live-client-verification question
+	// (does any connected client read this exact field name?) is resolved,
+	// since removing it would be a breaking wire change if so.
+	Related []relatedPageDTO `json:"related"`
 }
 
 type buildAgentContextInput struct {
@@ -181,7 +188,9 @@ type getRelatedContentOutput struct {
 	RelatedPages   []relatedPageDTO     `json:"related_pages"`
 	Backlinks      []backlinkDTO        `json:"backlinks"`
 	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
-	Related        []relatedPageDTO     `json:"related"`
+	// Related is a deprecated alias of RelatedPages (#453); see the comment
+	// on getRelatedContentData.Related for why it isn't simply removed.
+	Related []relatedPageDTO `json:"related"`
 }
 
 type buildAgentContextOutput struct {

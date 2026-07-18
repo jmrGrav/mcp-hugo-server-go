@@ -344,11 +344,17 @@ type linkSuggestionDTO struct {
 }
 
 type suggestInternalLinksData struct {
-	Slug           string               `json:"slug,omitempty"`
-	Total          int                  `json:"total"`
-	Translations   []translationPageDTO `json:"translations"`
-	Suggestions    []linkSuggestionDTO  `json:"suggestions"`
-	SuggestedLinks []linkSuggestionDTO  `json:"suggested_links"`
+	Slug         string               `json:"slug,omitempty"`
+	Total        int                  `json:"total"`
+	Translations []translationPageDTO `json:"translations"`
+	// SuggestedLinks is canonical (matches the suggest_links tool name).
+	// Suggestions always carries the exact same slice (#453) — kept as a
+	// deprecated alias rather than removed until #433's live-client-
+	// verification question (does any connected client read this exact
+	// field name?) is resolved, since removing it would be a breaking
+	// wire change if so.
+	Suggestions    []linkSuggestionDTO `json:"suggestions"`
+	SuggestedLinks []linkSuggestionDTO `json:"suggested_links"`
 }
 
 type suggestInternalLinksOutput struct {
