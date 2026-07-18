@@ -249,7 +249,7 @@ content, including drafts, for every tool in this table.
 | `diff_page`             | structured  | `data` (diff result) + `data.state`          |
 | `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state` |
 | `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`           |
-| `validate_site`         | structured  | `data.pages`, `data.pages_checked`           |
+| `validate_site`         | structured  | `data.pages`, `data.pages_checked`; defaults to invalid-only (`data.pages` omits passing pages unless `include_valid=true` or `invalid_only=false` is passed explicitly) — `data.pages_checked`/`data.pages_passed`/`data.invalid` always describe the full scan regardless (#456) |
 
 ### `write` (requires a registered OAuth client, see [§6.12](#612-2-scope-model-readwrite-450))
 
