@@ -15,6 +15,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
@@ -22,6 +23,12 @@ import (
 
 type inspectRenderedPageInput struct {
 	Slug string `json:"slug"`
+	// IncludePreview opts into the pre-publish preview facet (#435): a
+	// diff summary, this page's broken-link count, and front-matter
+	// validity, composed from diff_page/get_broken_links/
+	// validate_frontmatter's own logic rather than a new preview_page
+	// tool. Off by default — every existing caller's cost is unchanged.
+	IncludePreview bool `json:"include_preview,omitempty"`
 }
 
 // renderCheckResult is one structured render check, e.g. "title" or
@@ -34,6 +41,21 @@ type renderCheckResult struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// previewDTO is the opt-in include_preview facet (#435): a pre-publish
+// summary combining diff_page's git-diff status, get_broken_links'
+// per-page scan, and validate_frontmatter's per-page checks into one
+// risks list, so an agent doesn't have to chain three separate calls
+// before publishing. Advisory only, same posture as get_broken_links —
+// never blocks anything.
+type previewDTO struct {
+	DiffStatus        string   `json:"diff_status"`
+	DiffSummary       string   `json:"diff_summary"`
+	BrokenLinksCount  int      `json:"broken_links_count"`
+	FrontmatterValid  bool     `json:"frontmatter_valid"`
+	FrontmatterIssues []string `json:"frontmatter_issues,omitempty"`
+	Risks             []string `json:"risks"`
+}
+
 type inspectRenderedPageData struct {
 	Slug       string              `json:"slug"`
 	URL        string              `json:"url"`
@@ -42,14 +64,17 @@ type inspectRenderedPageData struct {
 	State      site.LifecycleState `json:"state"`
 	Status     string              `json:"status"`
 	Checks     []renderCheckResult `json:"checks"`
+	// Preview is populated only when include_preview=true is requested.
+	Preview *previewDTO `json:"preview,omitempty"`
 }
 
 type inspectRenderedPageOutput struct {
 	toolcontract.ToolResponse[inspectRenderedPageData]
-	Slug   string              `json:"slug"`
-	URL    string              `json:"url"`
-	Status string              `json:"status"`
-	Checks []renderCheckResult `json:"checks"`
+	Slug    string              `json:"slug"`
+	URL     string              `json:"url"`
+	Status  string              `json:"status"`
+	Checks  []renderCheckResult `json:"checks"`
+	Preview *previewDTO         `json:"preview,omitempty"`
 }
 
 func newInspectRenderedPageOutput(data inspectRenderedPageData, now time.Time) inspectRenderedPageOutput {
@@ -59,6 +84,7 @@ func newInspectRenderedPageOutput(data inspectRenderedPageData, now time.Time) i
 		URL:          data.URL,
 		Status:       data.Status,
 		Checks:       data.Checks,
+		Preview:      data.Preview,
 	}
 }
 
@@ -78,7 +104,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Requires content.read.",
+	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in inspectRenderedPageInput) (*mcp.CallToolResult, inspectRenderedPageOutput, error) {
 			if idx == nil {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("index not initialized")
@@ -143,8 +169,114 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				Status:     overall,
 				Checks:     checks,
 			}
+			if in.IncludePreview {
+				preview := computePreview(ctx, idx, cfg, resolved, page, doc)
+				data.Preview = &preview
+			}
 			return nil, newInspectRenderedPageOutput(data, time.Now().UTC()), nil
 		})
+}
+
+// computePreview builds inspect_rendered's opt-in include_preview facet
+// (#435) by composing diff_page's git-diff logic, the same
+// brokenInternalLinksFromDoc scan checkInternalLinks already ran against
+// this same freshly-parsed doc (not brokenLinksForPage's cached, possibly
+// stale RawHTML — using a different source here would let this response
+// contradict its own checks[].internal_links result under build drift),
+// and validate_frontmatter's per-page checks (validateFrontMatterPage) —
+// rather than re-deriving any of their logic. Advisory only: never fails
+// the call, never blocks a mutation.
+func computePreview(ctx context.Context, idx *site.Index, cfg config.Config, resolved site.ResolvedPage, page site.Page, doc *html.Node) previewDTO {
+	preview := previewDTO{Risks: []string{}}
+
+	diffStatus, diffSummary := computeDiffPreviewSummary(ctx, resolved, cfg)
+	preview.DiffStatus = diffStatus
+	preview.DiffSummary = diffSummary
+	if diffStatus == "modified" {
+		preview.Risks = append(preview.Risks, "uncommitted source changes: "+diffSummary)
+	}
+
+	broken, _ := brokenInternalLinksFromDoc(idx, page, doc)
+	preview.BrokenLinksCount = len(broken)
+	if len(broken) > 0 {
+		preview.Risks = append(preview.Risks, fmt.Sprintf("%d broken internal link(s) on this page", len(broken)))
+	}
+
+	preview.FrontmatterValid = true
+	if resolved.Source != nil {
+		aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
+		issues := validateFrontMatterPage(*resolved.Source, aliases)
+		if len(issues) > 0 {
+			preview.FrontmatterValid = false
+			preview.FrontmatterIssues = issues
+			preview.Risks = append(preview.Risks, fmt.Sprintf("%d front-matter issue(s)", len(issues)))
+		}
+	}
+
+	return preview
+}
+
+// computeDiffPreviewSummary mirrors diff_page's own git-diff resolution
+// (findGitRoot/gitShowFile/diffStatus/unifiedDiff) but returns a compact
+// line-count summary instead of the full diff text — preview only needs
+// enough to flag "this page has uncommitted changes," not the diff itself.
+func computeDiffPreviewSummary(ctx context.Context, resolved site.ResolvedPage, cfg config.Config) (status, summary string) {
+	contentRoot := strings.TrimSpace(cfg.ContentRoot)
+	if resolved.Source == nil || contentRoot == "" || cfg.GitBaseline.Mode == "disabled" {
+		return "git_unavailable", "diff unavailable"
+	}
+	gitRoot, err := findGitRoot(ctx, contentRoot)
+	if err != nil {
+		return "git_unavailable", "diff unavailable: git repository not found"
+	}
+	absPath := resolved.SourcePath
+	if absPath == "" {
+		return "git_unavailable", "diff unavailable"
+	}
+	relRepoPath, err := filepath.Rel(gitRoot, absPath)
+	if err != nil || strings.HasPrefix(relRepoPath, "..") {
+		return "git_unavailable", "diff unavailable: source page is outside the repository root"
+	}
+	baseContent, baseExists, err := gitShowFile(ctx, gitRoot, relRepoPath)
+	if err != nil && !isGitPathMissing(err) {
+		return "git_unavailable", "diff unavailable"
+	}
+	if !baseExists {
+		baseContent = nil
+	}
+	currentContent, err := os.ReadFile(absPath)
+	if err != nil {
+		return "git_unavailable", "diff unavailable"
+	}
+	dStatus := diffStatus(baseExists, currentContent, baseContent)
+	if dStatus == "git_untracked" {
+		return dStatus, "file is new and not yet tracked by git"
+	}
+	if dStatus == "unchanged" {
+		return dStatus, "no uncommitted changes"
+	}
+	diffText, err := unifiedDiff(relRepoPath, baseContent, currentContent)
+	if err != nil {
+		return "git_unavailable", "diff unavailable"
+	}
+	added, removed := countDiffLines(diffText)
+	return dStatus, fmt.Sprintf("%d line(s) added, %d removed", added, removed)
+}
+
+// countDiffLines counts +/- content lines in a unified diff, excluding the
+// +++/--- file-header lines (which also start with +/-).
+func countDiffLines(diffText string) (added, removed int) {
+	for _, line := range strings.Split(diffText, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++") || strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added++
+		case strings.HasPrefix(line, "-"):
+			removed++
+		}
+	}
+	return added, removed
 }
 
 func checkTitle(doc *html.Node) renderCheckResult {
@@ -271,14 +403,18 @@ func siteIsMultilingual(idx *site.Index) bool {
 	return false
 }
 
-// checkInternalLinks walks the freshly-parsed doc (not the cached
+// brokenInternalLinksFromDoc walks the freshly-parsed doc (not the cached
 // page.RawHTML from idx, which was read at server-start and can be stale
-// relative to the current on-disk build) so this check validates the
-// current rendered output, matching the rest of these checks.
-func checkInternalLinks(idx *site.Index, page site.Page, doc *html.Node) renderCheckResult {
+// relative to the current on-disk build) so callers validate the current
+// rendered output. Shared by checkInternalLinks and computePreview (#435)
+// so the two can never disagree about how many broken links this page has
+// — using brokenLinksForPage's stale RawHTML for one and this for the
+// other would let a single inspect_rendered response contradict itself
+// under build drift, exactly the condition this tool exists to catch.
+func brokenInternalLinksFromDoc(idx *site.Index, page site.Page, doc *html.Node) ([]string, error) {
 	base, err := url.Parse(page.URL)
 	if err != nil {
-		return renderCheckResult{Check: "internal_links", Status: "warn", Detail: "page URL could not be parsed, skipped internal link check"}
+		return nil, err
 	}
 	classifier := site.NewClassifier(idx)
 	var broken []string
@@ -294,6 +430,14 @@ func checkInternalLinks(idx *site.Index, page site.Page, doc *html.Node) renderC
 			continue
 		}
 		broken = append(broken, href)
+	}
+	return broken, nil
+}
+
+func checkInternalLinks(idx *site.Index, page site.Page, doc *html.Node) renderCheckResult {
+	broken, err := brokenInternalLinksFromDoc(idx, page, doc)
+	if err != nil {
+		return renderCheckResult{Check: "internal_links", Status: "warn", Detail: "page URL could not be parsed, skipped internal link check"}
 	}
 	if len(broken) > 0 {
 		sample := broken

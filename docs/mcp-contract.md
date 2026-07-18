@@ -267,7 +267,7 @@ content, including drafts, for every tool in this table.
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
 | `suggest_links`         | structured  | `data.suggested_links` is canonical; the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458) |
 | `diff_page`             | structured  | `data` (diff result) + `data.state`          |
-| `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state` |
+| `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state`; `include_preview=true` opts into `data.preview` — a combined pre-publish summary composing `diff_page` (`diff_status`/`diff_summary`), `get_broken_links` scoped to this page (`broken_links_count`), and `validate_frontmatter` (`frontmatter_valid`/`frontmatter_issues`) into one `risks` list, so an agent doesn't have to chain three separate calls before publishing — omitted unless requested, advisory only, never blocks a mutation (#435) |
 | `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`           |
 | `validate_site`         | structured  | `data.pages`, `data.pages_checked`; defaults to invalid-only (`data.pages` omits passing pages unless `include_valid=true` or `invalid_only=false` is passed explicitly) — `data.pages_checked`/`data.pages_passed`/`data.invalid` always describe the full scan regardless (#456) |
 
