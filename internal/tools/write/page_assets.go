@@ -195,7 +195,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			"This tool never overwrites: fails with already_exists if filename is already taken in this bundle. " +
 			"If identical content already exists under a different filename in the same bundle, the response includes duplicate_of as an advisory only — the file is still written under the requested name. " +
 			"Callers may provide idempotency_key to safely replay the exact same upload after a timeout or uncertain delivery. " +
-				"rate_limit_remaining reports the caller's remaining budget on the shared create_page/update_page/upload_page_asset quota (#466); if exceeded, the error's resolution.retry_after_seconds gives a concrete wait time instead of forcing you to guess a safe pacing. Requires content.write.",
+			"rate_limit_remaining reports the caller's remaining budget on the shared create_page/update_page/upload_page_asset quota (#466); if exceeded, the error's resolution.retry_after_seconds gives a concrete wait time instead of forcing you to guess a safe pacing. Requires content.write.",
 		InputSchema:  tools.MustSchema[uploadPageAssetInput](),
 		OutputSchema: tools.MustSchema[uploadPageAssetOutput](),
 		Annotations: &mcp.ToolAnnotations{
