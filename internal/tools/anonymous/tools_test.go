@@ -314,6 +314,11 @@ func TestGetPageDraftBlockedEvenWithSourceFallback(t *testing.T) {
 	}
 }
 
+// TestGetPageEmptySlug is a regression test for #470: an empty slug is a
+// missing-parameter error (invalid_params), not a "page doesn't exist"
+// error (content_not_found) — the two must stay distinguishable so an
+// agent's error-recovery logic doesn't try to search_content for a page
+// that was never named.
 func TestGetPageEmptySlug(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -324,8 +329,36 @@ func TestGetPageEmptySlug(t *testing.T) {
 		t.Fatal("get_page with empty slug should return error result")
 	}
 	raw, _ := json.Marshal(res.Content)
+	// invalid_params for a "must not be empty" message is auto-upgraded to
+	// the more specific missing_required_parameter by
+	// toolcontract.ParseToolError — matching every other tool's convention.
+	if !strings.Contains(string(raw), "missing_required_parameter") {
+		t.Fatalf("get_page empty slug error missing 'missing_required_parameter': %s", raw)
+	}
+	if strings.Contains(string(raw), "content_not_found") {
+		t.Fatalf("get_page empty slug error must not be content_not_found: %s", raw)
+	}
+}
+
+// TestGetPageUnresolvedSlugStillContentNotFound pins the case #470's fix must
+// not touch: a non-empty slug that fails to resolve to any page still
+// reports content_not_found, distinct from the invalid_params empty-slug case
+// above.
+func TestGetPageUnresolvedSlugStillContentNotFound(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/does/not/exist/"})
+	if !res.IsError {
+		t.Fatal("get_page with unresolvable slug should return error result")
+	}
+	raw, _ := json.Marshal(res.Content)
 	if !strings.Contains(string(raw), "content_not_found") {
-		t.Fatalf("get_page empty slug error missing 'content_not_found': %s", raw)
+		t.Fatalf("get_page unresolved slug error missing 'content_not_found': %s", raw)
+	}
+	if strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("get_page unresolved slug error must not be invalid_params: %s", raw)
 	}
 }
 
