@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.0] - 2026-07-18
+
+Consolidates v1.5.0-pre1 and v1.5.0-pre2 (see below for full detail) plus two live-production fixes found during connector interoperability testing (Claude.ai, ChatGPT, Le Chat):
+
+### Fixed
+- **Live OAuth outage: "reader" scope rejected** (PR #448): `requestedScope`/`normalizeConfiguredScope` didn't recognize the published `reader` scope token, so any client (observed: Claude.ai) that echoed the full advertised `scopes_supported` list back as its `/authorize` request's `scope` parameter had the entire request rejected with `invalid_scope`. Fixed by accepting `reader` as its own distinct canonical scope, kept separate from `content.read` (same rank, different string — `site.IsReaderProfile` and the reader-safe gate key on the literal `"reader"` value).
+- **CORS missing on `/register`, `/authorize`, `/token`** (PR #468): these three OAuth endpoints returned a plain 405 with no CORS headers on an `OPTIONS` preflight, blocking any browser-based OAuth client calling them directly via `fetch`/`XHR`. Now matches the CORS policy already used on discovery endpoints.
+
+### Interop
+- **Le Chat (Mistral) confirmed working end-to-end** (#424, #341): connects, discovers tools, and completes a full multi-tool session against production. Gemini CLI and GitHub Copilot support is deliberately deferred, not attempted in this release.
+
+See v1.5.0-pre1 and v1.5.0-pre2 below for the full list of underlying fixes and features included in this release.
+
 ## [v1.5.0-pre2] - 2026-07-18
 
 Prerelease covering a live connector audit (ChatGPT, 2026-07-17) of
