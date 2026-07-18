@@ -251,7 +251,9 @@ without changing the envelope (Section 5.1 still applies — shaping narrows
 what's inside `data`/the flat top level, never removes `success`/`errors`/
 `warnings`/`meta`). Omitting all shaping parameters is always a no-op: a
 call with no shaping parameters returns the exact same shape it returned
-before this feature existed.
+before this feature existed. The current rollout is partial; the proposed
+uniform compact-mode policy for the full read surface is tracked separately in
+`docs/compact-response-mode-design.md` (`#526`).
 
 | Parameter        | Type       | Meaning                                                    |
 |-------------------|------------|-------------------------------------------------------------|
