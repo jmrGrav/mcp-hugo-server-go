@@ -1072,6 +1072,108 @@ func TestDeletePageEmptySlug(t *testing.T) {
 	}
 }
 
+// TestCreatePageAlreadyExistsPreservesRequestContext is a regression test
+// for #455: a failed create_page must still echo the caller's normalized
+// slug/lang via request_context, and must omit (not empty-string) the
+// resolved_lang/resolved_source_path fields that were never reached.
+func TestCreatePageAlreadyExistsPreservesRequestContext(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	first := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/dup", "title": "First", "body": "First body.", "lang": "fr",
+		"tags": []any{"a"}, "categories": []any{"b"},
+	})
+	if first.IsError {
+		raw, _ := json.Marshal(first.Content)
+		t.Fatalf("initial create_page failed: %s", raw)
+	}
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/dup", "title": "Second", "body": "Second body.", "lang": "fr",
+		"tags": []any{"a"}, "categories": []any{"b"},
+	})
+	if !res.IsError {
+		t.Fatal("expected already_exists error on duplicate create_page")
+	}
+	m := decodeWriteContent(t, res)
+	reqCtx, ok := m["request_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_context type = %T, want populated object", m["request_context"])
+	}
+	if got := reqCtx["slug"]; got != "posts/dup" {
+		t.Fatalf("request_context.slug = %v, want posts/dup", got)
+	}
+	if got := reqCtx["requested_lang"]; got != "fr" {
+		t.Fatalf("request_context.requested_lang = %v, want fr", got)
+	}
+	if _, present := m["resolved_lang"]; present {
+		t.Fatalf("resolved_lang = %v, want omitted on error", m["resolved_lang"])
+	}
+	if _, present := m["resolved_source_path"]; present {
+		t.Fatalf("resolved_source_path = %v, want omitted on error", m["resolved_source_path"])
+	}
+	if _, present := m["slug"]; present {
+		t.Fatalf("top-level slug = %v, want omitted on error (real value lives in request_context.slug)", m["slug"])
+	}
+}
+
+// TestUpdatePageNotFoundPreservesRequestContext is #455's update_page case.
+func TestUpdatePageNotFoundPreservesRequestContext(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{"slug": "posts/does-not-exist", "title": "T", "lang": "en"})
+	if !res.IsError {
+		t.Fatal("expected not_found error for update_page on a missing page")
+	}
+	m := decodeWriteContent(t, res)
+	reqCtx, ok := m["request_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_context type = %T, want populated object", m["request_context"])
+	}
+	if got := reqCtx["slug"]; got != "posts/does-not-exist" {
+		t.Fatalf("request_context.slug = %v, want posts/does-not-exist", got)
+	}
+	if got := reqCtx["requested_lang"]; got != "en" {
+		t.Fatalf("request_context.requested_lang = %v, want en", got)
+	}
+	if _, present := m["resolved_source_path"]; present {
+		t.Fatalf("resolved_source_path = %v, want omitted on error", m["resolved_source_path"])
+	}
+	if _, present := m["slug"]; present {
+		t.Fatalf("top-level slug = %v, want omitted on error (real value lives in request_context.slug)", m["slug"])
+	}
+}
+
+// TestDeletePageNotFoundPreservesRequestContext is #455's delete_page case.
+func TestDeletePageNotFoundPreservesRequestContext(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{"slug": "posts/does-not-exist"})
+	if !res.IsError {
+		t.Fatal("expected not_found error for delete_page on a missing page")
+	}
+	m := decodeWriteContent(t, res)
+	reqCtx, ok := m["request_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_context type = %T, want populated object", m["request_context"])
+	}
+	if got := reqCtx["slug"]; got != "posts/does-not-exist" {
+		t.Fatalf("request_context.slug = %v, want posts/does-not-exist", got)
+	}
+	if _, present := m["resolved_source_path"]; present {
+		t.Fatalf("resolved_source_path = %v, want omitted on error", m["resolved_source_path"])
+	}
+	if _, present := m["slug"]; present {
+		t.Fatalf("top-level slug = %v, want omitted on error (real value lives in request_context.slug)", m["slug"])
+	}
+}
+
 func TestUpdatePageSuccess(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)

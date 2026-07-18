@@ -258,9 +258,9 @@ no exceptions — `write` implies full `read` access plus everything below.
 
 | Tool          | Envelope | Top-level key(s)                            |
 |---------------|----------|---------------------------------------------|
-| `create_page` | flat     | `status`, `slug`, `path`, `dry_run?`, `content?`, `warning?`      |
-| `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`                 |
-| `delete_page` | flat     | `status`, `slug`, `warning?`                                      |
+| `create_page` | flat     | `status`, `slug`, `path`, `dry_run?`, `content?`, `warning?`; `resolved_lang`/`resolved_source_path` are omitted (not empty-stringed) unless resolution actually succeeded; on failure, `request_context` (`slug`, `requested_lang?`) always echoes the caller's normalized input (#455) |
+| `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455) |
+| `delete_page` | flat     | `status`, `slug`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455) |
 | `upload_page_asset` | flat | `status`, `slug`, `filename`, `path`, `content_type`, `size_bytes`, `sha256`, `duplicate_of?` (advisory only), `dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`) |
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready` |
 | `preview_build`           | flat     | (build result)                       |

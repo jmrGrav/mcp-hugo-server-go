@@ -3,6 +3,7 @@ package toolcontract
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -99,6 +100,46 @@ func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 	}
 }
 
+// RequestContext echoes the caller's normalized input on a failed mutation
+// (#455), independent of whether resolution or the write itself succeeded —
+// unlike resolved_lang/resolved_source_path (only meaningful post-resolution
+// and correctly omitted on error), slug/requested_lang are known from the
+// input alone and should never be silently dropped just because the
+// handler's own typed Out struct gets discarded on the error path below.
+type RequestContext struct {
+	Slug          string `json:"slug"`
+	RequestedLang string `json:"requested_lang,omitempty"`
+}
+
+// errWithRequestContext wraps an error with the request context that was
+// known at the point of failure, so WrapTool can recover it after the
+// handler's typed Out value is discarded.
+type errWithRequestContext struct {
+	err error
+	ctx RequestContext
+}
+
+func (e *errWithRequestContext) Error() string { return e.err.Error() }
+func (e *errWithRequestContext) Unwrap() error { return e.err }
+
+// WithRequestContext annotates err with the caller's normalized request
+// context so it survives WrapTool's generic error handling and reaches the
+// response as request_context. A nil err returns nil.
+func WithRequestContext(err error, ctx RequestContext) error {
+	if err == nil {
+		return nil
+	}
+	return &errWithRequestContext{err: err, ctx: ctx}
+}
+
+func requestContextFrom(err error) *RequestContext {
+	var wrapped *errWithRequestContext
+	if errors.As(err, &wrapped) {
+		return &wrapped.ctx
+	}
+	return nil
+}
+
 func Failure(meta ResponseMeta, errs ...ToolError) ToolResponse[map[string]any] {
 	if errs == nil {
 		errs = []ToolError{}
@@ -176,30 +217,52 @@ func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerF
 		res, out, err := handler(ctx, req, in)
 		if err != nil {
 			meta := NewMeta(buildinfo.Version, time.Now())
-			return ErrorResult(err, meta), errorOutput[Out](meta, ParseToolError(err)), nil
+			reqCtx := requestContextFrom(err)
+			return ErrorResult(err, meta, reqCtx), errorOutput[Out](meta, ParseToolError(err), reqCtx), nil
 		}
 		return res, out, nil
 	}
 }
 
-func ErrorResult(err error, meta ResponseMeta) *mcp.CallToolResult {
+func ErrorResult(err error, meta ResponseMeta, reqCtx *RequestContext) *mcp.CallToolResult {
 	toolErr := ParseToolError(err)
-	payload := Failure(meta, toolErr)
 	return &mcp.CallToolResult{
 		Content:           []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%s: %s", toolErr.Code, toolErr.Message)}},
-		StructuredContent: payload,
+		StructuredContent: failurePayload(meta, toolErr, reqCtx),
 		IsError:           true,
 	}
 }
 
-func errorOutput[Out any](meta ResponseMeta, toolErr ToolError) Out {
+func errorOutput[Out any](meta ResponseMeta, toolErr ToolError, reqCtx *RequestContext) Out {
 	var out Out
-	raw, err := json.Marshal(Failure(meta, toolErr))
+	raw, err := json.Marshal(failurePayload(meta, toolErr, reqCtx))
 	if err != nil {
 		return out
 	}
 	_ = json.Unmarshal(raw, &out)
 	return out
+}
+
+// failurePayload builds the failure envelope, injecting request_context at
+// the root of the JSON object (alongside data/errors/meta) when present, so
+// it reaches both a structured-envelope caller reading the raw payload and a
+// flat-envelope Out struct that declares its own root-level RequestContext
+// field with the matching JSON tag.
+func failurePayload(meta ResponseMeta, toolErr ToolError, reqCtx *RequestContext) any {
+	base := Failure(meta, toolErr)
+	if reqCtx == nil {
+		return base
+	}
+	raw, err := json.Marshal(base)
+	if err != nil {
+		return base
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return base
+	}
+	m["request_context"] = reqCtx
+	return m
 }
 
 func splitErrorPrefix(raw string) (string, string) {
