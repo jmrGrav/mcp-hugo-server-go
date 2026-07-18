@@ -202,6 +202,26 @@ func TestScopeConfigurationHelpers(t *testing.T) {
 	if got, err := requestedScope("unknown"); err == nil || got != "" {
 		t.Fatalf("requestedScope(unknown) = %q, %v", got, err)
 	}
+	// Reproduces a real production outage (2026-07-18): Claude.ai's
+	// /authorize request echoed the full advertised scopes_supported list
+	// back verbatim as its scope parameter — and "reader" (part of
+	// tools.KnownScopes, published in scopes_supported) was not accepted
+	// by requestedScope/normalizeConfiguredScope, so the whole authorize
+	// call failed with invalid_scope. "reader" must be accepted here, and
+	// a higher-ranked scope in the same list must still win.
+	if got, err := requestedScope("reader content.read content.write site.admin"); err != nil || got != "site.admin" {
+		t.Fatalf(`requestedScope("reader content.read content.write site.admin") = %q, %v, want "site.admin", nil`, got, err)
+	}
+	// "reader" alone must stay "reader", NOT get folded into
+	// "content.read": site.IsReaderProfile and server.go's request-time
+	// reader-safe gate both key on the literal scope string being exactly
+	// "reader" (ScopeRank treats them as equal-rank, but they are not the
+	// same string) — collapsing them here would silently upgrade a
+	// self-service reader client out of the reader-safe profile the moment
+	// it explicitly requested scope=reader.
+	if got, err := requestedScope("reader"); err != nil || got != "reader" {
+		t.Fatalf(`requestedScope("reader") = %q, %v, want "reader", nil`, got, err)
+	}
 	if !allowedScope("content.read", "site.admin") {
 		t.Fatal("allowedScope() should allow lower rank")
 	}
