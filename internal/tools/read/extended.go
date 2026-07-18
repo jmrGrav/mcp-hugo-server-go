@@ -613,7 +613,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
-	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). Requires content.read.",
+	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). This is the same backlinks data get_related_content returns alongside related_pages/suggested_links/translations in one call — use this standalone version when you only need backlinks and want to avoid the cost of the other three facets. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
 			if idx == nil {
 				return nil, getBacklinksOutput{}, fmt.Errorf("index not initialized")
@@ -654,7 +654,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		"Recommend existing published pages to link from a draft or existing page, based on shared tags and categories. "+
 			"Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. "+
 			"Optionally include body to detect pages whose titles already appear in the text (body_mention: true). "+
-			"Returns ranked suggestions with anchor_text and shared taxonomy context. Requires content.read.",
+			"Returns ranked suggestions with anchor_text and shared taxonomy context. Use this specifically for a draft not yet indexed (via tags/categories/body); for an already-published page, get_related_content's suggested_links field covers the same case alongside backlinks/related_pages/translations in one call. Requires content.read.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in suggestInternalLinksInput) (*mcp.CallToolResult, suggestInternalLinksOutput, error) {
 			if idx == nil {
 				return nil, suggestInternalLinksOutput{}, fmt.Errorf("index not initialized")
