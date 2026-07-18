@@ -38,8 +38,13 @@ A "structured" tool (Section 1.2) omits the top-level `pages`/`total`
 duplication and exposes the payload only via `data.pages`/`data.total`. Both
 shapes always carry `success`/`errors`/`warnings`/`meta` — that part of the
 contract does not vary. #433 removed this top-level duplication from 9
-anonymous tools; #495 tracks doing the same for the remaining tools still
-listed as "flat" in [Section 6](#6-tool-inventory).
+anonymous tools; #495 removed it from the remaining read tools that still
+had it. As of #495, no read or anonymous tool duplicates `data.X` at the top
+level — every row in [Section 6](#6-tool-inventory) that is still labeled
+"flat" (the write/mutation tools) uses a genuinely different, older
+convention instead: `data` is a placeholder empty object and the real
+payload lives only at the top level. That convention is tracked separately
+(#508) and is not the same problem #433/#495 fixed.
 
 ### 1.2 Structured envelope
 
@@ -118,12 +123,9 @@ classification:
 ## 3. Pagination
 
 Tools that return lists support optional `limit` and `offset` parameters.
-Default and maximum limits vary per tool (see tool descriptions). The
-structured envelope reflects applied pagination in `data.limit`,
-`data.offset`, and `data.total`.
-
-Flat tools that support pagination include `total` at the top level of the
-nested result object (e.g., `export.total`).
+Default and maximum limits vary per tool (see tool descriptions). Pagination
+is always reflected at `data.limit`, `data.offset`, and `data.total` — no
+tool has a top-level duplicate of these fields as of #495.
 
 ---
 
@@ -264,24 +266,24 @@ content, including drafts, for every tool in this table.
 
 | Tool                    | Envelope    | Notes                                        |
 |-------------------------|-------------|----------------------------------------------|
-| `get_page_markdown`| flat        | `page` + `page.state`                        |
-| `get_page_frontmatter`  | flat        | `frontmatter` + `frontmatter.state`          |
-| `get_related_content`   | flat        | `related_pages`; the deprecated `related` alias (#453) was removed once #433/#454 resolved the live-client-verification question — `related_pages` was always canonical; when `related_pages` is empty, `empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); `include: ["impact"]` opts into a pre-mutation impact summary — `impact.taxonomy_orphans` (tags/categories on this page with no other carrier), `impact.sitemap_present`, `impact.feed_present`, `impact.aliases` (this page's own front-matter redirect aliases) — omitted unless requested, advisory only, never blocks a mutation (#434) |
-| `build_agent_context`   | flat        | `context` + `context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337) |
-| `export_agent_context`  | flat        | `export.pages[*].state`, `export.total`, `export.include_body`; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325) |
-| `get_page_for_edit`     | flat        | `page.state`, `page.revision`, `page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` (#339); `page.backlinks` is a fifth, opt-in-only `include` value (identical data to a standalone `get_backlinks` call) — never part of the default bundle when `include` is omitted (#465) |
-| `list_content_types`    | flat        | `content_types[*]` (`name`, `source`, `archetype_path?`, `expected_fields?`, `page_count?`); `expected_fields` is the union of the archetype's declared keys and keys observed on existing pages of that type (#347); `special_files[*]` (`kind: "section_index"`, `section`, `languages[]`) surfaces Hugo `_index`/`_index.<lang>.md` files separately — they are structural, not creatable content types; `section: ""` means the site's root/home index, not a missing value (#457) |
-| `list_page_assets`      | flat        | `assets[*]` (`name`, `size_bytes`, `modified_at`); lists the sibling files in a leaf page bundle's directory; `not_a_bundle` for single-file pages (#348) |
-| `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo |
-| `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state`; a non-default-language page's route prefix (e.g. `en` in `/en/posts/foo/`) is stripped before section counting and only ever surfaced via `data.languages`, never as a `data.sections[*].name` (#459) |
-| `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324) |
-| `get_broken_links`      | structured  | `data.links`, `data.broken_links`            |
-| `get_backlinks`         | structured  | `data.backlinks`, `data.count`               |
-| `suggest_links`         | structured  | `data.suggested_links` is canonical; the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458) |
-| `diff_page`             | structured  | `data` (diff result) + `data.state`          |
-| `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state`; `include_preview=true` opts into `data.preview` — a combined pre-publish summary composing `diff_page` (`diff_status`/`diff_summary`), `get_broken_links` scoped to this page (`broken_links_count`), and `validate_frontmatter` (`frontmatter_valid`/`frontmatter_issues`) into one `risks` list, so an agent doesn't have to chain three separate calls before publishing — omitted unless requested, advisory only, never blocks a mutation (#435) |
-| `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`           |
-| `validate_site`         | structured  | `data.pages`, `data.pages_checked`; defaults to invalid-only (`data.pages` omits passing pages unless `include_valid=true` or `invalid_only=false` is passed explicitly) — `data.pages_checked`/`data.pages_passed`/`data.invalid` always describe the full scan regardless (#456) |
+| `get_page_markdown`| structured  | `data.page` + `data.page.state` (#495)                        |
+| `get_page_frontmatter`  | structured  | `data.frontmatter` + `data.frontmatter.state` (#495)          |
+| `get_related_content`   | structured  | `data.related_pages`; the deprecated `related` alias (#453) was removed once #433/#454 resolved the live-client-verification question — `related_pages` was always canonical; when `data.related_pages` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); `include: ["impact"]` opts into a pre-mutation impact summary — `data.impact.taxonomy_orphans` (tags/categories on this page with no other carrier), `data.impact.sitemap_present`, `data.impact.feed_present`, `data.impact.aliases` (this page's own front-matter redirect aliases) — omitted unless requested, advisory only, never blocks a mutation (#434); top-level duplication removed (#495) |
+| `build_agent_context`   | structured  | `data.context` + `data.context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337); top-level duplication removed (#495) |
+| `export_agent_context`  | structured  | `data.pages[*].state`, `data.total`, `data.include_body` — no nested `export` wrapper, `data` itself is the export result; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325); top-level duplication removed (#495) |
+| `get_page_for_edit`     | structured  | `data.page.state`, `data.page.revision`, `data.page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` (#339); `data.page.backlinks` is a fifth, opt-in-only `include` value (identical data to a standalone `get_backlinks` call) — never part of the default bundle when `include` is omitted (#465); top-level duplication removed (#495) |
+| `list_content_types`    | structured  | `data.content_types[*]` (`name`, `source`, `archetype_path?`, `expected_fields?`, `page_count?`); `expected_fields` is the union of the archetype's declared keys and keys observed on existing pages of that type (#347); `data.special_files[*]` (`kind: "section_index"`, `section`, `languages[]`) surfaces Hugo `_index`/`_index.<lang>.md` files separately — they are structural, not creatable content types; `section: ""` means the site's root/home index, not a missing value (#457); top-level duplication removed (#495) |
+| `list_page_assets`      | structured  | `data.assets[*]` (`name`, `size_bytes`, `modified_at`); lists the sibling files in a leaf page bundle's directory; `not_a_bundle` for single-file pages (#348); top-level duplication removed (#495) |
+| `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo; top-level duplication removed (#495) |
+| `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state`; a non-default-language page's route prefix (e.g. `en` in `/en/posts/foo/`) is stripped before section counting and only ever surfaced via `data.languages`, never as a `data.sections[*].name` (#459); top-level duplication removed (#495) |
+| `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); top-level duplication removed (#495) |
+| `get_broken_links`      | structured  | `data.links`, `data.broken_links`; top-level duplication removed (#495) |
+| `get_backlinks`         | structured  | `data.backlinks`, `data.count`; top-level duplication removed (#495) |
+| `suggest_links`         | structured  | `data.suggested_links` is canonical; the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); top-level duplication removed (#495) |
+| `diff_page`             | structured  | `data` (diff result) + `data.state`; top-level duplication removed (#495) |
+| `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state`; `include_preview=true` opts into `data.preview` — a combined pre-publish summary composing `diff_page` (`diff_status`/`diff_summary`), `get_broken_links` scoped to this page (`broken_links_count`), and `validate_frontmatter` (`frontmatter_valid`/`frontmatter_issues`) into one `risks` list, so an agent doesn't have to chain three separate calls before publishing — omitted unless requested, advisory only, never blocks a mutation (#435); top-level duplication removed (#495) |
+| `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`; top-level duplication removed (#495) |
+| `validate_site`         | structured  | `data.pages`, `data.pages_checked`; defaults to invalid-only (`data.pages` omits passing pages unless `include_valid=true` or `invalid_only=false` is passed explicitly) — `data.pages_checked`/`data.pages_passed`/`data.invalid` always describe the full scan regardless (#456); top-level duplication removed (#495) |
 
 ### `write` (requires a registered OAuth client, see [§6.12](#612-2-scope-model-readwrite-450))
 

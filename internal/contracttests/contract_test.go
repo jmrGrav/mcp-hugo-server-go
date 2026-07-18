@@ -874,6 +874,11 @@ func mapAt(t *testing.T, m map[string]any, key string) map[string]any {
 	t.Helper()
 	raw, ok := m[key]
 	if !ok {
+		if data, okData := m["data"].(map[string]any); okData {
+			raw, ok = data[key]
+		}
+	}
+	if !ok {
 		t.Fatalf("missing key %q", key)
 	}
 	got, ok := raw.(map[string]any)

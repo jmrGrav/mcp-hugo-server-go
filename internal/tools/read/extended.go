@@ -145,25 +145,6 @@ type contentEnvelopeData struct {
 
 type contentEnvelope struct {
 	toolcontract.ToolResponse[contentEnvelopeData]
-	Status                       string                     `json:"status,omitempty"`
-	Score                        int                        `json:"score,omitempty"`
-	ScoreBreakdown               *scoreBreakdownDTO         `json:"score_breakdown,omitempty"`
-	PublishedPages               int                        `json:"published_pages,omitempty"`
-	SourcePages                  int                        `json:"source_pages,omitempty"`
-	DraftPages                   int                        `json:"draft_pages,omitempty"`
-	Tags                         int                        `json:"tags,omitempty"`
-	Categories                   int                        `json:"categories,omitempty"`
-	MissingTitles                int                        `json:"missing_titles,omitempty"`
-	MissingDates                 int                        `json:"missing_dates,omitempty"`
-	ValidationErrors             int                        `json:"validation_errors,omitempty"`
-	TaxonomyInconsistencies      []string                   `json:"taxonomy_inconsistencies,omitempty"`
-	TaxonomyInconsistencyDetails []taxonomyInconsistencyDTO `json:"taxonomy_inconsistency_details,omitempty"`
-	OrphanPages                  []string                   `json:"orphan_pages,omitempty"`
-	Sections                     []sectionDTO               `json:"sections,omitempty"`
-	Languages                    []string                   `json:"languages,omitempty"`
-	Summary                      string                     `json:"summary,omitempty"`
-	RecentPages                  []pageDTO                  `json:"recent_pages,omitempty"`
-	Notes                        []string                   `json:"notes,omitempty"`
 }
 
 type searchContentData struct {
@@ -185,20 +166,6 @@ type searchContentData struct {
 
 type searchContentEnvelope struct {
 	toolcontract.ToolResponse[searchContentData]
-	Pages         []pageDTO `json:"pages,omitempty"`
-	Total         int       `json:"total"`
-	Limit         int       `json:"limit"`
-	Offset        int       `json:"offset"`
-	ReturnedCount int       `json:"returned_count"`
-	HasMore       bool      `json:"has_more"`
-	NextOffset    *int      `json:"next_offset,omitempty"`
-	Sort          string    `json:"sort,omitempty"`
-	Order         string    `json:"order,omitempty"`
-	Query         string    `json:"query,omitempty"`
-	Type          string    `json:"type,omitempty"`
-	Tag           string    `json:"tag,omitempty"`
-	Category      string    `json:"category,omitempty"`
-	Language      string    `json:"language,omitempty"`
 }
 
 type validateFrontMatterInput struct {
@@ -281,15 +248,6 @@ type validateOutputData struct {
 
 type validateOutput struct {
 	toolcontract.ToolResponse[validateOutputData]
-	PagesChecked int                   `json:"pages_checked"`
-	PagesPassed  int                   `json:"pages_passed"`
-	Invalid      int                   `json:"invalid"`
-	Returned     int                   `json:"returned_count,omitempty"`
-	Limit        int                   `json:"limit,omitempty"`
-	Offset       int                   `json:"offset,omitempty"`
-	HasMore      bool                  `json:"has_more"`
-	NextOffset   *int                  `json:"next_offset,omitempty"`
-	Pages        []frontMatterIssueDTO `json:"pages"`
 }
 
 type brokenLinkInput struct {
@@ -314,11 +272,6 @@ type brokenLinkData struct {
 
 type brokenLinkOutput struct {
 	toolcontract.ToolResponse[brokenLinkData]
-	TotalPages  int             `json:"total_pages"`
-	BrokenLinks int             `json:"broken_links"`
-	Limit       int             `json:"limit"`
-	Offset      int             `json:"offset"`
-	Links       []brokenLinkDTO `json:"links"`
 }
 
 type getBacklinksInput struct {
@@ -339,9 +292,6 @@ type getBacklinksData struct {
 
 type getBacklinksOutput struct {
 	toolcontract.ToolResponse[getBacklinksData]
-	Slug      string        `json:"slug"`
-	Count     int           `json:"count"`
-	Backlinks []backlinkDTO `json:"backlinks"`
 }
 
 type suggestInternalLinksInput struct {
@@ -376,11 +326,6 @@ type suggestInternalLinksData struct {
 
 type suggestInternalLinksOutput struct {
 	toolcontract.ToolResponse[suggestInternalLinksData]
-	Slug           string                     `json:"slug,omitempty"`
-	Total          int                        `json:"total"`
-	Translations   []translationPageDTO       `json:"translations"`
-	SuggestedLinks []linkSuggestionDTO        `json:"suggested_links"`
-	EmptyReason    *emptyResultExplanationDTO `json:"empty_reason,omitempty"`
 }
 
 // RegisterWithSourceIndex wires additional read-only tools that benefit from the
@@ -1173,94 +1118,27 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 }
 
 func newContentEnvelope(data contentEnvelopeData, now time.Time) contentEnvelope {
-	return contentEnvelope{
-		ToolResponse:                 successEnvelope(data, now),
-		Status:                       data.Status,
-		Score:                        data.Score,
-		ScoreBreakdown:               data.ScoreBreakdown,
-		PublishedPages:               data.PublishedPages,
-		SourcePages:                  data.SourcePages,
-		DraftPages:                   data.DraftPages,
-		Tags:                         data.Tags,
-		Categories:                   data.Categories,
-		MissingTitles:                data.MissingTitles,
-		MissingDates:                 data.MissingDates,
-		ValidationErrors:             data.ValidationErrors,
-		TaxonomyInconsistencies:      data.TaxonomyInconsistencies,
-		TaxonomyInconsistencyDetails: data.TaxonomyInconsistencyDetails,
-		OrphanPages:                  data.OrphanPages,
-		Sections:                     data.Sections,
-		Languages:                    data.Languages,
-		Summary:                      data.Summary,
-		RecentPages:                  data.RecentPages,
-		Notes:                        data.Notes,
-	}
+	return contentEnvelope{ToolResponse: successEnvelope(data, now)}
 }
 
 func newSearchContentEnvelope(data searchContentData, now time.Time) searchContentEnvelope {
-	return searchContentEnvelope{
-		ToolResponse:  successEnvelope(data, now),
-		Pages:         data.Pages,
-		Total:         data.Total,
-		Limit:         data.Limit,
-		Offset:        data.Offset,
-		ReturnedCount: data.ReturnedCount,
-		HasMore:       data.HasMore,
-		NextOffset:    data.NextOffset,
-		Sort:          data.Sort,
-		Order:         data.Order,
-		Query:         data.Query,
-		Type:          data.Type,
-		Tag:           data.Tag,
-		Category:      data.Category,
-		Language:      data.Language,
-	}
+	return searchContentEnvelope{ToolResponse: successEnvelope(data, now)}
 }
 
 func newValidateOutput(data validateOutputData, now time.Time) validateOutput {
-	return validateOutput{
-		ToolResponse: successEnvelope(data, now),
-		PagesChecked: data.PagesChecked,
-		PagesPassed:  data.PagesPassed,
-		Invalid:      data.Invalid,
-		Returned:     data.Returned,
-		Limit:        data.Limit,
-		Offset:       data.Offset,
-		HasMore:      data.HasMore,
-		NextOffset:   data.NextOffset,
-		Pages:        data.Pages,
-	}
+	return validateOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newBrokenLinkOutput(data brokenLinkData, now time.Time) brokenLinkOutput {
-	return brokenLinkOutput{
-		ToolResponse: successEnvelope(data, now),
-		TotalPages:   data.TotalPages,
-		BrokenLinks:  data.BrokenLinks,
-		Limit:        data.Limit,
-		Offset:       data.Offset,
-		Links:        data.Links,
-	}
+	return brokenLinkOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newGetBacklinksOutput(data getBacklinksData, now time.Time) getBacklinksOutput {
-	return getBacklinksOutput{
-		ToolResponse: successEnvelope(data, now),
-		Slug:         data.Slug,
-		Count:        data.Count,
-		Backlinks:    data.Backlinks,
-	}
+	return getBacklinksOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func newSuggestInternalLinksOutput(data suggestInternalLinksData, now time.Time) suggestInternalLinksOutput {
-	return suggestInternalLinksOutput{
-		ToolResponse:   successEnvelope(data, now),
-		Slug:           data.Slug,
-		Total:          data.Total,
-		Translations:   data.Translations,
-		SuggestedLinks: data.SuggestedLinks,
-		EmptyReason:    data.EmptyReason,
-	}
+	return suggestInternalLinksOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func effectiveSort(in searchContentInput) string {

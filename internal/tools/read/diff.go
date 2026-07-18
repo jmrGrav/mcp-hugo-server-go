@@ -41,17 +41,6 @@ type diffPageData struct {
 
 type diffPageOutput struct {
 	toolcontract.ToolResponse[diffPageData]
-	Slug          string `json:"slug"`
-	Path          string `json:"path"`
-	ResolvedLang  string `json:"resolved_lang"`
-	ResolvedPath  string `json:"resolved_source_path"`
-	Status        string `json:"status"`
-	DiffAvailable bool   `json:"diff_available"`
-	FallbackMode  string `json:"fallback_mode,omitempty"`
-	BaseCommit    string `json:"base_commit"`
-	HeadCommit    string `json:"head_commit"`
-	Diff          string `json:"diff"`
-	SourceContent string `json:"source_content,omitempty"`
 }
 
 func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
@@ -172,20 +161,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 }
 
 func newDiffPageOutput(data diffPageData, now time.Time) diffPageOutput {
-	return diffPageOutput{
-		ToolResponse:  successEnvelope(data, now),
-		Slug:          data.Slug,
-		Path:          data.Path,
-		ResolvedLang:  data.ResolvedLang,
-		ResolvedPath:  data.ResolvedPath,
-		Status:        data.Status,
-		DiffAvailable: data.DiffAvailable,
-		FallbackMode:  data.FallbackMode,
-		BaseCommit:    data.BaseCommit,
-		HeadCommit:    data.HeadCommit,
-		Diff:          data.Diff,
-		SourceContent: data.SourceContent,
-	}
+	return diffPageOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 func resolvedLogicalPath(contentRoot, absPath, relPath string) string {

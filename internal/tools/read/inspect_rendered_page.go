@@ -70,22 +70,10 @@ type inspectRenderedPageData struct {
 
 type inspectRenderedPageOutput struct {
 	toolcontract.ToolResponse[inspectRenderedPageData]
-	Slug    string              `json:"slug"`
-	URL     string              `json:"url"`
-	Status  string              `json:"status"`
-	Checks  []renderCheckResult `json:"checks"`
-	Preview *previewDTO         `json:"preview,omitempty"`
 }
 
 func newInspectRenderedPageOutput(data inspectRenderedPageData, now time.Time) inspectRenderedPageOutput {
-	return inspectRenderedPageOutput{
-		ToolResponse: successEnvelope(data, now),
-		Slug:         data.Slug,
-		URL:          data.URL,
-		Status:       data.Status,
-		Checks:       data.Checks,
-		Preview:      data.Preview,
-	}
+	return inspectRenderedPageOutput{ToolResponse: successEnvelope(data, now)}
 }
 
 // hugoRenderErrorRe matches known Hugo render/shortcode failure signatures
