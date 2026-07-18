@@ -32,9 +32,10 @@ func TestSourcePageAsPublic(t *testing.T) {
 		Date:       "2026-07-11",
 		Tags:       []string{"go"},
 		Categories: []string{"blog"},
+		Lang:       "en",
 	}
 	got := sourcePageAsPublic(src)
-	if got.Slug != "/posts/hello/" || got.Title != "Hello" || len(got.Tags) != 1 {
+	if got.Slug != "/posts/hello/" || got.Title != "Hello" || len(got.Tags) != 1 || got.Lang != "en" {
 		t.Fatalf("sourcePageAsPublic() = %#v", got)
 	}
 }

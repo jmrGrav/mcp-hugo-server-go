@@ -244,6 +244,53 @@ func TestGetPageFrontmatterExposesStableMetadataContract(t *testing.T) {
 	}
 }
 
+// TestGetPageFrontmatterLangMatchesResolvedLangBeforeBuild is a regression
+// test for #476: a page that exists only in the source index (e.g. right
+// after create_page, before the next Hugo build) must report a non-empty
+// `lang` that agrees with `resolved_lang`, rather than leaving `lang` empty
+// until the page is built and gains a site.Index entry.
+func TestGetPageFrontmatterLangMatchesResolvedLangBeforeBuild(t *testing.T) {
+	cfg := config.Default()
+	cfg.DefaultLanguage = "en"
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	full := filepath.Join(contentRoot, "posts", "unbuilt", "index.fr.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	body := "---\ntitle: Pas Encore Construit\n---\nContenu non construit.\n"
+	if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/posts/unbuilt"})
+	if res.IsError {
+		t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	fm, ok := m["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_frontmatter frontmatter type = %T", m["frontmatter"])
+	}
+	if got := fm["resolved_lang"]; got != "fr" {
+		t.Fatalf("get_page_frontmatter resolved_lang = %v, want fr", got)
+	}
+	if got := fm["lang"]; got != "fr" {
+		t.Fatalf("get_page_frontmatter lang = %v, want fr (must agree with resolved_lang before any build)", got)
+	}
+}
+
 func TestGetRelatedContent(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
