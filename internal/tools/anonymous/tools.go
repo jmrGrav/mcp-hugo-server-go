@@ -108,6 +108,8 @@ type pageDetailDTO struct {
 	ResolvedSourcePath string                  `json:"resolved_source_path"`
 	Revision           string                  `json:"revision,omitempty"`
 	HTML               string                  `json:"html"`
+	HTMLOrigin         string                  `json:"html_origin"`
+	RenderedHTMLAvail  bool                    `json:"rendered_html_available"`
 	State              site.LifecycleState     `json:"state"`
 }
 
@@ -286,6 +288,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"(e.g. immediately after create_page, before the next Hugo build); draft pages are always excluded. "+
 			"Pass content_only=true to return just the article body (prefers the theme's id=\"content\" wrapper when present, excluding title, TOC, post metadata, share buttons, and prev/next navigation; falls back to <article>/<main>/<body>-minus-chrome otherwise) from the rendered HTML of published pages "+
 			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; if `content_only=true` is also set, the `html` field is returned empty for source-only fallback results). "+
+			"`html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
 			"For the raw Markdown source, use get_page_markdown (requires content.read); for metadata only (no body), use get_page_frontmatter; if you're about to edit or delete this page, use get_page_for_edit instead — it bundles frontmatter, markdown, revision, and quality signals in one call. "+
 			"Does not require authentication.",
@@ -327,6 +330,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				dto.HTML = site.ExtractArticleHTML(dto.HTML)
 			} else if in.ContentOnly {
 				dto.HTML = ""
+				dto.HTMLOrigin = "none"
 			}
 			return nil, newGetPageOutput(getPageData{Page: dto}), nil
 		})
@@ -718,17 +722,19 @@ func toPageDetailDTO(p site.Page) pageDetailDTO {
 		cats = []string{}
 	}
 	return pageDetailDTO{
-		Slug:          p.Slug,
-		Title:         p.Title,
-		Summary:       p.Summary,
-		Tags:          tags,
-		Categories:    cats,
-		TagTerms:      taxonomy.Normalize(tags),
-		CategoryTerms: taxonomy.Normalize(cats),
-		Date:          p.Date,
-		URL:           p.URL,
-		Lang:          p.Lang,
-		HTML:          p.RawHTML,
+		Slug:              p.Slug,
+		Title:             p.Title,
+		Summary:           p.Summary,
+		Tags:              tags,
+		Categories:        cats,
+		TagTerms:          taxonomy.Normalize(tags),
+		CategoryTerms:     taxonomy.Normalize(cats),
+		Date:              p.Date,
+		URL:               p.URL,
+		Lang:              p.Lang,
+		HTML:              p.RawHTML,
+		HTMLOrigin:        "rendered_public",
+		RenderedHTMLAvail: true,
 	}
 }
 
@@ -771,6 +777,8 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage, contentRoot string) pag
 		ResolvedSourcePath: fileutil.LogicalContentPath(contentRoot, resolved.SourcePath),
 		Revision:           resolvedSourceRevision(resolved.SourcePath),
 		HTML:               src.Body,
+		HTMLOrigin:         "source_fallback",
+		RenderedHTMLAvail:  false,
 	}
 }
 
