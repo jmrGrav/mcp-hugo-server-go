@@ -137,7 +137,11 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("create_page returned error: %s", marshalAny(t, res.Content))
 	}
-	assertToolResponseEnvelope(t, "create_page", decodeContent(t, res))
+	m := decodeContent(t, res)
+	assertToolResponseEnvelope(t, "create_page", m)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/envelope-check" {
+		t.Fatalf("create_page data.slug = %q, want posts/envelope-check", got)
+	}
 
 	revision := func() string {
 		t.Helper()
@@ -157,7 +161,11 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("update_page returned error: %s", marshalAny(t, res.Content))
 	}
-	assertToolResponseEnvelope(t, "update_page", decodeContent(t, res))
+	m = decodeContent(t, res)
+	assertToolResponseEnvelope(t, "update_page", m)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/existing" {
+		t.Fatalf("update_page data.slug = %q, want posts/existing", got)
+	}
 
 	res = callTool(t, session, "delete_page", map[string]any{
 		"slug":              "posts/existing",
@@ -166,7 +174,11 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("delete_page returned error: %s", marshalAny(t, res.Content))
 	}
-	assertToolResponseEnvelope(t, "delete_page", decodeContent(t, res))
+	m = decodeContent(t, res)
+	assertToolResponseEnvelope(t, "delete_page", m)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/existing" {
+		t.Fatalf("delete_page data.slug = %q, want posts/existing", got)
+	}
 }
 
 func TestContractDiffPageErrorUsesStructuredEnvelope(t *testing.T) {
