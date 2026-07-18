@@ -28,6 +28,15 @@ func TestWriteToolSchemasPresent(t *testing.T) {
 		assertObjectSchema(t, tool, "inputSchema")
 		assertObjectSchema(t, tool, "outputSchema")
 	}
+
+	createTool := got["create_page"]
+	assertSchemaHasProperties(t, createTool, "outputSchema.data", "status", "slug", "resolved_source_path", "rate_limit_remaining")
+
+	updateTool := got["update_page"]
+	assertSchemaHasProperties(t, updateTool, "outputSchema.data", "status", "slug", "resolved_source_path", "rate_limit_remaining")
+
+	deleteTool := got["delete_page"]
+	assertSchemaHasProperties(t, deleteTool, "outputSchema.data", "status", "slug", "resolved_source_path", "rate_limit_remaining")
 }
 
 func TestWriteToolAnnotationsDescribeIdempotency(t *testing.T) {
@@ -87,4 +96,43 @@ func assertObjectSchema(t *testing.T, tool *mcp.Tool, field string) {
 	if m["type"] != "object" {
 		t.Fatalf("tool %q: %s.type = %v, want object", tool.Name, field, m["type"])
 	}
+}
+
+func assertSchemaHasProperties(t *testing.T, tool *mcp.Tool, field string, want ...string) {
+	t.Helper()
+	schema := schemaAt(t, tool, field)
+	props, ok := schema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: %s.properties type = %T, want map[string]any", tool.Name, field, schema["properties"])
+	}
+	for _, key := range want {
+		if _, ok := props[key]; !ok {
+			t.Fatalf("tool %q: %s.properties missing %q", tool.Name, field, key)
+		}
+	}
+}
+
+func schemaAt(t *testing.T, tool *mcp.Tool, field string) map[string]any {
+	t.Helper()
+	parts := strings.Split(field, ".")
+	var cur any = tool.OutputSchema
+	if parts[0] == "inputSchema" {
+		cur = tool.InputSchema
+	}
+	for _, part := range parts[1:] {
+		m, ok := cur.(map[string]any)
+		if !ok {
+			t.Fatalf("tool %q: %s segment %q type = %T, want map[string]any", tool.Name, field, part, cur)
+		}
+		props, ok := m["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool %q: %s missing properties map", tool.Name, field)
+		}
+		cur = props[part]
+	}
+	m, ok := cur.(map[string]any)
+	if !ok {
+		t.Fatalf("tool %q: %s type = %T, want map[string]any", tool.Name, field, cur)
+	}
+	return m
 }

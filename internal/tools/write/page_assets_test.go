@@ -42,8 +42,12 @@ func TestUploadPageAssetSuccess(t *testing.T) {
 		t.Fatalf("upload_page_asset returned error: %s", raw)
 	}
 	out := decodeWriteContent(t, res)
+	dataEnvelope := decodeWriteData(t, res)
 	if out["content_type"] != "image/png" {
 		t.Fatalf("upload_page_asset content_type = %v, want image/png", out["content_type"])
+	}
+	if dataEnvelope["content_type"] != "image/png" {
+		t.Fatalf("upload_page_asset data.content_type = %v, want image/png", dataEnvelope["content_type"])
 	}
 	if size, _ := out["size_bytes"].(float64); size != float64(len(minimalPNG)) {
 		t.Fatalf("upload_page_asset size_bytes = %v, want %d", out["size_bytes"], len(minimalPNG))
@@ -297,8 +301,12 @@ func TestDeletePageAssetSuccess(t *testing.T) {
 		t.Fatalf("delete_page_asset returned error: %s", raw)
 	}
 	out := decodeWriteContent(t, res)
+	dataEnvelope := decodeWriteData(t, res)
 	if out["sha256"] != sha256 {
 		t.Fatalf("delete_page_asset sha256 = %v, want %v", out["sha256"], sha256)
+	}
+	if dataEnvelope["sha256"] != sha256 {
+		t.Fatalf("delete_page_asset data.sha256 = %v, want %v", dataEnvelope["sha256"], sha256)
 	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); !os.IsNotExist(err) {
 		t.Fatal("delete_page_asset must remove the file")
