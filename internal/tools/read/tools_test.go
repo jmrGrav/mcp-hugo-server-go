@@ -648,6 +648,115 @@ func TestGetPageForEditInvalidIncludeRejected(t *testing.T) {
 	}
 }
 
+// TestGetPageForEditBacklinksIncludeMatchesStandaloneGetBacklinks is a
+// regression test for #465: include=["backlinks"] must return the exact
+// same data a standalone get_backlinks call would for the same slug, and
+// must NOT be present when omitted (backlinks is opt-in only, not part of
+// the default four-section bundle).
+func TestGetPageForEditBacklinksIncludeMatchesStandaloneGetBacklinks(t *testing.T) {
+	siteRoot := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(siteRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/target/index.html", `<!doctype html><html><head>
+<title>Target</title>
+<link rel="canonical" href="https://example.test/posts/target/">
+</head><body><article>Target body.</article></body></html>`)
+	write("posts/linker/index.html", `<!doctype html><html><head>
+<title>Linker</title>
+<link rel="canonical" href="https://example.test/posts/linker/">
+</head><body><article>See <a href="/posts/target/">target</a>.</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	standalone := callTool(t, session, "get_backlinks", map[string]any{"slug": "/posts/target/"})
+	if standalone.IsError {
+		t.Fatalf("get_backlinks returned error: %v", standalone.Content)
+	}
+	standaloneData := decodeContent(t, standalone)
+	standaloneBacklinks, ok := standaloneData["backlinks"].([]any)
+	if !ok || len(standaloneBacklinks) == 0 {
+		t.Fatalf("get_backlinks backlinks = %#v, want at least one entry from posts/linker", standaloneData["backlinks"])
+	}
+
+	withBacklinks := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/target/", "include": []string{"backlinks"}})
+	if withBacklinks.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", withBacklinks.Content)
+	}
+	withBacklinksData := decodeContent(t, withBacklinks)
+	page, ok := withBacklinksData["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit: 'page' is %T, want map", withBacklinksData["page"])
+	}
+	editBacklinks, ok := page["backlinks"].([]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit include=[backlinks]: 'backlinks' is %T, want array", page["backlinks"])
+	}
+	standaloneJSON, _ := json.Marshal(standaloneBacklinks)
+	editJSON, _ := json.Marshal(editBacklinks)
+	if string(standaloneJSON) != string(editJSON) {
+		t.Fatalf("get_page_for_edit backlinks = %s, want identical to get_backlinks = %s", editJSON, standaloneJSON)
+	}
+	for _, field := range []string{"frontmatter", "markdown", "state", "quality"} {
+		if _, present := page[field]; present {
+			t.Errorf("get_page_for_edit include=[backlinks]: unexpected field %q present (backlinks is additive to explicit include, not exclusive)", field)
+		}
+	}
+
+	// Default (omitted include) must NOT carry backlinks.
+	defaultRes := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/target/"})
+	if defaultRes.IsError {
+		t.Fatalf("get_page_for_edit default returned error: %v", defaultRes.Content)
+	}
+	defaultData := decodeContent(t, defaultRes)
+	defaultPage, ok := defaultData["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit default: 'page' is %T, want map", defaultData["page"])
+	}
+	if _, present := defaultPage["backlinks"]; present {
+		t.Fatalf("get_page_for_edit default: unexpected 'backlinks' present, want omitted since it's opt-in only")
+	}
+
+	// Requested-but-empty must stay present as `[]`, distinct from
+	// not-requested (absent) — this is the whole reason Backlinks is a
+	// pointer field rather than a plain slice.
+	noInboundRes := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/linker/", "include": []string{"backlinks"}})
+	if noInboundRes.IsError {
+		t.Fatalf("get_page_for_edit include=[backlinks] (no inbound links) returned error: %v", noInboundRes.Content)
+	}
+	noInboundPage, ok := decodeContent(t, noInboundRes)["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit include=[backlinks] (no inbound links): 'page' is not a map")
+	}
+	noInboundBacklinks, present := noInboundPage["backlinks"]
+	if !present {
+		t.Fatal("get_page_for_edit include=[backlinks] (no inbound links): 'backlinks' absent, want present as []")
+	}
+	arr, ok := noInboundBacklinks.([]any)
+	if !ok || len(arr) != 0 {
+		t.Fatalf("get_page_for_edit include=[backlinks] (no inbound links): backlinks = %#v, want empty array", noInboundBacklinks)
+	}
+}
+
 func TestGetPageForEditNotFound(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

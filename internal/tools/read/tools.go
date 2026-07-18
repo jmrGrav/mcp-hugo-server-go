@@ -239,6 +239,13 @@ type pageForEditDTO struct {
 	Markdown    string               `json:"markdown,omitempty"`
 	State       *site.LifecycleState `json:"state,omitempty"`
 	Quality     *pageQualityDTO      `json:"quality,omitempty"`
+	// Backlinks is opt-in only via include=["backlinks"] (#465) — unlike
+	// the other four sections, it's deliberately NOT part of the default
+	// bundle returned when `include` is omitted, so existing callers see no
+	// change in default behavior. Reuses the same collectBacklinks helper
+	// get_related_content calls, so the data is identical to a standalone
+	// get_backlinks call for the same slug.
+	Backlinks *[]backlinkDTO `json:"backlinks,omitempty"`
 }
 
 type getPageForEditData struct {
@@ -250,33 +257,44 @@ type getPageForEditOutput struct {
 	Page pageForEditDTO `json:"page"`
 }
 
-// getPageForEditSections is the allowed vocabulary for the `include` param.
-// An empty/omitted `include` defaults to all four sections (the full
-// pre-shaping bundle), matching this repo's established shaping convention
-// (#337) that omitting shaping params never reduces the default response.
-var getPageForEditSections = map[string]bool{
+// getPageForEditDefaultSections is what an empty/omitted `include` expands
+// to — the original four-section bundle, matching this repo's established
+// shaping convention (#337) that omitting shaping params never reduces the
+// default response. backlinks is deliberately excluded from this default
+// set (#465): it's a fifth, opt-in-only vocabulary entry, not part of the
+// "full bundle" omitting `include` already promises callers.
+var getPageForEditDefaultSections = map[string]bool{
 	"frontmatter": true,
 	"markdown":    true,
 	"state":       true,
 	"quality":     true,
 }
 
+// getPageForEditAllSections is the full allowed vocabulary for the
+// `include` param, used to validate explicitly-requested values.
+var getPageForEditAllSections = map[string]bool{
+	"frontmatter": true,
+	"markdown":    true,
+	"state":       true,
+	"quality":     true,
+	"backlinks":   true,
+}
+
 func resolveEditInclude(raw []string) (map[string]bool, error) {
 	if len(raw) == 0 {
 		// Return a copy, not the package-level map itself: callers treat
-		// the result as theirs to hold, and getPageForEditSections also
-		// backs the validation lookup below — an accidental mutation by a
-		// future caller must not corrupt the shared vocabulary.
-		out := make(map[string]bool, len(getPageForEditSections))
-		for k, v := range getPageForEditSections {
+		// the result as theirs to hold, and the shared vocabulary maps must
+		// not be mutated by an accidental caller edit.
+		out := make(map[string]bool, len(getPageForEditDefaultSections))
+		for k, v := range getPageForEditDefaultSections {
 			out[k] = v
 		}
 		return out, nil
 	}
 	out := make(map[string]bool, len(raw))
 	for _, r := range raw {
-		if !getPageForEditSections[r] {
-			return nil, fmt.Errorf("invalid_params: include must be a subset of frontmatter, markdown, state, quality (got %q)", r)
+		if !getPageForEditAllSections[r] {
+			return nil, fmt.Errorf("invalid_params: include must be a subset of frontmatter, markdown, state, quality, backlinks (got %q)", r)
 		}
 		out[r] = true
 	}
@@ -536,7 +554,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
-		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality; default all four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` may be empty for a source-only page read back before the next Hugo build (e.g. immediately after create_page); use `frontmatter.resolved_lang` instead, which is always populated. Lower-level tools remain available; this is an addition, not a replacement. Input: indexed slug only.",
+		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality; default all four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` may be empty for a source-only page read back before the next Hugo build (e.g. immediately after create_page); use `frontmatter.resolved_lang` instead, which is always populated. Pass `include: [\"backlinks\", ...]` to also get impact-analysis data (pages linking here) in the same call before a risky edit/delete — `page.backlinks` carries the same backlinks array as a standalone get_backlinks call for this slug (not its `count`/`slug` envelope fields), and it's opt-in only, never included in the default four-section bundle when `include` is omitted. Lower-level tools remain available; this is an addition, not a replacement. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageForEditInput) (*mcp.CallToolResult, getPageForEditOutput, error) {
 			if idx == nil {
 				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
@@ -585,6 +603,10 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 						page.Quality = &pageQualityDTO{Valid: len(issues) == 0, BrokenLinks: broken}
 					}
 				}
+			}
+			if include["backlinks"] {
+				backlinks := collectBacklinks(idx, p.Slug)
+				page.Backlinks = &backlinks
 			}
 			return nil, newGetPageForEditOutput(getPageForEditData{Page: page}, warnings, time.Now().UTC()), nil
 		})
