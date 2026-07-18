@@ -791,6 +791,72 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	}
 }
 
+func TestOAuthEnabledToolsListDescriptionsDoNotClaimBearerlessOrLegacyReadScopes(t *testing.T) {
+	srv := mustOAuthServer(t)
+	bearer := obtainBearerToken(t, srv)
+	body := doMCPToolsListBody(t, srv, bearer, nil)
+
+	var result struct {
+		Result struct {
+			Tools []struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	parsed := false
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		data := line
+		if strings.HasPrefix(line, "data: ") {
+			data = strings.TrimPrefix(line, "data: ")
+		}
+		if err := json.Unmarshal([]byte(data), &result); err == nil && len(result.Result.Tools) > 0 {
+			parsed = true
+			break
+		}
+	}
+	if !parsed {
+		t.Fatalf("tools/list response did not contain a parseable tools payload: %q", body)
+	}
+
+	forbiddenGlobal := []string{
+		"No authentication required",
+		"Does not require authentication",
+		"Requires content.read",
+		"requires content.read",
+		"if you have content.read scope",
+	}
+	for _, tool := range result.Result.Tools {
+		for _, bad := range forbiddenGlobal {
+			if strings.Contains(tool.Description, bad) {
+				t.Fatalf("tool %q description still contains forbidden auth wording %q: %q", tool.Name, bad, tool.Description)
+			}
+		}
+	}
+
+	mustContain := map[string]string{
+		"search_pages":      "read Bearer token",
+		"search_content":    "read Bearer token",
+		"get_page_markdown": "read Bearer token",
+	}
+	for name, needle := range mustContain {
+		found := false
+		for _, tool := range result.Result.Tools {
+			if tool.Name == name {
+				found = true
+				if !strings.Contains(tool.Description, needle) {
+					t.Fatalf("tool %q description = %q, want substring %q", name, tool.Description, needle)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("tools/list missing %q", name)
+		}
+	}
+}
+
 func TestReaderTokenGetPageRejectsSourceOnlyFallback(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")

@@ -241,7 +241,7 @@ breaking change since the parameters are optional and additive.
 
 ## 6. Tool Inventory
 
-### Anonymous (no auth required)
+### Anonymous semantics at the tool layer
 
 These 9 tools carry the full structured envelope (`success`/`data`/`errors`/
 `warnings`/`meta`) like every other tool in this document — their payload
@@ -263,11 +263,13 @@ each field.
 | `get_feed`            | structured  | `items`                   |
 | `get_site_information`| structured  | `site`                    |
 
-### `read` (ungated — no scope required, see [§6.12](#612-2-scope-model-readwrite-450))
+### `read` (reader tier; on OAuth-enabled deployments, obtain a Bearer token first; see [§6.12](#612-2-scope-model-readwrite-450))
 
 Per [§6.12](#612-2-scope-model-readwrite-450), these tools require
-`RequiredScope: ""` — they are fully public, identical in gating to the
-Anonymous tier above. The per-tool notes below that once described
+`RequiredScope: ""` — there is no additional per-tool split below `read`.
+On deployments with OAuth disabled they can be called directly; on
+OAuth-enabled deployments the transport still requires a Bearer token before
+`tools/list` or `tools/call`. The per-tool notes below that once described
 reader-safe restrictions (`quality` omitted, `page_count` omitted, empty
 `assets` list, `content_not_public`) described the pre-#450 `reader` profile
 and no longer apply to any live caller: any caller now sees full source

@@ -20,12 +20,12 @@ detail matters for runtime setup.
 
 | Scenario | Tool | Notes |
 |---|---|---|
-| Read a published page (summary + HTML) | `get_page` | No auth needed |
-| Read a page's source Markdown for editing | `get_page_markdown` | Needs a Bearer token (ungated, any scope works); includes `page.state` |
+| Read a published page (summary + HTML) | `get_page` | Reader tool; on OAuth-enabled deployments, obtain a read Bearer token first |
+| Read a page's source Markdown for editing | `get_page_markdown` | Reader tool; on OAuth-enabled deployments, use a read Bearer token; includes `page.state` |
 | Get a full context bundle before editing | `build_agent_context` | Frontmatter + Markdown + related + `context.state` |
 | Get a compact edit bundle in one call | `get_page_for_edit` | Frontmatter + Markdown + `state` + `quality` + `revision`; shape with `include`/`max_body_chars` |
 | Bulk-export content for analysis | `export_agent_context` | Tag/category filter + pagination + per-page `state` |
-| Simple keyword search (no auth) | `search_pages` | Title, summary, tags, URL |
+| Simple keyword search | `search_pages` | Published-page search; on OAuth-enabled deployments, obtain a read Bearer token first |
 | Filtered search (type, tag, language, sort) | `search_content` | Full filter set + pagination + per-result `state` |
 | List all published pages with pagination | `list_pages` | No auth, metadata only |
 | Get the full URL list (including taxonomy) | `get_sitemap` | No auth, all slugs |
@@ -111,8 +111,8 @@ get_broken_links()                    ← internal link audit
 
 ```
 Need to READ a page?
-├── No auth available       → get_page (HTML), search_pages, list_pages
-└── Auth available
+├── No Bearer token yet     → obtain a reader token first on OAuth-enabled deployments
+└── Bearer token available
     ├── Just metadata       → get_page_frontmatter
     ├── Markdown (editing)  → get_page_markdown
     └── Full bundle         → build_agent_context
@@ -143,7 +143,7 @@ Need to VALIDATE?
 
 | | `search_pages` | `search_content` |
 |---|---|---|
-| Auth | None required | None required (ungated per #450) |
+| Auth | Reader tool; on OAuth-enabled deployments, use a read Bearer token | Reader tool; on OAuth-enabled deployments, use a read Bearer token |
 | Filters | Query only | type, tag, category, language, sort, order |
 | Pagination | None | limit, offset, total in response |
 | Envelope | Flat `{pages}` | Structured `{success, data, warnings, errors}` |
@@ -153,7 +153,7 @@ Need to VALIDATE?
 
 | | `get_page` | `get_page_markdown` | `build_agent_context` |
 |---|---|---|---|
-| Auth | None | None required (ungated per #450) | None required (ungated per #450) |
+| Auth | Reader tool; on OAuth-enabled deployments, use a read Bearer token | Reader tool; on OAuth-enabled deployments, use a read Bearer token | Reader tool; on OAuth-enabled deployments, use a read Bearer token |
 | Returns | Published HTML + metadata | Source Markdown + frontmatter | Frontmatter + Markdown + related pages |
 | Source fallback | Yes (`allow_source_fallback`) | Published only | Published only |
 | Use when | Reading/display | About to edit | Full context before editing/summarizing |

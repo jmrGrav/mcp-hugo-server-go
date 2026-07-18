@@ -51,7 +51,7 @@ func RegisterListPageAssets(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 		return
 	}
 	addReadOnlyTool(s, "list_page_assets", "List page assets",
-		"List the sibling files (images, etc.) stored alongside a Hugo page bundle's index.md, e.g. cover.webp next to content/posts/article/index.md. Only leaf page bundles have an asset directory; single-file pages (slug.md, no per-page directory) fail with not_a_bundle. Use before upload_page_asset to check what already exists, or before delete_page_asset to get the current sha256/revision for its expected_sha256/expected_revision concurrency guard. The on-disk bundle directory is a source-derived signal unavailable to the reader profile even when the page itself is public; readers receive an empty assets list instead of an error. Requires content.read.",
+		"List the sibling files (images, etc.) stored alongside a Hugo page bundle's index.md, e.g. cover.webp next to content/posts/article/index.md. Only leaf page bundles have an asset directory; single-file pages (slug.md, no per-page directory) fail with not_a_bundle. Use before upload_page_asset to check what already exists, or before delete_page_asset to get the current sha256/revision for its expected_sha256/expected_revision concurrency guard. The on-disk bundle directory is a source-derived signal unavailable to the reader profile even when the page itself is public; readers receive an empty assets list instead of an error. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listPageAssetsInput) (*mcp.CallToolResult, listPageAssetsOutput, error) {
 			slug := strings.Trim(strings.TrimSpace(in.Slug), "/")
 			if slug == "" {

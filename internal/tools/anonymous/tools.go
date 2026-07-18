@@ -257,7 +257,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	}
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
-	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published content pages (articles and pages, not taxonomy list pages) with pagination. Returns slug, title, summary, tags, categories, date, URL. Does not require authentication. For the full URL inventory including taxonomy pages use get_sitemap.",
+	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published content pages (articles and pages, not taxonomy list pages) with pagination. Returns slug, title, summary, tags, categories, date, URL. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. For the full URL inventory including taxonomy pages use get_sitemap.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
 				return nil, listPagesOutput{}, fmt.Errorf("index not initialized")
@@ -290,8 +290,8 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; if `content_only=true` is also set, the `html` field is returned empty for source-only fallback results). "+
 			"`html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
-			"For the raw Markdown source, use get_page_markdown (requires content.read); for metadata only (no body), use get_page_frontmatter; if you're about to edit or delete this page, use get_page_for_edit instead — it bundles frontmatter, markdown, revision, and quality signals in one call. "+
-			"Does not require authentication.",
+			"For the raw Markdown source, use get_page_markdown (reader token on OAuth-enabled deployments); for metadata only (no body), use get_page_frontmatter; if you're about to edit or delete this page, use get_page_for_edit instead — it bundles frontmatter, markdown, revision, and quality signals in one call. "+
+			"Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
 			if idx == nil && srcIdx == nil {
 				return nil, getPageOutput{}, fmt.Errorf("index not initialized")
@@ -335,7 +335,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			return nil, newGetPageOutput(getPageData{Page: dto}), nil
 		})
 
-	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). No authentication required. Anonymous alternative to search_content — if you have content.read scope, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Matching is intentionally broad: any page containing at least one query term in any indexed field is returned, ranked by `score` (count of matching terms, highest first) — it is not an exact-match search. Each result's `score` field indicates match strength; a low score means a loose/partial match. Use `match: \"title_exact\"` for a strict case-insensitive full-title match instead (e.g. to verify whether a specific page still exists after deleting it), which returns zero results rather than loosely related hits when there's no exact title match. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
+	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Published-content alternative to search_content — if you already have a reader token, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Matching is intentionally broad: any page containing at least one query term in any indexed field is returned, ranked by `score` (count of matching terms, highest first) — it is not an exact-match search. Each result's `score` field indicates match strength; a low score means a loose/partial match. Use `match: \"title_exact\"` for a strict case-insensitive full-title match instead (e.g. to verify whether a specific page still exists after deleting it), which returns zero results rather than loosely related hits when there's no exact title match. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchPagesInput) (*mcp.CallToolResult, searchPagesOutput, error) {
 			if idx == nil {
 				return nil, searchPagesOutput{}, fmt.Errorf("index not initialized")
@@ -457,7 +457,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_sitemap", "Read sitemap",
-		"Return the full published URL inventory (slug, URL, date) including taxonomy list pages (/tags/…, /categories/…). No authentication required. "+
+		"Return the full published URL inventory (slug, URL, date) including taxonomy list pages (/tags/…, /categories/…). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. "+
 			"Pass exclude_taxonomies=true to restrict to content pages only. For content-page browsing with titles and summaries use list_pages.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getSitemapInput) (*mcp.CallToolResult, getSitemapOutput, error) {
 			if idx == nil {
