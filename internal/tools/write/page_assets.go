@@ -229,12 +229,17 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+		wrapErrWithLimiter := func(err error) error {
+			return toolcontract.WithRootFields(err, map[string]any{
+				"rate_limit_remaining": rateLimitRemaining(limiter),
+			})
+		}
 		if !limiter.Allow() {
-			return nil, uploadPageAssetOutput{}, rateLimitExceededErr("upload_page_asset", cfg.RateLimit.CreateUpdatePerMin, limiter)
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("upload_page_asset", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 		data, err := decodeAndValidateAssetContent(in.ContentBase64, ext, wantMIME)
 		if err != nil {
-			return nil, uploadPageAssetOutput{}, err
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(err)
 		}
 
 		const lockWait = 10 * time.Second
@@ -246,7 +251,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			}
 			if time.Now().After(deadline) {
 				slog.Error("upload_page_asset: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, uploadPageAssetOutput{}, fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -256,12 +261,12 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}()
 
 		if err := validateBundleSlug(idx, slug); err != nil {
-			return nil, uploadPageAssetOutput{}, err
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(err)
 		}
 		dir, err := pg.SafeJoin(slug)
 		if err != nil {
 			slog.Warn("upload_page_asset: path validation failed", "slug", slug, "error", err)
-			return nil, uploadPageAssetOutput{}, fmt.Errorf("invalid_params: path validation failed")
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
 		}
 		filePath := filepath.Join(dir, filename)
 
@@ -279,13 +284,13 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				Sha256   string `json:"sha256"`
 			}{Slug: slug, Filename: filename, Sha256: hash})
 			if hashErr != nil {
-				return nil, uploadPageAssetOutput{}, fmt.Errorf("internal_error: failed to hash idempotency request")
+				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
 			}
 			idemHash = h
 			var cached uploadPageAssetOutput
 			hit, replayErr := idem.replay("upload_page_asset", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
-				return nil, uploadPageAssetOutput{}, replayErr
+				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(replayErr)
 			}
 			if hit {
 				return nil, cached, nil
@@ -293,10 +298,10 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		if _, statErr := os.Stat(filePath); statErr == nil {
-			return nil, uploadPageAssetOutput{}, fmt.Errorf("already_exists: asset already exists at %q", filename)
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: asset already exists at %q", filename))
 		} else if !os.IsNotExist(statErr) {
 			slog.Error("upload_page_asset: stat failed", "slug", slug, "filename", filename, "error", statErr)
-			return nil, uploadPageAssetOutput{}, fmt.Errorf("read_error: failed to inspect destination path")
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to inspect destination path"))
 		}
 
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
@@ -317,14 +322,14 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("upload_page_asset: symlink-swap detected before write", "slug", slug, "error", err)
-			return nil, uploadPageAssetOutput{}, fmt.Errorf("security_error: symlink detected in write path")
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
 		}
 		if err := fileutil.AtomicCreateCheckedBytes(filePath, data, pg); err != nil {
 			if errors.Is(err, fs.ErrExist) {
-				return nil, uploadPageAssetOutput{}, fmt.Errorf("already_exists: asset already exists at %q", filename)
+				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: asset already exists at %q", filename))
 			}
 			slog.Error("upload_page_asset: write failed", "slug", slug, "filename", filename, "error", err)
-			return nil, uploadPageAssetOutput{}, fmt.Errorf("write_error: failed to write asset")
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write asset"))
 		}
 
 		out := newUploadPageAssetOutput(uploadPageAssetData{
@@ -527,6 +532,11 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		// applies equally here).
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
+		wrapErrWithLimiter := func(err error) error {
+			return toolcontract.WithRootFields(wrapErr(err), map[string]any{
+				"rate_limit_remaining": rateLimitRemaining(limiter),
+			})
+		}
 
 		if in.DryRun {
 			data, readErr := os.ReadFile(filePath)
@@ -554,11 +564,11 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		if in.ExpectedSha256 == "" && in.ExpectedRevision == "" {
-			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: expected_sha256 or expected_revision is required for non-dry-run delete_page_asset"))
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_sha256 or expected_revision is required for non-dry-run delete_page_asset"))
 		}
 
 		if !limiter.Allow() {
-			return nil, deletePageAssetOutput{}, wrapErr(rateLimitExceededErr("delete_page_asset", cfg.RateLimit.DestructivePerMin, limiter))
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page_asset", cfg.RateLimit.DestructivePerMin, limiter))
 		}
 
 		const lockWait = 10 * time.Second
@@ -570,7 +580,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			}
 			if time.Now().After(deadline) {
 				slog.Error("delete_page_asset: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -594,13 +604,13 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				Force            bool   `json:"force,omitempty"`
 			}{Slug: slug, Filename: filename, ExpectedSha256: in.ExpectedSha256, ExpectedRevision: in.ExpectedRevision, Force: in.Force})
 			if hashErr != nil {
-				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("internal_error: failed to hash idempotency request"))
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
 			}
 			idemHash = h
 			var cached deletePageAssetOutput
 			hit, replayErr := idem.replay("delete_page_asset", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
-				return nil, deletePageAssetOutput{}, wrapErr(replayErr)
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(replayErr)
 			}
 			if hit {
 				return nil, cached, nil
@@ -610,10 +620,10 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		data, readErr := os.ReadFile(filePath)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
-				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug))
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug))
 			}
 			slog.Error("delete_page_asset: read failed", "slug", slug, "filename", filename, "error", readErr)
-			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("read_error: failed to read asset"))
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read asset"))
 		}
 		actualHash := contentmodel.SourceRevisionBytes(data)
 		actualBundleRevision := ""
@@ -628,18 +638,18 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		if in.ExpectedSha256 != "" && in.ExpectedSha256 != actualHash {
-			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
 		}
 		if in.ExpectedRevision != "" && in.ExpectedRevision != actualBundleRevision {
-			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
 		}
 		if len(referencedIn) > 0 && !in.Force {
-			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("asset_referenced: %q is referenced in %v; pass force=true to delete anyway", filename, referencedIn))
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("asset_referenced: %q is referenced in %v; pass force=true to delete anyway", filename, referencedIn))
 		}
 
 		if err := os.Remove(filePath); err != nil {
 			slog.Error("delete_page_asset: remove failed", "slug", slug, "filename", filename, "error", err)
-			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("delete_error: failed to delete asset"))
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete asset"))
 		}
 
 		var warning string

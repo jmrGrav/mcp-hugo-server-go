@@ -165,6 +165,44 @@ func requestContextFrom(err error) *RequestContext {
 	return nil
 }
 
+// errWithRootFields carries additive root-level fields that should survive a
+// tool error path instead of falling back to zero values in the typed Out
+// struct. Used for machine-meaningful telemetry like rate_limit_remaining,
+// where omitting the field is preferable to silently emitting Go's zero value.
+type errWithRootFields struct {
+	err    error
+	fields map[string]any
+}
+
+func (e *errWithRootFields) Error() string { return e.err.Error() }
+func (e *errWithRootFields) Unwrap() error { return e.err }
+
+// WithRootFields annotates err with root-level fields that must be injected
+// into the structured failure payload. Existing fields are copied so callers
+// can safely pass ephemeral maps.
+func WithRootFields(err error, fields map[string]any) error {
+	if err == nil || len(fields) == 0 {
+		return err
+	}
+	cloned := make(map[string]any, len(fields))
+	for k, v := range fields {
+		cloned[k] = v
+	}
+	return &errWithRootFields{err: err, fields: cloned}
+}
+
+func rootFieldsFrom(err error) map[string]any {
+	var wrapped *errWithRootFields
+	if !errors.As(err, &wrapped) || len(wrapped.fields) == 0 {
+		return nil
+	}
+	cloned := make(map[string]any, len(wrapped.fields))
+	for k, v := range wrapped.fields {
+		cloned[k] = v
+	}
+	return cloned
+}
+
 func Failure(meta ResponseMeta, errs ...ToolError) ToolResponse[map[string]any] {
 	if errs == nil {
 		errs = []ToolError{}
@@ -305,24 +343,25 @@ func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerF
 		if err != nil {
 			meta := NewMeta(buildinfo.Version, time.Now())
 			reqCtx := requestContextFrom(err)
-			return ErrorResult(err, meta, reqCtx), errorOutput[Out](meta, ParseToolError(err), reqCtx), nil
+			rootFields := rootFieldsFrom(err)
+			return ErrorResult(err, meta, reqCtx, rootFields), errorOutput[Out](meta, ParseToolError(err), reqCtx, rootFields), nil
 		}
 		return res, out, nil
 	}
 }
 
-func ErrorResult(err error, meta ResponseMeta, reqCtx *RequestContext) *mcp.CallToolResult {
+func ErrorResult(err error, meta ResponseMeta, reqCtx *RequestContext, rootFields map[string]any) *mcp.CallToolResult {
 	toolErr := ParseToolError(err)
 	return &mcp.CallToolResult{
 		Content:           []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("%s: %s", toolErr.Code, toolErr.Message)}},
-		StructuredContent: failurePayload(meta, toolErr, reqCtx),
+		StructuredContent: failurePayload(meta, toolErr, reqCtx, rootFields),
 		IsError:           true,
 	}
 }
 
-func errorOutput[Out any](meta ResponseMeta, toolErr ToolError, reqCtx *RequestContext) Out {
+func errorOutput[Out any](meta ResponseMeta, toolErr ToolError, reqCtx *RequestContext, rootFields map[string]any) Out {
 	var out Out
-	raw, err := json.Marshal(failurePayload(meta, toolErr, reqCtx))
+	raw, err := json.Marshal(failurePayload(meta, toolErr, reqCtx, rootFields))
 	if err != nil {
 		return out
 	}
@@ -330,14 +369,14 @@ func errorOutput[Out any](meta ResponseMeta, toolErr ToolError, reqCtx *RequestC
 	return out
 }
 
-// failurePayload builds the failure envelope, injecting request_context at
-// the root of the JSON object (alongside data/errors/meta) when present, so
-// it reaches both a structured-envelope caller reading the raw payload and a
-// flat-envelope Out struct that declares its own root-level RequestContext
-// field with the matching JSON tag.
-func failurePayload(meta ResponseMeta, toolErr ToolError, reqCtx *RequestContext) any {
+// failurePayload builds the failure envelope, injecting additive root-level
+// fields (request_context, rate_limit_remaining, etc.) when present, so they
+// reach both raw structured callers and typed Out structs with matching JSON
+// tags. Root fields intentionally remain additive: they must not overwrite the
+// envelope's core success/data/errors/warnings/meta shape.
+func failurePayload(meta ResponseMeta, toolErr ToolError, reqCtx *RequestContext, rootFields map[string]any) any {
 	base := Failure(meta, toolErr)
-	if reqCtx == nil {
+	if reqCtx == nil && len(rootFields) == 0 {
 		return base
 	}
 	raw, err := json.Marshal(base)
@@ -348,7 +387,17 @@ func failurePayload(meta ResponseMeta, toolErr ToolError, reqCtx *RequestContext
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return base
 	}
-	m["request_context"] = reqCtx
+	if reqCtx != nil {
+		m["request_context"] = reqCtx
+	}
+	for key, value := range rootFields {
+		switch key {
+		case "success", "data", "errors", "warnings", "meta":
+			continue
+		default:
+			m[key] = value
+		}
+	}
 	return m
 }
 

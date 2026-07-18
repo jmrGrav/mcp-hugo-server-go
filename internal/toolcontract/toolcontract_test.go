@@ -267,7 +267,7 @@ func TestParseToolErrorRejectsNonMachinePrefix(t *testing.T) {
 
 func TestErrorResultPopulatesStructuredContent(t *testing.T) {
 	meta := NewMeta("1.4.0", time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC))
-	res := ErrorResult(fmt.Errorf("invalid_params: slug must not be empty"), meta, nil)
+	res := ErrorResult(fmt.Errorf("invalid_params: slug must not be empty"), meta, nil, nil)
 	if res == nil {
 		t.Fatal("ErrorResult() = nil")
 	}
@@ -303,7 +303,7 @@ func TestErrorResultPopulatesStructuredContent(t *testing.T) {
 
 func TestErrorResultUsesHumanReadableTextContent(t *testing.T) {
 	meta := NewMeta("1.4.0", time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC))
-	res := ErrorResult(fmt.Errorf("not_found: page not found"), meta, nil)
+	res := ErrorResult(fmt.Errorf("not_found: page not found"), meta, nil, nil)
 	if len(res.Content) != 1 {
 		t.Fatalf("len(Content) = %d, want 1", len(res.Content))
 	}

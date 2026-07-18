@@ -442,8 +442,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+		wrapErrWithLimiter := func(err error) error {
+			return toolcontract.WithRootFields(wrapErr(err), map[string]any{
+				"rate_limit_remaining": rateLimitRemaining(limiter),
+			})
+		}
 		if !limiter.Allow() {
-			return nil, createPageOutput{}, wrapErr(rateLimitExceededErr("create_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
+			return nil, createPageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("create_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 
 		dir, err := pg.SafeJoin(in.Slug)
@@ -465,10 +470,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		if in.DryRun {
 			if _, err := os.Stat(filePath); err == nil {
-				return nil, createPageOutput{}, wrapErr(fmt.Errorf("already_exists: page already exists at slug %q", in.Slug))
+				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: page already exists at slug %q", in.Slug))
 			} else if !os.IsNotExist(err) {
 				slog.Error("create_page: dry-run stat failed", "slug", in.Slug, "error", err)
-				return nil, createPageOutput{}, wrapErr(fmt.Errorf("read_error: failed to inspect destination path"))
+				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to inspect destination path"))
 			}
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, newCreatePageOutput(createPageData{
@@ -491,7 +496,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			if time.Now().After(deadline) {
 				slog.Error("create_page: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, createPageOutput{}, wrapErr(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -524,13 +529,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Categories: in.Categories,
 			})
 			if hashErr != nil {
-				return nil, createPageOutput{}, wrapErr(fmt.Errorf("internal_error: failed to hash idempotency request"))
+				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
 			}
 			idemHash = hash
 			var cached createPageOutput
 			hit, replayErr := idem.replay("create_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
-				return nil, createPageOutput{}, wrapErr(replayErr)
+				return nil, createPageOutput{}, wrapErrWithLimiter(replayErr)
 			}
 			if hit {
 				return nil, cached, nil
@@ -539,14 +544,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("create_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
-			return nil, createPageOutput{}, wrapErr(fmt.Errorf("security_error: symlink detected in write path"))
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
 		}
 		if err := fileutil.AtomicCreateChecked(filePath, content, pg); err != nil {
 			if errors.Is(err, fs.ErrExist) {
-				return nil, createPageOutput{}, wrapErr(fmt.Errorf("already_exists: page already exists at slug %q", in.Slug))
+				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: page already exists at slug %q", in.Slug))
 			}
 			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
-			return nil, createPageOutput{}, wrapErr(fmt.Errorf("write_error: failed to write page"))
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		created := hugosite.SourcePage{
@@ -650,8 +655,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+		wrapErrWithLimiter := func(err error) error {
+			return toolcontract.WithRootFields(wrapErr(err), map[string]any{
+				"rate_limit_remaining": rateLimitRemaining(limiter),
+			})
+		}
 		if !limiter.Allow() {
-			return nil, updatePageOutput{}, wrapErr(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
+			return nil, updatePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 
 		const lockWait = 10 * time.Second
@@ -663,7 +673,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			if time.Now().After(deadline) {
 				slog.Error("update_page: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, updatePageOutput{}, wrapErr(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -674,17 +684,17 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		existing, ok := idx.GetBySlug(in.Slug)
 		if !ok {
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("not_found: page not found"))
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found"))
 		}
 
 		if _, err := pg.SafeJoin(in.Slug); err != nil {
 			slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
 		}
 
 		resolvedSource, langErr := resolveExistingSource(cfg.ContentRoot, in.Slug, lang)
 		if langErr != nil {
-			return nil, updatePageOutput{}, wrapErr(langErr)
+			return nil, updatePageOutput{}, wrapErrWithLimiter(langErr)
 		}
 		filePath := resolvedSource.SourcePath
 
@@ -718,13 +728,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				ExpectedRevision: in.ExpectedRevision,
 			})
 			if hashErr != nil {
-				return nil, updatePageOutput{}, wrapErr(fmt.Errorf("internal_error: failed to hash idempotency request"))
+				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
 			}
 			idemHash = hash
 			var cached updatePageOutput
 			hit, replayErr := idem.replay("update_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
-				return nil, updatePageOutput{}, wrapErr(replayErr)
+				return nil, updatePageOutput{}, wrapErrWithLimiter(replayErr)
 			}
 			if hit {
 				return nil, cached, nil
@@ -734,15 +744,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		raw, err := os.ReadFile(filePath)
 		if err != nil {
 			slog.Error("update_page: read failed", "slug", in.Slug, "path", filePath, "error", err)
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("read_error: failed to read page"))
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read page"))
 		}
 		currentRevision := contentmodel.SourceRevisionBytes(raw)
 		if !in.DryRun {
 			if strings.TrimSpace(in.ExpectedRevision) == "" {
-				return nil, updatePageOutput{}, wrapErr(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run update_page"))
+				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run update_page"))
 			}
 			if in.ExpectedRevision != currentRevision {
-				return nil, updatePageOutput{}, wrapErr(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
+				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
 			}
 		}
 		opts := pageUpdateOpts{
@@ -754,12 +764,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		content, err := applyPageUpdates(string(raw), in.Title, in.Body, opts)
 		if err != nil {
 			slog.Error("update_page: frontmatter update failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("parse_error: failed to update frontmatter"))
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("parse_error: failed to update frontmatter"))
 		}
 		// Round-trip guard: reject content with malformed/duplicated frontmatter.
 		if err := validateFrontmatterRoundTrip(content); err != nil {
 			slog.Error("update_page: round-trip guard failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("validation_error: %w", err))
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("validation_error: %w", err))
 		}
 		if in.DryRun {
 			// Use the resolved filename (e.g. index.fr.md) so the diff header
@@ -779,11 +789,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("update_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("security_error: symlink detected in write path"))
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
 		}
 		if err := fileutil.AtomicWriteChecked(filePath, content, pg); err != nil {
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("write_error: failed to write page"))
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
 		}
 		updated := *existing
 		updated.FilePath = filePath
@@ -894,6 +904,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		// the not_found check above already established (#466).
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
+		wrapErrWithLimiter := func(err error) error {
+			return toolcontract.WithRootFields(wrapErr(err), map[string]any{
+				"rate_limit_remaining": rateLimitRemaining(limiter),
+			})
+		}
 
 		// dry_run: return page content + backlinks that would break, without touching disk (#267).
 		if in.DryRun {
@@ -921,11 +936,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}), nil
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
 		}
 
 		if !limiter.Allow() {
-			return nil, deletePageOutput{}, wrapErr(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
+			return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
 		}
 
 		const lockWait = 10 * time.Second
@@ -937,7 +952,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			if time.Now().After(deadline) {
 				slog.Error("delete_page: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, deletePageOutput{}, wrapErr(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -962,13 +977,13 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				ExpectedRevision: in.ExpectedRevision,
 			})
 			if hashErr != nil {
-				return nil, deletePageOutput{}, wrapErr(fmt.Errorf("internal_error: failed to hash idempotency request"))
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
 			}
 			idemHash = hash
 			var cached deletePageOutput
 			hit, replayErr := idem.replay("delete_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
-				return nil, deletePageOutput{}, wrapErr(replayErr)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(replayErr)
 			}
 			if hit {
 				return nil, cached, nil
@@ -980,16 +995,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			currentRevision, err = contentmodel.SourceRevision(resolvedSource.SourcePath)
 			if err != nil {
 				slog.Error("delete_page: read revision failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
-				return nil, deletePageOutput{}, wrapErr(fmt.Errorf("read_error: failed to read page revision"))
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read page revision"))
 			}
 		}
 		if in.ExpectedRevision != currentRevision {
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
 		}
 
 		if err := os.RemoveAll(dir); err != nil {
 			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("delete_error: failed to delete page"))
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
 		}
 		idx.Delete(in.Slug)
 		if siteIdx != nil {
