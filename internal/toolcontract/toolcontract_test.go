@@ -299,6 +299,9 @@ func TestErrorResultPopulatesStructuredContent(t *testing.T) {
 	if got := first["code"]; got != "missing_required_parameter" {
 		t.Fatalf("structured errors[0].code = %v, want missing_required_parameter", got)
 	}
+	if _, present := decoded["is_error"]; present {
+		t.Fatalf("structured payload must not contain transport-only is_error, got %v", decoded["is_error"])
+	}
 }
 
 func TestErrorResultUsesHumanReadableTextContent(t *testing.T) {
