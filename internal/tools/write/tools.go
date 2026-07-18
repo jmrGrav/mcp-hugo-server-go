@@ -73,6 +73,11 @@ type createPageOutput struct {
 	// ResolvedSourcePath above.
 	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
 	State          *site.LifecycleState         `json:"state,omitempty"`
+	// RateLimitRemaining is the caller's remaining create_page/update_page
+	// budget after this call (#466) — always set on success (0 is a
+	// meaningful value, not "unset"), so an agent can self-regulate pacing
+	// instead of inferring a safe rate from the tool description alone.
+	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
 type updatePageInput struct {
@@ -111,6 +116,8 @@ type updatePageOutput struct {
 	// (#455) — see the comment on createPageOutput.RequestContext.
 	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
 	State          *site.LifecycleState         `json:"state,omitempty"`
+	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466).
+	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
 type deletePageInput struct {
@@ -144,6 +151,8 @@ type deletePageOutput struct {
 	// — see the comment on createPageOutput.RequestContext.
 	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
 	State          *site.LifecycleState         `json:"state,omitempty"`
+	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466).
+	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
 // strPtr distinguishes "resolved to the empty string" (e.g. the default
@@ -223,6 +232,53 @@ func callerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string, perMi
 	return l
 }
 
+// rateLimitRemaining reports the caller's current available quota on l,
+// rounded down to a whole call (#466) — surfaced directly in tool responses
+// so an agent can self-regulate pacing instead of inferring a safe rate from
+// the tool description alone. l.Tokens() is a pure read (it doesn't mutate
+// limiter state), so this is safe to call after Allow() without disturbing
+// the budget it just consumed.
+func rateLimitRemaining(l *rate.Limiter) int {
+	if l == nil {
+		return 0
+	}
+	tokens := l.Tokens()
+	if tokens < 0 {
+		return 0
+	}
+	return int(tokens)
+}
+
+// rateLimitRetryAfterSeconds reports how long the caller must wait before
+// its next call to l would succeed, or 0 if a call would succeed now (#466).
+func rateLimitRetryAfterSeconds(l *rate.Limiter) float64 {
+	if l == nil {
+		return 0
+	}
+	tokens := l.Tokens()
+	if tokens >= 1 {
+		return 0
+	}
+	limit := float64(l.Limit())
+	if limit <= 0 {
+		return 0
+	}
+	wait := (1 - tokens) / limit
+	if wait < 0 {
+		return 0
+	}
+	return wait
+}
+
+// rateLimitExceededErr builds the rate_limit_exceeded error for tool,
+// embedding retry_after_seconds in the message (#466) so
+// toolcontract.ParseToolError can surface it in ErrorResolution without a
+// separate error-wrapping mechanism — the same message-embedding convention
+// already used for allowed-values parsing.
+func rateLimitExceededErr(tool string, perMinute int, l *rate.Limiter) error {
+	return fmt.Errorf("rate_limit_exceeded: %s is limited to %d per minute (retry_after_seconds=%.1f)", tool, perMinute, rateLimitRetryAfterSeconds(l))
+}
+
 func validateLangParam(lang string) (string, error) {
 	lang = strings.TrimSpace(lang)
 	if lang == "" {
@@ -259,7 +315,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -296,8 +352,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, createPageOutput{}, wrapErr(err)
 		}
 		callerKey := mutationCallerKey(ctx)
-		if !callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin).Allow() {
-			return nil, createPageOutput{}, wrapErr(fmt.Errorf("rate_limit_exceeded: create_page is limited to %d per minute", cfg.RateLimit.CreateUpdatePerMin))
+		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+		if !limiter.Allow() {
+			return nil, createPageOutput{}, wrapErr(rateLimitExceededErr("create_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 
 		dir, err := pg.SafeJoin(in.Slug)
@@ -333,6 +390,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				ResolvedSourcePath: strPtr(logicalPath),
 				DryRun:             true,
 				Content:            content,
+				RateLimitRemaining: rateLimitRemaining(limiter),
 			}, nil
 		}
 
@@ -440,6 +498,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			NewRevision:        contentmodel.SourceRevisionBytes([]byte(content)),
 			Warning:            appendLastBuildWarning(warning),
 			State:              &state,
+			RateLimitRemaining: rateLimitRemaining(limiter),
 		}
 		if idemHash != "" {
 			if err := idem.remember("create_page", in.IdempotencyKey, idemHash, out); err != nil {
@@ -459,7 +518,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			"Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); " +
 			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
-			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state.",
+			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. " +
+			"`rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[updatePageInput](),
 		OutputSchema: tools.MustSchema[updatePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -502,8 +562,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 		callerKey := mutationCallerKey(ctx)
-		if !callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin).Allow() {
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("rate_limit_exceeded: update_page is limited to %d per minute", cfg.RateLimit.CreateUpdatePerMin))
+		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+		if !limiter.Allow() {
+			return nil, updatePageOutput{}, wrapErr(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 
 		const lockWait = 10 * time.Second
@@ -627,6 +688,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				ResolvedSourcePath: strPtr(logicalPath),
 				DryRun:             true,
 				Diff:               diff,
+				RateLimitRemaining: rateLimitRemaining(limiter),
 			}, nil
 		}
 		if err := pg.RevalidateForWrite(filePath); err != nil {
@@ -696,6 +758,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			NewRevision:        contentmodel.SourceRevisionBytes([]byte(content)),
 			Warning:            appendLastBuildWarning(warning),
 			State:              &state,
+			RateLimitRemaining: rateLimitRemaining(limiter),
 		}
 		if idemHash != "" {
 			if err := idem.remember("update_page", in.IdempotencyKey, idemHash, out); err != nil {
@@ -708,7 +771,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -739,6 +802,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		resolvedSource := inspectDeleteSource(dir)
 
+		// Fetching the limiter is not itself a budget-consuming operation —
+		// only Allow() below is — so hoisting it above the dry-run block
+		// lets dry-run report an accurate rate_limit_remaining without
+		// violating the "don't burn budget on dry-run/not_found" invariant
+		// the not_found check above already established (#466).
+		callerKey := mutationCallerKey(ctx)
+		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
+
 		// dry_run: return page content + backlinks that would break, without touching disk (#267).
 		if in.DryRun {
 			content := ""
@@ -762,15 +833,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				DryRun:             true,
 				Content:            content,
 				Backlinks:          &bls,
+				RateLimitRemaining: rateLimitRemaining(limiter),
 			}, nil
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
 			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
 		}
 
-		callerKey := mutationCallerKey(ctx)
-		if !callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin).Allow() {
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("rate_limit_exceeded: delete_page is limited to %d per minute", cfg.RateLimit.DestructivePerMin))
+		if !limiter.Allow() {
+			return nil, deletePageOutput{}, wrapErr(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
 		}
 
 		const lockWait = 10 * time.Second
@@ -903,6 +974,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
 			Warning:            deleteWarning,
 			State:              &state,
+			RateLimitRemaining: rateLimitRemaining(limiter),
 		}
 		if idemHash != "" {
 			if err := idem.remember("delete_page", in.IdempotencyKey, idemHash, out); err != nil {

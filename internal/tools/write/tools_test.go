@@ -535,6 +535,97 @@ func TestDeleteAndCreateRateLimitsAreIndependent(t *testing.T) {
 	}
 }
 
+// TestCreatePageExposesRateLimitRemaining is a regression test for #466:
+// rate_limit_remaining must decrease with each successful mutation sharing
+// the same per-caller budget, instead of forcing an agent to infer safe
+// pacing from the tool description alone.
+func TestCreatePageExposesRateLimitRemaining(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.CreateUpdatePerMin = 3
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	var remaining []float64
+	for i := 0; i < 3; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("rl-remaining-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+		out := decodeWriteContent(t, res)
+		rem, ok := out["rate_limit_remaining"].(float64)
+		if !ok {
+			t.Fatalf("create_page %d: rate_limit_remaining = %#v, want present numeric field", i, out["rate_limit_remaining"])
+		}
+		remaining = append(remaining, rem)
+	}
+	for i := 1; i < len(remaining); i++ {
+		if remaining[i] >= remaining[i-1] {
+			t.Fatalf("rate_limit_remaining did not decrease across calls: %v", remaining)
+		}
+	}
+}
+
+// TestDeletePageRateLimitExceededIncludesRetryAfterSeconds is a regression
+// test for #466: the throttled error's structured resolution must surface a
+// concrete retry_after_seconds instead of only "retry_later" with no numeric
+// hint.
+func TestDeletePageRateLimitExceededIncludesRetryAfterSeconds(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	for i := 0; i < 2; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("rl-retry-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	if res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "rl-retry-0",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "rl-retry-0", "index.md")),
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page expected success, got error: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "rl-retry-1",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "rl-retry-1", "index.md")),
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete_page, got success")
+	}
+	m := decodeWriteErrorEnvelope(t, res)
+	errs, ok := m["errors"].([]any)
+	if !ok || len(errs) == 0 {
+		t.Fatalf("errors = %#v, want at least one error", m["errors"])
+	}
+	first, ok := errs[0].(map[string]any)
+	if !ok {
+		t.Fatalf("errors[0] type = %T", errs[0])
+	}
+	resolution, ok := first["resolution"].(map[string]any)
+	if !ok {
+		t.Fatalf("errors[0].resolution = %#v, want present", first["resolution"])
+	}
+	retryAfter, ok := resolution["retry_after_seconds"].(float64)
+	if !ok || retryAfter <= 0 {
+		t.Fatalf("resolution.retry_after_seconds = %#v, want a positive number", resolution["retry_after_seconds"])
+	}
+}
+
 func TestDeletePageExposesLifecycleState(t *testing.T) {
 	contentRoot := t.TempDir()
 	siteRoot := filepath.Join(t.TempDir(), "public")
@@ -1819,6 +1910,16 @@ func TestDeletePageDryRun(t *testing.T) {
 	}
 	if _, ok := m["backlinks"]; !ok {
 		t.Error("dry_run response must include backlinks key")
+	}
+
+	// #466 regression: delete_page's dry_run must report the caller's actual
+	// remaining rate-limit budget, not a false 0 — dry_run doesn't consume
+	// the budget, so on a fresh caller this must equal the configured burst
+	// (5, config.Default()'s DestructivePerMin), not the zero value a
+	// forgotten field assignment would produce.
+	remaining, ok := m["rate_limit_remaining"].(float64)
+	if !ok || remaining != float64(config.Default().RateLimit.DestructivePerMin) {
+		t.Errorf("dry_run rate_limit_remaining = %#v, want %d (fresh, unconsumed budget)", m["rate_limit_remaining"], config.Default().RateLimit.DestructivePerMin)
 	}
 
 	// File must not have been removed.

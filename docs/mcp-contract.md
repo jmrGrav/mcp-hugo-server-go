@@ -258,10 +258,10 @@ no exceptions — `write` implies full `read` access plus everything below.
 
 | Tool          | Envelope | Top-level key(s)                            |
 |---------------|----------|---------------------------------------------|
-| `create_page` | flat     | `status`, `slug`, `path`, `dry_run?`, `content?`, `warning?`; `resolved_lang`/`resolved_source_path` are omitted (not empty-stringed) unless resolution actually succeeded; on failure, `request_context` (`slug`, `requested_lang?`) always echoes the caller's normalized input (#455); on success (non-dry-run), `new_revision` is the resulting page's revision, usable directly as `expected_revision` on a following `update_page`/`delete_page` without an intermediate read (#464) |
-| `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455); same `new_revision` success-path contract as `create_page` (#464) |
-| `delete_page` | flat     | `status`, `slug`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455) |
-| `upload_page_asset` | flat | `status`, `slug`, `filename`, `path`, `content_type`, `size_bytes`, `sha256`, `duplicate_of?` (advisory only), `dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`) |
+| `create_page` | flat     | `status`, `slug`, `path`, `dry_run?`, `content?`, `warning?`; `resolved_lang`/`resolved_source_path` are omitted (not empty-stringed) unless resolution actually succeeded; on failure, `request_context` (`slug`, `requested_lang?`) always echoes the caller's normalized input (#455); on success (non-dry-run), `new_revision` is the resulting page's revision, usable directly as `expected_revision` on a following `update_page`/`delete_page` without an intermediate read (#464); `rate_limit_remaining` is always present on success, reporting the caller's remaining budget on the shared create/update/upload quota (#466) |
+| `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455); same `new_revision` success-path contract as `create_page` (#464); same `rate_limit_remaining` contract as `create_page` (#466) |
+| `delete_page` | flat     | `status`, `slug`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455); `rate_limit_remaining` reports the caller's remaining budget on `delete_page`'s own, separate quota (#466) |
+| `upload_page_asset` | flat | `status`, `slug`, `filename`, `path`, `content_type`, `size_bytes`, `sha256`, `duplicate_of?` (advisory only), `dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`); `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466) |
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready` |
 | `preview_build`           | flat     | (build result)                       |
 | `run_post_build_hooks`    | flat     | (hook result)                        |
@@ -436,7 +436,7 @@ Every tool-facing error code, whether it carries a `resolution` and why:
 | `ambiguous_language` | yes | `retry_with_parameter` on `lang`, with `allowed_values` |
 | `missing_required_parameter` | yes | `retry_with_parameter` on the missing field; `expected_revision` specifically recommends `get_page_for_edit` (its own message shape — "expected_revision is required for non-dry-run update_page/delete_page" — is matched separately from the generic "X must not be empty" pattern) |
 | `invalid_params` (other) | yes | `retry_with_parameter`, with `field`/`allowed_values` inferred from the message where possible |
-| `build_in_progress`, `rate_limit_exceeded` | yes | `retry_later` |
+| `build_in_progress`, `rate_limit_exceeded` | yes | `retry_later`; `rate_limit_exceeded` additionally carries `resolution.retry_after_seconds` (a concrete wait time parsed from the message), `build_in_progress` does not (#466) |
 | `revision_conflict` | yes | `reread_then_retry` via `get_page_for_edit` |
 | `content_not_found`, `not_found` | yes | `search_then_retry` via `search_pages` — both mean the named slug doesn't resolve |
 | `already_exists` | conditional | `use_different_tool` → `update_page`, but only for `create_page`'s own "page already exists" message; `upload_page_asset`'s "asset already exists" message deliberately gets no hint, since there's no update path for an existing asset by design |
