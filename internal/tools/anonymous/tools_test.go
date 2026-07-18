@@ -86,7 +86,21 @@ func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[st
 	return res
 }
 
+// decodeContent returns the tool's data.X payload, not the full envelope
+// (success/data/errors/warnings/meta) — all anonymous tools now carry their
+// payload solely under data (#433), so this is the one place callers need.
+// Use decodeEnvelope for tests asserting on success/errors/meta themselves.
 func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
+	t.Helper()
+	envelope := decodeEnvelope(t, res)
+	data, ok := envelope["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("structured content missing data object: %#v", envelope)
+	}
+	return data
+}
+
+func decodeEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	t.Helper()
 	raw, err := json.Marshal(res.StructuredContent)
 	if err != nil {
@@ -102,7 +116,7 @@ func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 func decodeErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	t.Helper()
 	if res.StructuredContent != nil {
-		return decodeContent(t, res)
+		return decodeEnvelope(t, res)
 	}
 	text := res.Content[0].(*mcp.TextContent).Text
 	var m map[string]any
@@ -1323,16 +1337,21 @@ func TestReadOnlyAnnotations(t *testing.T) {
 		got[tools.Tools[i].Name] = tools.Tools[i]
 	}
 	names := []string{"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information"}
-	wantProps := map[string][]string{
-		"list_pages":           {"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"},
-		"get_page":             {"success", "data", "errors", "warnings", "meta", "page"},
-		"search_pages":         {"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"},
-		"get_recent_posts":     {"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"},
-		"list_tags":            {"success", "data", "errors", "warnings", "meta", "tags"},
-		"list_categories":      {"success", "data", "errors", "warnings", "meta", "categories"},
-		"get_sitemap":          {"success", "data", "errors", "warnings", "meta", "entries", "total", "limit", "offset", "returned_count", "has_more"},
-		"get_feed":             {"success", "data", "errors", "warnings", "meta", "items", "total", "limit", "offset", "returned_count", "has_more"},
-		"get_site_information": {"success", "data", "errors", "warnings", "meta", "site"},
+	// wantProps intentionally lists only the envelope fields plus data itself
+	// (#433): these tools' payload lives solely under data.X now, not
+	// duplicated at the top level, so outputSchema's top-level properties are
+	// the same envelope shape across all of them.
+	envelopeProps := []string{"success", "data", "errors", "warnings", "meta"}
+	wantDataProps := map[string][]string{
+		"list_pages":           {"pages", "total", "limit", "offset", "returned_count", "has_more"},
+		"get_page":             {"page"},
+		"search_pages":         {"pages", "total", "limit", "offset", "returned_count", "has_more"},
+		"get_recent_posts":     {"pages", "total", "limit", "offset", "returned_count", "has_more"},
+		"list_tags":            {"tags"},
+		"list_categories":      {"categories"},
+		"get_sitemap":          {"entries", "total", "limit", "offset", "returned_count", "has_more"},
+		"get_feed":             {"items", "total", "limit", "offset", "returned_count", "has_more"},
+		"get_site_information": {"site"},
 	}
 	for _, name := range names {
 		tool, ok := got[name]
@@ -1341,7 +1360,8 @@ func TestReadOnlyAnnotations(t *testing.T) {
 		}
 		assertObjectSchema(t, tool, "inputSchema")
 		assertObjectSchema(t, tool, "outputSchema")
-		assertSchemaHasProperties(t, tool, "outputSchema", wantProps[name]...)
+		assertSchemaHasProperties(t, tool, "outputSchema", envelopeProps...)
+		assertSchemaHasProperties(t, tool, "outputSchema.data", wantDataProps[name]...)
 		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "server_version")
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
 			t.Fatalf("tool %q: ReadOnlyHint not set", name)

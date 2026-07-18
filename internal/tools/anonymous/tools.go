@@ -203,79 +203,46 @@ type getSiteInformationData struct {
 	Site siteInfoDTO `json:"site"`
 }
 
+// Output types below intentionally carry nothing beyond the embedded
+// toolcontract.ToolResponse[T] — data.X (inside the envelope) is the sole,
+// canonical location for the payload. They previously also duplicated every
+// field at the top level (data.pages AND pages, etc.), roughly doubling
+// response size for these tools with no functional benefit; removed as the
+// approved resolution to #433.
 type listPagesOutput struct {
 	toolcontract.ToolResponse[listPagesData]
-	Pages         []pageDTO `json:"pages"`
-	Total         int       `json:"total"`
-	Limit         int       `json:"limit"`
-	Offset        int       `json:"offset"`
-	ReturnedCount int       `json:"returned_count"`
-	HasMore       bool      `json:"has_more"`
-	NextOffset    *int      `json:"next_offset,omitempty"`
 }
 
 type getPageOutput struct {
 	toolcontract.ToolResponse[getPageData]
-	Page pageDetailDTO `json:"page"`
 }
 
 type searchPagesOutput struct {
 	toolcontract.ToolResponse[searchPagesData]
-	Pages         []any `json:"pages"`
-	Total         int   `json:"total"`
-	Limit         int   `json:"limit"`
-	Offset        int   `json:"offset"`
-	ReturnedCount int   `json:"returned_count"`
-	HasMore       bool  `json:"has_more"`
-	NextOffset    *int  `json:"next_offset,omitempty"`
 }
 
 type getRecentPostsOutput struct {
 	toolcontract.ToolResponse[getRecentPostsData]
-	Pages         []pageDTO `json:"pages"`
-	Total         int       `json:"total"`
-	Limit         int       `json:"limit"`
-	Offset        int       `json:"offset"`
-	ReturnedCount int       `json:"returned_count"`
-	HasMore       bool      `json:"has_more"`
-	NextOffset    *int      `json:"next_offset,omitempty"`
 }
 
 type listTagsOutput struct {
 	toolcontract.ToolResponse[listTagsData]
-	Tags []string `json:"tags"`
 }
 
 type listCategoriesOutput struct {
 	toolcontract.ToolResponse[listCategoriesData]
-	Categories []string `json:"categories"`
 }
 
 type getSitemapOutput struct {
 	toolcontract.ToolResponse[getSitemapData]
-	Entries       []sitemapEntryDTO `json:"entries"`
-	Total         int               `json:"total"`
-	Limit         int               `json:"limit"`
-	Offset        int               `json:"offset"`
-	ReturnedCount int               `json:"returned_count"`
-	HasMore       bool              `json:"has_more"`
-	NextOffset    *int              `json:"next_offset,omitempty"`
 }
 
 type getFeedOutput struct {
 	toolcontract.ToolResponse[getFeedData]
-	Items         []feedItemDTO `json:"items"`
-	Total         int           `json:"total"`
-	Limit         int           `json:"limit"`
-	Offset        int           `json:"offset"`
-	ReturnedCount int           `json:"returned_count"`
-	HasMore       bool          `json:"has_more"`
-	NextOffset    *int          `json:"next_offset,omitempty"`
 }
 
 type getSiteInformationOutput struct {
 	toolcontract.ToolResponse[getSiteInformationData]
-	Site siteInfoDTO `json:"site"`
 }
 
 func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
@@ -597,39 +564,39 @@ func success[T any](data T) toolcontract.ToolResponse[T] {
 }
 
 func newListPagesOutput(data listPagesData) listPagesOutput {
-	return listPagesOutput{ToolResponse: success(data), Pages: data.Pages, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+	return listPagesOutput{ToolResponse: success(data)}
 }
 
 func newGetPageOutput(data getPageData) getPageOutput {
-	return getPageOutput{ToolResponse: success(data), Page: data.Page}
+	return getPageOutput{ToolResponse: success(data)}
 }
 
 func newSearchPagesOutput(data searchPagesData) searchPagesOutput {
-	return searchPagesOutput{ToolResponse: success(data), Pages: data.Pages, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+	return searchPagesOutput{ToolResponse: success(data)}
 }
 
 func newGetRecentPostsOutput(data getRecentPostsData) getRecentPostsOutput {
-	return getRecentPostsOutput{ToolResponse: success(data), Pages: data.Pages, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+	return getRecentPostsOutput{ToolResponse: success(data)}
 }
 
 func newListTagsOutput(data listTagsData) listTagsOutput {
-	return listTagsOutput{ToolResponse: success(data), Tags: data.Tags}
+	return listTagsOutput{ToolResponse: success(data)}
 }
 
 func newListCategoriesOutput(data listCategoriesData) listCategoriesOutput {
-	return listCategoriesOutput{ToolResponse: success(data), Categories: data.Categories}
+	return listCategoriesOutput{ToolResponse: success(data)}
 }
 
 func newGetSitemapOutput(data getSitemapData) getSitemapOutput {
-	return getSitemapOutput{ToolResponse: success(data), Entries: data.Entries, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+	return getSitemapOutput{ToolResponse: success(data)}
 }
 
 func newGetFeedOutput(data getFeedData) getFeedOutput {
-	return getFeedOutput{ToolResponse: success(data), Items: data.Items, Total: data.Total, Limit: data.Limit, Offset: data.Offset, ReturnedCount: data.ReturnedCount, HasMore: data.HasMore, NextOffset: data.NextOffset}
+	return getFeedOutput{ToolResponse: success(data)}
 }
 
 func newGetSiteInformationOutput(data getSiteInformationData) getSiteInformationOutput {
-	return getSiteInformationOutput{ToolResponse: success(data), Site: data.Site}
+	return getSiteInformationOutput{ToolResponse: success(data)}
 }
 
 func clampLimit(v, defaultVal, maxVal int) int {

@@ -301,13 +301,13 @@ func TestGetRelatedContent(t *testing.T) {
 		t.Fatalf("get_related_content returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
-	relVal, ok := m["related"]
+	relVal, ok := m["related_pages"]
 	if !ok {
-		t.Fatal("get_related_content: missing 'related' key")
+		t.Fatal("get_related_content: missing 'related_pages' key")
 	}
 	related, ok := relVal.([]any)
 	if !ok {
-		t.Fatalf("get_related_content: 'related' is %T, want []any", relVal)
+		t.Fatalf("get_related_content: 'related_pages' is %T, want []any", relVal)
 	}
 	if len(related) == 0 {
 		t.Fatal("get_related_content: expected at least one related page (bonjour shares Hugo tag)")
@@ -1380,18 +1380,12 @@ func TestGetRelatedContentSeparatesTranslations(t *testing.T) {
 	if !ok || len(suggestedLinks) == 0 {
 		t.Fatalf("suggested_links = %#v, want populated editorial suggestions", m["suggested_links"])
 	}
-	legacyRelated, ok := m["related"].([]any)
-	if !ok || len(legacyRelated) == 0 {
-		t.Fatalf("related = %#v, want legacy compatibility alias", m["related"])
+	// The deprecated "related" alias (#453) was removed once #433/#454 were
+	// resolved (related_pages is canonical and was never actually removed).
+	if _, ok := m["related"]; ok {
+		t.Fatalf("related = %#v, want the deprecated alias removed", m["related"])
 	}
-	// #453: related must stay byte-identical to related_pages — it's a
-	// deprecated alias, not an independently-populated field.
-	relatedJSON, _ := json.Marshal(relatedPages)
-	legacyRelatedJSON, _ := json.Marshal(legacyRelated)
-	if string(relatedJSON) != string(legacyRelatedJSON) {
-		t.Fatalf("related = %s, want identical to related_pages = %s", legacyRelatedJSON, relatedJSON)
-	}
-	for _, raw := range append(append(relatedPages, legacyRelated...), suggestedLinks...) {
+	for _, raw := range append(relatedPages, suggestedLinks...) {
 		related := raw.(map[string]any)
 		if got := related["slug"]; got == "/en/posts/hello/" {
 			t.Fatalf("translation leaked into related content: %#v", related)
@@ -1451,28 +1445,22 @@ func TestSuggestInternalLinksSeparatesTranslations(t *testing.T) {
 	if !ok || len(translations) != 1 {
 		t.Fatalf("translations = %#v, want one translation", data["translations"])
 	}
-	legacySuggestions, ok := data["suggestions"].([]any)
-	if !ok || len(legacySuggestions) == 0 {
-		t.Fatalf("suggestions = %#v, want at least one suggestion", data["suggestions"])
-	}
 	suggestedLinks, ok := data["suggested_links"].([]any)
 	if !ok || len(suggestedLinks) == 0 {
-		t.Fatalf("suggested_links = %#v, want compatibility alias", data["suggested_links"])
+		t.Fatalf("suggested_links = %#v, want at least one suggestion", data["suggested_links"])
 	}
-	// #453: suggestions is a deprecated alias of the canonical
-	// suggested_links — must stay byte-identical, not independently populated.
-	suggestionsJSON, _ := json.Marshal(legacySuggestions)
-	suggestedLinksJSON, _ := json.Marshal(suggestedLinks)
-	if string(suggestionsJSON) != string(suggestedLinksJSON) {
-		t.Fatalf("suggestions = %s, want identical to suggested_links = %s", suggestionsJSON, suggestedLinksJSON)
+	// The deprecated "suggestions" alias (#453) was removed once #433/#454
+	// were resolved (suggested_links is canonical and was never removed).
+	if _, ok := data["suggestions"]; ok {
+		t.Fatalf("suggestions = %#v, want the deprecated alias removed", data["suggestions"])
 	}
-	for _, raw := range append(legacySuggestions, suggestedLinks...) {
+	for _, raw := range suggestedLinks {
 		suggestion := raw.(map[string]any)
 		if got := suggestion["slug"]; got == "/en/posts/hello/" {
 			t.Fatalf("translation leaked into suggested links: %#v", suggestion)
 		}
 	}
-	if got := legacySuggestions[0].(map[string]any)["slug"]; got != "/posts/guide/" {
+	if got := suggestedLinks[0].(map[string]any)["slug"]; got != "/posts/guide/" {
 		t.Fatalf("top suggestion slug = %v, want /posts/guide/", got)
 	}
 }
@@ -2434,7 +2422,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 	}{
 		{tool: "get_page_markdown", keys: []string{"success", "data", "errors", "warnings", "meta", "page"}},
 		{tool: "get_page_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "frontmatter"}},
-		{tool: "get_related_content", keys: []string{"success", "data", "errors", "warnings", "meta", "translations", "related_pages", "related"}},
+		{tool: "get_related_content", keys: []string{"success", "data", "errors", "warnings", "meta", "translations", "related_pages"}},
 		{tool: "build_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "context"}},
 		{tool: "export_agent_context", keys: []string{"success", "data", "errors", "warnings", "meta", "export", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
 		{tool: "search_content", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "total", "limit", "offset", "returned_count", "has_more"}},
@@ -2442,7 +2430,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		{tool: "get_site_health", keys: []string{"success", "data", "errors", "warnings", "meta", "status", "score", "published_pages"}},
 		{tool: "get_broken_links", keys: []string{"success", "data", "errors", "warnings", "meta", "links", "broken_links", "total_pages"}},
 		{tool: "get_backlinks", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "count", "backlinks"}},
-		{tool: "suggest_links", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "total", "translations", "suggestions", "suggested_links"}},
+		{tool: "suggest_links", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "total", "translations", "suggested_links"}},
 		{tool: "diff_page", keys: []string{"success", "data", "errors", "warnings", "meta", "slug", "path", "status", "diff_available"}},
 		{tool: "validate_frontmatter", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
 		{tool: "validate_site", keys: []string{"success", "data", "errors", "warnings", "meta", "pages", "pages_checked", "pages_passed", "invalid"}},
