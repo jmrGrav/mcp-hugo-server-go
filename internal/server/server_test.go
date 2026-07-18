@@ -43,12 +43,11 @@ func mustTestServer(t *testing.T) *server.Server {
 
 func mustOAuthServer(t *testing.T) *server.Server {
 	t.Helper()
-	// Bake in a read client for http://localhost:9999/cb so that
-	// obtainBearerToken (which DCR-registers with that redirect URI) inherits
-	// read scope via resolveRegistrationScope. Without this, unmatched
-	// DCR clients get anonymous scope ("") after the #249 fix, which would make
-	// TestReadCannotCallWriteTool and TestReadCannotCallSiteAdminTool
-	// test the wrong boundary (anonymous→write, not read→write).
+	// Bake in a read client for http://localhost:9999/cb. Since #497, DCR
+	// always grants "read" regardless of match, so this registry entry is no
+	// longer strictly required for that outcome — kept for clarity so
+	// TestReadCannotCallWriteTool/TestReadCannotCallSiteAdminTool document the
+	// read→write boundary explicitly.
 	registryPath := filepath.Join(t.TempDir(), "clients.yaml")
 	if err := os.WriteFile(registryPath, []byte(`clients:
 - client_id: test-read-client

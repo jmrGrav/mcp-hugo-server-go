@@ -280,32 +280,25 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 	}, nil
 }
 
-// resolveRegistrationScope returns the highest scope among all pre-registered
-// (secret-bearing) clients whose redirect URIs overlap with the DCR request.
-// This lets Claude.ai and ChatGPT inherit the scope of their pre-registered
-// counterparts when they do Dynamic Client Registration. Falls back to
-// "" (anonymous) when no pre-registered client matches, so public tools like
-// MCP scanners that self-register via RFC 7591 get anonymous read-only access
-// without automatically gaining content.read privileges.
+// resolveRegistrationScope determines the scope granted to a client created
+// via public Dynamic Client Registration (RFC 7591).
+//
+// A DCR request supplies nothing but a redirect_uri string chosen by the
+// caller — there is no secret, no proof of domain ownership, and no user
+// consent step at registration time. /authorize is a plain HTTP endpoint: a
+// caller who invokes it directly (rather than via real browser navigation)
+// reads the redirect's Location header themselves, so matching a
+// pre-registered privileged client's redirect_uri text proves nothing about
+// who is making the request (#497). Earlier versions of this function
+// inherited the matched pre-registered client's scope (including "write"),
+// which let any Internet caller mint a privileged token merely by echoing
+// back a known callback URL. Public DCR clients must therefore never receive
+// more than "read", regardless of redirect_uri overlap with a privileged
+// client. Genuine Claude.ai/ChatGPT write access continues to work because
+// those integrations use their pre-registered, secret-bearing client_id
+// directly — they do not rely on DCR to obtain write scope.
 func (s *Service) resolveRegistrationScope(redirectURIs []string) string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var scopes []string
-clientLoop:
-	for _, c := range s.clients {
-		if c.SecretHash == "" {
-			continue // public DCR client — skip, only match pre-registered clients
-		}
-		for _, reqURI := range redirectURIs {
-			for _, regURI := range c.RedirectURIs {
-				if matchRedirectURI(regURI, reqURI) {
-					scopes = append(scopes, c.Scope)
-					continue clientLoop
-				}
-			}
-		}
-	}
-	return highestMatchedScope(scopes)
+	return "read"
 }
 
 func (s *Service) validateClientRedirect(clientID, uri string) (string, error) {
