@@ -1,11 +1,24 @@
 package buildinfo
 
-import "runtime/debug"
+import (
+	"runtime/debug"
+	"strings"
+)
 
 const SchemaVersion = "v1.0.0"
 
 // Version is set at build time via -ldflags.
 var Version = "dev"
+
+// ReleaseVersion is the human-facing product/release identifier (e.g.
+// v1.5.1) when known at build time. Empty means "this build is not tied to
+// a named release"; callers can still inspect Version/Commit.
+var ReleaseVersion = ""
+
+// BuildChannel identifies the deployment line the binary came from when it
+// is known at build time (e.g. release, main, staging). Empty falls back to
+// a deterministic derivation from Version.
+var BuildChannel = ""
 
 // Commit, CommitTime, and Dirty are populated automatically from Go's
 // embedded VCS build info (available whenever the binary was built with
@@ -33,4 +46,31 @@ func init() {
 			Dirty = s.Value == "true"
 		}
 	}
+}
+
+func EffectiveReleaseVersion() string {
+	if v := strings.TrimSpace(ReleaseVersion); v != "" {
+		return v
+	}
+	v := strings.TrimSpace(Version)
+	if strings.HasPrefix(v, "v") {
+		return v
+	}
+	return ""
+}
+
+func EffectiveBuildChannel() string {
+	if ch := strings.TrimSpace(BuildChannel); ch != "" {
+		return ch
+	}
+	if EffectiveReleaseVersion() != "" && strings.TrimSpace(Version) == EffectiveReleaseVersion() {
+		return "release"
+	}
+	if head, _, ok := strings.Cut(strings.TrimSpace(Version), "-"); ok && head != "" {
+		return head
+	}
+	if v := strings.TrimSpace(Version); v != "" {
+		return v
+	}
+	return "dev"
 }

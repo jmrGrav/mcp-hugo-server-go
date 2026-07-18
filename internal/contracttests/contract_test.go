@@ -33,6 +33,9 @@ type identity struct {
 }
 
 func TestContractAnonymousReadToolsUseToolResponseEnvelope(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -67,6 +70,9 @@ func TestContractAnonymousReadToolsUseToolResponseEnvelope(t *testing.T) {
 }
 
 func TestContractContentReadToolsUseToolResponseEnvelope(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -110,6 +116,9 @@ func TestContractContentReadToolsUseToolResponseEnvelope(t *testing.T) {
 // meta.server_version instead of the actual server build version, on every
 // successful create_page/update_page/delete_page/upload_page_asset call.
 func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	contentRoot := t.TempDir()
 	writeFile(t, filepath.Join(contentRoot, "posts", "existing", "index.md"), "---\ntitle: Existing\n---\nBody.\n")
 
@@ -161,6 +170,9 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 }
 
 func TestContractDiffPageErrorUsesStructuredEnvelope(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -177,6 +189,9 @@ func TestContractDiffPageErrorUsesStructuredEnvelope(t *testing.T) {
 }
 
 func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -240,6 +255,9 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 }
 
 func TestContractRichReadToolsExposeLifecycleState(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -314,6 +332,9 @@ func TestContractRichReadToolsExposeLifecycleState(t *testing.T) {
 }
 
 func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -376,6 +397,9 @@ func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *test
 }
 
 func TestContractDryRunMutationsDoNotWriteToDisk(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	contentRoot := t.TempDir()
 	originalPath := filepath.Join(contentRoot, "posts", "existing", "index.md")
 	original := "---\ntitle: Existing\n---\nOriginal body.\n"
@@ -430,6 +454,9 @@ func TestContractDryRunMutationsDoNotWriteToDisk(t *testing.T) {
 }
 
 func TestContractPaginationWalksToEndWithoutGaps(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -559,6 +586,9 @@ func TestContractPaginationWalksToEndWithoutGaps(t *testing.T) {
 }
 
 func TestContractGetPageMatchesGolden(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -574,6 +604,9 @@ func TestContractGetPageMatchesGolden(t *testing.T) {
 }
 
 func TestContractListPagesMatchesGolden(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -589,6 +622,9 @@ func TestContractListPagesMatchesGolden(t *testing.T) {
 }
 
 func TestContractGetRelatedContentMatchesGolden(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -1017,6 +1053,12 @@ func assertToolResponseEnvelopeMeta(t *testing.T, tool string, m map[string]any)
 	if got := asString(meta["schema_version"]); got != toolcontract.ToolResultVersion {
 		t.Fatalf("%s meta.schema_version = %q, want schema version %q", tool, got, toolcontract.ToolResultVersion)
 	}
+	if got := asString(meta["commit"]); got == "" {
+		t.Fatalf("%s meta.commit = %q, want non-empty string", tool, got)
+	}
+	if got := asString(meta["build_channel"]); got == "" {
+		t.Fatalf("%s meta.build_channel = %q, want non-empty string", tool, got)
+	}
 	if _, ok := m["version"]; ok {
 		t.Fatalf("%s root-level version should be removed (#454), got %v", tool, m["version"])
 	}
@@ -1081,6 +1123,26 @@ func normalizeSourcePaths(v any) {
 		for _, item := range x {
 			normalizeSourcePaths(item)
 		}
+	}
+}
+
+func setContractBuildInfo(t *testing.T) func() {
+	t.Helper()
+	origVersion := buildinfo.Version
+	origRelease := buildinfo.ReleaseVersion
+	origCommit := buildinfo.Commit
+	origChannel := buildinfo.BuildChannel
+
+	buildinfo.Version = "main-testbuild"
+	buildinfo.ReleaseVersion = "vtest"
+	buildinfo.Commit = "0123456789ab"
+	buildinfo.BuildChannel = "main"
+
+	return func() {
+		buildinfo.Version = origVersion
+		buildinfo.ReleaseVersion = origRelease
+		buildinfo.Commit = origCommit
+		buildinfo.BuildChannel = origChannel
 	}
 }
 
