@@ -1543,7 +1543,7 @@ func countSections(pages []site.Page) []sectionDTO {
 		if !classifier.IsContent(p) {
 			continue
 		}
-		seg := topSection(p.Slug)
+		seg := topSection(p.Slug, p.Lang)
 		counts[seg]++
 	}
 	out := make([]sectionDTO, 0, len(counts))
@@ -1559,13 +1559,25 @@ func countSections(pages []site.Page) []sectionDTO {
 	return out
 }
 
-func topSection(slug string) string {
+// topSection derives a page's editorial section from its slug. lang, when
+// non-empty, is the page's own resolved language: if the slug's first path
+// segment is that language's route prefix (e.g. "/en/posts/foo/" for an
+// English page), it's stripped before section detection so a language code
+// is never reported as if it were a content section (#459) — languages are
+// already surfaced separately via the sibling `languages` field.
+func topSection(slug, lang string) string {
 	slug = strings.TrimSpace(slug)
 	if slug == "" || slug == "/" {
 		return "root"
 	}
 	trimmed := strings.TrimPrefix(slug, "/")
 	parts := strings.Split(trimmed, "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return "root"
+	}
+	if lang != "" && parts[0] == lang {
+		parts = parts[1:]
+	}
 	if len(parts) == 0 || parts[0] == "" {
 		return "root"
 	}

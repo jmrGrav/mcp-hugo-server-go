@@ -74,11 +74,17 @@ func TestContentHelperFunctions(t *testing.T) {
 	if got := countSections(pages); len(got) == 0 || got[0].Name == "" {
 		t.Fatalf("countSections() = %#v", got)
 	}
-	if got := topSection("/posts/hello/"); got != "posts" {
+	if got := topSection("/posts/hello/", ""); got != "posts" {
 		t.Fatalf("topSection(posts) = %q", got)
 	}
-	if got := topSection("/about/"); got != "about" {
+	if got := topSection("/about/", ""); got != "about" {
 		t.Fatalf("topSection(about) = %q", got)
+	}
+	if got := topSection("/en/posts/hello/", "en"); got != "posts" {
+		t.Fatalf("topSection(lang-prefixed) = %q, want language prefix stripped", got)
+	}
+	if got := topSection("/en/", "en"); got != "root" {
+		t.Fatalf("topSection(bare lang root) = %q, want root", got)
 	}
 	if got := uniqueLanguages(pages); len(got) != 2 {
 		t.Fatalf("uniqueLanguages() = %#v", got)
