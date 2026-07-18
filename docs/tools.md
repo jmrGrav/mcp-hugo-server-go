@@ -37,18 +37,18 @@ internal `read`/`write` scopes (#450, see `docs/mcp-contract.md` §6.12):
 
 The registry below lists the current internal scope tiers enforced by the
 runtime so the mapping stays explicit and auditable. Since #450, there are
-only two: `read` (fully public — every tool below "read", plus the
-Anonymous tools, requires no scope at all) and `write` (requires a
-registered OAuth client).
+only two: `read` (the reader tier; on OAuth-enabled deployments `/mcp`
+still requires a Bearer token, but no additional per-tool scope split
+exists below `read`) and `write` (requires a registered OAuth client).
 
 ## Search tool selection (#326)
 
-Two overlapping search tools exist: `search_pages` (anonymous) and
-`search_content` (`read`, but ungated — see below). If calling with any
+Two overlapping search tools exist: `search_pages` (published-page search)
+and `search_content` (`read`). If calling with any
 Bearer token, prefer `search_content` — it also matches body text and
 supports type/language/sort filtering that `search_pages` doesn't (both
 tools support `limit`/`offset` pagination).
-`search_pages` exists for callers with no authentication at all; it is not
+`search_pages` exists as the smaller published-content search surface; it is not
 a lighter-weight alternative to reach for when `search_content` is
 available.
 
@@ -64,7 +64,7 @@ available.
 - `get_feed` - Read feed
 - `get_site_information` - Read site metadata
 
-## `read` (ungated — no scope required, #450)
+## `read` (reader tier; on OAuth-enabled deployments, obtain a Bearer token first)
 
 - `get_page_markdown` - Get full page Markdown
 - `get_page_frontmatter` - Get page frontmatter

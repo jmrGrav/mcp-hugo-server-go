@@ -47,7 +47,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository, a configured content root, and content.read. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. Use this before editing or reviewing a page.",
+	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository and a configured content root. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. Use this before editing or reviewing a page.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in diffPageInput) (*mcp.CallToolResult, diffPageOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, diffPageOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source git diagnostics")
