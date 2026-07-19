@@ -251,9 +251,9 @@ without changing the envelope (Section 5.1 still applies — shaping narrows
 what's inside `data`/the flat top level, never removes `success`/`errors`/
 `warnings`/`meta`). Omitting all shaping parameters is always a no-op: a
 call with no shaping parameters returns the exact same shape it returned
-before this feature existed. The current rollout is partial; the proposed
-uniform compact-mode policy for the full read surface is tracked separately in
-`docs/compact-response-mode-design.md` (`#526`).
+before this feature existed. The uniform compact-mode policy for the full
+read surface is tracked in `docs/compact-response-mode-design.md` (`#526`)
+and is now implemented for all anonymous/content.read tools.
 
 | Parameter        | Type       | Meaning                                                    |
 |-------------------|------------|-------------------------------------------------------------|
@@ -263,13 +263,14 @@ uniform compact-mode policy for the full read surface is tracked separately in
 | `max_body_chars`  | int        | Truncate a body field to N characters. `0` (default) disables truncation. Truncation adds a `warnings` entry so callers know the body was cut. |
 
 Not every tool supports every parameter — see [Section 6](#6-tool-inventory)
-for which parameters each tool accepts. Current adopters: `search_pages`
-(`response_mode`, `fields`), `build_agent_context` (`response_mode`,
-`max_body_chars`), `export_agent_context` (`include_body`, predates this
-section — see #325), `get_page_for_edit` (`include`, a named-section variant
-of `fields` — see #339 — plus `max_body_chars`). Additional tools adopt
-these parameters incrementally; adding support to a new tool is not a
-breaking change since the parameters are optional and additive.
+for which parameters each tool accepts. `response_mode` is now uniformly
+available across the anonymous/content.read surface. In `compact` mode, the
+envelope-level behavior is shared everywhere: `meta` keeps only
+`schema_version`, while the root `generated_at` compatibility field remains
+present. Tool-specific data shaping remains opt-in and tool-defined:
+`search_pages` still narrows each row further with `fields`, and
+`build_agent_context`/`get_page_for_edit`/`export_agent_context` keep their
+own body/section shaping controls.
 
 ---
 
@@ -287,15 +288,15 @@ each field.
 
 | Tool                  | Envelope    | `data.X` key(s)          |
 |-----------------------|-------------|---------------------------|
-| `list_pages`          | structured  | `pages`                   |
-| `get_page`            | structured  | `page`; `page.html_origin` (`rendered_public`/`source_fallback`/`none`) and `page.rendered_html_available` (bool) disambiguate whether `page.html` is real rendered public HTML or a source-fallback/empty value, so a caller never has to infer that from `page.state` alone (#502) |
+| `list_pages`          | structured  | `pages`; supports `response_mode` compact envelope shaping (§5.2, #526) |
+| `get_page`            | structured  | `page`; supports `response_mode` compact envelope shaping (§5.2, #526); `page.html_origin` (`rendered_public`/`source_fallback`/`none`) and `page.rendered_html_available` (bool) disambiguate whether `page.html` is real rendered public HTML or a source-fallback/empty value, so a caller never has to infer that from `page.state` alone (#502) |
 | `search_pages`        | structured  | `pages`; supports `response_mode`/`fields` shaping (§5.2, #337); each page carries `score` (term-match count) and `match: "title_exact"` requests a strict full-title match instead of broad term matching (#332) |
-| `get_recent_posts`    | structured  | `pages`                   |
-| `list_tags`           | structured  | `tags`                    |
-| `list_categories`     | structured  | `categories`              |
-| `get_sitemap`         | structured  | `entries`                 |
-| `get_feed`            | structured  | `items`                   |
-| `get_site_information`| structured  | `site`                    |
+| `get_recent_posts`    | structured  | `pages`; supports `response_mode` compact envelope shaping (§5.2, #526) |
+| `list_tags`           | structured  | `tags`; supports `response_mode` compact envelope shaping (§5.2, #526) |
+| `list_categories`     | structured  | `categories`; supports `response_mode` compact envelope shaping (§5.2, #526) |
+| `get_sitemap`         | structured  | `entries`; supports `response_mode` compact envelope shaping (§5.2, #526) |
+| `get_feed`            | structured  | `items`; supports `response_mode` compact envelope shaping (§5.2, #526) |
+| `get_site_information`| structured  | `site`; supports `response_mode` compact envelope shaping (§5.2, #526) |
 
 ### `read` (reader tier; on OAuth-enabled deployments, obtain a Bearer token first; see [§6.12](#612-2-scope-model-readwrite-450))
 
@@ -311,24 +312,24 @@ content, including drafts, for every tool in this table.
 
 | Tool                    | Envelope    | Notes                                        |
 |-------------------------|-------------|----------------------------------------------|
-| `get_page_markdown`| structured  | `data.page` + `data.page.state` (#495)                        |
-| `get_page_frontmatter`  | structured  | `data.frontmatter` + `data.frontmatter.state` (#495)          |
-| `get_related_content`   | structured  | `data.related_pages`; the deprecated `related` alias (#453) was removed once #433/#454 resolved the live-client-verification question — `related_pages` was always canonical; when `data.related_pages` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); `include: ["impact"]` opts into a pre-mutation impact summary — `data.impact.taxonomy_orphans` (tags/categories on this page with no other carrier), `data.impact.sitemap_present`, `data.impact.feed_present`, `data.impact.aliases` (this page's own front-matter redirect aliases) — omitted unless requested, advisory only, never blocks a mutation (#434); top-level duplication removed (#495) |
+| `get_page_markdown`| structured  | `data.page` + `data.page.state` (#495); supports `response_mode` compact envelope shaping (§5.2, #526) |
+| `get_page_frontmatter`  | structured  | `data.frontmatter` + `data.frontmatter.state` (#495); supports `response_mode` compact envelope shaping (§5.2, #526) |
+| `get_related_content`   | structured  | `data.related_pages`; supports `response_mode` compact envelope shaping (§5.2, #526); the deprecated `related` alias (#453) was removed once #433/#454 resolved the live-client-verification question — `related_pages` was always canonical; when `data.related_pages` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); `include: ["impact"]` opts into a pre-mutation impact summary — `data.impact.taxonomy_orphans` (tags/categories on this page with no other carrier), `data.impact.sitemap_present`, `data.impact.feed_present`, `data.impact.aliases` (this page's own front-matter redirect aliases) — omitted unless requested, advisory only, never blocks a mutation (#434); top-level duplication removed (#495) |
 | `build_agent_context`   | structured  | `data.context` + `data.context.state`; supports `response_mode`/`max_body_chars` shaping (§5.2, #337); top-level duplication removed (#495) |
-| `export_agent_context`  | structured  | `data.pages[*].state`, `data.total`, `data.include_body` — no nested `export` wrapper, `data` itself is the export result; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325); top-level duplication removed (#495) |
-| `get_page_for_edit`     | structured  | `data.page.state`, `data.page.revision`, `data.page.quality`; each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` (#339); `data.page.backlinks` is a fifth, opt-in-only `include` value (identical data to a standalone `get_backlinks` call) — never part of the default bundle when `include` is omitted (#465); top-level duplication removed (#495) |
-| `list_content_types`    | structured  | `data.content_types[*]` (`name`, `source`, `archetype_path?`, `expected_fields?`, `page_count?`); `expected_fields` is the union of the archetype's declared keys and keys observed on existing pages of that type (#347); `data.special_files[*]` (`kind: "section_index"`, `section`, `languages[]`) surfaces Hugo `_index`/`_index.<lang>.md` files separately — they are structural, not creatable content types; `section: ""` means the site's root/home index, not a missing value (#457); top-level duplication removed (#495) |
-| `list_page_assets`      | structured  | `data.assets[*]` (`name`, `size_bytes`, `modified_at`); lists the sibling files in a leaf page bundle's directory; `not_a_bundle` for single-file pages (#348); top-level duplication removed (#495) |
-| `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo; top-level duplication removed (#495) |
-| `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state`; a non-default-language page's route prefix (e.g. `en` in `/en/posts/foo/`) is stripped before section counting and only ever surfaced via `data.languages`, never as a `data.sections[*].name` (#459); top-level duplication removed (#495) |
-| `get_site_health`       | structured  | `data.score`, `data.status`, counts; `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); top-level duplication removed (#495) |
-| `get_broken_links`      | structured  | `data.links`, `data.broken_links`; top-level duplication removed (#495) |
-| `get_backlinks`         | structured  | `data.backlinks`, `data.count`; top-level duplication removed (#495) |
-| `suggest_links`         | structured  | `data.suggested_links` is canonical; the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); top-level duplication removed (#495) |
-| `diff_page`             | structured  | `data` (diff result) + `data.state`; top-level duplication removed (#495); `data.slug` is the canonical `/posts/x/`-form public slug, not the raw source-relative path (#519) |
-| `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state`; `include_preview=true` opts into `data.preview` — a combined pre-publish summary composing `diff_page` (`diff_status`/`diff_summary`), `get_broken_links` scoped to this page (`broken_links_count`), and `validate_frontmatter` (`frontmatter_valid`/`frontmatter_issues`) into one `risks` list, so an agent doesn't have to chain three separate calls before publishing — omitted unless requested, advisory only, never blocks a mutation (#435); top-level duplication removed (#495) |
-| `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`; top-level duplication removed (#495); each `data.pages[*].slug` is the canonical `/posts/x/`-form public slug, including for Hugo section-index pages (#519) |
-| `validate_site`         | structured  | `data.pages`, `data.pages_checked`; defaults to invalid-only (`data.pages` omits passing pages unless `include_valid=true` or `invalid_only=false` is passed explicitly) — `data.pages_checked`/`data.pages_passed`/`data.invalid` always describe the full scan regardless (#456); top-level duplication removed (#495); each `data.pages[*].slug` is the canonical `/posts/x/`-form public slug (#519) |
+| `export_agent_context`  | structured  | `data.pages[*].state`, `data.total`, `data.include_body`; supports `response_mode` compact envelope shaping (§5.2, #526) — no nested `export` wrapper, `data` itself is the export result; `limit` capped at 10 when `include_body=true` (default), 50 when `include_body=false` (#325); top-level duplication removed (#495) |
+| `get_page_for_edit`     | structured  | `data.page.state`, `data.page.revision`, `data.page.quality`; supports `response_mode` compact envelope shaping (§5.2, #526); each of `frontmatter`/`markdown`/`state`/`quality` is a pointer field omitted when not requested via `include` (#339); `data.page.backlinks` is a fifth, opt-in-only `include` value (identical data to a standalone `get_backlinks` call) — never part of the default bundle when `include` is omitted (#465); top-level duplication removed (#495) |
+| `list_content_types`    | structured  | `data.content_types[*]` (`name`, `source`, `archetype_path?`, `expected_fields?`, `page_count?`); supports `response_mode` compact envelope shaping (§5.2, #526); `expected_fields` is the union of the archetype's declared keys and keys observed on existing pages of that type (#347); `data.special_files[*]` (`kind: "section_index"`, `section`, `languages[]`) surfaces Hugo `_index`/`_index.<lang>.md` files separately — they are structural, not creatable content types; `section: ""` means the site's root/home index, not a missing value (#457); top-level duplication removed (#495) |
+| `list_page_assets`      | structured  | `data.assets[*]` (`name`, `size_bytes`, `modified_at`); supports `response_mode` compact envelope shaping (§5.2, #526); lists the sibling files in a leaf page bundle's directory; `not_a_bundle` for single-file pages (#348); top-level duplication removed (#495) |
+| `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo; supports `response_mode` compact envelope shaping (§5.2, #526); top-level duplication removed (#495) |
+| `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state`; supports `response_mode` compact envelope shaping (§5.2, #526); a non-default-language page's route prefix (e.g. `en` in `/en/posts/foo/`) is stripped before section counting and only ever surfaced via `data.languages`, never as a `data.sections[*].name` (#459); top-level duplication removed (#495) |
+| `get_site_health`       | structured  | `data.score`, `data.status`, counts; supports `response_mode` compact envelope shaping (§5.2, #526); `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); top-level duplication removed (#495) |
+| `get_broken_links`      | structured  | `data.links`, `data.broken_links`; supports `response_mode` compact envelope shaping (§5.2, #526); top-level duplication removed (#495) |
+| `get_backlinks`         | structured  | `data.backlinks`, `data.count`; supports `response_mode` compact envelope shaping (§5.2, #526); top-level duplication removed (#495) |
+| `suggest_links`         | structured  | `data.suggested_links` is canonical; supports `response_mode` compact envelope shaping (§5.2, #526); the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); top-level duplication removed (#495) |
+| `diff_page`             | structured  | `data` (diff result) + `data.state`; supports `response_mode` compact envelope shaping (§5.2, #526); top-level duplication removed (#495); `data.slug` is the canonical `/posts/x/`-form public slug, not the raw source-relative path (#519) |
+| `inspect_rendered` | structured  | `data.checks[*].check/status/detail`, `data.status`, `data.state`; supports `response_mode` compact envelope shaping (§5.2, #526); `include_preview=true` opts into `data.preview` — a combined pre-publish summary composing `diff_page` (`diff_status`/`diff_summary`), `get_broken_links` scoped to this page (`broken_links_count`), and `validate_frontmatter` (`frontmatter_valid`/`frontmatter_issues`) into one `risks` list, so an agent doesn't have to chain three separate calls before publishing — omitted unless requested, advisory only, never blocks a mutation (#435); top-level duplication removed (#495) |
+| `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`; supports `response_mode` compact envelope shaping (§5.2, #526); top-level duplication removed (#495); each `data.pages[*].slug` is the canonical `/posts/x/`-form public slug, including for Hugo section-index pages (#519) |
+| `validate_site`         | structured  | `data.pages`, `data.pages_checked`; supports `response_mode` compact envelope shaping (§5.2, #526); defaults to invalid-only (`data.pages` omits passing pages unless `include_valid=true` or `invalid_only=false` is passed explicitly) — `data.pages_checked`/`data.pages_passed`/`data.invalid` always describe the full scan regardless (#456); top-level duplication removed (#495); each `data.pages[*].slug` is the canonical `/posts/x/`-form public slug (#519) |
 
 ### `write` (requires a registered OAuth client, see [§6.12](#612-2-scope-model-readwrite-450))
 

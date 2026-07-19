@@ -16,10 +16,10 @@ import (
 const ToolResultVersion = buildinfo.SchemaVersion
 
 type ResponseMeta struct {
-	GeneratedAt string `json:"generated_at"`
+	GeneratedAt string `json:"generated_at,omitempty"`
 	// ServerVersion is the deployed server build (internal/buildinfo.Version)
 	// — what most callers actually want when they say "version".
-	ServerVersion  string `json:"server_version"`
+	ServerVersion  string `json:"server_version,omitempty"`
 	ReleaseVersion string `json:"release_version,omitempty"`
 	Commit         string `json:"commit,omitempty"`
 	BuildChannel   string `json:"build_channel,omitempty"`
@@ -123,6 +123,45 @@ func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 		Meta:        meta,
 		GeneratedAt: meta.GeneratedAt,
 	}
+}
+
+func compactMetaMap(meta map[string]any) map[string]any {
+	schemaVersion, _ := meta["schema_version"]
+	return map[string]any{
+		"schema_version": schemaVersion,
+	}
+}
+
+// ShapeSuccessOutput trims the success-envelope meta object for compact mode
+// while preserving the root generated_at compatibility field. It is a
+// JSON-roundtrip helper so every typed Out struct embedding ToolResponse[T]
+// can be shaped uniformly without per-tool boilerplate.
+func ShapeSuccessOutput[Out any](out Out, mode ResponseMode) Out {
+	if mode != ResponseModeCompact {
+		return out
+	}
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return out
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return out
+	}
+	meta, ok := m["meta"].(map[string]any)
+	if !ok || meta == nil {
+		return out
+	}
+	m["meta"] = compactMetaMap(meta)
+	raw, err = json.Marshal(m)
+	if err != nil {
+		return out
+	}
+	var shaped Out
+	if err := json.Unmarshal(raw, &shaped); err != nil {
+		return out
+	}
+	return shaped
 }
 
 // RequestContext echoes the caller's normalized input on a failed mutation
@@ -378,6 +417,11 @@ func ParseToolError(err error) ToolError {
 
 func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {
 	return func(ctx context.Context, req *mcp.CallToolRequest, in In) (*mcp.CallToolResult, Out, error) {
+		mode, hasMode, err := ResponseModeFromInput(in)
+		if err != nil {
+			meta := NewMeta(buildinfo.Version, time.Now())
+			return ErrorResult(err, meta, nil, nil, nil), errorOutput[Out](meta, ParseToolError(err), nil, nil, nil), nil
+		}
 		res, out, err := handler(ctx, req, in)
 		if err != nil {
 			meta := NewMeta(buildinfo.Version, time.Now())
@@ -385,6 +429,9 @@ func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerF
 			rootFields := rootFieldsFrom(err)
 			dataFields := dataFieldsFrom(err)
 			return ErrorResult(err, meta, reqCtx, rootFields, dataFields), errorOutput[Out](meta, ParseToolError(err), reqCtx, rootFields, dataFields), nil
+		}
+		if hasMode {
+			out = ShapeSuccessOutput(out, mode)
 		}
 		return res, out, nil
 	}

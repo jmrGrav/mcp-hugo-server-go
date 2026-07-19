@@ -21,15 +21,16 @@ import (
 )
 
 type searchContentInput struct {
-	Query    string `json:"query,omitempty"`
-	Type     string `json:"type,omitempty"`
-	Tag      string `json:"tag,omitempty"`
-	Category string `json:"category,omitempty"`
-	Language string `json:"language,omitempty"`
-	Limit    int    `json:"limit,omitempty"`
-	Offset   int    `json:"offset,omitempty"`
-	Sort     string `json:"sort,omitempty"`
-	Order    string `json:"order,omitempty"`
+	Query        string `json:"query,omitempty"`
+	Type         string `json:"type,omitempty"`
+	Tag          string `json:"tag,omitempty"`
+	Category     string `json:"category,omitempty"`
+	Language     string `json:"language,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	Sort         string `json:"sort,omitempty"`
+	Order        string `json:"order,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 // taxonomyInconsistencyDTO is the structured, actionable form of a
@@ -169,9 +170,10 @@ type searchContentEnvelope struct {
 }
 
 type validateFrontMatterInput struct {
-	Slug   string `json:"slug,omitempty"`
-	Limit  int    `json:"limit,omitempty"`
-	Offset int    `json:"offset,omitempty"`
+	Slug         string `json:"slug,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 // validateSiteInput's InvalidOnly/IncludeValid are pointers so the handler
@@ -180,10 +182,11 @@ type validateFrontMatterInput struct {
 // caller that already depended on the old explicit invalid_only=false full
 // listing).
 type validateSiteInput struct {
-	Limit        int   `json:"limit,omitempty"`
-	Offset       int   `json:"offset,omitempty"`
-	InvalidOnly  *bool `json:"invalid_only,omitempty"`
-	IncludeValid *bool `json:"include_valid,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	InvalidOnly  *bool  `json:"invalid_only,omitempty"`
+	IncludeValid *bool  `json:"include_valid,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 // effectiveInvalidOnly resolves validateSiteInput's default-flip precedence
@@ -251,8 +254,9 @@ type validateOutput struct {
 }
 
 type brokenLinkInput struct {
-	Limit  int `json:"limit,omitempty"`
-	Offset int `json:"offset,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type brokenLinkDTO struct {
@@ -275,7 +279,8 @@ type brokenLinkOutput struct {
 }
 
 type getBacklinksInput struct {
-	Slug string `json:"slug"`
+	Slug         string `json:"slug"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type backlinkDTO struct {
@@ -295,11 +300,16 @@ type getBacklinksOutput struct {
 }
 
 type suggestInternalLinksInput struct {
-	Slug       string   `json:"slug,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
-	Categories []string `json:"categories,omitempty"`
-	Body       string   `json:"body,omitempty"`
-	Limit      int      `json:"limit,omitempty"`
+	Slug         string   `json:"slug,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	Categories   []string `json:"categories,omitempty"`
+	Body         string   `json:"body,omitempty"`
+	Limit        int      `json:"limit,omitempty"`
+	ResponseMode string   `json:"response_mode,omitempty"`
+}
+
+type responseModeOnlyInput struct {
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type linkSuggestionDTO struct {
@@ -450,7 +460,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
 	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
@@ -487,7 +497,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		})
 
 	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`) — neither moves the top-level `score`/`status`, but a `warning` finding does show a local penalty in `score_breakdown.taxonomy.score`. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never contributed to `score`), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, contentEnvelope, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}

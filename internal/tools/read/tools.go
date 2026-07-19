@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
@@ -19,7 +20,8 @@ import (
 )
 
 type getFullPageMarkdownInput struct {
-	Slug string `json:"slug"`
+	Slug         string `json:"slug"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type pageMarkdownDTO struct {
@@ -44,7 +46,8 @@ type getFullPageMarkdownData struct {
 }
 
 type getPageFrontmatterInput struct {
-	Slug string `json:"slug"`
+	Slug         string `json:"slug"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type frontmatterDTO struct {
@@ -69,9 +72,10 @@ type getPageFrontmatterData struct {
 }
 
 type getRelatedContentInput struct {
-	Slug    string   `json:"slug"`
-	Limit   int      `json:"limit,omitempty"`
-	Include []string `json:"include,omitempty"`
+	Slug         string   `json:"slug"`
+	Limit        int      `json:"limit,omitempty"`
+	Include      []string `json:"include,omitempty"`
+	ResponseMode string   `json:"response_mode,omitempty"`
 }
 
 // getRelatedContentAllInclude is the allowed vocabulary for get_related_content's
@@ -204,11 +208,12 @@ type buildAgentContextData struct {
 }
 
 type exportAgentContextInput struct {
-	Tag         string `json:"tag,omitempty"`
-	Category    string `json:"category,omitempty"`
-	Limit       int    `json:"limit,omitempty"`
-	Offset      int    `json:"offset,omitempty"`
-	IncludeBody *bool  `json:"include_body,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
+	Tag          string `json:"tag,omitempty"`
+	Category     string `json:"category,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	IncludeBody  *bool  `json:"include_body,omitempty"`
 }
 
 type pageExportDTO struct {
@@ -265,6 +270,7 @@ type getPageForEditInput struct {
 	Slug         string   `json:"slug"`
 	Include      []string `json:"include,omitempty"`
 	MaxBodyChars int      `json:"max_body_chars,omitempty"`
+	ResponseMode string   `json:"response_mode,omitempty"`
 }
 
 // pageQualityDTO surfaces enough signal to decide whether a page is safe to
@@ -992,6 +998,7 @@ func readingTimeMinutes(md string) int {
 // that jsonschema-go's struct-tag inference can't express directly.
 func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out], schemaOpts ...func(any) any) {
 	inputSchema := tools.MustSchema[In]()
+	inputSchema = addResponseModeEnum(inputSchema)
 	for _, opt := range schemaOpts {
 		inputSchema = opt(inputSchema)
 	}
@@ -1011,6 +1018,17 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func addResponseModeEnum(inputSchema any) any {
+	schema, ok := inputSchema.(*jsonschema.Schema)
+	if !ok {
+		return inputSchema
+	}
+	if _, ok := schema.Properties["response_mode"]; !ok {
+		return inputSchema
+	}
+	return tools.WithEnum(inputSchema, "response_mode", "", string(toolcontract.ResponseModeStandard), string(toolcontract.ResponseModeCompact))
+}
 
 func clampLimit(v, defaultVal, maxVal int) int {
 	if v <= 0 {

@@ -18,7 +18,8 @@ import (
 )
 
 type listPageAssetsInput struct {
-	Slug string `json:"slug"`
+	Slug         string `json:"slug"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 // pageAssetDTO describes one sibling file stored alongside a page bundle's
