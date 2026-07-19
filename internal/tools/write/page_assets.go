@@ -424,12 +424,12 @@ type deletePageAssetInput struct {
 
 type deletePageAssetOutput struct {
 	toolcontract.ToolResponse[deletePageAssetData]
-	Status   string `json:"status,omitempty"`
-	Slug     string `json:"slug,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Slug      string `json:"slug,omitempty"`
 	SourceKey string `json:"source_key,omitempty"`
-	Filename string `json:"filename,omitempty"`
-	Sha256   string `json:"sha256,omitempty"`
-	DryRun   bool   `json:"dry_run,omitempty"`
+	Filename  string `json:"filename,omitempty"`
+	Sha256    string `json:"sha256,omitempty"`
+	DryRun    bool   `json:"dry_run,omitempty"`
 	// Referenced/ReferencedIn report whether filename appears in any of the
 	// bundle's index.<lang>.md files at the time of this call — present on
 	// both the dry_run preview and a force-overridden real delete, so the
