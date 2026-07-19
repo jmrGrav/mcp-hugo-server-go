@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.9] - 2026-07-20
+
+Follow-up from ChatGPT's and Claude.ai's independent live audits of v1.5.8 (both 9.2/10, 31/31 and 25/41 tools tested — no failures, refinement items only).
+
+### Changed
+- **BREAKING: finished #520's root/data de-duplication on `create_preview` and `generate_hero_image`** (#573): both tools gained their envelope slightly later than the 5 mutation tools #520 originally covered (via #552, in the same release cycle), and were missed by that convergence. Their success payload now lives only under `data.*` — `preview_id`/`url`/`expires_at`/`build` (`create_preview`) and `path` (`generate_hero_image`) are no longer mirrored at the root. Callers reading those fields at the root must switch to `data.*`.
+- **`build_site` now uses the standard structured envelope** (#572): the last tool with zero envelope at all (not even root-level duplication) — success/error responses now carry `success`/`data`/`errors`/`warnings`/`meta` like every other tool. Existing flat fields (`status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready`) are kept as root compatibility aliases — additive, not breaking.
+- **`get_site_health` detects same-language taxonomy casing variants** (#577): a new `casing_variant` finding kind catches e.g. `Infrastructure`/`infrastructure` used within the same language — a blind spot `possible_duplicate`/`translation_pair` structurally couldn't see, since `taxonomy.Slug()` already lowercases before either of those checks ever runs. This will surface new findings on sites with existing casing drift; `score`/`status` are unaffected (taxonomy findings never move the top-level score).
+
+### Fixed
+- **`validate_site` exposes `data.status`** (`"valid"`/`"invalid"`, #568) instead of requiring callers to derive validity from an empty `pages` list plus a counter.
+- **`list_page_assets` now returns `sha256`** (#574), matching what its own description already promised as the way to get the current hash for `delete_page_asset`'s `expected_sha256` guard.
+- **`list_page_assets` adds `data.hint` when `data.assets` is empty** (#569), clarifying the tool only covers page-bundle sibling files, not the site's global static assets a page may still reference.
+- **`list_pages`/`search_pages`/`get_recent_posts`/`get_sitemap`/`get_feed` expose `source_key`** alongside `slug` (#576), matching `get_page`/`get_page_frontmatter`, so a browsing result can feed directly into a write tool's `slug` input without guessing the expected format.
+
+### Docs
+- **`get_feed`'s description now states it's site-wide**, not posts-only (#570) — use `get_recent_posts` for posts-only.
+- **`dry_run` quota semantics clarified** (#575): investigated a live audit's observation that `delete_page_asset`'s `dry_run` appeared to consume its destructive quota. A regression test proves it does not — the observed drop is consistent with normal token-bucket refill timing between an earlier real call and the next observation, not a leak. No code change; documented in `docs/mcp-contract.md` §6.4.
+
 ## [v1.5.8] - 2026-07-19
 
 **BREAKING.** Follow-up from the v1.5.6/v1.5.7 "ChatGPT tool disabled" incident report (confirmed by production nginx/mcp log audit to be a client-side connector safety trip, not a server regression — zero 5xx/429/unexpected-4xx responses to the ChatGPT connector across the full log history) plus an explicit maintainer field-naming request.

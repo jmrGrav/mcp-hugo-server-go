@@ -38,9 +38,12 @@ type generateFeaturedImageInput struct {
 	Prompt   string   `json:"prompt,omitempty"`
 }
 
+// generateFeaturedImageOutput's payload lives only under data.* as of
+// v1.5.9 (#573) — see createPreviewOutput's comment in create_preview.go
+// for why. BREAKING: callers reading path at the root must switch to
+// data.path.
 type generateFeaturedImageOutput struct {
 	toolcontract.ToolResponse[generateFeaturedImageData]
-	Path string `json:"path"`
 }
 
 type generateFeaturedImageData struct {
@@ -83,7 +86,6 @@ func logicalHugoRootPath(hugoRoot, absPath string) string {
 func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeaturedImageOutput {
 	return generateFeaturedImageOutput{
 		ToolResponse: imageSuccessEnvelope(data),
-		Path:         data.Path,
 	}
 }
 

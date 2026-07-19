@@ -411,8 +411,10 @@ top-level mirroring is removed for `create_page`/`update_page`/
 "structured" below,
 the same way #495 did for the read tools, with only `request_context`
 (error path) and `rate_limit_remaining` kept at the root (see
-[§1.1](#11-flat-envelope)). `generate_hero_image` is unaffected — it was not
-in #520's scope and remains flat.
+[§1.1](#11-flat-envelope)). `generate_hero_image` and `create_preview` were
+not in #520's original scope (they gained their envelope slightly later,
+via #552) — as of `v1.5.9` (#573), that gap is closed: both are now
+structured too, with the same root/data convergence.
 
 | Tool          | Envelope | Top-level key(s)                            |
 |---------------|----------|---------------------------------------------|
@@ -424,12 +426,12 @@ in #520's scope and remains flat.
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready`; `data.X` mirrors all five additively (#572) — this was the last tool with zero envelope at all (not even root-level duplication) before this change |
 | `preview_build`           | flat     | `status`, `duration_ms`; `data.X` mirrors both additively (#552) |
 | `run_post_build_hooks`    | flat     | `results`; `data.results` mirrors it additively (#552) |
-| `generate_hero_image` | flat     | `path`; `data.path` mirrors it additively (#508); `path` is hugo_root-relative, never the host's absolute filesystem path (#551) |
+| `generate_hero_image` | structured | `data.path`; `path` is hugo_root-relative, never the host's absolute filesystem path (#551); no root-level duplication as of v1.5.9 (#573) |
 | `check_sri_versions`      | flat     | `files_scanned`, `files_with_sri_attributes`, `sri_entries_loaded`, `sri_checked`, `status`, `summary`, `findings`; `data.X` mirrors all of the above additively (#552) |
 | `get_runtime_status`      | structured | `data.release_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
 | `verify_publication`      | structured | `data.source/build/public/index`, `data.http_status`, `data.status`, `data.explanation` |
-| `create_preview`          | flat     | `preview_id`, `url`, `expires_at`, `build`; `data.X` mirrors all of the above additively (#552) |
+| `create_preview`          | structured | `data.preview_id`, `data.url`, `data.expires_at`, `data.build`; no root-level duplication as of v1.5.9 (#573) |
 
 ---
 

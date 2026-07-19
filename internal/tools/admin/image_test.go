@@ -123,6 +123,10 @@ func TestGenerateFeaturedImage_Success(t *testing.T) {
 	if got := data["path"]; got != expectedLogicalPath {
 		t.Fatalf("generate_hero_image data.path = %v, want %q", got, expectedLogicalPath)
 	}
+	// #573: root-level path must no longer be mirrored alongside data.path.
+	if _, present := out["path"]; present {
+		t.Fatalf("root path = %v, want absent — no more root/data duplication (#573)", out["path"])
+	}
 }
 
 func TestGenerateFeaturedImage_MIMEReject(t *testing.T) {
