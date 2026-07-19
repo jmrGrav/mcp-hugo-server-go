@@ -771,6 +771,9 @@ func TestGetPageForEditDefaultReturnsFullBundle(t *testing.T) {
 	if rev, _ := page["revision"].(string); rev == "" {
 		t.Error("get_page_for_edit default: revision is empty, want a stable revision (#335 dependency)")
 	}
+	if got := page["source_key"]; got != "posts/hello" {
+		t.Fatalf("get_page_for_edit default: source_key = %v, want posts/hello", got)
+	}
 	quality, ok := page["quality"].(map[string]any)
 	if !ok {
 		t.Fatalf("get_page_for_edit: 'quality' is %T, want map", page["quality"])
@@ -780,6 +783,28 @@ func TestGetPageForEditDefaultReturnsFullBundle(t *testing.T) {
 	}
 	if _, present := quality["broken_links"]; !present {
 		t.Error("get_page_for_edit: quality.broken_links missing")
+	}
+}
+
+func TestGetPageFrontmatterIncludesSourceKey(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	fm, ok := m["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_frontmatter: 'frontmatter' is %T, want map", m["frontmatter"])
+	}
+	if got := fm["slug"]; got != "/posts/hello/" {
+		t.Fatalf("get_page_frontmatter slug = %v, want canonical public slug /posts/hello/", got)
+	}
+	if got := fm["source_key"]; got != "posts/hello" {
+		t.Fatalf("get_page_frontmatter source_key = %v, want posts/hello", got)
 	}
 }
 

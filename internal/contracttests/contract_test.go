@@ -23,6 +23,7 @@ import (
 
 type identity struct {
 	Slug               string
+	SourceKey          string
 	Lang               string
 	URL                string
 	ResolvedLang       string
@@ -217,6 +218,7 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 	wantSourcePath := "content/posts/hello.md"
 	want := identity{
 		Slug:          "/posts/hello/",
+		SourceKey:     "posts/hello",
 		Lang:          "en",
 		URL:           "https://example.test/posts/hello/",
 		ResolvedLang:  "",
@@ -247,6 +249,9 @@ func TestContractPageIdentityConsistentAcrossReadTools(t *testing.T) {
 		}
 		if actual.ResolvedSourcePath != wantSourcePath {
 			t.Fatalf("%s resolved_source_path = %q, want %q", tool, actual.ResolvedSourcePath, wantSourcePath)
+		}
+		if actual.SourceKey != want.SourceKey {
+			t.Fatalf("%s source_key = %q, want %q", tool, actual.SourceKey, want.SourceKey)
 		}
 		if actual.Revision == "" {
 			t.Fatalf("%s revision = empty, want stable source revision", tool)
@@ -388,6 +393,9 @@ func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *test
 		}
 		if actual.ResolvedSourcePath != frSource {
 			t.Fatalf("%s resolved_source_path = %q, want %q", tool, actual.ResolvedSourcePath, frSource)
+		}
+		if actual.SourceKey != "posts/bonjour" {
+			t.Fatalf("%s source_key = %q, want posts/bonjour", tool, actual.SourceKey)
 		}
 	}
 
@@ -768,6 +776,7 @@ func identityFromGetPage(t *testing.T, res *mcp.CallToolResult) identity {
 	page := mapAt(t, data, "page")
 	return identity{
 		Slug:               asString(page["slug"]),
+		SourceKey:          asString(page["source_key"]),
 		Lang:               asString(page["lang"]),
 		URL:                asString(page["url"]),
 		ResolvedLang:       asString(page["resolved_lang"]),
@@ -783,6 +792,7 @@ func identityFromFrontmatter(t *testing.T, res *mcp.CallToolResult) identity {
 	fm := mapAt(t, decodeContent(t, res), "frontmatter")
 	return identity{
 		Slug:               asString(fm["slug"]),
+		SourceKey:          asString(fm["source_key"]),
 		Lang:               asString(fm["lang"]),
 		URL:                asString(fm["url"]),
 		ResolvedLang:       asString(fm["resolved_lang"]),
@@ -798,6 +808,7 @@ func identityFromMarkdownPage(t *testing.T, res *mcp.CallToolResult) identity {
 	page := mapAt(t, decodeContent(t, res), "page")
 	return identity{
 		Slug:               asString(page["slug"]),
+		SourceKey:          asString(page["source_key"]),
 		Lang:               asString(page["lang"]),
 		URL:                asString(page["url"]),
 		ResolvedLang:       asString(page["resolved_lang"]),
@@ -814,6 +825,7 @@ func identityFromAgentContext(t *testing.T, res *mcp.CallToolResult) identity {
 	fm := mapAt(t, ctx, "frontmatter")
 	return identity{
 		Slug:               asString(fm["slug"]),
+		SourceKey:          asString(fm["source_key"]),
 		Lang:               asString(fm["lang"]),
 		URL:                asString(fm["url"]),
 		ResolvedLang:       asString(fm["resolved_lang"]),
@@ -828,6 +840,7 @@ func identityFromDiffPage(t *testing.T, res *mcp.CallToolResult) identity {
 	t.Helper()
 	data := mapAt(t, decodeContent(t, res), "data")
 	return identity{
+		SourceKey:          asString(data["source_key"]),
 		ResolvedLang:       asString(data["resolved_lang"]),
 		ResolvedSourcePath: asString(data["resolved_source_path"]),
 		Revision:           asString(data["revision"]),

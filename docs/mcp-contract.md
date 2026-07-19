@@ -179,6 +179,19 @@ Slugs are always absolute paths with a trailing slash:
 The server normalizes slugs before lookup; partial slugs (`posts/hello`) are
 accepted but normalized internally.
 
+### Source key format
+
+Where a tool also exposes source-oriented identity, it uses `source_key`:
+
+- `slug` = canonical public route, for example `/posts/hello-world/`
+- `source_key` = canonical source-relative Hugo content key, for example
+  `posts/hello-world`
+
+`source_key` never has leading/trailing slashes and never includes the
+`content/` prefix or a concrete source filename such as `index.md`,
+`index.fr.md`, or `hello.md`. It is the stable value to compare across
+write tools and other source-aware workflows.
+
 ### Date format
 
 All dates are ISO 8601 / RFC 3339. Date-only values use `YYYY-MM-DD`.

@@ -82,6 +82,9 @@ func TestDiffPage(t *testing.T) {
 	if got := data["resolved_source_path"]; got != "content/posts/hello/index.md" {
 		t.Fatalf("diff_page resolved_source_path = %v, want content/posts/hello/index.md", got)
 	}
+	if got := data["source_key"]; got != "posts/hello" {
+		t.Fatalf("diff_page source_key = %v, want posts/hello", got)
+	}
 	if got := data["resolved_lang"]; got != "" {
 		t.Fatalf("diff_page resolved_lang = %v, want empty default lang", got)
 	}

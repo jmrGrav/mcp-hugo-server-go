@@ -60,6 +60,7 @@ type uploadPageAssetOutput struct {
 	toolcontract.ToolResponse[uploadPageAssetData]
 	Status      string `json:"status,omitempty"`
 	Slug        string `json:"slug"`
+	SourceKey   string `json:"source_key,omitempty"`
 	Filename    string `json:"filename"`
 	Path        string `json:"path,omitempty"`
 	ContentType string `json:"content_type,omitempty"`
@@ -77,6 +78,7 @@ type uploadPageAssetOutput struct {
 type uploadPageAssetData struct {
 	Status             string `json:"status,omitempty"`
 	Slug               string `json:"slug"`
+	SourceKey          string `json:"source_key,omitempty"`
 	Filename           string `json:"filename"`
 	Path               string `json:"path,omitempty"`
 	ContentType        string `json:"content_type,omitempty"`
@@ -310,6 +312,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			return nil, newUploadPageAssetOutput(uploadPageAssetData{
 				Status:             "ok",
 				Slug:               slug,
+				SourceKey:          slug,
 				Filename:           filename,
 				Path:               logicalPath,
 				ContentType:        wantMIME,
@@ -336,6 +339,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		out := newUploadPageAssetOutput(uploadPageAssetData{
 			Status:             "ok",
 			Slug:               slug,
+			SourceKey:          slug,
 			Filename:           filename,
 			Path:               logicalPath,
 			ContentType:        wantMIME,
@@ -422,6 +426,7 @@ type deletePageAssetOutput struct {
 	toolcontract.ToolResponse[deletePageAssetData]
 	Status   string `json:"status,omitempty"`
 	Slug     string `json:"slug,omitempty"`
+	SourceKey string `json:"source_key,omitempty"`
 	Filename string `json:"filename,omitempty"`
 	Sha256   string `json:"sha256,omitempty"`
 	DryRun   bool   `json:"dry_run,omitempty"`
@@ -443,6 +448,7 @@ type deletePageAssetOutput struct {
 type deletePageAssetData struct {
 	Status             string   `json:"status,omitempty"`
 	Slug               string   `json:"slug,omitempty"`
+	SourceKey          string   `json:"source_key,omitempty"`
 	Filename           string   `json:"filename,omitempty"`
 	Sha256             string   `json:"sha256,omitempty"`
 	DryRun             bool     `json:"dry_run,omitempty"`
@@ -457,6 +463,7 @@ func newUploadPageAssetOutput(data uploadPageAssetData) uploadPageAssetOutput {
 		ToolResponse:       writeSuccessEnvelope(data),
 		Status:             data.Status,
 		Slug:               data.Slug,
+		SourceKey:          data.SourceKey,
 		Filename:           data.Filename,
 		Path:               data.Path,
 		ContentType:        data.ContentType,
@@ -474,6 +481,7 @@ func newDeletePageAssetOutput(data deletePageAssetData) deletePageAssetOutput {
 		ToolResponse:       writeSuccessEnvelope(data),
 		Status:             data.Status,
 		Slug:               data.Slug,
+		SourceKey:          data.SourceKey,
 		Filename:           data.Filename,
 		Sha256:             data.Sha256,
 		DryRun:             data.DryRun,
@@ -556,6 +564,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			return nil, newDeletePageAssetOutput(deletePageAssetData{
 				Status:             "ok",
 				Slug:               slug,
+				SourceKey:          slug,
 				Filename:           filename,
 				Sha256:             contentmodel.SourceRevisionBytes(data),
 				DryRun:             true,
@@ -665,6 +674,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		out := newDeletePageAssetOutput(deletePageAssetData{
 			Status:             "ok",
 			Slug:               slug,
+			SourceKey:          slug,
 			Filename:           filename,
 			Sha256:             actualHash,
 			Referenced:         fileutil.BoolPtr(len(referencedIn) > 0),

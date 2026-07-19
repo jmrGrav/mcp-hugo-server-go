@@ -26,6 +26,7 @@ type getFullPageMarkdownInput struct {
 
 type pageMarkdownDTO struct {
 	Slug               string              `json:"slug"`
+	SourceKey          string              `json:"source_key,omitempty"`
 	Title              string              `json:"title"`
 	Date               string              `json:"date"`
 	Tags               []string            `json:"tags"`
@@ -52,6 +53,7 @@ type getPageFrontmatterInput struct {
 
 type frontmatterDTO struct {
 	Slug               string                      `json:"slug"`
+	SourceKey          string                      `json:"source_key,omitempty"`
 	Title              string                      `json:"title"`
 	Date               string                      `json:"date"`
 	Tags               []string                    `json:"tags"`
@@ -290,6 +292,7 @@ type pageQualityDTO struct {
 // zero value that could be mistaken for real data.
 type pageForEditDTO struct {
 	Slug        string               `json:"slug"`
+	SourceKey   string               `json:"source_key,omitempty"`
 	Revision    string               `json:"revision,omitempty"`
 	Frontmatter *frontmatterDTO      `json:"frontmatter,omitempty"`
 	Markdown    string               `json:"markdown,omitempty"`
@@ -649,7 +652,11 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, getPageForEditOutput{}, err
 			}
 			p := resolvedPublicPage(resolved)
-			page := pageForEditDTO{Slug: p.Slug, Revision: resolvedRevision(resolved)}
+			page := pageForEditDTO{
+				Slug:      p.Slug,
+				SourceKey: contentmodel.SourceKeyFromLogicalPath(fileutil.LogicalContentPath(cfg.ContentRoot, resolved.SourcePath)),
+				Revision:  resolvedRevision(resolved),
+			}
 			var warnings []string
 
 			if include["frontmatter"] {
@@ -735,6 +742,7 @@ func newExportAgentContextOutput(data exportAgentContextData, warnings []string,
 func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revision string, state site.LifecycleState) pageMarkdownDTO {
 	return pageMarkdownDTO{
 		Slug:               p.Slug,
+		SourceKey:          contentmodel.SourceKeyFromLogicalPath(resolvedSourcePath),
 		Title:              p.Title,
 		Date:               p.Date,
 		Tags:               nullsafeStrings(p.Tags),
@@ -807,6 +815,7 @@ func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, contentRoot, site
 	identity := pageIdentityFromPage(p, fileutil.LogicalContentPath(contentRoot, resolved.SourcePath), resolvedRevision(resolved), readingTimeMin)
 	return frontmatterDTO{
 		Slug:               identity.Slug,
+		SourceKey:          identity.SourceKey,
 		Title:              identity.Title,
 		Date:               p.Date,
 		Tags:               nullsafeStrings(p.Tags),

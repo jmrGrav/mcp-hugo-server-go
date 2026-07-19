@@ -52,6 +52,7 @@ type createPageOutput struct {
 	// response doesn't emit a useless slug:"" alongside the real value in
 	// request_context.slug (#455).
 	Slug         string  `json:"slug,omitempty"`
+	SourceKey    string  `json:"source_key,omitempty"`
 	Path         string  `json:"path,omitempty"`
 	ResolvedLang *string `json:"resolved_lang,omitempty"`
 	// ResolvedSourcePath is only meaningful once resolution succeeded — see
@@ -83,6 +84,7 @@ type createPageOutput struct {
 type createPageData struct {
 	Status             string               `json:"status,omitempty"`
 	Slug               string               `json:"slug,omitempty"`
+	SourceKey          string               `json:"source_key,omitempty"`
 	Path               string               `json:"path,omitempty"`
 	ResolvedLang       *string              `json:"resolved_lang,omitempty"`
 	ResolvedSourcePath *string              `json:"resolved_source_path,omitempty"`
@@ -114,6 +116,7 @@ type updatePageOutput struct {
 	// Slug is never legitimately empty on success — see the same reasoning
 	// on createPageOutput.Slug (#455).
 	Slug         string  `json:"slug,omitempty"`
+	SourceKey    string  `json:"source_key,omitempty"`
 	ResolvedLang *string `json:"resolved_lang,omitempty"`
 	// ResolvedSourcePath is only meaningful once the slug/lang resolved to a
 	// real source page — omitted (not emptied) when resolution never
@@ -137,6 +140,7 @@ type updatePageOutput struct {
 type updatePageData struct {
 	Status             string               `json:"status,omitempty"`
 	Slug               string               `json:"slug,omitempty"`
+	SourceKey          string               `json:"source_key,omitempty"`
 	ResolvedLang       *string              `json:"resolved_lang,omitempty"`
 	ResolvedSourcePath *string              `json:"resolved_source_path,omitempty"`
 	DryRun             bool                 `json:"dry_run,omitempty"`
@@ -166,6 +170,7 @@ type deletePageOutput struct {
 	// Slug is never legitimately empty on success — see the same reasoning
 	// on createPageOutput.Slug (#455).
 	Slug         string  `json:"slug,omitempty"`
+	SourceKey    string  `json:"source_key,omitempty"`
 	ResolvedLang *string `json:"resolved_lang,omitempty"`
 	// ResolvedSourcePath is only meaningful once resolution succeeded — see
 	// the same reasoning on updatePageOutput.ResolvedSourcePath.
@@ -185,6 +190,7 @@ type deletePageOutput struct {
 type deletePageData struct {
 	Status             string                   `json:"status,omitempty"`
 	Slug               string                   `json:"slug,omitempty"`
+	SourceKey          string                   `json:"source_key,omitempty"`
 	ResolvedLang       *string                  `json:"resolved_lang,omitempty"`
 	ResolvedSourcePath *string                  `json:"resolved_source_path,omitempty"`
 	DryRun             bool                     `json:"dry_run,omitempty"`
@@ -211,6 +217,7 @@ func newCreatePageOutput(data createPageData) createPageOutput {
 		ToolResponse:       writeSuccessEnvelope(data),
 		Status:             data.Status,
 		Slug:               data.Slug,
+		SourceKey:          data.SourceKey,
 		Path:               data.Path,
 		ResolvedLang:       data.ResolvedLang,
 		ResolvedSourcePath: data.ResolvedSourcePath,
@@ -228,6 +235,7 @@ func newUpdatePageOutput(data updatePageData) updatePageOutput {
 		ToolResponse:       writeSuccessEnvelope(data),
 		Status:             data.Status,
 		Slug:               data.Slug,
+		SourceKey:          data.SourceKey,
 		ResolvedLang:       data.ResolvedLang,
 		ResolvedSourcePath: data.ResolvedSourcePath,
 		DryRun:             data.DryRun,
@@ -244,6 +252,7 @@ func newDeletePageOutput(data deletePageData) deletePageOutput {
 		ToolResponse:       writeSuccessEnvelope(data),
 		Status:             data.Status,
 		Slug:               data.Slug,
+		SourceKey:          data.SourceKey,
 		ResolvedLang:       data.ResolvedLang,
 		ResolvedSourcePath: data.ResolvedSourcePath,
 		DryRun:             data.DryRun,
@@ -480,6 +489,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, newCreatePageOutput(createPageData{
 				Status:             "ok",
 				Slug:               in.Slug,
+				SourceKey:          in.Slug,
 				ResolvedLang:       strPtr(resolvedLang),
 				ResolvedSourcePath: strPtr(logicalPath),
 				DryRun:             true,
@@ -585,6 +595,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		out := newCreatePageOutput(createPageData{
 			Status:             status,
 			Slug:               in.Slug,
+			SourceKey:          in.Slug,
 			Path:               logicalPath,
 			ResolvedLang:       strPtr(resolvedLang),
 			ResolvedSourcePath: strPtr(logicalPath),
@@ -782,6 +793,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, newUpdatePageOutput(updatePageData{
 				Status:             "ok",
 				Slug:               in.Slug,
+				SourceKey:          in.Slug,
 				ResolvedLang:       strPtr(resolvedSource.Lang),
 				ResolvedSourcePath: strPtr(logicalPath),
 				DryRun:             true,
@@ -850,6 +862,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		out := newUpdatePageOutput(updatePageData{
 			Status:             status,
 			Slug:               in.Slug,
+			SourceKey:          in.Slug,
 			ResolvedLang:       strPtr(resolvedSource.Lang),
 			ResolvedSourcePath: strPtr(logicalPath),
 			NewRevision:        contentmodel.SourceRevisionBytes([]byte(content)),
@@ -930,6 +943,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, newDeletePageOutput(deletePageData{
 				Status:             "ok",
 				Slug:               in.Slug,
+				SourceKey:          in.Slug,
 				ResolvedLang:       strPtr(resolvedSource.Lang),
 				ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
 				DryRun:             true,
@@ -1071,6 +1085,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		out := newDeletePageOutput(deletePageData{
 			Status:             status,
 			Slug:               in.Slug,
+			SourceKey:          in.Slug,
 			ResolvedLang:       strPtr(resolvedSource.Lang),
 			ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
 			Warning:            deleteWarning,
