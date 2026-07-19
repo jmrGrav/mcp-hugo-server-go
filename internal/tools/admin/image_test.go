@@ -107,17 +107,21 @@ func TestGenerateFeaturedImage_Success(t *testing.T) {
 		t.Fatalf("file content mismatch: got %v, want %v", got, fakeBytes)
 	}
 
+	expectedLogicalPath := "static/images/my-post-featured.jpg"
 	text := resultText(res)
-	if !strings.Contains(text, expectedPath) {
-		t.Fatalf("result text %q does not contain path %q", text, expectedPath)
+	if !strings.Contains(text, expectedLogicalPath) {
+		t.Fatalf("result text %q does not contain logical path %q", text, expectedLogicalPath)
+	}
+	if strings.Contains(text, hugoRoot) {
+		t.Fatalf("result text %q leaks absolute hugo_root %q (#551)", text, hugoRoot)
 	}
 	out := decodeStructuredResult(t, res)
 	data, ok := out["data"].(map[string]any)
 	if !ok {
 		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
-	if got := data["path"]; got != expectedPath {
-		t.Fatalf("generate_hero_image data.path = %v, want %q", got, expectedPath)
+	if got := data["path"]; got != expectedLogicalPath {
+		t.Fatalf("generate_hero_image data.path = %v, want %q", got, expectedLogicalPath)
 	}
 }
 
@@ -240,6 +244,15 @@ func TestGenerateFeaturedImageLocalRender(t *testing.T) {
 	}
 	if info.Size() < 1000 {
 		t.Fatalf("rendered JPEG suspiciously small: %d bytes", info.Size())
+	}
+
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	if got, want := data["path"], "static/images/my-post-featured.jpg"; got != want {
+		t.Fatalf("generate_hero_image (local render) data.path = %v, want %q (#551)", got, want)
 	}
 }
 
