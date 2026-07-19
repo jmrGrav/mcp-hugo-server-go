@@ -54,8 +54,8 @@ func TestSuccessEnvelopePopulatesCompatibilityFields(t *testing.T) {
 	if got.Meta.SchemaVersion != toolcontract.ToolResultVersion {
 		t.Fatalf("successEnvelope().Meta.SchemaVersion = %q, want %q", got.Meta.SchemaVersion, toolcontract.ToolResultVersion)
 	}
-	if got.Meta.ServerVersion != buildinfo.Version {
-		t.Fatalf("successEnvelope().Meta.ServerVersion = %q, want %q", got.Meta.ServerVersion, buildinfo.Version)
+	if got.Meta.ReleaseVersion != buildinfo.Version {
+		t.Fatalf("successEnvelope().Meta.ReleaseVersion = %q, want %q", got.Meta.ReleaseVersion, buildinfo.Version)
 	}
 	if got.GeneratedAt != now.Format(time.RFC3339) {
 		t.Fatalf("successEnvelope().GeneratedAt = %q", got.GeneratedAt)

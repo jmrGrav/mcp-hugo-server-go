@@ -116,8 +116,8 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 	if degraded, present := out["data"].(map[string]any)["degraded"]; present {
 		t.Fatalf("expected no degraded surfaces when hugo+git are both available, got %v", degraded)
 	}
-	if _, present := data["release_version"]; present {
-		t.Fatalf("release_version = %v, want removed (#560) — server_version + build_channel already carry this", data["release_version"])
+	if got, ok := data["release_version"].(string); !ok || got == "" {
+		t.Fatalf("release_version = %v, want non-empty (#563)", data["release_version"])
 	}
 	if got := data["build_channel"]; got != "main" {
 		t.Fatalf("build_channel = %v, want main", got)

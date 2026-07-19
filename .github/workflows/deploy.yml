@@ -81,7 +81,7 @@ jobs:
           else
             BUILD_VERSION="main-$SHORT_SHA"
             # Mainline production deploys with no explicit release_version
-            # input omit it: callers should use server_version=main-<sha>
+            # input omit it: callers should use build_version=main-<sha>
             # plus commit/build_channel instead.
             RELEASE_VERSION=""
             BUILD_CHANNEL="main"

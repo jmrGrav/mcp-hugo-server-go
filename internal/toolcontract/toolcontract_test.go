@@ -60,11 +60,11 @@ func TestSuccessInitializesSlicesAndMeta(t *testing.T) {
 	if !ok {
 		t.Fatalf("meta = %T, want map", decoded["meta"])
 	}
-	if metaMap["server_version"] != "1.4.0" {
-		t.Fatalf("meta.server_version = %v, want 1.4.0", metaMap["server_version"])
+	if metaMap["release_version"] != "1.4.0" {
+		t.Fatalf("meta.release_version = %v, want 1.4.0", metaMap["release_version"])
 	}
-	if _, present := metaMap["release_version"]; present {
-		t.Fatalf("meta.release_version = %v, want removed (#560) — server_version + build_channel already carry this", metaMap["release_version"])
+	if _, present := metaMap["server_version"]; present {
+		t.Fatalf("meta.server_version = %v, want absent — renamed to release_version (#563)", metaMap["server_version"])
 	}
 	if metaMap["commit"] != "50cbc9fe4217" {
 		t.Fatalf("meta.commit = %v, want 50cbc9fe4217", metaMap["commit"])
@@ -80,23 +80,20 @@ func TestSuccessInitializesSlicesAndMeta(t *testing.T) {
 	}
 }
 
-// TestSuccessCarriesReleaseIdentityViaServerVersionForMainlineBuilds covers
-// #560: server_version + build_channel together carry the release identity
-// that a since-removed release_version field used to mirror — on a mainline
-// build, server_version is "main-<sha>" and build_channel is "main"; there
-// is no release_version key to omit or populate anymore.
-func TestSuccessCarriesReleaseIdentityViaServerVersionForMainlineBuilds(t *testing.T) {
+// TestSuccessReleaseVersionAlwaysPopulatedForMainlineBuilds covers #563:
+// meta.release_version (renamed from server_version) keeps the same
+// always-populated semantics its predecessor had — on a mainline build it's
+// "main-<sha>", not empty, unlike the older (pre-#560) release_version field
+// this rename deliberately does not restore.
+func TestSuccessReleaseVersionAlwaysPopulatedForMainlineBuilds(t *testing.T) {
 	origVersion := buildinfo.Version
-	origRelease := buildinfo.ReleaseVersion
 	origCommit := buildinfo.Commit
 	origChannel := buildinfo.BuildChannel
 	buildinfo.Version = "main-3fb254677090"
-	buildinfo.ReleaseVersion = ""
 	buildinfo.Commit = "3fb25467709019d1611a252f2ccfc9376677031d"
 	buildinfo.BuildChannel = ""
 	defer func() {
 		buildinfo.Version = origVersion
-		buildinfo.ReleaseVersion = origRelease
 		buildinfo.Commit = origCommit
 		buildinfo.BuildChannel = origChannel
 	}()
@@ -116,11 +113,11 @@ func TestSuccessCarriesReleaseIdentityViaServerVersionForMainlineBuilds(t *testi
 	if !ok {
 		t.Fatalf("meta = %T, want map", decoded["meta"])
 	}
-	if _, present := metaMap["release_version"]; present {
-		t.Fatalf("meta.release_version = %v, want removed (#560)", metaMap["release_version"])
+	if _, present := metaMap["server_version"]; present {
+		t.Fatalf("meta.server_version = %v, want absent — renamed to release_version (#563)", metaMap["server_version"])
 	}
-	if got := metaMap["server_version"]; got != "main-3fb254677090" {
-		t.Fatalf("meta.server_version = %v, want main-3fb254677090", got)
+	if got := metaMap["release_version"]; got != "main-3fb254677090" {
+		t.Fatalf("meta.release_version = %v, want main-3fb254677090", got)
 	}
 	if got := metaMap["build_channel"]; got != "main" {
 		t.Fatalf("meta.build_channel = %v, want main", got)

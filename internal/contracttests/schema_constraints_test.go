@@ -191,7 +191,7 @@ func TestContractCompactModeTrimsMetaOnReadTools(t *testing.T) {
 			if got := asString(meta["schema_version"]); got != toolcontract.ToolResultVersion {
 				t.Fatalf("%s compact meta.schema_version = %q, want %q", tc.tool, got, toolcontract.ToolResultVersion)
 			}
-			for _, forbidden := range []string{"generated_at", "server_version", "commit", "build_channel"} {
+			for _, forbidden := range []string{"generated_at", "release_version", "commit", "build_channel"} {
 				if _, ok := meta[forbidden]; ok {
 					t.Fatalf("%s compact meta unexpectedly contains %q: %v", tc.tool, forbidden, meta[forbidden])
 				}
@@ -228,13 +228,12 @@ func TestContractSearchPagesDefaultModeKeepsFullMeta(t *testing.T) {
 	if !ok {
 		t.Fatalf("search_pages meta type = %T, want map[string]any", m["meta"])
 	}
-	// generated_at/server_version are always non-empty (see toolcontract.NewMeta);
+	// generated_at/release_version are always non-empty (see toolcontract.NewMeta);
 	// commit/build_channel are legitimately omitted for an untagged dev/test
-	// build (omitempty), so they aren't asserted here — release_version was
-	// removed from the contract entirely (#560). The point is proving this
-	// is NOT the compact-trimmed shape (schema_version
+	// build (omitempty), so they aren't asserted here. The point is proving
+	// this is NOT the compact-trimmed shape (schema_version
 	// only), not that every optional identity field is populated.
-	for _, field := range []string{"generated_at", "server_version", "schema_version"} {
+	for _, field := range []string{"generated_at", "release_version", "schema_version"} {
 		if got := asString(meta[field]); got == "" {
 			t.Fatalf("search_pages default-mode meta.%s = empty, want populated (#553)", field)
 		}
