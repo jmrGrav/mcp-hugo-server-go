@@ -2,6 +2,28 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.3] - 2026-07-18
+
+Follow-up fixes and contract clarifications from the v1.5.2 live audit, plus a real build-pipeline bug found while investigating one of them. Four adjacent design proposals (compact response mode, pre-mutation bundling, AI-readiness rubric, execution planner) were reviewed and locked as design docs but deferred to v1.5.4 for implementation.
+
+### Fixed
+- **`diff_page`/`validate_frontmatter`/`validate_site` now return canonical `/posts/x/`-form slugs** (#519, PR #529), including for Hugo section-index pages, instead of the raw source-relative path.
+- **`rate_limit_remaining` no longer reports a stale value inside nested `data` on write-tool errors** (#522, PR #530): the field is now derived from the same value mirrored at the root, so the two can never disagree.
+- **`build_site` permission-denied hints now distinguish ownership drift from a missing `ReadWritePaths` entry** (#521, PR #532): a `chtimes ... operation not permitted` failure on an existing output file now points at file ownership specifically, not just the systemd write allowlist.
+- **`build_site` now passes `--cleanDestinationDir` to Hugo** (#524, PR #539): previously, output for pages deleted since the last build (stale taxonomy list entries, orphaned static assets) was never removed from `site_root`. Live investigation traced a reported broken link on production not to any current content defect, but to twenty builds' worth of accumulated orphaned output from posts deleted over the prior week.
+
+### Docs
+- **Reader tool descriptions and docs no longer overstate bearerless access on OAuth-enabled deployments** (#518, PR #528): `search_pages`, `get_page`, `get_sitemap`, `search_content`, and other `read`-tier tools now say a Bearer token is required when OAuth is enabled, rather than "no authentication required."
+- **Write-tool root/data field duplication documented as an explicit v1.x compatibility alias** (#520, PR #531), with regression tests proving root and `data` values can never drift apart.
+- **`meta.release_version` mainline-build policy made explicit** (#523, PR #533): a normal `main` deploy reports `server_version=main-<sha>`/`build_channel=main` and omits `release_version` by design; only exact-tag deploys populate it.
+- **`IsError` documented as a transport-only MCP signal** (#525, PR #534): the canonical JSON contract is `success`/`errors`, never a mirrored `is_error` field in the structured payload.
+
+### Design (deferred to v1.5.4 — not yet implemented)
+- **Compact response mode** (#526, PR #535): locks `response_mode=compact` as the single uniform shaping mechanism for the read surface, trimming `meta` to `schema_version` only.
+- **Pre-mutation bundle consolidation** (#527, PR #536): locks `get_page_for_edit` as the aggregation point for `backlinks`/`impact`/`preview`, with an equality invariant against the standalone tools.
+- **AI-readiness rubric** (#437, PR #538): locks a deterministic, source-oriented check family (heading hierarchy, section/paragraph length, metadata presence, link density, citation structure) for a future `validate_ai_readiness` tool.
+- **Execution planner scope** (#438, PR #537): locks the planner as an extension of the existing `plan_content_change`/`apply_content_plan` transactional-edit foundation, not a competing orchestration model.
+
 ## [v1.5.2] - 2026-07-18
 
 Security-driven release from a same-day live production audit (external ChatGPT/Codex audit + Claude Code, 2026-07-18) of the v1.5.1 deploy, plus the resulting envelope-contract and observability follow-ups.
