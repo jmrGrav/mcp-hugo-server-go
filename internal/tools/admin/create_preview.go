@@ -42,15 +42,16 @@ type createPreviewData struct {
 	Build     string `json:"build"`
 }
 
-// createPreviewOutput carries the same fields at the root as compatibility
-// aliases alongside the structured envelope (#552) — this tool previously
-// had no envelope at all, so this is purely additive, not a breaking change.
+// createPreviewOutput's payload lives only under data.* as of v1.5.9 (#573)
+// — #552 originally added root-level compatibility aliases alongside data
+// when this tool first gained an envelope, but #520 (v1.5.7) had already
+// established data-only as the convention for every other tool that got an
+// envelope around the same time; this finishes that convergence for the
+// two tools #520 didn't cover. BREAKING: callers reading preview_id/url/
+// expires_at/build at the root must switch to data.preview_id/data.url/
+// data.expires_at/data.build.
 type createPreviewOutput struct {
 	toolcontract.ToolResponse[createPreviewData]
-	PreviewID string `json:"preview_id"`
-	URL       string `json:"url"`
-	ExpiresAt string `json:"expires_at"`
-	Build     string `json:"build"`
 }
 
 func createPreviewSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
@@ -60,10 +61,6 @@ func createPreviewSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 func newCreatePreviewOutput(data createPreviewData) createPreviewOutput {
 	return createPreviewOutput{
 		ToolResponse: createPreviewSuccessEnvelope(data),
-		PreviewID:    data.PreviewID,
-		URL:          data.URL,
-		ExpiresAt:    data.ExpiresAt,
-		Build:        data.Build,
 	}
 }
 

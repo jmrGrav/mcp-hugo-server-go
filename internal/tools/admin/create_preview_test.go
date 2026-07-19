@@ -2,7 +2,6 @@ package admin_test
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -115,23 +114,24 @@ func TestCreatePreviewBuildsIsolatedDirAndServesViaStore(t *testing.T) {
 		t.Fatalf("create_preview returned error: %s", resultText(res))
 	}
 
-	var out map[string]any
-	if err := json.Unmarshal([]byte(resultText(res)), &out); err != nil {
-		t.Fatalf("response not JSON: %v", err)
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
-	if out["build"] != "passed" {
-		t.Fatalf("build = %v, want passed", out["build"])
+	if data["build"] != "passed" {
+		t.Fatalf("data.build = %v, want passed", data["build"])
 	}
-	previewID, _ := out["preview_id"].(string)
+	previewID, _ := data["preview_id"].(string)
 	if previewID == "" {
-		t.Fatal("preview_id must not be empty")
+		t.Fatal("data.preview_id must not be empty")
 	}
-	url, _ := out["url"].(string)
+	url, _ := data["url"].(string)
 	if !strings.HasPrefix(url, "https://mcp.example.test/preview/"+previewID+"/") {
-		t.Fatalf("url = %q, want prefix https://mcp.example.test/preview/%s/", url, previewID)
+		t.Fatalf("data.url = %q, want prefix https://mcp.example.test/preview/%s/", url, previewID)
 	}
-	if out["expires_at"] == "" || out["expires_at"] == nil {
-		t.Fatal("expires_at must not be empty")
+	if data["expires_at"] == "" || data["expires_at"] == nil {
+		t.Fatal("data.expires_at must not be empty")
 	}
 
 	// The public site directory must remain untouched by the preview build.
@@ -154,7 +154,12 @@ func TestCreatePreviewBuildsIsolatedDirAndServesViaStore(t *testing.T) {
 	}
 }
 
-func TestCreatePreviewHasEnvelopeMatchingRootFields(t *testing.T) {
+// TestCreatePreviewNoRootFieldDuplication is a regression test for #573:
+// finishes #520's convergence for this tool — preview_id/url/expires_at/
+// build must live only under data.*, with no root-level compatibility
+// aliases (which #552 originally added when this tool first gained an
+// envelope, before #520 established data-only as the convention).
+func TestCreatePreviewNoRootFieldDuplication(t *testing.T) {
 	hugoDir := writeMockHugoForPreview(t, "preview marker content")
 	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
 
@@ -175,18 +180,21 @@ func TestCreatePreviewHasEnvelopeMatchingRootFields(t *testing.T) {
 
 	out := decodeStructuredResult(t, res)
 	if got := out["success"]; got != true {
-		t.Fatalf("success = %v, want true (#552)", got)
+		t.Fatalf("success = %v, want true (#573)", got)
 	}
 	data, ok := out["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("data type = %T, want map[string]any (#552)", out["data"])
+		t.Fatalf("data type = %T, want map[string]any (#573)", out["data"])
 	}
 	if _, ok := out["meta"].(map[string]any); !ok {
-		t.Fatalf("meta type = %T, want map[string]any (#552)", out["meta"])
+		t.Fatalf("meta type = %T, want map[string]any (#573)", out["meta"])
 	}
 	for _, field := range []string{"preview_id", "url", "expires_at", "build"} {
-		if data[field] != out[field] {
-			t.Fatalf("data.%s = %v, root %s = %v — must match (#552)", field, data[field], field, out[field])
+		if _, present := data[field]; !present {
+			t.Fatalf("data.%s missing (#573)", field)
+		}
+		if _, present := out[field]; present {
+			t.Fatalf("root %s = %v, want absent — no more root/data duplication (#573)", field, out[field])
 		}
 	}
 }
@@ -210,13 +218,14 @@ func TestCreatePreviewClampsTTLToConfiguredBounds(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("create_preview returned error: %s", resultText(res))
 	}
-	var out map[string]any
-	if err := json.Unmarshal([]byte(resultText(res)), &out); err != nil {
-		t.Fatalf("response not JSON: %v", err)
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
-	expiresAt, _ := out["expires_at"].(string)
+	expiresAt, _ := data["expires_at"].(string)
 	if expiresAt == "" {
-		t.Fatal("expires_at must not be empty")
+		t.Fatal("data.expires_at must not be empty")
 	}
 }
 
@@ -240,11 +249,12 @@ func TestCreatePreviewPassesBaseURLPointedAtOwnMount(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("create_preview returned error: %s", resultText(res))
 	}
-	var out map[string]any
-	if err := json.Unmarshal([]byte(resultText(res)), &out); err != nil {
-		t.Fatalf("response not JSON: %v", err)
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
-	returnedURL, _ := out["url"].(string)
+	returnedURL, _ := data["url"].(string)
 
 	argv, err := os.ReadFile(argvFile)
 	if err != nil {
