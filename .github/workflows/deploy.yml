@@ -16,6 +16,11 @@ on:
         required: true
         default: main
         type: string
+      release_version:
+        description: 'Explicit release identity to report (e.g. v1.5.5). Optional — overrides git-tag auto-detection, so a mainline commit deployed before its release tag exists can still report the release it belongs to. Leave empty to keep the existing exact-tag-only behavior.'
+        required: false
+        default: ''
+        type: string
       dry_run:
         description: 'Dry run — build and validate only, skip production deployment'
         required: false
@@ -59,15 +64,25 @@ jobs:
             exit 1
           fi
           SHORT_SHA="$(git rev-parse --short=12 HEAD)"
-          if TAG_NAME="$(git describe --tags --exact-match 2>/dev/null)"; then
+          EXPLICIT_RELEASE="${{ inputs.release_version }}"
+          if [ -n "$EXPLICIT_RELEASE" ]; then
+            # Deploy-before-tag: the caller is asserting which release this
+            # mainline commit belongs to, ahead of the Release workflow
+            # actually cutting that tag (which requires this deployment to
+            # already be live and verified — see release.yml). Once tagged,
+            # git describe would resolve the same value anyway.
+            BUILD_VERSION="$EXPLICIT_RELEASE"
+            RELEASE_VERSION="$EXPLICIT_RELEASE"
+            BUILD_CHANNEL="release"
+          elif TAG_NAME="$(git describe --tags --exact-match 2>/dev/null)"; then
             BUILD_VERSION="$TAG_NAME"
             RELEASE_VERSION="$TAG_NAME"
             BUILD_CHANNEL="release"
           else
             BUILD_VERSION="main-$SHORT_SHA"
-            # Mainline production deploys intentionally omit release_version:
-            # callers should use server_version=main-<sha> plus commit/build_channel
-            # unless the build came from an exact release tag.
+            # Mainline production deploys with no explicit release_version
+            # input omit it: callers should use server_version=main-<sha>
+            # plus commit/build_channel instead.
             RELEASE_VERSION=""
             BUILD_CHANNEL="main"
           fi

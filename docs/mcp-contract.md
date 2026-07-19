@@ -208,12 +208,16 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
   server version, and the two now live at unambiguous, adjacent names.
 - The deployed server version is carried separately in
   `meta.server_version` inside structured tool responses.
-- `meta.release_version` is the named product release when the build was cut
-  from one (for example `v1.5.1`). It is omitted for non-release builds.
-  Concretely, the current deploy workflow sets it only for exact-tag
-  deployments; a normal production deploy from `main` reports
-  `meta.server_version = "main-<sha>"`, `meta.build_channel = "main"`, and
-  no `meta.release_version`.
+- `meta.release_version` is the named product release the build belongs to
+  (for example `v1.5.5`). Production deploys always run from `main` and
+  are tagged only afterward, once the deployment is live and verified (see
+  `.github/workflows/release.yml`'s ancestry check) — so `release_version`
+  is always supplied explicitly at deploy time via the `release_version`
+  input to `.github/workflows/deploy.yml`, rather than derived from a tag
+  that doesn't exist yet. A deploy triggered without that input (or
+  targeting a ref that isn't the intended release commit) omits
+  `meta.release_version` and reports `meta.server_version = "main-<sha>"`,
+  `meta.build_channel = "main"` instead.
 - `meta.commit` is the VCS revision embedded by Go's build info.
 - `meta.build_channel` identifies the deployment line (for example
   `release`, `main`, `staging`) and is derived or injected separately from
