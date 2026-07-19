@@ -696,6 +696,13 @@ func TestListPageAssetsListsSiblingFilesInBundle(t *testing.T) {
 			if size, _ := a["size_bytes"].(float64); size != float64(len("cover bytes")) {
 				t.Fatalf("list_page_assets cover.webp size_bytes = %v, want %d", a["size_bytes"], len("cover bytes"))
 			}
+			// #574: sha256 must be present, matching this tool's own
+			// description that promises it for delete_page_asset's
+			// expected_sha256 concurrency guard.
+			sha, _ := a["sha256"].(string)
+			if !strings.HasPrefix(sha, "sha256:") {
+				t.Fatalf("list_page_assets cover.webp sha256 = %q, want sha256:<hex> prefix", sha)
+			}
 		}
 	}
 	if !names["cover.webp"] || !names["notes.txt"] {
@@ -703,6 +710,47 @@ func TestListPageAssetsListsSiblingFilesInBundle(t *testing.T) {
 	}
 	if names["index.md"] {
 		t.Fatal("list_page_assets must not list the page's own index.md")
+	}
+	if _, ok := m["hint"]; ok {
+		t.Fatalf("list_page_assets data.hint = %v, want absent when assets is non-empty", m["hint"])
+	}
+}
+
+// TestListPageAssetsEmptyBundleIncludesHint is a regression test for #569:
+// an empty data.assets list should carry a hint clarifying this tool only
+// covers page-bundle sibling files, not the site's global static assets a
+// page's rendered HTML may still reference.
+func TestListPageAssetsEmptyBundleIncludesHint(t *testing.T) {
+	root := t.TempDir()
+	full := filepath.Join(root, "content", "posts", "article", "index.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte("---\ntitle: Article\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src, err := hugosite.NewSourceIndex(filepath.Join(root, "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join(root, "content")
+	session, done := newTestClientWithCfg(t, idx, cfg, src)
+	defer done()
+
+	res := callTool(t, session, "list_page_assets", map[string]any{"slug": "/posts/article"})
+	if res.IsError {
+		t.Fatalf("list_page_assets returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	assets, _ := m["assets"].([]any)
+	if len(assets) != 0 {
+		t.Fatalf("list_page_assets assets = %v, want empty (no sibling files written)", assets)
+	}
+	hint, _ := m["hint"].(string)
+	if hint == "" {
+		t.Fatal("list_page_assets data.hint must be present when assets is empty")
 	}
 }
 
@@ -2308,6 +2356,27 @@ func TestValidateSite(t *testing.T) {
 	data := decodeContent(t, res)
 	if _, ok := data["pages_checked"]; !ok {
 		t.Fatal("validate_site missing pages_checked")
+	}
+	if data["status"] != "valid" {
+		t.Fatalf("validate_site data.status = %v, want %q (fixture has no invalid pages)", data["status"], "valid")
+	}
+}
+
+// TestValidateSiteStatusFieldInvalid is a regression test for #568: a
+// caller should be able to branch on a single data.status field instead of
+// deriving validity from an empty pages list plus the invalid counter.
+func TestValidateSiteStatusFieldInvalid(t *testing.T) {
+	idx, srcIdx := mustSiteWithOneInvalidPage(t)
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{"include_valid": true})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if data["status"] != "invalid" {
+		t.Fatalf("validate_site data.status = %v, want %q (fixture has one broken page)", data["status"], "invalid")
 	}
 }
 

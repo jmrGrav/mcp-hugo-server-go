@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 )
 
 // minimalPNG is enough leading bytes for http.DetectContentType to sniff
@@ -468,6 +470,59 @@ func TestDeletePageAssetDryRunPreviewsWithoutDeleting(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); err != nil {
 		t.Fatalf("delete_page_asset dry_run must not delete the file: %v", err)
+	}
+}
+
+// TestDeletePageAssetDryRunDoesNotConsumeDestructiveQuota is a regression
+// test for #575: a live Claude.ai audit observed rate_limit_remaining drop
+// (5→4) on delete_page_asset before the real (non-dry-run) call, suggesting
+// dry_run itself consumed the destructive quota. The handler's own code
+// comment says fetching the limiter doesn't consume budget and dry_run
+// returns before calling limiter.Allow() — this test proves that empirically
+// with a small budget so any unexpected decrement is visible immediately,
+// ruling out (or catching) a token-bucket-refill artifact masking a real bug.
+func TestDeletePageAssetDryRunDoesNotConsumeDestructiveQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 2
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	if res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.png",
+		"content_base64": b64(minimalPNG),
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("upload_page_asset returned error: %s", raw)
+	}
+
+	var remaining []float64
+	for i := 0; i < 5; i++ {
+		res := callTool(t, session, "delete_page_asset", map[string]any{
+			"slug":     "posts/article",
+			"filename": "cover.png",
+			"dry_run":  true,
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("delete_page_asset dry_run %d returned error: %s", i, raw)
+		}
+		data := decodeWriteData(t, res)
+		rem, ok := data["rate_limit_remaining"].(float64)
+		if !ok {
+			t.Fatalf("delete_page_asset dry_run %d: rate_limit_remaining missing", i)
+		}
+		remaining = append(remaining, rem)
+	}
+	for i := 1; i < len(remaining); i++ {
+		if remaining[i] != remaining[0] {
+			t.Fatalf("delete_page_asset dry_run consumed destructive quota: rate_limit_remaining sequence = %v, want constant at %v (dry_run must never call limiter.Allow())", remaining, remaining[0])
+		}
+	}
+	if remaining[0] != float64(rl.DestructivePerMin) {
+		t.Fatalf("delete_page_asset dry_run rate_limit_remaining = %v, want full fresh budget %d", remaining[0], rl.DestructivePerMin)
 	}
 }
 
