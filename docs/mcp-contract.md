@@ -236,6 +236,12 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
   (`build_channel == "release"`, `release_version` is the release tag)
   from a mainline one (`build_channel == "main"`, `release_version` is
   `main-<sha>`).
+- **`release_version` is frozen as of v1.5.8.** This is the field's fourth
+  name/shape change in four releases (v1.5.5 add → v1.5.6/v1.5.7 merge →
+  v1.5.8 rename back), and that churn was itself flagged as a contract-
+  stability problem by an external client audit. The name and semantics
+  described above will not change again without a major version bump —
+  clients should key on `release_version` going forward.
 - Production deploys always run from `main` and are tagged only
   afterward, once the deployment is live and verified (see
   `.github/workflows/release.yml`'s ancestry check) — so a deploy must be

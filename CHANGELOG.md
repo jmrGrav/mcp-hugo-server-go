@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.8] - 2026-07-19
+
+**BREAKING.** Follow-up from the v1.5.6/v1.5.7 "ChatGPT tool disabled" incident report (confirmed by production nginx/mcp log audit to be a client-side connector safety trip, not a server regression — zero 5xx/429/unexpected-4xx responses to the ChatGPT connector across the full log history) plus an explicit maintainer field-naming request.
+
+### Changed
+- **BREAKING: `meta.server_version` renamed back to `meta.release_version`** (#563, PR #566), at explicit maintainer request. Same value, same always-populated semantics (release tag on a release build, `main-<sha>` otherwise) — only the JSON key name changed. Callers reading `meta.server_version` must switch to `meta.release_version`.
+- **`release_version` is now frozen.** This is the fourth change to this one field across four releases (v1.5.5 add → v1.5.6/v1.5.7 merge → v1.5.8 rename back) — churn that an external client audit flagged as a contract-stability problem. The name and semantics will not change again without a major version bump; see `docs/mcp-contract.md` §5.
+
+### Investigated
+- **"ChatGPT tool disabled" incident (#565): confirmed not a server-side regression.** Full nginx access/error log review across the incident window and full history shows zero anomalous responses to the ChatGPT connector — the identical healthy request pattern (200 → 202 ack → 200 payload → 499 client-closed SSE) repeats cleanly through all 35 tool-call cycles in the flagged session, with no error on the final cycle. The larger cycle count versus prior successful audits (35 vs. 11–15) points to ChatGPT's own connector-side safety circuit breaker tripping, not a passthrough of a proxied error.
+- **nginx `mcp_oauth` rate-limit zone reviewed** (#564): current limits (30r/m, burst 20 nodelay) were not the cause of this incident, but are tight enough that a somewhat larger legitimate multi-call agent session could plausibly trip them in the future. Hardening tracked separately in #564; no config change shipped in this release.
+
 ## [v1.5.7] - 2026-07-19
 
 **BREAKING.** Ships #520's preferred remediation as a patch release rather than waiting for v1.6.0 — the maintainer decided to reverse v1.5.6's deferral note once the fix turned out to be low-risk to implement cleanly.
