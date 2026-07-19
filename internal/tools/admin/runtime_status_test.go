@@ -23,12 +23,9 @@ func runGitCmd(t *testing.T, dir string, args ...string) {
 func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 	buildstatus.ResetForTest()
 	t.Cleanup(buildstatus.ResetForTest)
-	origRelease := buildinfo.ReleaseVersion
 	origChannel := buildinfo.BuildChannel
-	buildinfo.ReleaseVersion = "v1.5.1"
 	buildinfo.BuildChannel = "main"
 	t.Cleanup(func() {
-		buildinfo.ReleaseVersion = origRelease
 		buildinfo.BuildChannel = origChannel
 	})
 
@@ -119,8 +116,8 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 	if degraded, present := out["data"].(map[string]any)["degraded"]; present {
 		t.Fatalf("expected no degraded surfaces when hugo+git are both available, got %v", degraded)
 	}
-	if got := data["release_version"]; got != "v1.5.1" {
-		t.Fatalf("release_version = %v, want v1.5.1", got)
+	if _, present := data["release_version"]; present {
+		t.Fatalf("release_version = %v, want removed (#560) — server_version + build_channel already carry this", data["release_version"])
 	}
 	if got := data["build_channel"]; got != "main" {
 		t.Fatalf("build_channel = %v, want main", got)

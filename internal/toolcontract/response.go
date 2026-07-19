@@ -18,11 +18,16 @@ const ToolResultVersion = buildinfo.SchemaVersion
 type ResponseMeta struct {
 	GeneratedAt string `json:"generated_at,omitempty"`
 	// ServerVersion is the deployed server build (internal/buildinfo.Version)
-	// — what most callers actually want when they say "version".
-	ServerVersion  string `json:"server_version,omitempty"`
-	ReleaseVersion string `json:"release_version,omitempty"`
-	Commit         string `json:"commit,omitempty"`
-	BuildChannel   string `json:"build_channel,omitempty"`
+	// — what most callers actually want when they say "version". It already
+	// carries the release identity by itself: on a release build it *is*
+	// the release tag (e.g. "v1.5.5"); on a mainline build it's
+	// "main-<sha>". A separate release_version field used to mirror this
+	// same value (or be omitted) — removed (#560) because it never carried
+	// information ServerVersion + BuildChannel didn't already have:
+	// build_channel=="release" means ServerVersion is the release tag.
+	ServerVersion string `json:"server_version,omitempty"`
+	Commit        string `json:"commit,omitempty"`
+	BuildChannel  string `json:"build_channel,omitempty"`
 	// SchemaVersion is the response *shape* version (ToolResultVersion,
 	// currently "v1.0.0") — replaces the old root-level `version` field
 	// (#454), which was ambiguous: its name suggested the server version,
@@ -97,12 +102,11 @@ func ComputePagination(total, limit, offset, returned int) PaginationMeta {
 
 func NewMeta(serverVersion string, generatedAt time.Time) ResponseMeta {
 	return ResponseMeta{
-		GeneratedAt:    generatedAt.UTC().Format(time.RFC3339),
-		ServerVersion:  serverVersion,
-		ReleaseVersion: buildinfo.EffectiveReleaseVersion(),
-		Commit:         buildinfo.Commit,
-		BuildChannel:   buildinfo.EffectiveBuildChannel(),
-		SchemaVersion:  ToolResultVersion,
+		GeneratedAt:   generatedAt.UTC().Format(time.RFC3339),
+		ServerVersion: serverVersion,
+		Commit:        buildinfo.Commit,
+		BuildChannel:  buildinfo.EffectiveBuildChannel(),
+		SchemaVersion: ToolResultVersion,
 	}
 }
 

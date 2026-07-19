@@ -43,7 +43,6 @@
   "meta": {
     "build_channel": "main",
     "commit": "0123456789ab",
-    "release_version": "vtest",
     "schema_version": "v1.0.0",
     "server_version": "test-server-version"
   },

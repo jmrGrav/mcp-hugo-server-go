@@ -66,18 +66,20 @@ type lastBuildRuntimeStatus struct {
 }
 
 type runtimeStatusData struct {
-	ServerVersion  string                  `json:"server_version"`
-	SchemaVersion  string                  `json:"schema_version"`
-	ReleaseVersion string                  `json:"release_version,omitempty"`
-	Commit         string                  `json:"commit,omitempty"`
-	CommitTime     string                  `json:"commit_time,omitempty"`
-	BuildChannel   string                  `json:"build_channel,omitempty"`
-	BuildDirty     bool                    `json:"build_dirty"`
-	Hugo           hugoRuntimeStatus       `json:"hugo"`
-	Git            gitRuntimeStatus        `json:"git"`
-	Site           siteRuntimeStatus       `json:"site"`
-	LastBuild      *lastBuildRuntimeStatus `json:"last_build,omitempty"`
-	Degraded       []string                `json:"degraded,omitempty"`
+	// ServerVersion already carries the release identity by itself — see the
+	// comment on toolcontract.ResponseMeta.ServerVersion for why a separate
+	// release_version field was removed here too (#560).
+	ServerVersion string                  `json:"server_version"`
+	SchemaVersion string                  `json:"schema_version"`
+	Commit        string                  `json:"commit,omitempty"`
+	CommitTime    string                  `json:"commit_time,omitempty"`
+	BuildChannel  string                  `json:"build_channel,omitempty"`
+	BuildDirty    bool                    `json:"build_dirty"`
+	Hugo          hugoRuntimeStatus       `json:"hugo"`
+	Git           gitRuntimeStatus        `json:"git"`
+	Site          siteRuntimeStatus       `json:"site"`
+	LastBuild     *lastBuildRuntimeStatus `json:"last_build,omitempty"`
+	Degraded      []string                `json:"degraded,omitempty"`
 }
 
 type getRuntimeStatusOutput struct {
@@ -110,13 +112,12 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in getRuntimeStatusInput) (*mcp.CallToolResult, getRuntimeStatusOutput, error) {
 		data := runtimeStatusData{
-			ServerVersion:  buildinfo.Version,
-			SchemaVersion:  buildinfo.SchemaVersion,
-			ReleaseVersion: buildinfo.EffectiveReleaseVersion(),
-			Commit:         buildinfo.Commit,
-			CommitTime:     buildinfo.CommitTime,
-			BuildChannel:   buildinfo.EffectiveBuildChannel(),
-			BuildDirty:     buildinfo.Dirty,
+			ServerVersion: buildinfo.Version,
+			SchemaVersion: buildinfo.SchemaVersion,
+			Commit:        buildinfo.Commit,
+			CommitTime:    buildinfo.CommitTime,
+			BuildChannel:  buildinfo.EffectiveBuildChannel(),
+			BuildDirty:    buildinfo.Dirty,
 			Site: siteRuntimeStatus{
 				ContentRootConfigured: strings.TrimSpace(cfg.ContentRoot) != "",
 				HugoRootConfigured:    strings.TrimSpace(cfg.HugoRoot) != "",
