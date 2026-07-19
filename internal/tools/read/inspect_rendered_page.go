@@ -1,7 +1,6 @@
 package read
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -109,17 +108,9 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 			}
 			page := *resolved.Public
 
-			if strings.TrimSpace(cfg.SiteRoot) == "" || strings.TrimSpace(page.OutputPath) == "" {
-				return nil, inspectRenderedPageOutput{}, fmt.Errorf("render_output_unavailable: rendered HTML file location is unknown for slug %q", slug)
-			}
-			fullPath := filepath.Join(cfg.SiteRoot, filepath.FromSlash(page.OutputPath))
-			raw, err := os.ReadFile(fullPath)
+			doc, raw, err := loadRenderedHTML(cfg, page)
 			if err != nil {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("render_output_unavailable: %v", err)
-			}
-			doc, err := html.Parse(bytes.NewReader(raw))
-			if err != nil {
-				return nil, inspectRenderedPageOutput{}, fmt.Errorf("render_output_unavailable: rendered HTML could not be parsed: %v", err)
 			}
 
 			checks := []renderCheckResult{

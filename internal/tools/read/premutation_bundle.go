@@ -1,6 +1,7 @@
 package read
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -125,6 +126,33 @@ func premutationPreview(ctx context.Context, idx *site.Index, cfg config.Config,
 	}
 
 	return preview
+}
+
+func loadRenderedPreview(ctx context.Context, idx *site.Index, cfg config.Config, resolved site.ResolvedPage, page site.Page) (previewDTO, error) {
+	if resolved.Public == nil {
+		return previewDTO{}, fmt.Errorf("preview unavailable: page has no rendered public output yet; build/publish it before requesting preview")
+	}
+	doc, _, err := loadRenderedHTML(cfg, page)
+	if err != nil {
+		return previewDTO{}, fmt.Errorf("preview unavailable: %v", err)
+	}
+	return premutationPreview(ctx, idx, cfg, resolved, page, doc), nil
+}
+
+func loadRenderedHTML(cfg config.Config, page site.Page) (*html.Node, []byte, error) {
+	if strings.TrimSpace(cfg.SiteRoot) == "" || strings.TrimSpace(page.OutputPath) == "" {
+		return nil, nil, fmt.Errorf("rendered HTML file location is unknown")
+	}
+	fullPath := filepath.Join(cfg.SiteRoot, filepath.FromSlash(page.OutputPath))
+	raw, err := os.ReadFile(fullPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	doc, err := html.Parse(bytes.NewReader(raw))
+	if err != nil {
+		return nil, nil, fmt.Errorf("rendered HTML could not be parsed: %v", err)
+	}
+	return doc, raw, nil
 }
 
 // premutationDiffPreviewSummary mirrors diff_page's own git-diff resolution
