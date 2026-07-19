@@ -1504,17 +1504,10 @@ func detectCasingVariants(rawForms map[string]map[string]map[string][]string, no
 				if !sharedLang {
 					continue
 				}
-				var pagesA, pagesB []string
-				for _, ps := range forms[a] {
-					pagesA = append(pagesA, ps...)
-				}
-				for _, ps := range forms[b] {
-					pagesB = append(pagesB, ps...)
-				}
-				sort.Strings(pagesA)
-				sort.Strings(pagesB)
+				pagesA := dedupSortedPages(forms[a])
+				pagesB := dedupSortedPages(forms[b])
 				out = append(out, taxonomyInconsistencyDTO{
-					Message:        fmt.Sprintf("%s %q and %q are the same term with different casing, both used within the same language — normalize to one spelling", noun, a, b),
+					Message:        fmt.Sprintf("%s %q and %q are the same term spelled differently, both used within the same language — normalize to one spelling", noun, a, b),
 					TermA:          a,
 					TermB:          b,
 					PagesWithTermA: pagesA,
@@ -1524,6 +1517,25 @@ func detectCasingVariants(rawForms map[string]map[string]map[string][]string, no
 			}
 		}
 	}
+	return out
+}
+
+// dedupSortedPages flattens a raw form's per-language page-slug lists into
+// one deduplicated, sorted slice — a bundle whose index.en.md/index.fr.md
+// both carry the exact same raw spelling would otherwise list that page
+// slug twice (once per language) in a casing_variant finding.
+func dedupSortedPages(byLang map[string][]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, pages := range byLang {
+		for _, p := range pages {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
