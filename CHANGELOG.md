@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.6] - 2026-07-19
+
+Fast-turnaround fixes from the v1.5.5 live ChatGPT audit and direct user feedback on the same build-identity fields v1.5.5 just added.
+
+### Changed
+- **Write tools' `slug` on success is now the canonical public `/posts/x/` form** (#554, PR #559), matching read tools (#519), instead of echoing the raw source-relative input — applies to `create_page`/`update_page`/`upload_page_asset`/`delete_page`/`delete_page_asset`. `source_key` (v1.5.4, #545) remains the stable source-relative identifier for callers that need to feed a value back into another write tool's `slug` input. **Note:** the v1.5.5 changelog said this was deferred to v1.6.0 — it shipped here in v1.5.6 instead, once bundled with #520 turned out to need less coordination than expected (root-alias removal, #520, is still deferred; only the slug format changed here).
+- **`meta.release_version` removed from the contract** (#560, PR #561): it was added in v1.5.5 (#550) to expose the deploy-time release identity, but turned out to be pure duplication — `meta.server_version` already *is* the release tag on a release build (and `main-<sha>` otherwise), with `meta.build_channel` distinguishing the two cases. `server_version` + `build_channel` are now the sole version signal across every tool response and `get_runtime_status`.
+
+### Deferred to v1.6.0
+- **Mutation root/data field duplication removal** (#520): still needs a documented deprecation window per the v1.x compatibility policy: the root aliases stay in place, not removed.
+
 ## [v1.5.5] - 2026-07-19
 
 Fast-turnaround fixes from the v1.5.4 live audits (Claude.ai and ChatGPT), triaged into quick wins (this release) versus breaking changes (deferred to v1.6.0).
