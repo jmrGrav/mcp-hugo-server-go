@@ -60,6 +60,26 @@ func imageSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
+// logicalHugoRootPath projects an absolute file path under hugoRoot into a
+// hugo_root-relative logical path (e.g. "static/images/hello-featured.jpg"),
+// so responses don't leak the host's absolute filesystem layout (#551).
+func logicalHugoRootPath(hugoRoot, absPath string) string {
+	hugoRoot = strings.TrimSpace(hugoRoot)
+	absPath = strings.TrimSpace(absPath)
+	if absPath == "" {
+		return ""
+	}
+	if hugoRoot != "" {
+		if rel, err := filepath.Rel(hugoRoot, absPath); err == nil && rel != "" && rel != "." && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel)
+		}
+	}
+	if filepath.IsAbs(absPath) {
+		return ""
+	}
+	return filepath.ToSlash(absPath)
+}
+
 func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeaturedImageOutput {
 	return generateFeaturedImageOutput{
 		ToolResponse: imageSuccessEnvelope(data),
@@ -206,7 +226,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 		}
 
-		return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: destPath}), nil
+		return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: logicalHugoRootPath(cfg.HugoRoot, destPath)}), nil
 	}))
 }
 
@@ -257,7 +277,7 @@ func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedI
 		return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 	}
 
-	return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: destPath}), nil
+	return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: logicalHugoRootPath(cfg.HugoRoot, destPath)}), nil
 }
 
 func imageWriteError(destPath string) error {
