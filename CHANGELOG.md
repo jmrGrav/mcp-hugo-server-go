@@ -21,7 +21,7 @@ Follow-up fixes and contract clarifications from the v1.5.2 live audit, plus a r
 ### Design (deferred to v1.5.4 — not yet implemented)
 - **Compact response mode** (#526, PR #535): locks `response_mode=compact` as the single uniform shaping mechanism for the read surface, trimming `meta` to `schema_version` only.
 - **Pre-mutation bundle consolidation** (#527, PR #536): locks `get_page_for_edit` as the aggregation point for `backlinks`/`impact`/`preview`, with an equality invariant against the standalone tools.
-- **AI-readiness rubric** (#437, PR #538): locks a deterministic, source-oriented check family (heading hierarchy, section/paragraph length, metadata presence, link density, citation structure) for a future `validate_ai_readiness` tool.
+- **AI-readiness rubric** (#437, PR #538): locks a deterministic, source-oriented check family (heading hierarchy, section/paragraph length, metadata presence, link density, citation structure) for a future `check_ai_readiness` tool.
 - **Execution planner scope** (#438, PR #537): locks the planner as an extension of the existing `plan_content_change`/`apply_content_plan` transactional-edit foundation, not a competing orchestration model.
 
 ## [v1.5.2] - 2026-07-18

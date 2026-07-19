@@ -74,6 +74,7 @@ available.
 - `get_page_for_edit` - Get page for edit (compact edit bundle: frontmatter + markdown + state + quality + revision in one call; see #339)
 - `list_content_types` - List content types (site's Hugo content types/sections, archetype template + expected front matter fields [union of archetype-declared and observed-page fields] + observed page count per type; see #347)
 - `list_page_assets` - List page assets (sibling files stored alongside a page bundle's index.md, e.g. images; only leaf bundles have an asset directory, single-file pages fail with `not_a_bundle`; see #348)
+- `check_ai_readiness` - Validate AI readiness (deterministic Markdown/frontmatter audit for heading hierarchy, section and paragraph length outliers, metadata presence, internal-link density, and citation structure; intentionally not an SEO/render/build validator; see #437)
 - `search_content` - Search content
 - `explain_structure` - Explain site structure
 - `get_site_health` - Get site health

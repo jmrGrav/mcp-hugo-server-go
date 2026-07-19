@@ -3,7 +3,7 @@
 ## Goal
 
 Define a **deterministic**, **source-oriented** rubric for a future
-`validate_ai_readiness` tool or equivalent validation mode.
+`check_ai_readiness` tool or equivalent validation mode.
 
 This document intentionally avoids any opaque single score. The server should
 answer a narrow question:

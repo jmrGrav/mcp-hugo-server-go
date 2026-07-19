@@ -354,6 +354,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	RegisterInspectRenderedPage(s, idx, srcIdx, cfg)
 	RegisterListContentTypes(s, srcIdx, cfg)
 	RegisterListPageAssets(s, idx, srcIdx, cfg)
+	RegisterAIReadiness(s, idx, srcIdx, cfg)
 
 	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Also matches body text, unlike search_pages. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Prefer this tool over search_pages whenever you already have a reader token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {

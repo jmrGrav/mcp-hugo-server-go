@@ -15,17 +15,18 @@ import (
 //
 //	anonymous (no auth):  9  — list_pages, get_page, search_pages, get_recent_posts,
 //	                            list_tags, list_categories, get_sitemap, get_feed, get_site_information
-//	content.read:        18  — get_page_markdown, get_page_frontmatter, get_related_content,
+//	content.read:        19  — get_page_markdown, get_page_frontmatter, get_related_content,
 //	                            build_agent_context, export_agent_context, get_page_for_edit,
-//	                            list_content_types, list_page_assets, search_content, explain_structure,
-//	                            get_site_health, get_broken_links, get_backlinks, suggest_links,
-//	                            diff_page, inspect_rendered, validate_frontmatter, validate_site
+//	                            list_content_types, list_page_assets, search_content, check_ai_readiness,
+//	                            explain_structure, get_site_health, get_broken_links, get_backlinks,
+//	                            suggest_links, diff_page, inspect_rendered, validate_frontmatter,
+//	                            validate_site
 //	content.write:        5  — create_page, update_page, delete_page, upload_page_asset,
 //	                            delete_page_asset
 //	site.admin:           9  — build_site, preview_build, run_post_build_hooks,
 //	                            generate_hero_image, check_sri_versions, get_runtime_status,
 //	                            get_theme_status, verify_publication, create_preview
-const expectedToolCount = 41
+const expectedToolCount = 42
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())
