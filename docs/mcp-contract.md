@@ -289,6 +289,17 @@ present. Tool-specific data shaping remains opt-in and tool-defined:
 `build_agent_context`/`get_page_for_edit`/`export_agent_context` keep their
 own body/section shaping controls.
 
+**Note for anyone comparing responses across calls in the same session**
+(including live audits): a `compact`-mode response's `meta` will look
+meaningfully different from every other tool's `meta` in the same
+session — missing `server_version`/`commit`/`build_channel`/`release_version`
+entirely — purely because `response_mode` was set to `compact` on that one
+call, not because of any inconsistency or regression. `meta.schema_version`
+being the only key present is the expected, by-design shape for `compact`
+mode specifically (#526); it is not evidence of a bug on its own. If a
+non-`compact` call is missing full `meta`, that would be a real bug worth
+reporting — but check `response_mode` on the actual request first (#553).
+
 ---
 
 ## 6. Tool Inventory

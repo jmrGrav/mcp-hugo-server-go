@@ -158,6 +158,12 @@ func TestContractCompactModeTrimsMetaOnReadTools(t *testing.T) {
 			args:    map[string]any{"slug": "/posts/hello/", "response_mode": "compact"},
 		},
 		{
+			name:    "anonymous.search_pages",
+			session: anonSession,
+			tool:    "search_pages",
+			args:    map[string]any{"query": "hello", "response_mode": "compact"},
+		},
+		{
 			name:    "read.get_page_markdown",
 			session: readSession,
 			tool:    "get_page_markdown",
@@ -194,6 +200,46 @@ func TestContractCompactModeTrimsMetaOnReadTools(t *testing.T) {
 				t.Fatalf("%s root generated_at = empty, want preserved root timestamp", tc.tool)
 			}
 		})
+	}
+}
+
+// TestContractSearchPagesDefaultModeKeepsFullMeta covers #553: a live
+// v1.5.4 audit reported search_pages's meta as unexpectedly incomplete
+// (only schema_version) on a call made without response_mode. This proves
+// the default (standard) mode always carries the full meta object —
+// confirming that finding was compact mode (#526) being invoked, not a
+// default-mode regression, since search_pages uses the same
+// NewMeta/WrapTool pipeline as every other tool with no bespoke path that
+// could independently produce a trimmed meta.
+func TestContractSearchPagesDefaultModeKeepsFullMeta(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	anonSession, anonDone := newAnonymousSession(t, idx, cfg, srcIdx)
+	defer anonDone()
+
+	res := callTool(t, anonSession, "search_pages", map[string]any{"query": "hello"})
+	if res.IsError {
+		t.Fatalf("search_pages returned error: %s", marshalAny(t, res.Content))
+	}
+	m := decodeContent(t, res)
+	meta, ok := m["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("search_pages meta type = %T, want map[string]any", m["meta"])
+	}
+	// generated_at/server_version are always non-empty (see toolcontract.NewMeta);
+	// commit/release_version/build_channel are legitimately omitted for an
+	// untagged dev/test build (omitempty), so they aren't asserted here — the
+	// point is proving this is NOT the compact-trimmed shape (schema_version
+	// only), not that every optional identity field is populated.
+	for _, field := range []string{"generated_at", "server_version", "schema_version"} {
+		if got := asString(meta[field]); got == "" {
+			t.Fatalf("search_pages default-mode meta.%s = empty, want populated (#553)", field)
+		}
+	}
+	if len(meta) <= 1 {
+		t.Fatalf("search_pages default-mode meta = %v, want more than just schema_version (that shape is compact-mode-only, #526)", meta)
 	}
 }
 
