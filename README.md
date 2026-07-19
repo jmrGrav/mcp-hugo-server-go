@@ -16,6 +16,12 @@ Canonical unified MCP server for Hugo sites.
 
 Public endpoint: `https://mcp.arleo.eu/mcp`
 
+This MCP is far more than a remote Markdown editor for [Hugo](https://gohugo.io): it's an intelligent content-management interface. It gives AI agents structured understanding and safe operations on a Hugo site. Example site using this MCP: [www.arleo.eu](https://www.arleo.eu).
+
+Ce MCP est bien plus qu'un éditeur à distance de Markdown pour [Hugo](https://gohugo.io) : il est une interface de gestion intelligente du contenu. Il donne aux agents IA une compréhension structurée et des opérations sûres sur un site Hugo. Exemple de site utilisant ce MCP : [www.arleo.eu](https://www.arleo.eu).
+
+Content mostly written with Claude Code and Codex. / Contenu majoritairement codé avec Claude Code et Codex.
+
 ## What it does
 
 `mcp-hugo-server-go` exposes a Hugo site through the Model Context Protocol with public discovery, OAuth-backed scopes, and strict separation between read, write, and admin operations.
