@@ -618,11 +618,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			} else if resolved.Source != nil {
 				targetSlug = "/" + strings.Trim(resolved.Source.Slug, "/") + "/"
 			}
-			entries := idx.GetBacklinks(targetSlug)
-			dtos := make([]backlinkDTO, len(entries))
-			for i, e := range entries {
-				dtos[i] = backlinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL}
-			}
+			dtos := premutationBacklinks(idx, targetSlug)
 			env := newGetBacklinksOutput(getBacklinksData{
 				Slug:      targetSlug,
 				Count:     len(dtos),

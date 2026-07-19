@@ -437,7 +437,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			translations := collectTranslations(idx, ref)
 			related, evaluated := computeRelated(idx, ref, limit)
-			backlinks := collectBacklinks(idx, ref.Slug)
+			backlinks := premutationBacklinks(idx, ref.Slug)
 			suggestedLinks, _ := scoreLinkSuggestions(idx, ref.Slug, ref.Tags, ref.Categories, "", limit)
 			data := getRelatedContentData{
 				Translations:   translations,
@@ -449,7 +449,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
 			}
 			if include["impact"] {
-				impact := computeImpact(idx, resolved, ref, aliases)
+				impact := premutationImpact(idx, resolved, ref, aliases)
 				data.Impact = &impact
 			}
 			return nil, newGetRelatedContentOutput(data, time.Now().UTC()), nil
@@ -672,7 +672,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				}
 			}
 			if include["backlinks"] {
-				backlinks := collectBacklinks(idx, p.Slug)
+				backlinks := premutationBacklinks(idx, p.Slug)
 				page.Backlinks = &backlinks
 			}
 			return nil, newGetPageForEditOutput(getPageForEditData{Page: page}, warnings, time.Now().UTC()), nil
@@ -951,18 +951,6 @@ func collectTranslations(idx *site.Index, ref site.Page) []translationPageDTO {
 	return out
 }
 
-func collectBacklinks(idx *site.Index, slug string) []backlinkDTO {
-	if idx == nil || strings.TrimSpace(slug) == "" {
-		return []backlinkDTO{}
-	}
-	entries := idx.GetBacklinks(slug)
-	out := make([]backlinkDTO, len(entries))
-	for i, e := range entries {
-		out[i] = backlinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL}
-	}
-	return out
-}
-
 func translationKey(slug string) string {
 	candidates := site.SourceSlugCandidates(strings.Trim(slug, "/"))
 	if len(candidates) == 0 {
@@ -1069,65 +1057,6 @@ func frontmatterStringSlice(v any) []string {
 	default:
 		return nil
 	}
-}
-
-// computeImpact builds get_related_content's opt-in impact facet (#434):
-// a pre-mutation summary of what changing ref would affect. Advisory only
-// — never blocks a mutation, same posture as get_broken_links.
-func computeImpact(idx *site.Index, resolved site.ResolvedPage, ref site.Page, aliases map[string]string) impactDTO {
-	impact := impactDTO{
-		TaxonomyOrphans: []string{},
-		Aliases:         []string{},
-	}
-
-	if idx != nil {
-		// Hoisted out of the per-term loop below (design budget: one
-		// ContentPages() scan per call, not one per term).
-		contentPages := idx.ContentPages()
-		for _, term := range append(append([]string{}, ref.Tags...), ref.Categories...) {
-			target := taxonomy.ResolveAlias(taxonomy.Slug(term), aliases)
-			if target == "" {
-				continue
-			}
-			orphaned := true
-			for _, pg := range contentPages {
-				if pg.Slug == ref.Slug {
-					continue
-				}
-				if taxonomy.MatchesSlugWithAliases(pg.Tags, target, aliases) ||
-					taxonomy.MatchesSlugWithAliases(pg.Categories, target, aliases) {
-					orphaned = false
-					break
-				}
-			}
-			if orphaned {
-				impact.TaxonomyOrphans = append(impact.TaxonomyOrphans, term)
-			}
-		}
-		for _, pg := range idx.Sitemap() {
-			if pg.Slug == ref.Slug {
-				impact.SitemapPresent = true
-				break
-			}
-		}
-		for _, pg := range idx.GetFeed(0) {
-			if pg.Slug == ref.Slug {
-				impact.FeedPresent = true
-				break
-			}
-		}
-	}
-
-	if resolved.Source != nil {
-		if raw, ok := resolved.Source.FrontmatterRaw["aliases"]; ok {
-			impact.Aliases = frontmatterStringSlice(raw)
-			if impact.Aliases == nil {
-				impact.Aliases = []string{}
-			}
-		}
-	}
-
-	return impact
 }
 
 // Defs returns the tool definitions for this package (used to build the global registry).
