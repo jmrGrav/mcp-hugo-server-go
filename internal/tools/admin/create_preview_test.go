@@ -154,6 +154,43 @@ func TestCreatePreviewBuildsIsolatedDirAndServesViaStore(t *testing.T) {
 	}
 }
 
+func TestCreatePreviewHasEnvelopeMatchingRootFields(t *testing.T) {
+	hugoDir := writeMockHugoForPreview(t, "preview marker content")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+
+	session, _, done := newCreatePreviewServer(t, cfg)
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("create_preview returned error: %s", resultText(res))
+	}
+
+	out := decodeStructuredResult(t, res)
+	if got := out["success"]; got != true {
+		t.Fatalf("success = %v, want true (#552)", got)
+	}
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any (#552)", out["data"])
+	}
+	if _, ok := out["meta"].(map[string]any); !ok {
+		t.Fatalf("meta type = %T, want map[string]any (#552)", out["meta"])
+	}
+	for _, field := range []string{"preview_id", "url", "expires_at", "build"} {
+		if data[field] != out[field] {
+			t.Fatalf("data.%s = %v, root %s = %v — must match (#552)", field, data[field], field, out[field])
+		}
+	}
+}
+
 func TestCreatePreviewClampsTTLToConfiguredBounds(t *testing.T) {
 	hugoDir := writeMockHugoForPreview(t, "marker")
 	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))

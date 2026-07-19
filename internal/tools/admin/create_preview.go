@@ -11,10 +11,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -32,11 +34,37 @@ type createPreviewInput struct {
 	TTLSeconds    int  `json:"ttl_seconds,omitempty"`
 }
 
-type createPreviewOutput struct {
+// createPreviewData is the canonical data.* payload (#552).
+type createPreviewData struct {
 	PreviewID string `json:"preview_id"`
 	URL       string `json:"url"`
 	ExpiresAt string `json:"expires_at"`
 	Build     string `json:"build"`
+}
+
+// createPreviewOutput carries the same fields at the root as compatibility
+// aliases alongside the structured envelope (#552) — this tool previously
+// had no envelope at all, so this is purely additive, not a breaking change.
+type createPreviewOutput struct {
+	toolcontract.ToolResponse[createPreviewData]
+	PreviewID string `json:"preview_id"`
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expires_at"`
+	Build     string `json:"build"`
+}
+
+func createPreviewSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+}
+
+func newCreatePreviewOutput(data createPreviewData) createPreviewOutput {
+	return createPreviewOutput{
+		ToolResponse: createPreviewSuccessEnvelope(data),
+		PreviewID:    data.PreviewID,
+		URL:          data.URL,
+		ExpiresAt:    data.ExpiresAt,
+		Build:        data.Build,
+	}
 }
 
 // RegisterCreatePreview wires create_preview (site.admin scope). Unlike
@@ -64,7 +92,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in createPreviewInput) (*mcp.CallToolResult, createPreviewOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createPreviewInput) (*mcp.CallToolResult, createPreviewOutput, error) {
 		if cfg.HugoRoot == "" {
 			return nil, createPreviewOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 		}
@@ -180,11 +208,11 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			"ttl_seconds", int(ttl.Seconds()),
 		)
 
-		return nil, createPreviewOutput{
+		return nil, newCreatePreviewOutput(createPreviewData{
 			PreviewID: previewID,
 			URL:       previewURLBase,
 			ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
 			Build:     "passed",
-		}, nil
-	})
+		}), nil
+	}))
 }

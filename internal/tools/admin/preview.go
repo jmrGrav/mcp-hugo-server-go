@@ -12,18 +12,42 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type previewBuildInput struct{}
 
-type previewBuildOutput struct {
+// previewBuildData is the canonical data.* payload (#552).
+type previewBuildData struct {
 	Status     string `json:"status"`
 	DurationMs int64  `json:"duration_ms"`
+}
+
+// previewBuildOutput carries the same fields at the root as compatibility
+// aliases alongside the structured envelope (#552) — this tool previously
+// had no envelope at all, so this is purely additive, not a breaking change.
+type previewBuildOutput struct {
+	toolcontract.ToolResponse[previewBuildData]
+	Status     string `json:"status"`
+	DurationMs int64  `json:"duration_ms"`
+}
+
+func previewSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+}
+
+func newPreviewBuildOutput(data previewBuildData) previewBuildOutput {
+	return previewBuildOutput{
+		ToolResponse: previewSuccessEnvelope(data),
+		Status:       data.Status,
+		DurationMs:   data.DurationMs,
+	}
 }
 
 func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
@@ -43,7 +67,7 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ previewBuildInput) (*mcp.CallToolResult, previewBuildOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ previewBuildInput) (*mcp.CallToolResult, previewBuildOutput, error) {
 		if cfg.HugoRoot == "" {
 			return nil, previewBuildOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 		}
@@ -156,6 +180,6 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 			"duration_ms", durationMs,
 			"exit_code", 0,
 		)
-		return nil, previewBuildOutput{Status: "ok", DurationMs: durationMs}, nil
-	})
+		return nil, newPreviewBuildOutput(previewBuildData{Status: "ok", DurationMs: durationMs}), nil
+	}))
 }
