@@ -58,18 +58,7 @@ type uploadPageAssetInput struct {
 
 type uploadPageAssetOutput struct {
 	toolcontract.ToolResponse[uploadPageAssetData]
-	Status      string `json:"status,omitempty"`
-	Slug        string `json:"slug"`
-	SourceKey   string `json:"source_key,omitempty"`
-	Filename    string `json:"filename"`
-	Path        string `json:"path,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	SizeBytes   int    `json:"size_bytes,omitempty"`
-	Sha256      string `json:"sha256,omitempty"`
-	DuplicateOf string `json:"duplicate_of,omitempty"`
-	DryRun      bool   `json:"dry_run,omitempty"`
-	Warning     string `json:"warning,omitempty"`
-	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466).
+	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466, #520).
 	// upload_page_asset shares the same per-caller mutation budget as
 	// create_page/update_page, so the field means the same thing here.
 	RateLimitRemaining int `json:"rate_limit_remaining"`
@@ -424,25 +413,10 @@ type deletePageAssetInput struct {
 
 type deletePageAssetOutput struct {
 	toolcontract.ToolResponse[deletePageAssetData]
-	Status    string `json:"status,omitempty"`
-	Slug      string `json:"slug,omitempty"`
-	SourceKey string `json:"source_key,omitempty"`
-	Filename  string `json:"filename,omitempty"`
-	Sha256    string `json:"sha256,omitempty"`
-	DryRun    bool   `json:"dry_run,omitempty"`
-	// Referenced/ReferencedIn report whether filename appears in any of the
-	// bundle's index.<lang>.md files at the time of this call — present on
-	// both the dry_run preview and a force-overridden real delete, so the
-	// caller has a record of what it chose to override. Referenced is a
-	// pointer so "computed and false" (present as `false`) stays
-	// distinguishable from "never computed" (omitted, e.g. on an error
-	// response) — a plain bool with omitempty would silently collapse both
-	// to "absent".
-	Referenced         *bool                        `json:"referenced,omitempty"`
-	ReferencedIn       []string                     `json:"referenced_in,omitempty"`
-	Warning            string                       `json:"warning,omitempty"`
-	RateLimitRemaining int                          `json:"rate_limit_remaining"`
-	RequestContext     *toolcontract.RequestContext `json:"request_context,omitempty"`
+	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466, #520).
+	RateLimitRemaining int `json:"rate_limit_remaining"`
+	// RequestContext — see the comment on createPageOutput.RequestContext.
+	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
 }
 
 type deletePageAssetData struct {
@@ -461,17 +435,6 @@ type deletePageAssetData struct {
 func newUploadPageAssetOutput(data uploadPageAssetData) uploadPageAssetOutput {
 	return uploadPageAssetOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		Status:             data.Status,
-		Slug:               data.Slug,
-		SourceKey:          data.SourceKey,
-		Filename:           data.Filename,
-		Path:               data.Path,
-		ContentType:        data.ContentType,
-		SizeBytes:          data.SizeBytes,
-		Sha256:             data.Sha256,
-		DuplicateOf:        data.DuplicateOf,
-		DryRun:             data.DryRun,
-		Warning:            data.Warning,
 		RateLimitRemaining: data.RateLimitRemaining,
 	}
 }
@@ -479,15 +442,6 @@ func newUploadPageAssetOutput(data uploadPageAssetData) uploadPageAssetOutput {
 func newDeletePageAssetOutput(data deletePageAssetData) deletePageAssetOutput {
 	return deletePageAssetOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		Status:             data.Status,
-		Slug:               data.Slug,
-		SourceKey:          data.SourceKey,
-		Filename:           data.Filename,
-		Sha256:             data.Sha256,
-		DryRun:             data.DryRun,
-		Referenced:         data.Referenced,
-		ReferencedIn:       data.ReferencedIn,
-		Warning:            data.Warning,
 		RateLimitRemaining: data.RateLimitRemaining,
 	}
 }

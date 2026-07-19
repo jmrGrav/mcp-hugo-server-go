@@ -411,11 +411,12 @@ func TestContractMultilingualResolutionConsistentAcrossReadAndWriteTools(t *test
 		t.Fatalf("update_page dry_run returned error: %s", marshalAny(t, res.Content))
 	}
 	m := decodeContent(t, res)
-	if got := asString(m["resolved_lang"]); got != "fr" {
-		t.Fatalf("update_page resolved_lang = %q, want fr", got)
+	data := mapAt(t, m, "data")
+	if got := asString(data["resolved_lang"]); got != "fr" {
+		t.Fatalf("update_page data.resolved_lang = %q, want fr", got)
 	}
-	if got := asString(m["resolved_source_path"]); got != frSource {
-		t.Fatalf("update_page resolved_source_path = %q, want %q", got, frSource)
+	if got := asString(data["resolved_source_path"]); got != frSource {
+		t.Fatalf("update_page data.resolved_source_path = %q, want %q", got, frSource)
 	}
 }
 
