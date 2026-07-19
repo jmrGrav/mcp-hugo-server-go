@@ -126,7 +126,7 @@ func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 }
 
 func compactMetaMap(meta map[string]any) map[string]any {
-	schemaVersion, _ := meta["schema_version"]
+	schemaVersion := meta["schema_version"]
 	return map[string]any{
 		"schema_version": schemaVersion,
 	}
