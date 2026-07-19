@@ -1500,12 +1500,12 @@ Original body.
 
 	expectedRevision := currentRevision(t, pagePath)
 	dryRun := callTool(t, session, "update_page", map[string]any{
-		"slug":       "posts/complex-frontmatter",
-		"lang":       "fr",
-		"title":      "Complex Example Updated",
-		"body":       "Updated body.",
-		"tags":       []any{"go", "hugo"},
-		"dry_run":    true,
+		"slug":    "posts/complex-frontmatter",
+		"lang":    "fr",
+		"title":   "Complex Example Updated",
+		"body":    "Updated body.",
+		"tags":    []any{"go", "hugo"},
+		"dry_run": true,
 	})
 	if dryRun.IsError {
 		raw, _ := json.Marshal(dryRun.Content)
