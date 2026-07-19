@@ -1141,6 +1141,7 @@ func Defs() []tools.ToolDef {
 		{Name: "get_page_for_edit", RequiredScope: ""},
 		{Name: "list_content_types", RequiredScope: ""},
 		{Name: "list_page_assets", RequiredScope: ""},
+		{Name: "check_ai_readiness", RequiredScope: ""},
 		{Name: "search_content", RequiredScope: ""},
 		{Name: "explain_structure", RequiredScope: ""},
 		{Name: "get_site_health", RequiredScope: ""},
