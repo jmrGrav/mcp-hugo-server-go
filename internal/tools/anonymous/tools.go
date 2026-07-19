@@ -100,6 +100,7 @@ type pageDTO struct {
 
 type pageDetailDTO struct {
 	Slug               string                  `json:"slug"`
+	SourceKey          string                  `json:"source_key,omitempty"`
 	Title              string                  `json:"title"`
 	Summary            string                  `json:"summary"`
 	Tags               []string                `json:"tags"`
@@ -779,6 +780,7 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage, contentRoot string) pag
 		if resolved.Source != nil {
 			dto.ResolvedLang = resolved.Source.Lang
 			dto.ResolvedSourcePath = fileutil.LogicalContentPath(contentRoot, resolved.SourcePath)
+			dto.SourceKey = contentmodel.SourceKeyFromLogicalPath(dto.ResolvedSourcePath)
 			dto.Revision = resolvedSourceRevision(resolved.SourcePath)
 		}
 		return dto
@@ -797,6 +799,7 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage, contentRoot string) pag
 	}
 	return pageDetailDTO{
 		Slug:               "/" + src.Slug + "/",
+		SourceKey:          contentmodel.SourceKeyFromLogicalPath(fileutil.LogicalContentPath(contentRoot, resolved.SourcePath)),
 		Title:              src.Title,
 		Tags:               tags,
 		Categories:         cats,

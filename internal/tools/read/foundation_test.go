@@ -26,6 +26,9 @@ func TestPageIdentityFromPage(t *testing.T) {
 	if got.SourcePath != "content/posts/hello.md" {
 		t.Fatalf("pageIdentityFromPage().SourcePath = %q", got.SourcePath)
 	}
+	if got.SourceKey != "posts/hello" {
+		t.Fatalf("pageIdentityFromPage().SourceKey = %q, want posts/hello", got.SourceKey)
+	}
 	if got.Revision != "sha256:test" {
 		t.Fatalf("pageIdentityFromPage().Revision = %q", got.Revision)
 	}

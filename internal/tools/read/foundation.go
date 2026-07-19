@@ -12,6 +12,7 @@ import (
 func pageIdentityFromPage(p site.Page, sourcePath, revision string, readingTime int) contentmodel.PageIdentity {
 	return contentmodel.PageIdentity{
 		Slug:        p.Slug,
+		SourceKey:   contentmodel.SourceKeyFromLogicalPath(sourcePath),
 		Lang:        p.Lang,
 		URL:         p.URL,
 		SourcePath:  sourcePath,

@@ -44,9 +44,13 @@ func TestUploadPageAssetSuccess(t *testing.T) {
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "slug")
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "source_key")
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "content_type")
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "size_bytes")
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
+	if out["source_key"] != "posts/article" {
+		t.Fatalf("upload_page_asset source_key = %v, want posts/article", out["source_key"])
+	}
 	if out["content_type"] != "image/png" {
 		t.Fatalf("upload_page_asset content_type = %v, want image/png", out["content_type"])
 	}
@@ -306,11 +310,15 @@ func TestDeletePageAssetSuccess(t *testing.T) {
 	}
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "source_key")
 	if out["sha256"] != sha256 {
 		t.Fatalf("delete_page_asset sha256 = %v, want %v", out["sha256"], sha256)
 	}
 	if dataEnvelope["sha256"] != sha256 {
 		t.Fatalf("delete_page_asset data.sha256 = %v, want %v", dataEnvelope["sha256"], sha256)
+	}
+	if out["source_key"] != "posts/article" {
+		t.Fatalf("delete_page_asset source_key = %v, want posts/article", out["source_key"])
 	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); !os.IsNotExist(err) {
 		t.Fatal("delete_page_asset must remove the file")

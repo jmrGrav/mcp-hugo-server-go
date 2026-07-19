@@ -20,6 +20,7 @@
       "resolved_source_path": "content/posts/hello.md",
       "revision": "sha256:cd389cff5937b3567f228eca770c7b9b1b48cbf24400a913dd56fda01b165ad1",
       "slug": "/posts/hello/",
+      "source_key": "posts/hello",
       "state": {
         "build_state": "built",
         "index_state": "fresh",

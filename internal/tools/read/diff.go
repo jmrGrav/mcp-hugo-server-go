@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -27,6 +28,7 @@ type diffPageInput struct {
 
 type diffPageData struct {
 	Slug          string              `json:"slug"`
+	SourceKey     string              `json:"source_key,omitempty"`
 	Path          string              `json:"path"`
 	ResolvedLang  string              `json:"resolved_lang"`
 	ResolvedPath  string              `json:"resolved_source_path"`
@@ -77,6 +79,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				}
 				resp := newDiffPageOutput(diffPageData{
 					Slug:          canonicalResolvedSlug(resolved),
+					SourceKey:     contentmodel.SourceKeyFromLogicalPath(resolvedLogicalPath(contentRoot, resolved.SourcePath, relPath)),
 					Path:          relPath,
 					ResolvedLang:  resolved.Source.Lang,
 					ResolvedPath:  resolvedLogicalPath(contentRoot, resolved.SourcePath, relPath),
@@ -128,6 +131,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			if status == "git_untracked" {
 				resp := newDiffPageOutput(diffPageData{
 					Slug:          canonicalResolvedSlug(resolved),
+					SourceKey:     contentmodel.SourceKeyFromLogicalPath(resolvedLogicalPath(contentRoot, absPath, relPath)),
 					Path:          relPath,
 					ResolvedLang:  resolved.Source.Lang,
 					ResolvedPath:  resolvedLogicalPath(contentRoot, absPath, relPath),
@@ -148,6 +152,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			}
 			return nil, newDiffPageOutput(diffPageData{
 				Slug:          canonicalResolvedSlug(resolved),
+				SourceKey:     contentmodel.SourceKeyFromLogicalPath(resolvedLogicalPath(contentRoot, absPath, relPath)),
 				Path:          relPath,
 				ResolvedLang:  resolved.Source.Lang,
 				ResolvedPath:  resolvedLogicalPath(contentRoot, absPath, relPath),

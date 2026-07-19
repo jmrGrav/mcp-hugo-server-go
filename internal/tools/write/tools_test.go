@@ -192,11 +192,15 @@ func TestCreatePage(t *testing.T) {
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "slug")
+	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "source_key")
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "resolved_source_path")
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
 	assertWritePageState(t, out["state"], "present", "pending", "not_yet_available", "source_only")
 	if got := dataEnvelope["slug"]; got != "my-post" {
 		t.Fatalf("create_page data.slug = %v, want my-post", got)
+	}
+	if got := dataEnvelope["source_key"]; got != "my-post" {
+		t.Fatalf("create_page data.source_key = %v, want my-post", got)
 	}
 
 	path := filepath.Join(contentRoot, "my-post", "index.md")
@@ -1436,8 +1440,12 @@ func TestUpdatePageSuccess(t *testing.T) {
 	}
 	decoded := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
+	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "source_key")
 	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "resolved_source_path")
 	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "rate_limit_remaining")
+	if got := decoded["source_key"]; got != "update-me" {
+		t.Fatalf("update_page source_key = %v, want update-me", got)
+	}
 	if got := decoded["resolved_source_path"]; got != "content/update-me/index.md" {
 		t.Fatalf("update_page resolved_source_path = %v, want content/update-me/index.md", got)
 	}
@@ -1624,8 +1632,12 @@ func TestDeletePageSuccess(t *testing.T) {
 	}
 	decoded := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
+	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "source_key")
 	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "resolved_source_path")
 	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "rate_limit_remaining")
+	if got := decoded["source_key"]; got != "to-delete" {
+		t.Fatalf("delete_page source_key = %v, want to-delete", got)
+	}
 	if got := decoded["resolved_source_path"]; got != "content/to-delete/index.md" {
 		t.Fatalf("delete_page resolved_source_path = %v, want content/to-delete/index.md", got)
 	}

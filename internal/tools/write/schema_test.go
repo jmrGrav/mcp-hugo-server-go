@@ -30,13 +30,13 @@ func TestWriteToolSchemasPresent(t *testing.T) {
 	}
 
 	createTool := got["create_page"]
-	assertSchemaHasProperties(t, createTool, "outputSchema.data", "status", "slug", "resolved_source_path", "rate_limit_remaining")
+	assertSchemaHasProperties(t, createTool, "outputSchema.data", "status", "slug", "source_key", "resolved_source_path", "rate_limit_remaining")
 
 	updateTool := got["update_page"]
-	assertSchemaHasProperties(t, updateTool, "outputSchema.data", "status", "slug", "resolved_source_path", "rate_limit_remaining")
+	assertSchemaHasProperties(t, updateTool, "outputSchema.data", "status", "slug", "source_key", "resolved_source_path", "rate_limit_remaining")
 
 	deleteTool := got["delete_page"]
-	assertSchemaHasProperties(t, deleteTool, "outputSchema.data", "status", "slug", "resolved_source_path", "rate_limit_remaining")
+	assertSchemaHasProperties(t, deleteTool, "outputSchema.data", "status", "slug", "source_key", "resolved_source_path", "rate_limit_remaining")
 }
 
 func TestWriteToolAnnotationsDescribeIdempotency(t *testing.T) {

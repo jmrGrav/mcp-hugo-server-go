@@ -19,6 +19,7 @@ type TaxonomyTerm struct {
 // Both are populated progressively as handlers migrate to this type.
 type PageIdentity struct {
 	Slug           string         `json:"slug"`
+	SourceKey      string         `json:"source_key,omitempty"`
 	Lang           string         `json:"lang"`
 	URL            string         `json:"url"`
 	SourcePath     string         `json:"source_path"`
