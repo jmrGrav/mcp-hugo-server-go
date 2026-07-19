@@ -11,11 +11,12 @@ const SchemaVersion = "v1.0.0"
 var Version = "dev"
 
 // ReleaseVersion is the human-facing product/release identifier (e.g.
-// v1.5.1) when known at build time. Empty means "this build is not tied to
-// a named release"; callers can still inspect Version/Commit. Mainline
-// production deploys intentionally use this empty state today: they expose
-// Version like "main-<sha>" plus Commit/BuildChannel instead of inventing a
-// release alias that was never cut from a tag.
+// v1.5.5) when known at build time. Production deploys pass this explicitly
+// via deploy.yml's release_version input at deploy time, ahead of the git
+// tag itself (which release.yml only creates once the deployment is live
+// and verified) — see docs/operator-guide.md's "Production Deploy +
+// Release" section. Empty means "this build has no known release identity
+// yet"; callers can still inspect Version/Commit in that case.
 var ReleaseVersion = ""
 
 // BuildChannel identifies the deployment line the binary came from when it

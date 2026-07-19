@@ -221,6 +221,27 @@ This script:
 4. Uploads and installs the systemd service file to `/etc/systemd/system/mcp-hugo-server-go.service`.
 5. Reloads systemd and enables the service with `systemctl enable --now`.
 
+### Production Deploy + Release (GitHub Actions)
+
+Production deploys go through `.github/workflows/deploy.yml` (`workflow_dispatch`),
+followed by `.github/workflows/release.yml` once the deployment is confirmed live:
+
+```bash
+gh workflow run deploy.yml -f ref=main -f release_version=v1.5.5 -f dry_run=false
+# ...wait for it to succeed, approve the production environment gate...
+gh workflow run release.yml -f version=v1.5.5 -f ref=main
+```
+
+Always pass `release_version` on the deploy step matching the version you're
+about to tag. The tag itself is only created by `release.yml`, after it
+verifies the target commit already has a successful production deployment —
+so at deploy time the tag doesn't exist yet and `meta.release_version` can't
+be derived from `git describe`. The explicit `release_version` input lets the
+deployed build report its intended release identity immediately, instead of
+waiting for the tag to exist. Omit it for an untagged mainline deploy (a
+hotfix ahead of the next release, for example); the server then reports
+`meta.server_version = "main-<sha>"` with no `meta.release_version`, as before.
+
 ### Systemd Hardening and Override
 
 The service runs under `ProtectSystem=strict`, which makes the entire filesystem
