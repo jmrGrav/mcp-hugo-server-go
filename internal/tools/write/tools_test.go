@@ -191,11 +191,8 @@ func TestCreatePage(t *testing.T) {
 	}
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "slug")
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "source_key")
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "resolved_source_path")
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
-	assertWritePageState(t, out["state"], "present", "pending", "not_yet_available", "source_only")
+	assertWritePageState(t, dataEnvelope["state"], "present", "pending", "not_yet_available", "source_only")
 	if got := dataEnvelope["slug"]; got != "/my-post/" {
 		t.Fatalf("create_page data.slug = %v, want /my-post/ (canonical public form, #554)", got)
 	}
@@ -221,12 +218,11 @@ func TestCreatePage(t *testing.T) {
 	if !strings.Contains(content, "draft") {
 		t.Errorf("frontmatter missing draft field: %s", content)
 	}
-	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != "content/my-post/index.md" {
-		t.Fatalf("create_page resolved_source_path = %v, want content/my-post/index.md", got)
+	if got := dataEnvelope["resolved_source_path"]; got != "content/my-post/index.md" {
+		t.Fatalf("create_page data.resolved_source_path = %v, want content/my-post/index.md", got)
 	}
-	if got := decoded["resolved_lang"]; got != "" {
-		t.Fatalf("create_page resolved_lang = %v, want empty default lang", got)
+	if got := dataEnvelope["resolved_lang"]; got != "" {
+		t.Fatalf("create_page data.resolved_lang = %v, want empty default lang", got)
 	}
 }
 
@@ -253,10 +249,10 @@ func TestCreatePageWarnsWhenLastBuildFailed(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("create_page returned error: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
-	warning, _ := out["warning"].(string)
+	dataEnvelope := decodeWriteData(t, res)
+	warning, _ := dataEnvelope["warning"].(string)
 	if !strings.Contains(warning, "permission_denied") {
-		t.Fatalf("create_page warning = %q, want it to mention the last failed build_site attempt", warning)
+		t.Fatalf("create_page data.warning = %q, want it to mention the last failed build_site attempt", warning)
 	}
 }
 
@@ -280,9 +276,9 @@ func TestCreatePageOmitsBuildWarningWhenLastBuildSucceeded(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("create_page returned error: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
-	if warning, _ := out["warning"].(string); warning != "" {
-		t.Fatalf("create_page warning = %q, want empty when the last build_site attempt succeeded", warning)
+	dataEnvelope := decodeWriteData(t, res)
+	if warning, _ := dataEnvelope["warning"].(string); warning != "" {
+		t.Fatalf("create_page data.warning = %q, want empty when the last build_site attempt succeeded", warning)
 	}
 }
 
@@ -694,8 +690,8 @@ func TestDeletePageExposesLifecycleState(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page failed: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
-	assertWritePageState(t, out["state"], "deleted", "not_applicable", "removed", "removed")
+	dataEnvelope := decodeWriteData(t, res)
+	assertWritePageState(t, dataEnvelope["state"], "deleted", "not_applicable", "removed", "removed")
 }
 
 func TestUpdatePageNotFound(t *testing.T) {
@@ -1189,8 +1185,8 @@ func TestUpdatePageExposesLifecycleState(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("update_page failed: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
-	assertWritePageState(t, out["state"], "present", "pending", "stale", "stale")
+	dataEnvelope := decodeWriteData(t, res)
+	assertWritePageState(t, dataEnvelope["state"], "present", "pending", "stale", "stale")
 }
 
 func TestCreatePageEmptySlug(t *testing.T) {
@@ -1360,10 +1356,10 @@ func TestCreateUpdateDeleteChainUsesNewRevisionWithoutIntermediateRead(t *testin
 		raw, _ := json.Marshal(created.Content)
 		t.Fatalf("create_page failed: %s", raw)
 	}
-	createdOut := decodeWriteContent(t, created)
-	createRevision, _ := createdOut["new_revision"].(string)
+	createdData := decodeWriteData(t, created)
+	createRevision, _ := createdData["new_revision"].(string)
 	if createRevision == "" {
-		t.Fatalf("create_page new_revision missing: %#v", createdOut)
+		t.Fatalf("create_page data.new_revision missing: %#v", createdData)
 	}
 	wantAfterCreate := currentRevision(t, filepath.Join(contentRoot, "chain-me", "index.md"))
 	if createRevision != wantAfterCreate {
@@ -1379,10 +1375,10 @@ func TestCreateUpdateDeleteChainUsesNewRevisionWithoutIntermediateRead(t *testin
 		raw, _ := json.Marshal(updated.Content)
 		t.Fatalf("update_page failed using create_page's new_revision: %s", raw)
 	}
-	updatedOut := decodeWriteContent(t, updated)
-	updateRevision, _ := updatedOut["new_revision"].(string)
+	updatedData := decodeWriteData(t, updated)
+	updateRevision, _ := updatedData["new_revision"].(string)
 	if updateRevision == "" {
-		t.Fatalf("update_page new_revision missing: %#v", updatedOut)
+		t.Fatalf("update_page data.new_revision missing: %#v", updatedData)
 	}
 	if updateRevision == createRevision {
 		t.Fatal("update_page new_revision must differ from create_page's — content changed")
@@ -1440,14 +1436,9 @@ func TestUpdatePageSuccess(t *testing.T) {
 	}
 	decoded := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "source_key")
-	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "resolved_source_path")
 	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "rate_limit_remaining")
-	if got := decoded["source_key"]; got != "update-me" {
-		t.Fatalf("update_page source_key = %v, want update-me", got)
-	}
-	if got := decoded["resolved_source_path"]; got != "content/update-me/index.md" {
-		t.Fatalf("update_page resolved_source_path = %v, want content/update-me/index.md", got)
+	if got := dataEnvelope["source_key"]; got != "update-me" {
+		t.Fatalf("update_page data.source_key = %v, want update-me", got)
 	}
 	if got := dataEnvelope["resolved_source_path"]; got != "content/update-me/index.md" {
 		t.Fatalf("update_page data.resolved_source_path = %v, want content/update-me/index.md", got)
@@ -1519,8 +1510,8 @@ Original body.
 		raw, _ := json.Marshal(dryRun.Content)
 		t.Fatalf("update_page dry_run failed: %s", raw)
 	}
-	dryRunEnvelope := decodeWriteContent(t, dryRun)
-	dryRunPayload, _ := dryRunEnvelope["diff"].(string)
+	dryRunData := decodeWriteData(t, dryRun)
+	dryRunPayload, _ := dryRunData["diff"].(string)
 	for _, needle := range []string{
 		`+title: "Complex Example Updated"`,
 		"+  - go",
@@ -1632,14 +1623,9 @@ func TestDeletePageSuccess(t *testing.T) {
 	}
 	decoded := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "source_key")
-	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "resolved_source_path")
 	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "rate_limit_remaining")
-	if got := decoded["source_key"]; got != "to-delete" {
-		t.Fatalf("delete_page source_key = %v, want to-delete", got)
-	}
-	if got := decoded["resolved_source_path"]; got != "content/to-delete/index.md" {
-		t.Fatalf("delete_page resolved_source_path = %v, want content/to-delete/index.md", got)
+	if got := dataEnvelope["source_key"]; got != "to-delete" {
+		t.Fatalf("delete_page data.source_key = %v, want to-delete", got)
 	}
 	if got := dataEnvelope["resolved_source_path"]; got != "content/to-delete/index.md" {
 		t.Fatalf("delete_page data.resolved_source_path = %v, want content/to-delete/index.md", got)
@@ -1724,12 +1710,12 @@ func TestUpdatePageMultilingualFile(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(pageDir, "index.md")); !os.IsNotExist(err) {
 		t.Error("update_page must not create index.md when only index.fr.md exists")
 	}
-	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != "content/posts/csp-nonce/index.fr.md" {
-		t.Fatalf("update_page multilingual resolved_source_path = %v, want content/posts/csp-nonce/index.fr.md", got)
+	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["resolved_source_path"]; got != "content/posts/csp-nonce/index.fr.md" {
+		t.Fatalf("update_page multilingual data.resolved_source_path = %v, want content/posts/csp-nonce/index.fr.md", got)
 	}
-	if got := decoded["resolved_lang"]; got != "fr" {
-		t.Fatalf("update_page multilingual resolved_lang = %v, want fr", got)
+	if got := dataEnvelope["resolved_lang"]; got != "fr" {
+		t.Fatalf("update_page multilingual data.resolved_lang = %v, want fr", got)
 	}
 }
 
@@ -1803,12 +1789,12 @@ func TestCreatePageAcceptsExplicitLang(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "bilingual", "index.md")); !os.IsNotExist(err) {
 		t.Fatal("create_page with explicit lang must not create default index.md")
 	}
-	decoded := decodeWriteContent(t, res)
-	if got := decoded["resolved_source_path"]; got != "content/posts/bilingual/index.fr.md" {
-		t.Fatalf("create_page resolved_source_path = %v, want content/posts/bilingual/index.fr.md", got)
+	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["resolved_source_path"]; got != "content/posts/bilingual/index.fr.md" {
+		t.Fatalf("create_page data.resolved_source_path = %v, want content/posts/bilingual/index.fr.md", got)
 	}
-	if got := decoded["resolved_lang"]; got != "fr" {
-		t.Fatalf("create_page resolved_lang = %v, want fr", got)
+	if got := dataEnvelope["resolved_lang"]; got != "fr" {
+		t.Fatalf("create_page data.resolved_lang = %v, want fr", got)
 	}
 }
 
@@ -2132,16 +2118,16 @@ func TestDeletePageDryRun(t *testing.T) {
 		t.Fatalf("delete_page dry_run failed: %s", raw)
 	}
 
-	m := decodeWriteContent(t, res)
+	m := decodeWriteData(t, res)
 	if m["dry_run"] != true {
-		t.Errorf("expected dry_run=true in response, got %v", m["dry_run"])
+		t.Errorf("expected data.dry_run=true in response, got %v", m["dry_run"])
 	}
 	content, _ := m["content"].(string)
 	if !strings.Contains(content, "Dry Run") {
-		t.Errorf("dry_run content should contain page frontmatter, got: %q", content)
+		t.Errorf("dry_run data.content should contain page frontmatter, got: %q", content)
 	}
 	if _, ok := m["backlinks"]; !ok {
-		t.Error("dry_run response must include backlinks key")
+		t.Error("dry_run response must include data.backlinks key")
 	}
 
 	// #466 regression: delete_page's dry_run must report the caller's actual
@@ -2261,10 +2247,10 @@ func TestDeletePageDryRunWithBacklinks(t *testing.T) {
 		t.Fatalf("delete_page dry_run failed: %s", raw)
 	}
 
-	m := decodeWriteContent(t, res)
+	m := decodeWriteData(t, res)
 	bls, ok := m["backlinks"].([]any)
 	if !ok {
-		t.Fatalf("dry_run response must include backlinks array, got %T: %v", m["backlinks"], m["backlinks"])
+		t.Fatalf("dry_run response must include data.backlinks array, got %T: %v", m["backlinks"], m["backlinks"])
 	}
 	if len(bls) != 1 {
 		t.Fatalf("expected 1 backlink, got %d: %v", len(bls), bls)
@@ -2369,7 +2355,7 @@ func TestDeletePageDBWarning(t *testing.T) {
 	if !strings.Contains(string(raw), "warning") {
 		t.Errorf("expected a warning in response when DB delete fails, got: %s", raw)
 	}
-	if got := decodeWriteContent(t, res)["status"]; got != "partial_success" {
+	if got := decodeWriteData(t, res)["status"]; got != "partial_success" {
 		t.Errorf("expected partial_success status when DB delete fails, got: %v", got)
 	}
 }
@@ -2398,7 +2384,7 @@ func TestCreatePageDBWarning(t *testing.T) {
 	if !strings.Contains(string(raw), "warning") {
 		t.Fatalf("expected warning when create DB sync fails, got: %s", raw)
 	}
-	if got := decodeWriteContent(t, res)["status"]; got != "partial_success" {
+	if got := decodeWriteData(t, res)["status"]; got != "partial_success" {
 		t.Fatalf("expected partial_success status when create DB sync fails, got: %v", got)
 	}
 }
@@ -2435,7 +2421,7 @@ func TestUpdatePageDBWarning(t *testing.T) {
 	if !strings.Contains(string(raw), "warning") {
 		t.Fatalf("expected warning when update DB sync fails, got: %s", raw)
 	}
-	if got := decodeWriteContent(t, res)["status"]; got != "partial_success" {
+	if got := decodeWriteData(t, res)["status"]; got != "partial_success" {
 		t.Fatalf("expected partial_success status when update DB sync fails, got: %v", got)
 	}
 }

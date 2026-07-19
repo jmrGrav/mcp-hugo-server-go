@@ -1,13 +1,16 @@
 # MCP Contract — hugo-public-mcp
 
-Issue note for `#520`:
+Issue note for `#520` (draft PR, not yet merged):
 
-As of `v1.5.3`, successful **write/mutation** tools still expose a transitional
-v1.x compatibility shape: the canonical payload lives under `data`, and a
-mirrored copy of the same machine fields remains available at the root for
-older clients. This duplication is intentional for v1.x compatibility and is
-not shared by the read-only tools anymore. New clients must read `data.*`
-first; the root write fields are compatibility aliases only.
+Through `v1.5.6`, successful **write/mutation** tools mirrored their whole
+payload at the root in addition to `data`, as a transitional v1.x
+compatibility shape. This draft removes that root/data payload duplication:
+`create_page`/`update_page`/`upload_page_asset`/`delete_page`/
+`delete_page_asset` success responses now expose their payload only via
+`data.*`, matching the read tools. `request_context` (error-path only,
+#455) and `rate_limit_remaining` (#466/#510/#522) remain as deliberately
+kept root fields — see [§1.1](#11-flat-envelope) for why those two survive
+the convergence.
 
 This document specifies the observable contract for all tools exposed by the
 server: response envelopes, error model, pagination, naming conventions, and
@@ -51,29 +54,27 @@ anonymous tools; #495 removed it from the remaining read tools that still
 had it. As of #495, no read or anonymous tool duplicates `data.X` at the top
 level. As of `v1.5.2`, the write/mutation tools no longer use the older
 `data:{}` placeholder convention (#508): their canonical payload is now
-present under `data`. However, unlike the read tools, successful write
-responses still mirror those same payload fields at the root during the v1.x
-compatibility window (#520). That means:
+present under `data`. Through `v1.5.6`, successful write responses also
+mirrored those same payload fields at the root as a transitional v1.x
+compatibility shape; this draft (#520) removes that mirroring. That means:
 
 - **read tools**: canonical `data.*` only
-- **write success responses**: canonical `data.*` plus temporary root aliases
-- **write error responses**: canonical `data.*` plus temporary root aliases for
-  selected compatibility/telemetry fields where documented (for example
-  `rate_limit_remaining`, #522)
-
-**v1.6.0 direction for #520** (draft, not yet merged): the root aliases stay
-in place as documented compatibility aliases rather than being removed
-outright — a hard removal in a 1.x minor would contradict this same
-compatibility-window policy. A concrete removal target release will be set
-once the deprecation is announced.
+- **write success responses**: canonical `data.*` only, as of this draft — no
+  root mirroring
+- **write error responses**: canonical `data.*` plus two deliberately kept
+  root fields: `request_context` (echoes the caller's normalized input on
+  failure, #455 — meaningless on success, so it never appears there) and
+  `rate_limit_remaining` (#466/#510/#522 — kept on both success and error so
+  an agent can self-regulate pacing from the root alone, without inspecting
+  `data` on every call)
 
 `create_page`/`update_page`/`upload_page_asset`/`delete_page`/
-`delete_page_asset`'s `slug` field on success is being canonicalized to the
-public `/posts/x/` form to match read tools (#554, draft), instead of echoing
-the raw source-relative input. `source_key` (added in v1.5.4, #545) remains
-the stable source-relative identifier — callers that previously reused a
-write tool's returned `slug` as another write tool's `slug` input should
-switch to `source_key` for that purpose.
+`delete_page_asset`'s `slug` field on success is the canonical public
+`/posts/x/` form, matching read tools (#554, shipped `v1.5.6`), not the raw
+source-relative input. `source_key` (added in v1.5.4, #545) remains the
+stable source-relative identifier — callers that previously reused a write
+tool's returned `slug` as another write tool's `slug` input should switch to
+`source_key` for that purpose.
 
 ### 1.2 Structured envelope
 
@@ -390,20 +391,23 @@ no exceptions — `write` implies full `read` access plus everything below.
 `delete_page_asset`/`generate_hero_image` used to leave `data` as an empty
 placeholder object, with the real payload only at the top level — a
 different, older convention than the read-side flat/structured duplication
-#433/#495 addressed (tracked separately as #508). As of #508's fix (#512),
-`data.X` now mirrors the same fields listed below, additively — the
-top-level fields are unchanged and still canonical for existing callers.
-This is an interim state, not the final contract: a future breaking change
-may make `data.X` the sole location, at which point these rows would be
-relabeled "structured" the same way #495 did for the read tools.
+#433/#495 addressed (tracked separately as #508). #508's fix (#512) made
+`data.X` mirror the same fields additively, with the top-level fields kept
+as compatibility aliases through `v1.5.6`. This draft (#520) removes that
+top-level mirroring for `create_page`/`update_page`/`upload_page_asset`/
+`delete_page`/`delete_page_asset`: they are relabeled "structured" below,
+the same way #495 did for the read tools, with only `request_context`
+(error path) and `rate_limit_remaining` kept at the root (see
+[§1.1](#11-flat-envelope)). `generate_hero_image` is unaffected — it was not
+in #520's scope and remains flat.
 
 | Tool          | Envelope | Top-level key(s)                            |
 |---------------|----------|---------------------------------------------|
-| `create_page` | flat     | `status`, `slug`, `path`, `dry_run?`, `content?`, `warning?`; `resolved_lang`/`resolved_source_path` are omitted (not empty-stringed) unless resolution actually succeeded; on failure, `request_context` (`slug`, `requested_lang?`) always echoes the caller's normalized input (#455); on success (non-dry-run), `new_revision` is the resulting page's revision, usable directly as `expected_revision` on a following `update_page`/`delete_page` without an intermediate read (#464); `rate_limit_remaining` reports the caller's real remaining budget on the shared create/update/upload quota, on both success and error responses — it is never a stale/zero placeholder on the error path (#466, #510); `data.X` mirrors all of the above additively (#508) |
-| `update_page` | flat     | `status`, `slug`, `dry_run?`, `diff?`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455); same `new_revision` success-path contract as `create_page` (#464); same `rate_limit_remaining` contract as `create_page`, including on error responses (#466, #510); `data.X` mirrors all of the above additively (#508) |
-| `delete_page` | flat     | `status`, `slug`, `warning?`; same `resolved_lang`/`resolved_source_path`/`request_context` failure-path contract as `create_page` (#455); `rate_limit_remaining` reports the caller's real remaining budget on `delete_page`'s own, separate quota, on both success and error responses (#466, #510); `data.X` mirrors all of the above additively (#508) |
-| `upload_page_asset` | flat | `status`, `slug`, `filename`, `path`, `content_type`, `size_bytes`, `sha256`, `duplicate_of?` (advisory only), `dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`); `rate_limit_remaining` reports the caller's real remaining budget on the shared create/update/upload quota, on both success and error responses (#466, #510); `data.X` mirrors all of the above additively (#508) |
-| `delete_page_asset` | flat | `status`, `slug`, `filename`, `sha256`, `dry_run?`, `referenced?` (pointer — present as `false` on success, omitted on error, so "not referenced" and "never checked" stay distinguishable), `referenced_in?`; requires `expected_sha256` or `expected_revision` on non-dry-run calls (a mismatch fails `revision_conflict`); fails `asset_referenced` if the filename is still linked from the page body, unless `force=true`; `dry_run` previews `sha256`/`referenced` without requiring the concurrency guard or deleting anything; `rate_limit_remaining` reports the caller's real remaining budget on `delete_page`'s own destructive quota, on both success and error responses (#460, #510). Only removes the source asset — unlike `delete_page`, it does not purge any built public copy or CDN cache; the asset stays reachable at its old URL until the next build; `data.X` mirrors all of the above additively (#508) |
+| `create_page` | structured | `data.status`, `data.slug` (canonical public `/posts/x/` form, #554), `data.source_key`, `data.path`, `data.dry_run?`, `data.content?`, `data.warning?`; `data.resolved_lang`/`data.resolved_source_path` are omitted (not empty-stringed) unless resolution actually succeeded; on failure, root `request_context` (`slug`, `requested_lang?`) always echoes the caller's normalized input (#455); on success (non-dry-run), `data.new_revision` is the resulting page's revision, usable directly as `expected_revision` on a following `update_page`/`delete_page` without an intermediate read (#464); root `rate_limit_remaining` reports the caller's real remaining budget on the shared create/update/upload quota, on both success and error responses — it is never a stale/zero placeholder on the error path (#466, #510); no other top-level payload duplication as of this draft (#520) |
+| `update_page` | structured | `data.status`, `data.slug` (canonical public form, #554), `data.source_key`, `data.dry_run?`, `data.diff?`, `data.warning?`; same `data.resolved_lang`/`data.resolved_source_path`/root `request_context` failure-path contract as `create_page` (#455); same `data.new_revision` success-path contract as `create_page` (#464); same root `rate_limit_remaining` contract as `create_page`, including on error responses (#466, #510); no other top-level payload duplication as of this draft (#520) |
+| `delete_page` | structured | `data.status`, `data.slug` (canonical public form, #554), `data.source_key`, `data.warning?`; same `data.resolved_lang`/`data.resolved_source_path`/root `request_context` failure-path contract as `create_page` (#455); root `rate_limit_remaining` reports the caller's real remaining budget on `delete_page`'s own, separate quota, on both success and error responses (#466, #510); no other top-level payload duplication as of this draft (#520) |
+| `upload_page_asset` | structured | `data.status`, `data.slug` (canonical public form, #554), `data.source_key`, `data.filename`, `data.path`, `data.content_type`, `data.size_bytes`, `data.sha256`, `data.duplicate_of?` (advisory only), `data.dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`); root `rate_limit_remaining` reports the caller's real remaining budget on the shared create/update/upload quota, on both success and error responses (#466, #510); no other top-level payload duplication as of this draft (#520) |
+| `delete_page_asset` | structured | `data.status`, `data.slug` (canonical public form, #554), `data.source_key`, `data.filename`, `data.sha256`, `data.dry_run?`, `data.referenced?` (pointer — present as `false` on success, omitted on error, so "not referenced" and "never checked" stay distinguishable), `data.referenced_in?`; requires `expected_sha256` or `expected_revision` on non-dry-run calls (a mismatch fails `revision_conflict`); fails `asset_referenced` if the filename is still linked from the page body, unless `force=true`; `dry_run` previews `data.sha256`/`data.referenced` without requiring the concurrency guard or deleting anything; root `rate_limit_remaining` reports the caller's real remaining budget on `delete_page`'s own destructive quota, on both success and error responses (#460, #510). Only removes the source asset — unlike `delete_page`, it does not purge any built public copy or CDN cache; the asset stays reachable at its old URL until the next build; no other top-level payload duplication as of this draft (#520) |
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready` |
 | `preview_build`           | flat     | `status`, `duration_ms`; `data.X` mirrors both additively (#552) |
 | `run_post_build_hooks`    | flat     | `results`; `data.results` mirrors it additively (#552) |

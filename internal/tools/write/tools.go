@@ -46,38 +46,17 @@ type createPageInput struct {
 
 type createPageOutput struct {
 	toolcontract.ToolResponse[createPageData]
-	Status string `json:"status,omitempty"`
-	// Slug is never legitimately empty on success (an empty slug fails
-	// invalid_params before any write happens); omitempty so a failure
-	// response doesn't emit a useless slug:"" alongside the real value in
-	// request_context.slug (#455).
-	Slug         string  `json:"slug,omitempty"`
-	SourceKey    string  `json:"source_key,omitempty"`
-	Path         string  `json:"path,omitempty"`
-	ResolvedLang *string `json:"resolved_lang,omitempty"`
-	// ResolvedSourcePath is only meaningful once resolution succeeded — see
-	// the same reasoning on updatePageOutput.ResolvedSourcePath.
-	ResolvedSourcePath *string `json:"resolved_source_path,omitempty"`
-	DryRun             bool    `json:"dry_run,omitempty"`
-	Content            string  `json:"content,omitempty"`
-	Warning            string  `json:"warning,omitempty"`
-	// NewRevision is the resulting page's revision immediately after this
-	// write (#464), usable directly as expected_revision on a following
-	// update_page/delete_page without an intermediate read call. Omitted on
-	// dry_run (nothing was actually written) and on error (see
-	// ResolvedSourcePath's reasoning above).
-	NewRevision string `json:"new_revision,omitempty"`
 	// RequestContext echoes the caller's normalized slug/lang on failure
 	// (#455) — always populated by toolcontract.WrapTool when the handler
-	// wraps its error via toolcontract.WithRequestContext, independent of
-	// whether resolution got far enough to populate ResolvedLang/
-	// ResolvedSourcePath above.
+	// wraps its error via toolcontract.WithRequestContext. This is an
+	// error-path-only field, not a success-payload duplicate, so it survives
+	// the root/data convergence below (#520).
 	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
-	State          *site.LifecycleState         `json:"state,omitempty"`
-	// RateLimitRemaining is the caller's remaining create_page/update_page
-	// budget after this call (#466) — always set on success (0 is a
-	// meaningful value, not "unset"), so an agent can self-regulate pacing
-	// instead of inferring a safe rate from the tool description alone.
+	// RateLimitRemaining is intentionally still mirrored at the root on both
+	// success and error (#466, #510, #522) — a documented, deliberately kept
+	// exception to the root/data duplication removed here (#520), not an
+	// oversight: it lets an agent self-regulate pacing from the root alone
+	// without inspecting data on every call.
 	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
@@ -112,28 +91,9 @@ type updatePageInput struct {
 
 type updatePageOutput struct {
 	toolcontract.ToolResponse[updatePageData]
-	Status string `json:"status,omitempty"`
-	// Slug is never legitimately empty on success — see the same reasoning
-	// on createPageOutput.Slug (#455).
-	Slug         string  `json:"slug,omitempty"`
-	SourceKey    string  `json:"source_key,omitempty"`
-	ResolvedLang *string `json:"resolved_lang,omitempty"`
-	// ResolvedSourcePath is only meaningful once the slug/lang resolved to a
-	// real source page — omitted (not emptied) when resolution never
-	// happened, e.g. an invalid_params/content_not_found error before
-	// resolution (#455).
-	ResolvedSourcePath *string `json:"resolved_source_path,omitempty"`
-	DryRun             bool    `json:"dry_run,omitempty"`
-	Diff               string  `json:"diff,omitempty"`
-	Warning            string  `json:"warning,omitempty"`
-	// NewRevision is the resulting page's revision immediately after this
-	// write (#464) — see the comment on createPageOutput.NewRevision.
-	NewRevision string `json:"new_revision,omitempty"`
-	// RequestContext echoes the caller's normalized slug/lang on failure
-	// (#455) — see the comment on createPageOutput.RequestContext.
+	// RequestContext — see the comment on createPageOutput.RequestContext.
 	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
-	State          *site.LifecycleState         `json:"state,omitempty"`
-	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466).
+	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466, #520).
 	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
@@ -166,24 +126,10 @@ type deletePageBacklinkDTO struct {
 
 type deletePageOutput struct {
 	toolcontract.ToolResponse[deletePageData]
-	Status string `json:"status,omitempty"`
-	// Slug is never legitimately empty on success — see the same reasoning
-	// on createPageOutput.Slug (#455).
-	Slug         string  `json:"slug,omitempty"`
-	SourceKey    string  `json:"source_key,omitempty"`
-	ResolvedLang *string `json:"resolved_lang,omitempty"`
-	// ResolvedSourcePath is only meaningful once resolution succeeded — see
-	// the same reasoning on updatePageOutput.ResolvedSourcePath.
-	ResolvedSourcePath *string                  `json:"resolved_source_path,omitempty"`
-	DryRun             bool                     `json:"dry_run,omitempty"`
-	Content            string                   `json:"content,omitempty"`
-	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
-	Warning            string                   `json:"warning,omitempty"`
 	// RequestContext echoes the caller's normalized slug on failure (#455)
 	// — see the comment on createPageOutput.RequestContext.
 	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
-	State          *site.LifecycleState         `json:"state,omitempty"`
-	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466).
+	// RateLimitRemaining — see the comment on createPageOutput.RateLimitRemaining (#466, #520).
 	RateLimitRemaining int `json:"rate_limit_remaining"`
 }
 
@@ -215,17 +161,6 @@ func writeSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 func newCreatePageOutput(data createPageData) createPageOutput {
 	return createPageOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		Status:             data.Status,
-		Slug:               data.Slug,
-		SourceKey:          data.SourceKey,
-		Path:               data.Path,
-		ResolvedLang:       data.ResolvedLang,
-		ResolvedSourcePath: data.ResolvedSourcePath,
-		DryRun:             data.DryRun,
-		Content:            data.Content,
-		Warning:            data.Warning,
-		NewRevision:        data.NewRevision,
-		State:              data.State,
 		RateLimitRemaining: data.RateLimitRemaining,
 	}
 }
@@ -233,16 +168,6 @@ func newCreatePageOutput(data createPageData) createPageOutput {
 func newUpdatePageOutput(data updatePageData) updatePageOutput {
 	return updatePageOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		Status:             data.Status,
-		Slug:               data.Slug,
-		SourceKey:          data.SourceKey,
-		ResolvedLang:       data.ResolvedLang,
-		ResolvedSourcePath: data.ResolvedSourcePath,
-		DryRun:             data.DryRun,
-		Diff:               data.Diff,
-		Warning:            data.Warning,
-		NewRevision:        data.NewRevision,
-		State:              data.State,
 		RateLimitRemaining: data.RateLimitRemaining,
 	}
 }
@@ -250,16 +175,6 @@ func newUpdatePageOutput(data updatePageData) updatePageOutput {
 func newDeletePageOutput(data deletePageData) deletePageOutput {
 	return deletePageOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		Status:             data.Status,
-		Slug:               data.Slug,
-		SourceKey:          data.SourceKey,
-		ResolvedLang:       data.ResolvedLang,
-		ResolvedSourcePath: data.ResolvedSourcePath,
-		DryRun:             data.DryRun,
-		Content:            data.Content,
-		Backlinks:          data.Backlinks,
-		Warning:            data.Warning,
-		State:              data.State,
 		RateLimitRemaining: data.RateLimitRemaining,
 	}
 }

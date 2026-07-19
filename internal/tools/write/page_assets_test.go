@@ -43,22 +43,15 @@ func TestUploadPageAssetSuccess(t *testing.T) {
 	}
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "slug")
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "source_key")
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "content_type")
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "size_bytes")
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
-	if out["source_key"] != "posts/article" {
-		t.Fatalf("upload_page_asset source_key = %v, want posts/article", out["source_key"])
-	}
-	if out["content_type"] != "image/png" {
-		t.Fatalf("upload_page_asset content_type = %v, want image/png", out["content_type"])
+	if dataEnvelope["source_key"] != "posts/article" {
+		t.Fatalf("upload_page_asset data.source_key = %v, want posts/article", dataEnvelope["source_key"])
 	}
 	if dataEnvelope["content_type"] != "image/png" {
 		t.Fatalf("upload_page_asset data.content_type = %v, want image/png", dataEnvelope["content_type"])
 	}
-	if size, _ := out["size_bytes"].(float64); size != float64(len(minimalPNG)) {
-		t.Fatalf("upload_page_asset size_bytes = %v, want %d", out["size_bytes"], len(minimalPNG))
+	if size, _ := dataEnvelope["size_bytes"].(float64); size != float64(len(minimalPNG)) {
+		t.Fatalf("upload_page_asset data.size_bytes = %v, want %d", dataEnvelope["size_bytes"], len(minimalPNG))
 	}
 	data, err := os.ReadFile(filepath.Join(contentRoot, "posts", "article", "cover.png"))
 	if err != nil {
@@ -179,9 +172,9 @@ func TestUploadPageAssetDryRunDoesNotWrite(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("upload_page_asset dry_run returned error: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
-	if dryRun, _ := out["dry_run"].(bool); !dryRun {
-		t.Fatalf("upload_page_asset dry_run response dry_run = %v, want true", out["dry_run"])
+	dataEnvelope := decodeWriteData(t, res)
+	if dryRun, _ := dataEnvelope["dry_run"].(bool); !dryRun {
+		t.Fatalf("upload_page_asset dry_run response data.dry_run = %v, want true", dataEnvelope["dry_run"])
 	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); !os.IsNotExist(err) {
 		t.Fatal("upload_page_asset dry_run must not write a file")
@@ -212,9 +205,9 @@ func TestUploadPageAssetDuplicateContentIsAdvisoryOnly(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("second upload_page_asset (identical content, new filename) returned error: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
-	if out["duplicate_of"] != "cover.png" {
-		t.Fatalf("upload_page_asset duplicate_of = %v, want cover.png", out["duplicate_of"])
+	dataEnvelope := decodeWriteData(t, res)
+	if dataEnvelope["duplicate_of"] != "cover.png" {
+		t.Fatalf("upload_page_asset data.duplicate_of = %v, want cover.png", dataEnvelope["duplicate_of"])
 	}
 	// The write must still happen under the requested filename — duplicate
 	// detection is advisory, not a substitute for the caller's explicit intent.
@@ -242,9 +235,9 @@ func TestUploadPageAssetTrimsFilenameConsistently(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("upload_page_asset with whitespace-padded filename returned error: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
-	if out["filename"] != "cover.png" {
-		t.Fatalf("upload_page_asset filename = %v, want trimmed \"cover.png\"", out["filename"])
+	dataEnvelope := decodeWriteData(t, res)
+	if dataEnvelope["filename"] != "cover.png" {
+		t.Fatalf("upload_page_asset data.filename = %v, want trimmed \"cover.png\"", dataEnvelope["filename"])
 	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); err != nil {
 		t.Fatalf("expected file written under trimmed name %q: %v", "cover.png", err)
@@ -297,7 +290,7 @@ func TestDeletePageAssetSuccess(t *testing.T) {
 		raw, _ := json.Marshal(upload.Content)
 		t.Fatalf("upload_page_asset returned error: %s", raw)
 	}
-	sha256 := decodeWriteContent(t, upload)["sha256"].(string)
+	sha256 := decodeWriteData(t, upload)["sha256"].(string)
 
 	res := callTool(t, session, "delete_page_asset", map[string]any{
 		"slug":            "posts/article",
@@ -308,17 +301,12 @@ func TestDeletePageAssetSuccess(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page_asset returned error: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "source_key")
-	if out["sha256"] != sha256 {
-		t.Fatalf("delete_page_asset sha256 = %v, want %v", out["sha256"], sha256)
-	}
 	if dataEnvelope["sha256"] != sha256 {
 		t.Fatalf("delete_page_asset data.sha256 = %v, want %v", dataEnvelope["sha256"], sha256)
 	}
-	if out["source_key"] != "posts/article" {
-		t.Fatalf("delete_page_asset source_key = %v, want posts/article", out["source_key"])
+	if dataEnvelope["source_key"] != "posts/article" {
+		t.Fatalf("delete_page_asset data.source_key = %v, want posts/article", dataEnvelope["source_key"])
 	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); !os.IsNotExist(err) {
 		t.Fatal("delete_page_asset must remove the file")
@@ -407,7 +395,7 @@ func TestDeletePageAssetReferencedGuardBlocksUnlessForced(t *testing.T) {
 		raw, _ := json.Marshal(upload.Content)
 		t.Fatalf("upload_page_asset returned error: %s", raw)
 	}
-	sha256 := decodeWriteContent(t, upload)["sha256"].(string)
+	sha256 := decodeWriteData(t, upload)["sha256"].(string)
 
 	blocked := callTool(t, session, "delete_page_asset", map[string]any{
 		"slug":            "posts/article",
@@ -435,9 +423,9 @@ func TestDeletePageAssetReferencedGuardBlocksUnlessForced(t *testing.T) {
 		raw, _ := json.Marshal(forced.Content)
 		t.Fatalf("delete_page_asset with force=true returned error: %s", raw)
 	}
-	out := decodeWriteContent(t, forced)
-	if out["referenced"] != true {
-		t.Fatalf("delete_page_asset referenced = %v, want true (force overrides the guard, doesn't hide the fact)", out["referenced"])
+	dataEnvelope := decodeWriteData(t, forced)
+	if dataEnvelope["referenced"] != true {
+		t.Fatalf("delete_page_asset data.referenced = %v, want true (force overrides the guard, doesn't hide the fact)", dataEnvelope["referenced"])
 	}
 	if _, err := os.Stat(filepath.Join(dir, "cover.png")); !os.IsNotExist(err) {
 		t.Fatal("delete_page_asset with force=true must delete the file")
@@ -468,15 +456,15 @@ func TestDeletePageAssetDryRunPreviewsWithoutDeleting(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page_asset dry_run returned error: %s", raw)
 	}
-	out := decodeWriteContent(t, res)
-	if out["dry_run"] != true {
-		t.Fatalf("delete_page_asset dry_run response dry_run = %v, want true", out["dry_run"])
+	dataEnvelope := decodeWriteData(t, res)
+	if dataEnvelope["dry_run"] != true {
+		t.Fatalf("delete_page_asset dry_run response data.dry_run = %v, want true", dataEnvelope["dry_run"])
 	}
-	if sha, _ := out["sha256"].(string); sha == "" {
+	if sha, _ := dataEnvelope["sha256"].(string); sha == "" {
 		t.Fatal("delete_page_asset dry_run must report the asset's sha256")
 	}
-	if out["referenced"] == true {
-		t.Fatalf("delete_page_asset dry_run referenced = %v, want false (fixture body doesn't mention cover.png)", out["referenced"])
+	if dataEnvelope["referenced"] == true {
+		t.Fatalf("delete_page_asset dry_run data.referenced = %v, want false (fixture body doesn't mention cover.png)", dataEnvelope["referenced"])
 	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); err != nil {
 		t.Fatalf("delete_page_asset dry_run must not delete the file: %v", err)
@@ -498,7 +486,7 @@ func TestDeletePageAssetIdempotencyKeyReturnsOriginalResultWithoutDeletingTwice(
 		raw, _ := json.Marshal(upload.Content)
 		t.Fatalf("upload_page_asset returned error: %s", raw)
 	}
-	sha256 := decodeWriteContent(t, upload)["sha256"].(string)
+	sha256 := decodeWriteData(t, upload)["sha256"].(string)
 
 	args := map[string]any{
 		"slug":            "posts/article",
