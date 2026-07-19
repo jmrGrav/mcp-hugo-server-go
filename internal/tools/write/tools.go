@@ -287,6 +287,27 @@ func appendLastBuildWarning(warning string) string {
 // entry (#265).
 func normalizeInputSlug(s string) string { return strings.Trim(s, "/") }
 
+// canonicalPublicSlug converts a source-relative slug ("posts/x") to the
+// canonical public-route form ("/posts/x/") already used by read tools
+// (read.canonicalSourceSlug, #519). Write tools' success responses use this
+// for the public-facing Slug field while SourceKey keeps the raw
+// source-relative form (#554) — the same distinction read tools already
+// draw between source_key and slug.
+//
+// This is a draft-scope port: it does not yet special-case Hugo section
+// index pages (_index.md) the way read.canonicalSourceSlug does, since none
+// of the four write tools in scope here (create_page/update_page/
+// upload_page_asset/delete_page) can target a section index. If that
+// changes, share the logic with read.canonicalSourceSlug instead of
+// duplicating the section-index handling here.
+func canonicalPublicSlug(sourceSlug string) string {
+	slug := strings.Trim(sourceSlug, "/")
+	if slug == "" {
+		return ""
+	}
+	return "/" + slug + "/"
+}
+
 var reservedSlugs = map[string]bool{
 	"_index": true,
 	"index":  true,
@@ -488,7 +509,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, newCreatePageOutput(createPageData{
 				Status:             "ok",
-				Slug:               in.Slug,
+				Slug:               canonicalPublicSlug(in.Slug),
 				SourceKey:          in.Slug,
 				ResolvedLang:       strPtr(resolvedLang),
 				ResolvedSourcePath: strPtr(logicalPath),
@@ -594,7 +615,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := newCreatePageOutput(createPageData{
 			Status:             status,
-			Slug:               in.Slug,
+			Slug:               canonicalPublicSlug(in.Slug),
 			SourceKey:          in.Slug,
 			Path:               logicalPath,
 			ResolvedLang:       strPtr(resolvedLang),
@@ -792,7 +813,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, newUpdatePageOutput(updatePageData{
 				Status:             "ok",
-				Slug:               in.Slug,
+				Slug:               canonicalPublicSlug(in.Slug),
 				SourceKey:          in.Slug,
 				ResolvedLang:       strPtr(resolvedSource.Lang),
 				ResolvedSourcePath: strPtr(logicalPath),
@@ -861,7 +882,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := newUpdatePageOutput(updatePageData{
 			Status:             status,
-			Slug:               in.Slug,
+			Slug:               canonicalPublicSlug(in.Slug),
 			SourceKey:          in.Slug,
 			ResolvedLang:       strPtr(resolvedSource.Lang),
 			ResolvedSourcePath: strPtr(logicalPath),
@@ -942,7 +963,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			return nil, newDeletePageOutput(deletePageData{
 				Status:             "ok",
-				Slug:               in.Slug,
+				Slug:               canonicalPublicSlug(in.Slug),
 				SourceKey:          in.Slug,
 				ResolvedLang:       strPtr(resolvedSource.Lang),
 				ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
@@ -1084,7 +1105,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		out := newDeletePageOutput(deletePageData{
 			Status:             status,
-			Slug:               in.Slug,
+			Slug:               canonicalPublicSlug(in.Slug),
 			SourceKey:          in.Slug,
 			ResolvedLang:       strPtr(resolvedSource.Lang),
 			ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),

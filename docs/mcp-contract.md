@@ -61,6 +61,20 @@ compatibility window (#520). That means:
   selected compatibility/telemetry fields where documented (for example
   `rate_limit_remaining`, #522)
 
+**v1.6.0 direction for #520** (draft, not yet merged): the root aliases stay
+in place as documented compatibility aliases rather than being removed
+outright — a hard removal in a 1.x minor would contradict this same
+compatibility-window policy. A concrete removal target release will be set
+once the deprecation is announced.
+
+`create_page`/`update_page`/`upload_page_asset`/`delete_page`/
+`delete_page_asset`'s `slug` field on success is being canonicalized to the
+public `/posts/x/` form to match read tools (#554, draft), instead of echoing
+the raw source-relative input. `source_key` (added in v1.5.4, #545) remains
+the stable source-relative identifier — callers that previously reused a
+write tool's returned `slug` as another write tool's `slug` input should
+switch to `source_key` for that purpose.
+
 ### 1.2 Structured envelope
 
 Used by tools that need richer output: diagnostics, pagination metadata,

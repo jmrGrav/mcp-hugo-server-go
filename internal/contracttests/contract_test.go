@@ -140,8 +140,11 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	}
 	m := decodeContent(t, res)
 	assertToolResponseEnvelope(t, "create_page", m)
-	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/envelope-check" {
-		t.Fatalf("create_page data.slug = %q, want posts/envelope-check", got)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "/posts/envelope-check/" {
+		t.Fatalf("create_page data.slug = %q, want /posts/envelope-check/ (canonical public form, #554)", got)
+	}
+	if got := asString(mapAt(t, m, "data")["source_key"]); got != "posts/envelope-check" {
+		t.Fatalf("create_page data.source_key = %q, want posts/envelope-check", got)
 	}
 
 	revision := func() string {
@@ -164,8 +167,8 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	}
 	m = decodeContent(t, res)
 	assertToolResponseEnvelope(t, "update_page", m)
-	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/existing" {
-		t.Fatalf("update_page data.slug = %q, want posts/existing", got)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "/posts/existing/" {
+		t.Fatalf("update_page data.slug = %q, want /posts/existing/ (canonical public form, #554)", got)
 	}
 
 	res = callTool(t, session, "delete_page", map[string]any{
@@ -177,8 +180,8 @@ func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	}
 	m = decodeContent(t, res)
 	assertToolResponseEnvelope(t, "delete_page", m)
-	if got := asString(mapAt(t, m, "data")["slug"]); got != "posts/existing" {
-		t.Fatalf("delete_page data.slug = %q, want posts/existing", got)
+	if got := asString(mapAt(t, m, "data")["slug"]); got != "/posts/existing/" {
+		t.Fatalf("delete_page data.slug = %q, want /posts/existing/ (canonical public form, #554)", got)
 	}
 }
 

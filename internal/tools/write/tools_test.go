@@ -196,8 +196,8 @@ func TestCreatePage(t *testing.T) {
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "resolved_source_path")
 	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
 	assertWritePageState(t, out["state"], "present", "pending", "not_yet_available", "source_only")
-	if got := dataEnvelope["slug"]; got != "my-post" {
-		t.Fatalf("create_page data.slug = %v, want my-post", got)
+	if got := dataEnvelope["slug"]; got != "/my-post/" {
+		t.Fatalf("create_page data.slug = %v, want /my-post/ (canonical public form, #554)", got)
 	}
 	if got := dataEnvelope["source_key"]; got != "my-post" {
 		t.Fatalf("create_page data.source_key = %v, want my-post", got)

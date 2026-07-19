@@ -311,7 +311,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if in.DryRun {
 			return nil, newUploadPageAssetOutput(uploadPageAssetData{
 				Status:             "ok",
-				Slug:               slug,
+				Slug:               canonicalPublicSlug(slug),
 				SourceKey:          slug,
 				Filename:           filename,
 				Path:               logicalPath,
@@ -338,7 +338,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 
 		out := newUploadPageAssetOutput(uploadPageAssetData{
 			Status:             "ok",
-			Slug:               slug,
+			Slug:               canonicalPublicSlug(slug),
 			SourceKey:          slug,
 			Filename:           filename,
 			Path:               logicalPath,
@@ -563,7 +563,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			}
 			return nil, newDeletePageAssetOutput(deletePageAssetData{
 				Status:             "ok",
-				Slug:               slug,
+				Slug:               canonicalPublicSlug(slug),
 				SourceKey:          slug,
 				Filename:           filename,
 				Sha256:             contentmodel.SourceRevisionBytes(data),
@@ -673,7 +673,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 
 		out := newDeletePageAssetOutput(deletePageAssetData{
 			Status:             "ok",
-			Slug:               slug,
+			Slug:               canonicalPublicSlug(slug),
 			SourceKey:          slug,
 			Filename:           filename,
 			Sha256:             actualHash,
