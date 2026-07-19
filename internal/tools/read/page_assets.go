@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
@@ -30,15 +31,32 @@ type pageAssetDTO struct {
 	Name       string `json:"name"`
 	SizeBytes  int64  `json:"size_bytes"`
 	ModifiedAt string `json:"modified_at"`
+	// Sha256 is the same contentmodel.SourceRevisionBytes hash format
+	// upload_page_asset/delete_page_asset use for expected_sha256 — this
+	// tool's own description already promises it as the way to fetch that
+	// value before calling delete_page_asset (#574).
+	Sha256 string `json:"sha256"`
 }
 
 type listPageAssetsData struct {
 	Assets []pageAssetDTO `json:"assets"`
+	// Hint is populated only when Assets is empty, clarifying that this
+	// tool only lists page-bundle sibling files — a page can still
+	// reference images under the site's global static directory that
+	// won't show up here (#569). Additive only, never present alongside a
+	// non-empty Assets list.
+	Hint string `json:"hint,omitempty"`
 }
 
 type listPageAssetsOutput struct {
 	toolcontract.ToolResponse[listPageAssetsData]
 }
+
+// emptyPageAssetsHint (#569) clarifies scope when data.assets is empty: this
+// tool only lists sibling files in the page bundle's own directory, never
+// the site's global static assets a page's rendered HTML may still
+// reference (e.g. content under /images/...).
+const emptyPageAssetsHint = "No page-bundle assets found. Rendered content may still reference global static assets."
 
 func newListPageAssetsOutput(data listPageAssetsData, now time.Time) listPageAssetsOutput {
 	return listPageAssetsOutput{ToolResponse: successEnvelope(data, now)}
@@ -73,7 +91,7 @@ func RegisterListPageAssets(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 				// path to list. Return an empty list rather than an error, same
 				// omission-not-block treatment as #324/#339's source-derived
 				// fields.
-				return nil, newListPageAssetsOutput(listPageAssetsData{Assets: []pageAssetDTO{}}, time.Now().UTC()), nil
+				return nil, newListPageAssetsOutput(listPageAssetsData{Assets: []pageAssetDTO{}, Hint: emptyPageAssetsHint}, time.Now().UTC()), nil
 			}
 
 			base := filepath.Base(resolved.SourcePath)
@@ -103,14 +121,24 @@ func RegisterListPageAssets(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 				if err != nil {
 					continue
 				}
+				raw, err := os.ReadFile(filepath.Join(dir, name))
+				if err != nil {
+					slog.Warn("list_page_assets: read asset for sha256 failed", "slug", slug, "name", name, "error", err)
+					continue
+				}
 				assets = append(assets, pageAssetDTO{
 					Name:       name,
 					SizeBytes:  info.Size(),
 					ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
+					Sha256:     contentmodel.SourceRevisionBytes(raw),
 				})
 			}
 			sort.Slice(assets, func(i, j int) bool { return assets[i].Name < assets[j].Name })
 
-			return nil, newListPageAssetsOutput(listPageAssetsData{Assets: assets}, time.Now().UTC()), nil
+			data := listPageAssetsData{Assets: assets}
+			if len(assets) == 0 {
+				data.Hint = emptyPageAssetsHint
+			}
+			return nil, newListPageAssetsOutput(data, time.Now().UTC()), nil
 		})
 }

@@ -1144,6 +1144,40 @@ func TestGetSitemap(t *testing.T) {
 	}
 }
 
+// TestGetSitemapExposesSourceKey is a regression test for #576: sitemap
+// rows should carry source_key (like get_page/get_page_frontmatter already
+// do) so a caller doesn't have to guess whether a slug is a public-URL or
+// source-relative form before feeding it into a write tool.
+func TestGetSitemapExposesSourceKey(t *testing.T) {
+	idx := mustTestIndex(t)
+	srcIdx, err := hugosite.NewSourceIndex(filepath.Join("..", "..", "..", "testdata", "fixtures", "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_sitemap", map[string]any{"exclude_taxonomies": true})
+	if res.IsError {
+		t.Fatalf("get_sitemap returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	entries, _ := m["entries"].([]any)
+	found := false
+	for _, raw := range entries {
+		e, _ := raw.(map[string]any)
+		if e["slug"] == "/posts/hello/" {
+			found = true
+			if e["source_key"] != "posts/hello" {
+				t.Fatalf("get_sitemap entry source_key = %v, want %q", e["source_key"], "posts/hello")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("get_sitemap: expected an entry for /posts/hello/")
+	}
+}
+
 func TestGetSitemapExcludeTaxonomies(t *testing.T) {
 	root := t.TempDir()
 	writeHTML := func(rel, body string) {
@@ -1232,6 +1266,38 @@ func TestGetFeed(t *testing.T) {
 	_, ok := m["items"]
 	if !ok {
 		t.Fatal("get_feed: missing 'items' key")
+	}
+}
+
+// TestGetFeedExposesSourceKey is a regression test for #576: feed items
+// should carry source_key like list_pages/get_sitemap now do.
+func TestGetFeedExposesSourceKey(t *testing.T) {
+	idx := mustTestIndex(t)
+	srcIdx, err := hugosite.NewSourceIndex(filepath.Join("..", "..", "..", "testdata", "fixtures", "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_feed", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_feed returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	items, _ := m["items"].([]any)
+	found := false
+	for _, raw := range items {
+		it, _ := raw.(map[string]any)
+		if it["slug"] == "/posts/hello/" {
+			found = true
+			if it["source_key"] != "posts/hello" {
+				t.Fatalf("get_feed item source_key = %v, want %q", it["source_key"], "posts/hello")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("get_feed: expected an item for /posts/hello/")
 	}
 }
 

@@ -83,7 +83,11 @@ type getFeedInput struct {
 }
 
 type pageDTO struct {
-	Slug       string   `json:"slug"`
+	Slug string `json:"slug"`
+	// SourceKey is the source-relative, language-prefix-stripped identifier
+	// (e.g. "posts/foo"), omitted when it can't be resolved (#576). Feed
+	// this into a write tool's slug input instead of Slug's public-URL form.
+	SourceKey  string   `json:"source_key,omitempty"`
 	Title      string   `json:"title"`
 	Summary    string   `json:"summary"`
 	Tags       []string `json:"tags"`
@@ -140,16 +144,20 @@ type getSiteInformationInput struct {
 
 type sitemapEntryDTO struct {
 	Slug string `json:"slug"`
-	URL  string `json:"url"`
-	Date string `json:"date"`
+	// SourceKey — see pageDTO.SourceKey (#576).
+	SourceKey string `json:"source_key,omitempty"`
+	URL       string `json:"url"`
+	Date      string `json:"date"`
 }
 
 type feedItemDTO struct {
-	Slug    string `json:"slug"`
-	Title   string `json:"title"`
-	Summary string `json:"summary"`
-	Date    string `json:"date"`
-	URL     string `json:"url"`
+	Slug string `json:"slug"`
+	// SourceKey — see pageDTO.SourceKey (#576).
+	SourceKey string `json:"source_key,omitempty"`
+	Title     string `json:"title"`
+	Summary   string `json:"summary"`
+	Date      string `json:"date"`
+	URL       string `json:"url"`
 }
 
 type siteInfoDTO struct {
@@ -509,13 +517,13 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			entries := make([]sitemapEntryDTO, len(slice))
 			for i, p := range slice {
-				entries[i] = sitemapEntryDTO{Slug: p.Slug, URL: p.URL, Date: p.Date}
+				entries[i] = sitemapEntryDTO{Slug: p.Slug, SourceKey: resolveSourceKey(srcIdx, p.Slug), URL: p.URL, Date: p.Date}
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(entries))
 			return nil, newGetSitemapOutput(getSitemapData{Entries: entries, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 200) })
 
-	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication.",
+	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want posts only (#570).",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getFeedInput) (*mcp.CallToolResult, getFeedOutput, error) {
 			if idx == nil {
 				return nil, getFeedOutput{}, fmt.Errorf("index not initialized")
@@ -537,7 +545,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			items := make([]feedItemDTO, len(pages))
 			for i, p := range pages {
-				items[i] = feedItemDTO{Slug: p.Slug, Title: p.Title, Summary: p.Summary, Date: p.Date, URL: p.URL}
+				items[i] = feedItemDTO{Slug: p.Slug, SourceKey: resolveSourceKey(srcIdx, p.Slug), Title: p.Title, Summary: p.Summary, Date: p.Date, URL: p.URL}
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(items))
 			return nil, newGetFeedOutput(getFeedData{Items: items, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
@@ -644,6 +652,27 @@ func clampLimit(v, defaultVal, maxVal int) int {
 	return v
 }
 
+// resolveSourceKey looks up the source-relative, language-prefix-stripped
+// key for a public slug via the source index — the same candidate-matching
+// logic toPageDTOsEnriched already uses for category enrichment. Returns ""
+// when srcIdx is nil or no candidate matches (e.g. reader profile, or a
+// synthetic/taxonomy entry with no backing source file). Exposing this
+// alongside slug on list_pages/get_sitemap/get_feed rows (#576) lets a
+// caller feed a browsing result directly into a write tool's slug input
+// without having to guess whether it wants the public URL or source key
+// form, mirroring what get_page/get_page_frontmatter already expose.
+func resolveSourceKey(srcIdx *hugosite.SourceIndex, slug string) string {
+	if srcIdx == nil {
+		return ""
+	}
+	for _, candidate := range site.SourceSlugCandidates(slug) {
+		if _, ok := srcIdx.GetBySlug(candidate); ok {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func toPageDTO(p site.Page) pageDTO {
 	tags := p.Tags
 	if tags == nil {
@@ -681,6 +710,7 @@ func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases
 						cats = []string{}
 					}
 					dto.Categories = cats
+					dto.SourceKey = candidate
 					break
 				}
 			}

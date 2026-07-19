@@ -11,6 +11,7 @@
         "date": "2026-01-05T03:04:05Z",
         "lang": "en",
         "slug": "/posts/hello/",
+        "source_key": "posts/hello",
         "summary": "Minimal English article",
         "tags": [
           "Hugo",

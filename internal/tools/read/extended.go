@@ -238,6 +238,10 @@ type pageDTO struct {
 // must be able to tell "all 80 pages were scanned, only 5 detail rows came
 // back, and there are more" without guessing at what pages_checked means.
 type validateOutputData struct {
+	// Status is "valid" when Invalid == 0, "invalid" otherwise — lets a
+	// simple caller branch on one field instead of deriving validity from
+	// an empty Pages list plus the Invalid counter (#568).
+	Status       string                `json:"status"`
 	PagesChecked int                   `json:"pages_checked"`
 	PagesPassed  int                   `json:"pages_passed"`
 	Invalid      int                   `json:"invalid"`
@@ -1113,7 +1117,12 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 		results = results[:limit]
 	}
 	meta := toolcontract.ComputePagination(filteredTotal, limit, offset, len(results))
+	status := "valid"
+	if invalid > 0 {
+		status = "invalid"
+	}
 	return newValidateOutput(validateOutputData{
+		Status:       status,
 		PagesChecked: total,
 		PagesPassed:  total - invalid,
 		Invalid:      invalid,
