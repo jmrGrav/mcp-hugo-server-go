@@ -676,8 +676,16 @@ algorithm change (per the issue's own scope note):
 - Each entry in `taxonomy_inconsistency_details[*]` now carries a
   `severity`: `"info"` (`translation_pair` — the site's own localization,
   never counted as an issue) or `"warning"` (`alias_mismatch`/
-  `possible_duplicate` — counted as an issue, but still never penalizes the
-  top-level `score`, exactly as before #419).
+  `possible_duplicate`/`casing_variant` — counted as an issue, but still
+  never penalizes the top-level `score`, exactly as before #419).
+  `casing_variant` (#577) is a same-language, same-word, different-casing
+  finding (e.g. `Infrastructure`/`infrastructure` both used on English
+  pages) — a blind spot `possible_duplicate`/`translation_pair` never
+  covered, since `taxonomy.Slug()` already lowercases before either of
+  those two ever compares terms, so two same-slug spellings never even
+  reach the edit-distance pairing pass. A pair of spellings confined to
+  entirely different languages is left unflagged — that could be a
+  deliberate per-language style choice, not necessarily a bug.
 - `score_breakdown` gives a per-category `{score, weight, issues,
   advisories?}`. `weight` is each category's actual share of the top-level
   `score`, not a decorative number: `frontmatter` carries weight 100 (it's
