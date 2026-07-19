@@ -18,23 +18,56 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type buildSiteInput struct{}
 
-type buildSiteOutput struct {
+// buildSiteData is the canonical data.* payload (#572): build_site was the
+// last tool with zero envelope (no data/errors/meta/success at all, not
+// even root-level duplication). Root fields below are kept as
+// compatibility aliases, additive only — same treatment #552 gave
+// create_preview/generate_hero_image/etc.
+type buildSiteData struct {
 	Status         string `json:"status"`
 	DurationMs     int64  `json:"duration_ms"`
 	BuildID        string `json:"build_id"`
 	OutputRevision string `json:"output_revision,omitempty"`
 	PublishReady   bool   `json:"publish_ready"`
 	Warning        string `json:"warning,omitempty"`
+}
+
+type buildSiteOutput struct {
+	toolcontract.ToolResponse[buildSiteData]
+	Status         string `json:"status"`
+	DurationMs     int64  `json:"duration_ms"`
+	BuildID        string `json:"build_id"`
+	OutputRevision string `json:"output_revision,omitempty"`
+	PublishReady   bool   `json:"publish_ready"`
+	Warning        string `json:"warning,omitempty"`
+}
+
+func buildSiteSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+}
+
+func newBuildSiteOutput(data buildSiteData) buildSiteOutput {
+	return buildSiteOutput{
+		ToolResponse:   buildSiteSuccessEnvelope(data),
+		Status:         data.Status,
+		DurationMs:     data.DurationMs,
+		BuildID:        data.BuildID,
+		OutputRevision: data.OutputRevision,
+		PublishReady:   data.PublishReady,
+		Warning:        data.Warning,
+	}
 }
 
 // buildErrorPayload is the structured JSON returned on Hugo failure.
@@ -314,7 +347,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
 		if cfg.HugoRoot == "" {
 			return nil, buildSiteOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 		}
@@ -473,13 +506,13 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			"status", status,
 			"publish_ready", publishReady,
 		)
-		return nil, buildSiteOutput{
+		return nil, newBuildSiteOutput(buildSiteData{
 			Status:         status,
 			DurationMs:     durationMs,
 			BuildID:        runID,
 			OutputRevision: outputRevision,
 			PublishReady:   publishReady,
 			Warning:        cbWarning,
-		}, nil
-	})
+		}), nil
+	}))
 }

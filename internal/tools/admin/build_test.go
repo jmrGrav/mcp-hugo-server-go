@@ -69,6 +69,51 @@ func TestBuildSiteSucceeds(t *testing.T) {
 	}
 }
 
+// TestBuildSiteHasEnvelopeMatchingRootFields is a regression test for #572:
+// build_site was the last tool with zero envelope (no data/errors/meta/
+// success at all). Root fields are kept as compatibility aliases, additive
+// only, mirroring #552's treatment of create_preview/generate_hero_image.
+func TestBuildSiteHasEnvelopeMatchingRootFields(t *testing.T) {
+	wantRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\n[ \"$(pwd)\" = \""+wantRoot+"\" ] || exit 42\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = wantRoot
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+
+	out := decodeStructuredResult(t, res)
+	if got := out["success"]; got != true {
+		t.Fatalf("success = %v, want true (#572)", got)
+	}
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any (#572)", out["data"])
+	}
+	if _, ok := out["meta"].(map[string]any); !ok {
+		t.Fatalf("meta type = %T, want map[string]any (#572)", out["meta"])
+	}
+	if _, ok := out["errors"].([]any); !ok {
+		t.Fatalf("errors type = %T, want []any (#572)", out["errors"])
+	}
+	for _, field := range []string{"status", "duration_ms", "build_id", "output_revision", "publish_ready"} {
+		if data[field] != out[field] {
+			t.Fatalf("data.%s = %v, root %s = %v — must match (#572)", field, data[field], field, out[field])
+		}
+	}
+}
+
 func TestBuildSitePassesCleanDestinationDirFlag(t *testing.T) {
 	capturedArgsPath := filepath.Join(t.TempDir(), "captured-args.txt")
 	dir := writeMockHugo(t, "#!/bin/sh\necho \"$@\" > \""+capturedArgsPath+"\"\nexit 0\n")
