@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.5] - 2026-07-19
+
+Fast-turnaround fixes from the v1.5.4 live audits (Claude.ai and ChatGPT), triaged into quick wins (this release) versus breaking changes (deferred to v1.6.0).
+
+### Added
+- **`meta.release_version` now honors an explicit deploy-time input** (#550): `deploy.yml` gained a `release_version` workflow_dispatch input that sets `server_version`/`release_version`/`build_channel=release` at deploy time, instead of requiring the git tag to already exist — this repo deploys main, then tags after production validation, so the old exact-tag-only policy could never populate the field for a normal release. `docs/mcp-contract.md` and `docs/operator-guide.md` document the new `-f release_version=vX.Y.Z` deploy → approve → `release.yml` tag sequence.
+
+### Fixed
+- **`generate_hero_image` no longer leaks the host's absolute filesystem path** (#551): the returned `path` is now projected to a `hugo_root`-relative logical path (e.g. `static/images/my-post-featured.jpg`), matching the existing convention used for content-root-relative paths elsewhere.
+- **`check_sri_versions`/`preview_build`/`create_preview`/`run_post_build_hooks` now return the standard structured envelope** (#552): all four previously returned flat, un-enveloped output; they now embed `toolcontract.ToolResponse[XxxData]` (existing flat root fields kept as compatibility aliases) and route errors through `toolcontract.WrapTool` for consistent structured error responses, matching every other tool.
+
+### Docs
+- **Clarified that `response_mode=compact` trims `meta` by design** (#553): ChatGPT's audit flagged `search_pages`'s compact-mode `meta` as looking incomplete; contract tests now prove this is the documented `compact` behavior, not a default-mode regression, and `docs/mcp-contract.md` §5.2 carries an explicit callout so future audits don't re-flag it.
+
+### Deferred to v1.6.0
+- **Mutation root/data field duplication removal** (#520) and **write-tool `slug` canonicalization** (#554): both touch the same mutation-tool response surface and are breaking changes against the v1.x compatibility policy; drafted together for review, not merged.
+- **Execution planner** (#438): still blocked on `plan_content_change`/`apply_content_plan` (#338/#340) maturing first.
+
 ## [v1.5.4] - 2026-07-19
 
 Implementation follow-through on the four design proposals locked in v1.5.3, plus the top priority from the v1.5.3 live ChatGPT audit (complex front-matter preservation proof) and a canonical source-identity field.
