@@ -44,7 +44,7 @@ that tool:
   "data": { "pages": [ ... ], "total": 42 },
   "errors": [],
   "warnings": [],
-  "meta": { "generated_at": "...", "server_version": "...", "commit": "...", "build_channel": "...", "schema_version": "v1.0.0" }
+  "meta": { "generated_at": "...", "release_version": "...", "commit": "...", "build_channel": "...", "schema_version": "v1.0.0" }
 }
 ```
 
@@ -93,7 +93,7 @@ partial-success signalling, or forward-compatible extension.
   "errors": [],
   "meta": {
     "generated_at": "2026-07-12T02:30:00Z",
-    "server_version": "v1.5.1",
+    "release_version": "v1.5.1",
     "commit": "50cbc9fe4217",
     "build_channel": "release",
     "schema_version": "v1.0.0"
@@ -110,7 +110,7 @@ Fields:
 | `data`         | object   | yes           | Tool-specific payload — the sole location for a tool's fields; no top-level duplicates (#433) |
 | `warnings`     | string[] | yes           | Non-fatal observations (empty array when none)     |
 | `errors`       | string[] | yes           | Problems that degraded the result (empty array when none) |
-| `meta`         | object   | yes           | `generated_at`, `server_version` (deployed build identifier — is the release tag itself on a release build, `main-<sha>` otherwise), `commit`, `build_channel`, `schema_version` (this envelope's shape version, currently `"v1.0.0"`) — see [§5](#5-versioning) |
+| `meta`         | object   | yes           | `generated_at`, `release_version` (deployed build identifier — is the release tag itself on a release build, `main-<sha>` otherwise), `commit`, `build_channel`, `schema_version` (this envelope's shape version, currently `"v1.0.0"`) — see [§5](#5-versioning) |
 
 A root-level `version` field existed through v1.4.x but was removed (#454):
 its name was ambiguous (it actually meant the schema version, not the server
@@ -223,32 +223,35 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
   `version` field instead; it moved under `meta` (#454) because the old
   name was ambiguous — it read like it could mean either the schema or the
   server version, and the two now live at unambiguous, adjacent names.
-- The deployed server version is carried in `meta.server_version` inside
+- The deployed server version is carried in `meta.release_version` inside
   structured tool responses. On a release build this *is* the named
-  product release (for example `v1.5.5`); on a mainline build with no
-  explicit release identity it's `main-<sha>`.
-- A separate `meta.release_version` field existed briefly (#550) to mirror
-  this same value on release builds, or be omitted otherwise — it was
-  removed (#560) because it never carried information `server_version` +
-  `build_channel` didn't already have: `build_channel == "release"` means
-  `server_version` is the release tag. Check `meta.build_channel` to tell
-  the two cases apart instead of a second version field.
+  product release (for example `v1.5.8`); on a mainline build with no
+  explicit release identity it's `main-<sha>` — always populated either
+  way, never empty.
+- This field's name has moved twice: `release_version` (v1.5.5, #550) →
+  `server_version` (v1.5.7, #560, merging two overlapping fields into one)
+  → `release_version` (v1.5.8, #563, renamed back at explicit maintainer
+  request). The value and semantics have been stable since v1.5.7 — only
+  the name changed. `meta.build_channel` still tells apart a release build
+  (`build_channel == "release"`, `release_version` is the release tag)
+  from a mainline one (`build_channel == "main"`, `release_version` is
+  `main-<sha>`).
 - Production deploys always run from `main` and are tagged only
   afterward, once the deployment is live and verified (see
   `.github/workflows/release.yml`'s ancestry check) — so a deploy must be
   told which release it belongs to explicitly, via the `release_version`
   input to `.github/workflows/deploy.yml`, rather than deriving it from a
-  tag that doesn't exist yet. That workflow input name is unchanged; it now
-  feeds `meta.server_version` and `meta.build_channel` directly instead of
-  a dedicated `meta.release_version` field. A deploy triggered without that
-  input (or targeting a ref that isn't the intended release commit) reports
-  `meta.server_version = "main-<sha>"`, `meta.build_channel = "main"`.
+  tag that doesn't exist yet. That workflow input name is unchanged across
+  all three field-name changes above; it feeds `meta.release_version` and
+  `meta.build_channel` directly. A deploy triggered without that input (or
+  targeting a ref that isn't the intended release commit) reports
+  `meta.release_version = "main-<sha>"`, `meta.build_channel = "main"`.
 - `meta.commit` is the VCS revision embedded by Go's build info.
 - `meta.build_channel` identifies the deployment line (for example
   `release`, `main`, `staging`).
 - Flat envelope tools do not carry either version field; their schema is
   implicitly v1.
-- `meta.server_version` and the MCP `initialize` response's `serverInfo.version`
+- `meta.release_version` and the MCP `initialize` response's `serverInfo.version`
   both come from `internal/buildinfo.Version`, injected at build time via
   `-ldflags`. It defaults to the placeholder `"dev"` when a binary is built
   without that flag (e.g. `go run`/`go build` during local development). CI,
@@ -271,7 +274,7 @@ This is a known, accepted tradeoff, not a bug to silently fix:
 - **No cost to real clients**: Claude.ai, ChatGPT, and other live MCP
   integrations already depend on the uniform envelope (`success`/`data`/
   `warnings`/`errors`/`meta`) to distinguish partial success from hard
-  failure and to read `meta.server_version` consistently across tools.
+  failure and to read `meta.release_version` consistently across tools.
   Flattening the payload in place would be a breaking change to every
   existing caller, for a scanner-score gain with no functional benefit to
   agents.
@@ -316,7 +319,7 @@ own body/section shaping controls.
 **Note for anyone comparing responses across calls in the same session**
 (including live audits): a `compact`-mode response's `meta` will look
 meaningfully different from every other tool's `meta` in the same
-session — missing `server_version`/`commit`/`build_channel`
+session — missing `release_version`/`commit`/`build_channel`
 entirely — purely because `response_mode` was set to `compact` on that one
 call, not because of any inconsistency or regression. `meta.schema_version`
 being the only key present is the expected, by-design shape for `compact`
@@ -417,7 +420,7 @@ in #520's scope and remains flat.
 | `run_post_build_hooks`    | flat     | `results`; `data.results` mirrors it additively (#552) |
 | `generate_hero_image` | flat     | `path`; `data.path` mirrors it additively (#508); `path` is hugo_root-relative, never the host's absolute filesystem path (#551) |
 | `check_sri_versions`      | flat     | `files_scanned`, `files_with_sri_attributes`, `sri_entries_loaded`, `sri_checked`, `status`, `summary`, `findings`; `data.X` mirrors all of the above additively (#552) |
-| `get_runtime_status`      | structured | `data.server_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
+| `get_runtime_status`      | structured | `data.release_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
 | `verify_publication`      | structured | `data.source/build/public/index`, `data.http_status`, `data.status`, `data.explanation` |
 | `create_preview`          | flat     | `preview_id`, `url`, `expires_at`, `build`; `data.X` mirrors all of the above additively (#552) |

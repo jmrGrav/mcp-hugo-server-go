@@ -2802,7 +2802,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 			t.Fatalf("missing tool %q", tc.tool)
 		}
 		assertSchemaHasProperties(t, tool, "outputSchema", tc.keys...)
-		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "server_version")
+		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "release_version")
 		assertSchemaLacksProperties(t, tool, "outputSchema", tc.noTopLevel...)
 	}
 }

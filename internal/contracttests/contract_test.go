@@ -114,8 +114,9 @@ func TestContractContentReadToolsUseToolResponseEnvelope(t *testing.T) {
 // TestContractWriteToolsUseToolResponseEnvelope covers #426: a shared
 // write/admin success-envelope helper (writeSuccessEnvelope,
 // imageSuccessEnvelope) previously passed the response schema version into
-// meta.server_version instead of the actual server build version, on every
-// successful create_page/update_page/delete_page/upload_page_asset call.
+// meta.release_version (named server_version through v1.5.7, renamed #563)
+// instead of the actual server build version, on every successful
+// create_page/update_page/delete_page/upload_page_asset call.
 func TestContractWriteToolsUseToolResponseEnvelope(t *testing.T) {
 	restoreBuildInfo := setContractBuildInfo(t)
 	defer restoreBuildInfo()
@@ -1060,17 +1061,18 @@ func assertToolResponseEnvelopeMeta(t *testing.T, tool string, m map[string]any)
 	if !ok {
 		t.Fatalf("%s meta type = %T, want map[string]any", tool, m["meta"])
 	}
-	metaVersion, ok := meta["server_version"].(string)
+	metaVersion, ok := meta["release_version"].(string)
 	if !ok || metaVersion == "" {
-		t.Fatalf("%s meta.server_version = %v, want non-empty string", tool, meta["server_version"])
+		t.Fatalf("%s meta.release_version = %v, want non-empty string", tool, meta["release_version"])
 	}
-	// #426: meta.server_version must carry the build version
-	// (buildinfo.Version, "test-server-version" in this harness — see
-	// connectClient), never the response schema version. A prior bug had a
-	// shared write/admin success-envelope helper pass the schema version
-	// into this field by mistake.
+	// #426: meta.release_version (named server_version through v1.5.7,
+	// renamed #563) must carry the build version (buildinfo.Version,
+	// "test-server-version" in this harness — see connectClient), never the
+	// response schema version. A prior bug had a shared write/admin
+	// success-envelope helper pass the schema version into this field by
+	// mistake.
 	if metaVersion == toolcontract.ToolResultVersion {
-		t.Fatalf("%s meta.server_version = %q, want the build version, not the schema version (regression of #426)", tool, metaVersion)
+		t.Fatalf("%s meta.release_version = %q, want the build version, not the schema version (regression of #426)", tool, metaVersion)
 	}
 	metaGeneratedAt, ok := meta["generated_at"].(string)
 	if !ok || metaGeneratedAt == "" {

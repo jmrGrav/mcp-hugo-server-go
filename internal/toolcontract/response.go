@@ -17,17 +17,21 @@ const ToolResultVersion = buildinfo.SchemaVersion
 
 type ResponseMeta struct {
 	GeneratedAt string `json:"generated_at,omitempty"`
-	// ServerVersion is the deployed server build (internal/buildinfo.Version)
+	// ReleaseVersion is the deployed server build (internal/buildinfo.Version)
 	// — what most callers actually want when they say "version". It already
 	// carries the release identity by itself: on a release build it *is*
-	// the release tag (e.g. "v1.5.5"); on a mainline build it's
-	// "main-<sha>". A separate release_version field used to mirror this
-	// same value (or be omitted) — removed (#560) because it never carried
-	// information ServerVersion + BuildChannel didn't already have:
-	// build_channel=="release" means ServerVersion is the release tag.
-	ServerVersion string `json:"server_version,omitempty"`
-	Commit        string `json:"commit,omitempty"`
-	BuildChannel  string `json:"build_channel,omitempty"`
+	// the release tag (e.g. "v1.5.8"); on a mainline build it's
+	// "main-<sha>". This field was named ServerVersion/server_version
+	// through v1.5.7; renamed here (#563) at explicit maintainer request —
+	// same value, same always-populated semantics, just a different name.
+	// A separate release_version field existed briefly in v1.5.5 (#550)
+	// with different (sometimes-empty) semantics and was removed in v1.5.7
+	// (#560); this is a rename of ServerVersion, not a restore of that
+	// earlier field's behavior — build_channel=="release" still tells a
+	// release build apart from a mainline one.
+	ReleaseVersion string `json:"release_version,omitempty"`
+	Commit         string `json:"commit,omitempty"`
+	BuildChannel   string `json:"build_channel,omitempty"`
 	// SchemaVersion is the response *shape* version (ToolResultVersion,
 	// currently "v1.0.0") — replaces the old root-level `version` field
 	// (#454), which was ambiguous: its name suggested the server version,
@@ -100,13 +104,13 @@ func ComputePagination(total, limit, offset, returned int) PaginationMeta {
 	return m
 }
 
-func NewMeta(serverVersion string, generatedAt time.Time) ResponseMeta {
+func NewMeta(releaseVersion string, generatedAt time.Time) ResponseMeta {
 	return ResponseMeta{
-		GeneratedAt:   generatedAt.UTC().Format(time.RFC3339),
-		ServerVersion: serverVersion,
-		Commit:        buildinfo.Commit,
-		BuildChannel:  buildinfo.EffectiveBuildChannel(),
-		SchemaVersion: ToolResultVersion,
+		GeneratedAt:    generatedAt.UTC().Format(time.RFC3339),
+		ReleaseVersion: releaseVersion,
+		Commit:         buildinfo.Commit,
+		BuildChannel:   buildinfo.EffectiveBuildChannel(),
+		SchemaVersion:  ToolResultVersion,
 	}
 }
 

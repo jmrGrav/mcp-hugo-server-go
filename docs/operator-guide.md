@@ -235,15 +235,16 @@ gh workflow run release.yml -f version=v1.5.5 -f ref=main
 Always pass `release_version` on the deploy step matching the version you're
 about to tag. The tag itself is only created by `release.yml`, after it
 verifies the target commit already has a successful production deployment —
-so at deploy time the tag doesn't exist yet and `meta.server_version` can't
+so at deploy time the tag doesn't exist yet and `meta.release_version` can't
 be derived from `git describe`. The explicit `release_version` input lets the
 deployed build report its intended release identity immediately, instead of
-waiting for the tag to exist: it sets `meta.server_version` to the given
-value and `meta.build_channel` to `"release"` (there is no separate
-`meta.release_version` field — see `docs/mcp-contract.md` §5, #560). Omit it
-for an untagged mainline deploy (a hotfix ahead of the next release, for
-example); the server then reports `meta.server_version = "main-<sha>"` and
-`meta.build_channel = "main"`, as before.
+waiting for the tag to exist: it sets `meta.release_version` to the given
+value and `meta.build_channel` to `"release"` (see `docs/mcp-contract.md` §5
+for this field's naming history — it was briefly called `server_version`
+between v1.5.7 and v1.5.8, #560/#563). Omit it for an untagged mainline
+deploy (a hotfix ahead of the next release, for example); the server then
+reports `meta.release_version = "main-<sha>"` and `meta.build_channel =
+"main"`, as before.
 
 ### Systemd Hardening and Override
 

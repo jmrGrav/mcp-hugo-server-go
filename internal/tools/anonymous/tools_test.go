@@ -1386,7 +1386,7 @@ func TestReadOnlyAnnotations(t *testing.T) {
 		assertObjectSchema(t, tool, "outputSchema")
 		assertSchemaHasProperties(t, tool, "outputSchema", envelopeProps...)
 		assertSchemaHasProperties(t, tool, "outputSchema.data", wantDataProps[name]...)
-		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "server_version")
+		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "release_version")
 		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
 			t.Fatalf("tool %q: ReadOnlyHint not set", name)
 		}
