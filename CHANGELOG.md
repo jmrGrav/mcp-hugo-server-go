@@ -2,6 +2,13 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.7] - 2026-07-19
+
+**BREAKING.** Ships #520's preferred remediation as a patch release rather than waiting for v1.6.0 — the maintainer decided to reverse v1.5.6's deferral note once the fix turned out to be low-risk to implement cleanly.
+
+### Changed
+- **BREAKING: mutation root/data payload duplication removed** (#520, PR #562): `create_page`/`update_page`/`upload_page_asset`/`delete_page`/`delete_page_asset` success responses no longer mirror their payload at the root — `data.*` is now the sole payload location, matching the read tools' contract. Two root fields are deliberately kept, not part of this removal: `request_context` (error-path only, #455) and `rate_limit_remaining` (#466/#510/#522), so an agent can still self-regulate pacing from the root alone. **Note:** the v1.5.6 changelog said this was "deferred to v1.6.0" — that plan changed; this ships now, one patch release later, as an explicit breaking change rather than a silent contradiction. Callers reading `create_page`'s (etc.) root-level `slug`/`path`/`new_revision`/`state`/`status`/`warning`/`content`/`dry_run`/`diff`/`backlinks`/`filename`/`content_type`/`size_bytes`/`sha256`/`duplicate_of`/`referenced`/`referenced_in` directly must switch to reading the same fields under `data`.
+
 ## [v1.5.6] - 2026-07-19
 
 Fast-turnaround fixes from the v1.5.5 live ChatGPT audit and direct user feedback on the same build-identity fields v1.5.5 just added.
