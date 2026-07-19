@@ -290,6 +290,41 @@ func TestBuildSiteFailureStructuredError(t *testing.T) {
 	}
 }
 
+// TestBuildSiteFailureHasEnvelopeShape is a regression test for #572's
+// error path: build_site's Content.Text keeps its pre-existing
+// JSON-blob-in-message convention (build_error's payload is a marshaled
+// buildErrorPayload, not promoted to structured error fields — a separate
+// follow-up), but StructuredContent must now carry the standard
+// success:false + non-empty errors[] envelope like every other tool.
+func TestBuildSiteFailureHasEnvelopeShape(t *testing.T) {
+	dir := writeMockHugo(t, "#!/bin/sh\necho 'Error: TOML parse error' >&2\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected error result, got success")
+	}
+
+	out := decodeStructuredResult(t, res)
+	if got := out["success"]; got != false {
+		t.Fatalf("success = %v, want false (#572)", got)
+	}
+	errs, ok := out["errors"].([]any)
+	if !ok || len(errs) == 0 {
+		t.Fatalf("errors = %v, want non-empty []any (#572)", out["errors"])
+	}
+}
+
 func TestBuildSiteDoesNotInheritArbitraryEnvironment(t *testing.T) {
 	wantRoot := t.TempDir()
 	dir := writeMockHugo(t, "#!/bin/sh\n[ -z \"$SECRET_TOKEN_FOR_BUILD\" ] || exit 97\n[ \"$(pwd)\" = \""+wantRoot+"\" ] || exit 42\nexit 0\n")
