@@ -63,8 +63,8 @@ func TestSuccessInitializesSlicesAndMeta(t *testing.T) {
 	if metaMap["server_version"] != "1.4.0" {
 		t.Fatalf("meta.server_version = %v, want 1.4.0", metaMap["server_version"])
 	}
-	if metaMap["release_version"] != "v1.5.1" {
-		t.Fatalf("meta.release_version = %v, want v1.5.1", metaMap["release_version"])
+	if _, present := metaMap["release_version"]; present {
+		t.Fatalf("meta.release_version = %v, want removed (#560) — server_version + build_channel already carry this", metaMap["release_version"])
 	}
 	if metaMap["commit"] != "50cbc9fe4217" {
 		t.Fatalf("meta.commit = %v, want 50cbc9fe4217", metaMap["commit"])
@@ -80,7 +80,12 @@ func TestSuccessInitializesSlicesAndMeta(t *testing.T) {
 	}
 }
 
-func TestSuccessOmitsReleaseVersionForMainlineBuilds(t *testing.T) {
+// TestSuccessCarriesReleaseIdentityViaServerVersionForMainlineBuilds covers
+// #560: server_version + build_channel together carry the release identity
+// that a since-removed release_version field used to mirror — on a mainline
+// build, server_version is "main-<sha>" and build_channel is "main"; there
+// is no release_version key to omit or populate anymore.
+func TestSuccessCarriesReleaseIdentityViaServerVersionForMainlineBuilds(t *testing.T) {
 	origVersion := buildinfo.Version
 	origRelease := buildinfo.ReleaseVersion
 	origCommit := buildinfo.Commit
@@ -112,7 +117,7 @@ func TestSuccessOmitsReleaseVersionForMainlineBuilds(t *testing.T) {
 		t.Fatalf("meta = %T, want map", decoded["meta"])
 	}
 	if _, present := metaMap["release_version"]; present {
-		t.Fatalf("meta.release_version = %v, want omitted for mainline build without explicit release mapping", metaMap["release_version"])
+		t.Fatalf("meta.release_version = %v, want removed (#560)", metaMap["release_version"])
 	}
 	if got := metaMap["server_version"]; got != "main-3fb254677090" {
 		t.Fatalf("meta.server_version = %v, want main-3fb254677090", got)
