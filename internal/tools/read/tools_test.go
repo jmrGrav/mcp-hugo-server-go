@@ -952,6 +952,211 @@ func TestGetPageForEditBacklinksIncludeMatchesStandaloneGetBacklinks(t *testing.
 	}
 }
 
+func newPremutationBundleSession(t *testing.T) (*mcp.ClientSession, func()) {
+	t.Helper()
+	siteRoot := t.TempDir()
+	writeRendered := func(rel, html string) {
+		t.Helper()
+		full := filepath.Join(siteRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeRendered("posts/hello/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Hello World</title>
+<meta name="description" content="A short, valid description of this page.">
+<link rel="canonical" href="https://example.test/posts/hello/">
+</head>
+<body>
+<p>Hello. <a href="/posts/missing/">a broken link</a></p>
+</body>
+</html>`)
+	writeRendered("posts/guide/index.html", `<!DOCTYPE html><html lang="en"><head>
+<title>Guide</title>
+<link rel="canonical" href="https://example.test/posts/guide/">
+</head><body><article>Guide public body</article></body></html>`)
+	writeRendered("posts/linker/index.html", `<!DOCTYPE html><html lang="en"><head>
+<title>Linker</title>
+<link rel="canonical" href="https://example.test/posts/linker/">
+</head><body><article>See <a href="/posts/hello/">hello</a>.</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	writeSource := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeSource("posts/hello/index.md", "---\ndate: 2026-07-03\ntags: [Hugo, UniqueOrphanTag]\ncategories: [Infrastructure]\naliases: [/old-hello/]\n---\nHello world.\n")
+	writeSource("posts/guide/index.md", "---\ntitle: Guide\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nGuide body.\n")
+	writeSource("posts/linker/index.md", "---\ntitle: Linker\n---\nLinker body.\n")
+
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.email", "test@example.test")
+	runGit(t, root, "config", "user.name", "Test User")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+	writeSource("posts/hello/index.md", "---\ndate: 2026-07-03\ntags: [Hugo, UniqueOrphanTag]\ncategories: [Infrastructure]\naliases: [/old-hello/]\n---\nHello brave new world.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
+func TestGetPageForEditImpactIncludeMatchesStandaloneGetRelatedContent(t *testing.T) {
+	session, done := newPremutationBundleSession(t)
+	defer done()
+
+	standalone := callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/hello/", "include": []any{"impact"}})
+	if standalone.IsError {
+		t.Fatalf("get_related_content returned error: %v", standalone.Content)
+	}
+	standaloneImpact, ok := decodeContent(t, standalone)["impact"].(map[string]any)
+	if !ok {
+		t.Fatalf("standalone impact is %T, want map", decodeContent(t, standalone)["impact"])
+	}
+
+	bundled := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello/", "include": []string{"impact"}})
+	if bundled.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", bundled.Content)
+	}
+	page, ok := decodeContent(t, bundled)["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit page is %T, want map", decodeContent(t, bundled)["page"])
+	}
+	bundledImpact, ok := page["impact"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit impact is %T, want map", page["impact"])
+	}
+	standaloneJSON, _ := json.Marshal(standaloneImpact)
+	bundledJSON, _ := json.Marshal(bundledImpact)
+	if string(bundledJSON) != string(standaloneJSON) {
+		t.Fatalf("get_page_for_edit impact = %s, want identical to get_related_content impact = %s", bundledJSON, standaloneJSON)
+	}
+	for _, field := range []string{"frontmatter", "markdown", "state", "quality", "backlinks", "preview"} {
+		if _, present := page[field]; present {
+			t.Errorf("get_page_for_edit include=[impact]: unexpected field %q present", field)
+		}
+	}
+}
+
+func TestGetPageForEditPreviewIncludeMatchesStandaloneInspectRendered(t *testing.T) {
+	session, done := newPremutationBundleSession(t)
+	defer done()
+
+	standalone := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/hello/", "include_preview": true})
+	if standalone.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", standalone.Content)
+	}
+	standalonePreview, ok := decodeContent(t, standalone)["preview"].(map[string]any)
+	if !ok {
+		t.Fatalf("inspect_rendered preview is %T, want map", decodeContent(t, standalone)["preview"])
+	}
+
+	bundled := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello/", "include": []string{"preview"}})
+	if bundled.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", bundled.Content)
+	}
+	page, ok := decodeContent(t, bundled)["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit page is %T, want map", decodeContent(t, bundled)["page"])
+	}
+	bundledPreview, ok := page["preview"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit preview is %T, want map", page["preview"])
+	}
+	standaloneJSON, _ := json.Marshal(standalonePreview)
+	bundledJSON, _ := json.Marshal(bundledPreview)
+	if string(bundledJSON) != string(standaloneJSON) {
+		t.Fatalf("get_page_for_edit preview = %s, want identical to inspect_rendered preview = %s", bundledJSON, standaloneJSON)
+	}
+	for _, field := range []string{"frontmatter", "markdown", "state", "quality", "backlinks", "impact"} {
+		if _, present := page[field]; present {
+			t.Errorf("get_page_for_edit include=[preview]: unexpected field %q present", field)
+		}
+	}
+}
+
+func TestGetPageForEditPreviewIncludeWarnsWhenRenderedPageIsUnavailable(t *testing.T) {
+	siteRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	full := filepath.Join(contentRoot, "posts", "source-only", "index.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", full, err)
+	}
+	if err := os.WriteFile(full, []byte(`---
+title: Source only
+date: 2026-07-19
+---
+Body.
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", full, err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/source-only/", "include": []string{"preview"}})
+	if res.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+	}
+	envelope := decodeEnvelope(t, res)
+	page, ok := decodeContent(t, res)["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit page is %T, want map", decodeContent(t, res)["page"])
+	}
+	if _, present := page["preview"]; present {
+		t.Fatalf("get_page_for_edit include=[preview]: unexpected preview present for source-only page: %#v", page["preview"])
+	}
+	warnings, ok := envelope["warnings"].([]any)
+	if !ok || len(warnings) == 0 {
+		t.Fatal("get_page_for_edit include=[preview]: expected warning when rendered page is unavailable")
+	}
+}
+
 func TestGetPageForEditNotFound(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

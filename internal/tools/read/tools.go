@@ -298,10 +298,18 @@ type pageForEditDTO struct {
 	// Backlinks is opt-in only via include=["backlinks"] (#465) — unlike
 	// the other four sections, it's deliberately NOT part of the default
 	// bundle returned when `include` is omitted, so existing callers see no
-	// change in default behavior. Reuses the same collectBacklinks helper
+	// change in default behavior. Reuses the same premutationBacklinks helper
 	// get_related_content calls, so the data is identical to a standalone
 	// get_backlinks call for the same slug.
 	Backlinks *[]backlinkDTO `json:"backlinks,omitempty"`
+	// Impact is opt-in only via include=["impact"] (#527). It carries the
+	// same impact facet get_related_content(include=["impact"]) returns.
+	Impact *impactDTO `json:"impact,omitempty"`
+	// Preview is opt-in only via include=["preview"] (#527). It carries the
+	// same preview facet inspect_rendered(include_preview=true) returns for
+	// the same published page. Source-only pages omit it and surface a
+	// warning instead of failing the whole edit-prep bundle.
+	Preview *previewDTO `json:"preview,omitempty"`
 }
 
 type getPageForEditData struct {
@@ -333,6 +341,8 @@ var getPageForEditAllSections = map[string]bool{
 	"state":       true,
 	"quality":     true,
 	"backlinks":   true,
+	"impact":      true,
+	"preview":     true,
 }
 
 func resolveEditInclude(raw []string) (map[string]bool, error) {
@@ -349,7 +359,7 @@ func resolveEditInclude(raw []string) (map[string]bool, error) {
 	out := make(map[string]bool, len(raw))
 	for _, r := range raw {
 		if !getPageForEditAllSections[r] {
-			return nil, fmt.Errorf("invalid_params: include must be a subset of frontmatter, markdown, state, quality, backlinks (got %q)", r)
+			return nil, fmt.Errorf("invalid_params: include must be a subset of frontmatter, markdown, state, quality, backlinks, impact, preview (got %q)", r)
 		}
 		out[r] = true
 	}
@@ -621,7 +631,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
-		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality; default all four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. Pass `include: [\"backlinks\", ...]` to also get impact-analysis data (pages linking here) in the same call before a risky edit/delete — `page.backlinks` carries the same backlinks array as a standalone get_backlinks call for this slug (not its `count`/`slug` envelope fields), and it's opt-in only, never included in the default four-section bundle when `include` is omitted. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), and `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists. All three are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageForEditInput) (*mcp.CallToolResult, getPageForEditOutput, error) {
 			if idx == nil {
 				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
@@ -674,6 +684,21 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if include["backlinks"] {
 				backlinks := premutationBacklinks(idx, p.Slug)
 				page.Backlinks = &backlinks
+			}
+			if include["impact"] {
+				impactRef := resolvedPublicPage(resolved)
+				if resolved.Public != nil {
+					impactRef = *resolved.Public
+				}
+				impact := premutationImpact(idx, resolved, impactRef, aliases)
+				page.Impact = &impact
+			}
+			if include["preview"] {
+				if preview, err := loadRenderedPreview(ctx, idx, cfg, resolved, p); err != nil {
+					warnings = append(warnings, err.Error())
+				} else {
+					page.Preview = &preview
+				}
 			}
 			return nil, newGetPageForEditOutput(getPageForEditData{Page: page}, warnings, time.Now().UTC()), nil
 		})
