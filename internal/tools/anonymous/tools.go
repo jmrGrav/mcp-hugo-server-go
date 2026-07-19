@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -22,14 +23,16 @@ import (
 )
 
 type listPagesInput struct {
-	Limit  int `json:"limit,omitempty"`
-	Offset int `json:"offset,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type getPageInput struct {
 	Slug                string `json:"slug"`
 	ContentOnly         bool   `json:"content_only,omitempty"`
 	AllowSourceFallback bool   `json:"allow_source_fallback,omitempty"`
+	ResponseMode        string `json:"response_mode,omitempty"`
 }
 
 type searchPagesInput struct {
@@ -68,13 +71,15 @@ type pageDTOCompact struct {
 }
 
 type getRecentPostsInput struct {
-	Limit  int `json:"limit,omitempty"`
-	Offset int `json:"offset,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type getFeedInput struct {
-	Limit  int `json:"limit,omitempty"`
-	Offset int `json:"offset,omitempty"`
+	Limit        int    `json:"limit,omitempty"`
+	Offset       int    `json:"offset,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type pageDTO struct {
@@ -114,9 +119,22 @@ type pageDetailDTO struct {
 }
 
 type getSitemapInput struct {
-	Limit             int  `json:"limit,omitempty"`
-	Offset            int  `json:"offset,omitempty"`
-	ExcludeTaxonomies bool `json:"exclude_taxonomies,omitempty"`
+	Limit             int    `json:"limit,omitempty"`
+	Offset            int    `json:"offset,omitempty"`
+	ExcludeTaxonomies bool   `json:"exclude_taxonomies,omitempty"`
+	ResponseMode      string `json:"response_mode,omitempty"`
+}
+
+type listTagsInput struct {
+	ResponseMode string `json:"response_mode,omitempty"`
+}
+
+type listCategoriesInput struct {
+	ResponseMode string `json:"response_mode,omitempty"`
+}
+
+type getSiteInformationInput struct {
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type sitemapEntryDTO struct {
@@ -425,7 +443,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 
 	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listTagsOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ listTagsInput) (*mcp.CallToolResult, listTagsOutput, error) {
 			if idx == nil {
 				return nil, listTagsOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -441,7 +459,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "list_categories", "Browse categories", "List the categories discovered from the index. Returns a sorted category list and does not require authentication.",
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listCategoriesOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ listCategoriesInput) (*mcp.CallToolResult, listCategoriesOutput, error) {
 			if idx == nil {
 				return nil, listCategoriesOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -525,7 +543,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, getSiteInformationOutput, error) {
+		func(_ context.Context, _ *mcp.CallToolRequest, _ getSiteInformationInput) (*mcp.CallToolResult, getSiteInformationOutput, error) {
 			if idx == nil {
 				return nil, getSiteInformationOutput{}, fmt.Errorf("index not initialized")
 			}
@@ -543,6 +561,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 // that jsonschema-go's struct-tag inference can't express directly.
 func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out], schemaOpts ...func(any) any) {
 	inputSchema := tools.MustSchema[In]()
+	inputSchema = addResponseModeEnum(inputSchema)
 	for _, opt := range schemaOpts {
 		inputSchema = opt(inputSchema)
 	}
@@ -562,6 +581,17 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func addResponseModeEnum(inputSchema any) any {
+	schema, ok := inputSchema.(*jsonschema.Schema)
+	if !ok {
+		return inputSchema
+	}
+	if _, ok := schema.Properties["response_mode"]; !ok {
+		return inputSchema
+	}
+	return tools.WithEnum(inputSchema, "response_mode", "", string(toolcontract.ResponseModeStandard), string(toolcontract.ResponseModeCompact))
+}
 
 func success[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))

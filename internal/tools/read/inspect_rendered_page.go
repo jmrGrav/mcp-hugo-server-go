@@ -22,7 +22,8 @@ import (
 )
 
 type inspectRenderedPageInput struct {
-	Slug string `json:"slug"`
+	Slug         string `json:"slug"`
+	ResponseMode string `json:"response_mode,omitempty"`
 	// IncludePreview opts into the pre-publish preview facet (#435): a
 	// diff summary, this page's broken-link count, and front-matter
 	// validity, composed from diff_page/get_broken_links/

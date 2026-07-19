@@ -21,7 +21,8 @@ import (
 )
 
 type diffPageInput struct {
-	Slug string `json:"slug"`
+	Slug         string `json:"slug"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type diffPageData struct {

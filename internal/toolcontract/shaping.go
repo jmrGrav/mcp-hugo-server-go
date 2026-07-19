@@ -1,6 +1,9 @@
 package toolcontract
 
-import "fmt"
+import (
+	"fmt"
+	"reflect"
+)
 
 // ResponseMode is the shared vocabulary tools use to shape a response
 // payload down from the default. Only "standard" and "compact" are
@@ -72,4 +75,33 @@ func SelectFields(row map[string]any, fields []string) map[string]any {
 		}
 	}
 	return out
+}
+
+// ResponseModeFromInput inspects a typed tool input and returns the
+// normalized response_mode when the input exposes a top-level string field
+// named ResponseMode. Tools that do not declare that field simply return
+// (standard, false, nil), letting callers treat response shaping as absent.
+func ResponseModeFromInput(v any) (ResponseMode, bool, error) {
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() {
+		return ResponseModeStandard, false, nil
+	}
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return ResponseModeStandard, false, nil
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return ResponseModeStandard, false, nil
+	}
+	field := rv.FieldByName("ResponseMode")
+	if !field.IsValid() || field.Kind() != reflect.String {
+		return ResponseModeStandard, false, nil
+	}
+	mode, err := ResolveResponseMode(field.String())
+	if err != nil {
+		return "", true, err
+	}
+	return mode, true, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -81,9 +82,33 @@ func TestContractPublishedEnumsMatchRuntimeAcceptedValues(t *testing.T) {
 		field    string
 		wantEnum []string
 	}{
+		{anonSession, "list_pages", "response_mode", []string{"", "standard", "compact"}},
+		{anonSession, "get_page", "response_mode", []string{"", "standard", "compact"}},
 		{anonSession, "search_pages", "match", []string{"", "any", "title_exact"}},
 		{anonSession, "search_pages", "response_mode", []string{"", "standard", "compact"}},
+		{anonSession, "get_recent_posts", "response_mode", []string{"", "standard", "compact"}},
+		{anonSession, "list_tags", "response_mode", []string{"", "standard", "compact"}},
+		{anonSession, "list_categories", "response_mode", []string{"", "standard", "compact"}},
+		{anonSession, "get_sitemap", "response_mode", []string{"", "standard", "compact"}},
+		{anonSession, "get_feed", "response_mode", []string{"", "standard", "compact"}},
+		{anonSession, "get_site_information", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "get_page_markdown", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "get_page_frontmatter", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "get_related_content", "response_mode", []string{"", "standard", "compact"}},
 		{readSession, "build_agent_context", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "export_agent_context", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "get_page_for_edit", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "search_content", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "explain_structure", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "get_site_health", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "validate_frontmatter", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "validate_site", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "get_broken_links", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "get_backlinks", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "suggest_links", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "inspect_rendered", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "list_content_types", "response_mode", []string{"", "standard", "compact"}},
+		{readSession, "list_page_assets", "response_mode", []string{"", "standard", "compact"}},
 	}
 
 	for _, tc := range tests {
@@ -99,6 +124,74 @@ func TestContractPublishedEnumsMatchRuntimeAcceptedValues(t *testing.T) {
 			}
 			if !stringSetEqual(got, tc.wantEnum) {
 				t.Fatalf("%s.%s: published enum = %v, want %v", tc.tool, tc.field, got, tc.wantEnum)
+			}
+		})
+	}
+}
+
+func TestContractCompactModeTrimsMetaOnReadTools(t *testing.T) {
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	anonSession, anonDone := newAnonymousSession(t, idx, cfg, srcIdx)
+	defer anonDone()
+	readSession, readDone := newReadSession(t, idx, cfg, srcIdx)
+	defer readDone()
+
+	tests := []struct {
+		name    string
+		session *mcp.ClientSession
+		tool    string
+		args    map[string]any
+	}{
+		{
+			name:    "anonymous.list_pages",
+			session: anonSession,
+			tool:    "list_pages",
+			args:    map[string]any{"limit": 2, "offset": 0, "response_mode": "compact"},
+		},
+		{
+			name:    "anonymous.get_page",
+			session: anonSession,
+			tool:    "get_page",
+			args:    map[string]any{"slug": "/posts/hello/", "response_mode": "compact"},
+		},
+		{
+			name:    "read.get_page_markdown",
+			session: readSession,
+			tool:    "get_page_markdown",
+			args:    map[string]any{"slug": "/posts/hello/", "response_mode": "compact"},
+		},
+		{
+			name:    "read.search_content",
+			session: readSession,
+			tool:    "search_content",
+			args:    map[string]any{"type": "all", "limit": 2, "offset": 0, "response_mode": "compact"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := callTool(t, tc.session, tc.tool, tc.args)
+			if res.IsError {
+				t.Fatalf("%s returned error: %s", tc.tool, marshalAny(t, res.Content))
+			}
+			m := decodeContent(t, res)
+			meta, ok := m["meta"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s meta type = %T, want map[string]any", tc.tool, m["meta"])
+			}
+			if got := asString(meta["schema_version"]); got != toolcontract.ToolResultVersion {
+				t.Fatalf("%s compact meta.schema_version = %q, want %q", tc.tool, got, toolcontract.ToolResultVersion)
+			}
+			for _, forbidden := range []string{"generated_at", "server_version", "release_version", "commit", "build_channel"} {
+				if _, ok := meta[forbidden]; ok {
+					t.Fatalf("%s compact meta unexpectedly contains %q: %v", tc.tool, forbidden, meta[forbidden])
+				}
+			}
+			if got := asString(m["generated_at"]); got == "" {
+				t.Fatalf("%s root generated_at = empty, want preserved root timestamp", tc.tool)
 			}
 		})
 	}
