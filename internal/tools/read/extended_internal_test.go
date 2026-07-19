@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -369,6 +370,7 @@ func TestTaxonomyFindingSeverity(t *testing.T) {
 		"alias_mismatch":     "warning",
 		"possible_duplicate": "warning",
 		"translation_pair":   "info",
+		"casing_variant":     "warning",
 	}
 	for kind, want := range cases {
 		if got := taxonomyFindingSeverity(kind); got != want {
@@ -471,5 +473,86 @@ func TestDetectTaxonomyInconsistenciesSamePageBothSpellingsIsNotATranslation(t *
 	}
 	if match.Kind != "possible_duplicate" {
 		t.Fatalf("Kind = %q, want possible_duplicate (same page, same language, both spelling variants — a real typo, not a translation)", match.Kind)
+	}
+}
+
+// TestDetectTaxonomyInconsistenciesFlagsSameLanguageCasingVariant is a
+// regression test for #577: a live Claude.ai audit (2026-07-20) found
+// "Infrastructure"/"infrastructure" and similar casing-only variants mixed
+// across English-language pages, which get_site_health never flagged —
+// possible_duplicate/translation_pair never see this case because
+// taxonomy.Slug() already lowercases before either check ever runs, so both
+// spellings collapse to one slug and never even reach the edit-distance
+// pairing pass.
+func TestDetectTaxonomyInconsistenciesFlagsSameLanguageCasingVariant(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/one/index.md", "---\ntitle: One\ncategories: [Infrastructure]\n---\n")
+	write("posts/two/index.md", "---\ntitle: Two\ncategories: [infrastructure]\n---\n")
+
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	issues := detectTaxonomyInconsistencies(src, nil)
+
+	var match *taxonomyInconsistencyDTO
+	for i := range issues {
+		if issues[i].Kind == "casing_variant" {
+			match = &issues[i]
+			break
+		}
+	}
+	if match == nil {
+		t.Fatalf("expected a casing_variant finding for Infrastructure/infrastructure, got %#v", issues)
+	}
+	if match.Severity != "warning" {
+		t.Fatalf("casing_variant severity = %q, want warning (#419)", match.Severity)
+	}
+	gotPages := append(append([]string{}, match.PagesWithTermA...), match.PagesWithTermB...)
+	sort.Strings(gotPages)
+	wantPages := []string{"posts/one", "posts/two"}
+	if len(gotPages) != len(wantPages) || gotPages[0] != wantPages[0] || gotPages[1] != wantPages[1] {
+		t.Fatalf("casing_variant affected pages = %v, want %v", gotPages, wantPages)
+	}
+}
+
+// TestDetectTaxonomyInconsistenciesDoesNotFlagDisjointLanguageCasing
+// confirms the casing_variant detector only fires when both spellings
+// share at least one language: two forms confined to entirely different
+// languages could be a deliberate per-language capitalization convention,
+// not necessarily a bug, so they're left alone rather than guessed at.
+func TestDetectTaxonomyInconsistenciesDoesNotFlagDisjointLanguageCasing(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/en-only/index.en.md", "---\ntitle: EN\ncategories: [Homelab]\n---\n")
+	write("posts/fr-only/index.fr.md", "---\ntitle: FR\ncategories: [homelab]\n---\n")
+
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	issues := detectTaxonomyInconsistencies(src, nil)
+
+	for _, issue := range issues {
+		if issue.Kind == "casing_variant" {
+			t.Fatalf("unexpected casing_variant for disjoint-language spellings: %#v", issue)
+		}
 	}
 }

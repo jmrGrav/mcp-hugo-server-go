@@ -47,10 +47,15 @@ type taxonomyInconsistencyDTO struct {
 	// Kind distinguishes an actionable finding from an expected one (#183):
 	// "alias_mismatch" (a term should use its declared canonical form),
 	// "possible_duplicate" (similar spelling, no known relationship — likely
-	// a typo or unintentional variant), or "translation_pair" (the two
+	// a typo or unintentional variant), "translation_pair" (the two
 	// terms are used on exactly the same set of page-bundle slugs, just in
 	// different languages — this is the site's own localization, not a
-	// content inconsistency, and does not need an alias entry to resolve).
+	// content inconsistency, and does not need an alias entry to resolve),
+	// or "casing_variant" (the exact same term, spelled with different
+	// casing, both used within the same language — e.g. "Infrastructure"
+	// and "infrastructure" — a blind spot possible_duplicate/
+	// translation_pair never covered, since they compare distinct slugs and
+	// casing already collapses to one slug before either ever runs, #577).
 	Kind string `json:"kind,omitempty"`
 	// Severity tells an agent whether this finding is expected to be
 	// actionable at all (#419), instead of leaving it to infer that from a
@@ -501,7 +506,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`) — neither moves the top-level `score`/`status`, but a `warning` finding does show a local penalty in `score_breakdown.taxonomy.score`. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never contributed to `score`), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`) — neither moves the top-level `score`/`status`, but a `warning` finding does show a local penalty in `score_breakdown.taxonomy.score`. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never contributed to `score`), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -1345,6 +1350,12 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 	// applied together on one (possibly monolingual) page.
 	tagOccurrence := map[string]map[string]string{}
 	catOccurrence := map[string]map[string]string{}
+	// tagRawForms/catRawForms track, per slug, every distinct raw spelling
+	// seen and which languages used it — the same-slug rows that
+	// possible_duplicate/translation_pair never see, since Slug() already
+	// collapses casing before those two ever look at a term (#577).
+	tagRawForms := map[string]map[string]map[string][]string{}
+	catRawForms := map[string]map[string]map[string][]string{}
 	for _, p := range pages {
 		for _, t := range p.Tags {
 			s := taxonomy.Slug(t)
@@ -1353,6 +1364,7 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 				tagOccurrence[s] = map[string]string{}
 			}
 			tagOccurrence[s][p.Slug] = p.Lang
+			recordRawForm(tagRawForms, s, t, p.Lang, p.Slug)
 		}
 		for _, c := range p.Categories {
 			s := taxonomy.Slug(c)
@@ -1361,6 +1373,7 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 				catOccurrence[s] = map[string]string{}
 			}
 			catOccurrence[s][p.Slug] = p.Lang
+			recordRawForm(catRawForms, s, c, p.Lang, p.Slug)
 		}
 	}
 
@@ -1429,9 +1442,100 @@ func detectTaxonomyInconsistencies(srcIdx *hugosite.SourceIndex, aliases map[str
 		})
 	}
 
+	out = append(out, detectCasingVariants(tagRawForms, "tag")...)
+	out = append(out, detectCasingVariants(catRawForms, "category")...)
+
 	for i := range out {
 		out[i].Severity = taxonomyFindingSeverity(out[i].Kind)
 	}
+	return out
+}
+
+// recordRawForm records that raw was used, in lang, on page slug — indexed
+// under its normalized taxonomy.Slug (#577).
+func recordRawForm(dst map[string]map[string]map[string][]string, slug, raw, lang, pageSlug string) {
+	if dst[slug] == nil {
+		dst[slug] = map[string]map[string][]string{}
+	}
+	if dst[slug][raw] == nil {
+		dst[slug][raw] = map[string][]string{}
+	}
+	dst[slug][raw][lang] = append(dst[slug][raw][lang], pageSlug)
+}
+
+// detectCasingVariants finds normalized-slug groups with more than one
+// distinct raw spelling sharing at least one language in common (#577):
+// e.g. "Infrastructure" and "infrastructure" both used on English pages.
+// This is a different, previously undetected failure mode from
+// possible_duplicate/translation_pair above, which only ever compare
+// *different* slugs (Slug() already collapses casing before those two
+// checks run, so two same-slug spellings never even reach them) — and from
+// translation_pair, which is two *different* words used per language, not
+// the same word spelled two ways within one language. A pair of raw forms
+// used only in disjoint languages (never overlapping) is left alone: that
+// could be a deliberate per-language style choice, not necessarily a bug.
+func detectCasingVariants(rawForms map[string]map[string]map[string][]string, noun string) []taxonomyInconsistencyDTO {
+	var out []taxonomyInconsistencyDTO
+	slugs := make([]string, 0, len(rawForms))
+	for s := range rawForms {
+		slugs = append(slugs, s)
+	}
+	sort.Strings(slugs)
+	for _, slug := range slugs {
+		forms := rawForms[slug]
+		if len(forms) < 2 {
+			continue
+		}
+		rawList := make([]string, 0, len(forms))
+		for r := range forms {
+			rawList = append(rawList, r)
+		}
+		sort.Strings(rawList)
+		for i := 0; i < len(rawList); i++ {
+			for j := i + 1; j < len(rawList); j++ {
+				a, b := rawList[i], rawList[j]
+				sharedLang := false
+				for lang := range forms[a] {
+					if _, ok := forms[b][lang]; ok {
+						sharedLang = true
+						break
+					}
+				}
+				if !sharedLang {
+					continue
+				}
+				pagesA := dedupSortedPages(forms[a])
+				pagesB := dedupSortedPages(forms[b])
+				out = append(out, taxonomyInconsistencyDTO{
+					Message:        fmt.Sprintf("%s %q and %q are the same term spelled differently, both used within the same language — normalize to one spelling", noun, a, b),
+					TermA:          a,
+					TermB:          b,
+					PagesWithTermA: pagesA,
+					PagesWithTermB: pagesB,
+					Kind:           "casing_variant",
+				})
+			}
+		}
+	}
+	return out
+}
+
+// dedupSortedPages flattens a raw form's per-language page-slug lists into
+// one deduplicated, sorted slice — a bundle whose index.en.md/index.fr.md
+// both carry the exact same raw spelling would otherwise list that page
+// slug twice (once per language) in a casing_variant finding.
+func dedupSortedPages(byLang map[string][]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, pages := range byLang {
+		for _, p := range pages {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+	}
+	sort.Strings(out)
 	return out
 }
 
