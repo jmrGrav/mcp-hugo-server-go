@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -1442,6 +1443,152 @@ func TestUpdatePageSuccess(t *testing.T) {
 	}
 	if got := dataEnvelope["resolved_source_path"]; got != "content/update-me/index.md" {
 		t.Fatalf("update_page data.resolved_source_path = %v, want content/update-me/index.md", got)
+	}
+}
+
+func TestUpdatePagePreservesComplexFrontmatter(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "complex-frontmatter")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(pageDir): %v", err)
+	}
+	pagePath := filepath.Join(pageDir, "index.fr.md")
+	original := strings.TrimLeft(`
+---
+# editor-facing title comment
+title: "Complex Example"
+date: 2026-07-19T12:00:00Z
+draft: false
+aliases:
+  - /old-complex/
+seo:
+  canonical: https://example.test/posts/complex-frontmatter/
+  robots: index,follow
+images:
+  - src: /images/cover.png
+    alt: Cover image
+translations:
+  en:
+    title: Example
+    summary: Summary
+custom:
+  nested:
+    enabled: true
+    weight: 7
+    labels:
+      - one
+      - two
+tags:
+  - legacy
+categories:
+  - Infrastructure
+description: "Initial description"
+---
+
+Original body.
+`, "\n")
+	if err := os.WriteFile(pagePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("WriteFile(pagePath): %v", err)
+	}
+	beforeFM, err := hugosite.ParseFrontmatterFile(pagePath)
+	if err != nil {
+		t.Fatalf("ParseFrontmatterFile(before): %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	expectedRevision := currentRevision(t, pagePath)
+	dryRun := callTool(t, session, "update_page", map[string]any{
+		"slug":    "posts/complex-frontmatter",
+		"lang":    "fr",
+		"title":   "Complex Example Updated",
+		"body":    "Updated body.",
+		"tags":    []any{"go", "hugo"},
+		"dry_run": true,
+	})
+	if dryRun.IsError {
+		raw, _ := json.Marshal(dryRun.Content)
+		t.Fatalf("update_page dry_run failed: %s", raw)
+	}
+	dryRunEnvelope := decodeWriteContent(t, dryRun)
+	dryRunPayload, _ := dryRunEnvelope["diff"].(string)
+	for _, needle := range []string{
+		`+title: "Complex Example Updated"`,
+		"+  - go",
+		"+Updated body.",
+	} {
+		if !strings.Contains(dryRunPayload, needle) {
+			t.Fatalf("dry_run diff missing %q:\n%s", needle, dryRunPayload)
+		}
+	}
+	for _, untouched := range []string{"canonical:", "translations:", "custom:", "/old-complex/"} {
+		if strings.Contains(dryRunPayload, untouched) {
+			t.Fatalf("dry_run diff should not rewrite untouched complex section %q:\n%s", untouched, dryRunPayload)
+		}
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/complex-frontmatter",
+		"lang":              "fr",
+		"title":             "Complex Example Updated",
+		"body":              "Updated body.",
+		"tags":              []any{"go", "hugo"},
+		"expected_revision": expectedRevision,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page failed: %s", raw)
+	}
+
+	raw, err := os.ReadFile(pagePath)
+	if err != nil {
+		t.Fatalf("ReadFile(pagePath): %v", err)
+	}
+	got := string(raw)
+	for _, needle := range []string{
+		`title: "Complex Example Updated"`,
+		"Updated body.",
+		"  - go",
+		"  - hugo",
+		"canonical: https://example.test/posts/complex-frontmatter/",
+		"summary: Summary",
+		"weight: 7",
+	} {
+		if !strings.Contains(got, needle) {
+			t.Fatalf("updated page missing %q:\n%s", needle, got)
+		}
+	}
+
+	afterFM, err := hugosite.ParseFrontmatterFile(pagePath)
+	if err != nil {
+		t.Fatalf("ParseFrontmatterFile(after): %v", err)
+	}
+	delete(beforeFM, "title")
+	delete(beforeFM, "tags")
+	delete(afterFM, "title")
+	delete(afterFM, "tags")
+	if !reflect.DeepEqual(beforeFM, afterFM) {
+		t.Fatalf("untouched frontmatter changed\nbefore: %#v\nafter:  %#v", beforeFM, afterFM)
+	}
+
+	for _, pair := range [][2]string{
+		{"title:", "date:"},
+		{"aliases:", "seo:"},
+		{"seo:", "images:"},
+		{"images:", "translations:"},
+		{"translations:", "custom:"},
+		{"custom:", "tags:"},
+		{"tags:", "categories:"},
+		{"categories:", "description:"},
+	} {
+		left, right := strings.Index(got, pair[0]), strings.Index(got, pair[1])
+		if left < 0 || right < 0 {
+			t.Fatalf("missing ordering marker %q or %q in:\n%s", pair[0], pair[1], got)
+		}
+		if left > right {
+			t.Fatalf("frontmatter order drifted: %q now appears after %q in:\n%s", pair[0], pair[1], got)
+		}
 	}
 }
 
