@@ -9,8 +9,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -36,8 +38,29 @@ type hookResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-type runPostBuildHooksOutput struct {
+// runPostBuildHooksData is the canonical data.* payload (#552).
+type runPostBuildHooksData struct {
 	Results []hookResult `json:"results"`
+}
+
+// runPostBuildHooksOutput carries the same fields at the root as
+// compatibility aliases alongside the structured envelope (#552) — this
+// tool previously had no envelope at all, so this is purely additive, not a
+// breaking change.
+type runPostBuildHooksOutput struct {
+	toolcontract.ToolResponse[runPostBuildHooksData]
+	Results []hookResult `json:"results"`
+}
+
+func hooksSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+}
+
+func newRunPostBuildHooksOutput(data runPostBuildHooksData) runPostBuildHooksOutput {
+	return runPostBuildHooksOutput{
+		ToolResponse: hooksSuccessEnvelope(data),
+		Results:      data.Results,
+	}
 }
 
 func RegisterHooks(s *mcp.Server, cfg config.Config) {
@@ -57,10 +80,10 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ runPostBuildHooksInput) (*mcp.CallToolResult, runPostBuildHooksOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ runPostBuildHooksInput) (*mcp.CallToolResult, runPostBuildHooksOutput, error) {
 		results := fireHooks(ctx, cfg, hookClient)
-		return nil, runPostBuildHooksOutput{Results: results}, nil
-	})
+		return nil, newRunPostBuildHooksOutput(runPostBuildHooksData{Results: results}), nil
+	}))
 }
 
 func fireHooks(ctx context.Context, cfg config.Config, client *http.Client) []hookResult {

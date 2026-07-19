@@ -17,8 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"gopkg.in/yaml.v3"
@@ -40,7 +42,8 @@ type sriCheckEntry struct {
 	Error        string `json:"error,omitempty"`
 }
 
-type sriCheckOutput struct {
+// sriCheckData is the canonical data.* payload (#552).
+type sriCheckData struct {
 	FilesScanned           int             `json:"files_scanned"`
 	FilesWithSRIAttributes int             `json:"files_with_sri_attributes"`
 	SRIEntriesLoaded       int             `json:"sri_entries_loaded"`
@@ -48,6 +51,37 @@ type sriCheckOutput struct {
 	Status                 string          `json:"status"`
 	Summary                string          `json:"summary"`
 	Findings               []sriCheckEntry `json:"findings"`
+}
+
+// sriCheckOutput carries the same fields at the root as compatibility
+// aliases alongside the structured envelope (#552) — this tool previously
+// had no envelope at all, so this is purely additive, not a breaking change.
+type sriCheckOutput struct {
+	toolcontract.ToolResponse[sriCheckData]
+	FilesScanned           int             `json:"files_scanned"`
+	FilesWithSRIAttributes int             `json:"files_with_sri_attributes"`
+	SRIEntriesLoaded       int             `json:"sri_entries_loaded"`
+	SRIChecked             int             `json:"sri_checked"`
+	Status                 string          `json:"status"`
+	Summary                string          `json:"summary"`
+	Findings               []sriCheckEntry `json:"findings"`
+}
+
+func sriSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+}
+
+func newSRICheckOutput(data sriCheckData) sriCheckOutput {
+	return sriCheckOutput{
+		ToolResponse:           sriSuccessEnvelope(data),
+		FilesScanned:           data.FilesScanned,
+		FilesWithSRIAttributes: data.FilesWithSRIAttributes,
+		SRIEntriesLoaded:       data.SRIEntriesLoaded,
+		SRIChecked:             data.SRIChecked,
+		Status:                 data.Status,
+		Summary:                data.Summary,
+		Findings:               data.Findings,
+	}
 }
 
 type sriDataEntry struct {
@@ -72,27 +106,27 @@ func RegisterSRI(s *mcp.Server, cfg config.Config) {
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ sriCheckInput) (*mcp.CallToolResult, sriCheckOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ sriCheckInput) (*mcp.CallToolResult, sriCheckOutput, error) {
 		out, err := runSRICheck(ctx, cfg)
 		if err != nil {
 			return nil, sriCheckOutput{}, err
 		}
-		return nil, out, nil
-	})
+		return nil, newSRICheckOutput(out), nil
+	}))
 }
 
-func runSRICheck(ctx context.Context, cfg config.Config) (sriCheckOutput, error) {
+func runSRICheck(ctx context.Context, cfg config.Config) (sriCheckData, error) {
 	if cfg.HugoRoot == "" {
-		return sriCheckOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
+		return sriCheckData{}, fmt.Errorf("config_error: hugo_root is not configured")
 	}
 	dataEntries, err := loadSRIDataFile(filepath.Join(cfg.HugoRoot, "data", "sri.yaml"))
 	if err != nil {
-		return sriCheckOutput{}, err
+		return sriCheckData{}, err
 	}
 	pairs, scanStats, err := scanSRIReferences(cfg, dataEntries)
 	if err != nil {
 		slog.Error("check_sri_versions: scan failed", "error", err)
-		return sriCheckOutput{}, fmt.Errorf("scan_error: failed to scan SRI references")
+		return sriCheckData{}, fmt.Errorf("scan_error: failed to scan SRI references")
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -104,7 +138,7 @@ func runSRICheck(ctx context.Context, cfg config.Config) (sriCheckOutput, error)
 
 	status := sriStatus(len(dataEntries), len(findings), findings)
 	summary := buildSRISummary(status, len(dataEntries), len(findings), findings)
-	return sriCheckOutput{
+	return sriCheckData{
 		FilesScanned:           scanStats.FilesScanned,
 		FilesWithSRIAttributes: scanStats.FilesWithSRIAttributes,
 		SRIEntriesLoaded:       len(dataEntries),

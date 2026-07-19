@@ -374,14 +374,14 @@ relabeled "structured" the same way #495 did for the read tools.
 | `upload_page_asset` | flat | `status`, `slug`, `filename`, `path`, `content_type`, `size_bytes`, `sha256`, `duplicate_of?` (advisory only), `dry_run?`; allowed types png/jpg/jpeg/gif/webp only (SVG deferred, #348); never overwrites (`already_exists`); `rate_limit_remaining` reports the caller's real remaining budget on the shared create/update/upload quota, on both success and error responses (#466, #510); `data.X` mirrors all of the above additively (#508) |
 | `delete_page_asset` | flat | `status`, `slug`, `filename`, `sha256`, `dry_run?`, `referenced?` (pointer — present as `false` on success, omitted on error, so "not referenced" and "never checked" stay distinguishable), `referenced_in?`; requires `expected_sha256` or `expected_revision` on non-dry-run calls (a mismatch fails `revision_conflict`); fails `asset_referenced` if the filename is still linked from the page body, unless `force=true`; `dry_run` previews `sha256`/`referenced` without requiring the concurrency guard or deleting anything; `rate_limit_remaining` reports the caller's real remaining budget on `delete_page`'s own destructive quota, on both success and error responses (#460, #510). Only removes the source asset — unlike `delete_page`, it does not purge any built public copy or CDN cache; the asset stays reachable at its old URL until the next build; `data.X` mirrors all of the above additively (#508) |
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready` |
-| `preview_build`           | flat     | (build result)                       |
-| `run_post_build_hooks`    | flat     | (hook result)                        |
-| `generate_hero_image` | flat     | `path`; `data.path` mirrors it additively (#508) |
-| `check_sri_versions`      | flat     | (SRI result)                         |
+| `preview_build`           | flat     | `status`, `duration_ms`; `data.X` mirrors both additively (#552) |
+| `run_post_build_hooks`    | flat     | `results`; `data.results` mirrors it additively (#552) |
+| `generate_hero_image` | flat     | `path`; `data.path` mirrors it additively (#508); `path` is hugo_root-relative, never the host's absolute filesystem path (#551) |
+| `check_sri_versions`      | flat     | `files_scanned`, `files_with_sri_attributes`, `sri_entries_loaded`, `sri_checked`, `status`, `summary`, `findings`; `data.X` mirrors all of the above additively (#552) |
 | `get_runtime_status`      | structured | `data.server_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
 | `verify_publication`      | structured | `data.source/build/public/index`, `data.http_status`, `data.status`, `data.explanation` |
-| `create_preview`          | flat     | `preview_id`, `url`, `expires_at`, `build` |
+| `create_preview`          | flat     | `preview_id`, `url`, `expires_at`, `build`; `data.X` mirrors all of the above additively (#552) |
 
 ---
 

@@ -39,6 +39,44 @@ func TestPreviewBuildSucceeds(t *testing.T) {
 	}
 }
 
+func TestPreviewBuildHasEnvelopeMatchingRootFields(t *testing.T) {
+	wantRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\n[ \"$(pwd)\" = \""+wantRoot+"\" ] || exit 42\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = wantRoot
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "preview_build", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("preview_build returned error: %s", resultText(res))
+	}
+
+	out := decodeStructuredResult(t, res)
+	if got := out["success"]; got != true {
+		t.Fatalf("success = %v, want true (#552)", got)
+	}
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any (#552)", out["data"])
+	}
+	if _, ok := out["meta"].(map[string]any); !ok {
+		t.Fatalf("meta type = %T, want map[string]any (#552)", out["meta"])
+	}
+	for _, field := range []string{"status", "duration_ms"} {
+		if data[field] != out[field] {
+			t.Fatalf("data.%s = %v, root %s = %v — must match (#552)", field, data[field], field, out[field])
+		}
+	}
+}
+
 func TestPreviewBuildFailureStructuredError(t *testing.T) {
 	dir := writeMockHugo(t, "#!/bin/sh\necho 'Error: TOML parse error' >&2\nexit 1\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))

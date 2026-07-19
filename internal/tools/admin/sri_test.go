@@ -52,6 +52,48 @@ func setupSRILayout(t *testing.T, url, hash string) string {
 	return hugoRoot
 }
 
+func TestSRICheckVersionsHasEnvelopeMatchingRootFields(t *testing.T) {
+	body := []byte("console.log('hello');")
+	correctHash := computeTestSHA384(body)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	hugoRoot := setupSRILayout(t, srv.URL+"/lib.js", correctHash)
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "check_sri_versions", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+
+	out := decodeStructuredResult(t, res)
+	if got := out["success"]; got != true {
+		t.Fatalf("success = %v, want true (#552)", got)
+	}
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any (#552)", out["data"])
+	}
+	if _, ok := out["meta"].(map[string]any); !ok {
+		t.Fatalf("meta type = %T, want map[string]any (#552)", out["meta"])
+	}
+	for _, field := range []string{"files_scanned", "files_with_sri_attributes", "sri_entries_loaded", "sri_checked", "status", "summary"} {
+		if data[field] != out[field] {
+			t.Fatalf("data.%s = %v, root %s = %v — must match (#552)", field, data[field], field, out[field])
+		}
+	}
+}
+
 func TestSRIMatchingHash(t *testing.T) {
 	body := []byte("console.log('hello');")
 	correctHash := computeTestSHA384(body)
