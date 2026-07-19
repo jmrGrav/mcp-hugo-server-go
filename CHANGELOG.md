@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [v1.5.4] - 2026-07-19
+
+Implementation follow-through on the four design proposals locked in v1.5.3, plus the top priority from the v1.5.3 live ChatGPT audit (complex front-matter preservation proof) and a canonical source-identity field.
+
+### Added
+- **`check_ai_readiness` tool** (#437, PR #541): deterministic, source-oriented audit of a page's Markdown/frontmatter — heading hierarchy, section/paragraph length outliers, metadata presence, internal-link density, and citation structure. Explicitly does not score SEO, rendered HTML, or build freshness.
+- **`response_mode=compact` extended uniformly across the full read/anonymous tool surface** (#526, PR #540): in compact mode, `meta` trims to `schema_version` only (root `generated_at` is preserved for compatibility); every read tool's input schema now advertises the enum, with contract tests covering all 20 tools.
+- **`get_page_for_edit` gains `impact` and `preview` as opt-in `include` facets** (#527, PRs #542, #543), alongside the existing `backlinks`: identical data to standalone `get_related_content(include=["impact"])` and `inspect_rendered(include_preview=true)` calls, sharing the same underlying helpers (no forked logic). A page with no rendered public output yet omits `preview` with a warning instead of failing the whole bundle.
+- **`source_key` field added across source-aware read and write tools** (#545, PR #547): a canonical, unslashed source-relative identity (`posts/hello`) distinct from the canonical public-route `slug` (`/posts/hello/`), resolving the slug-format ambiguity flagged in the v1.5.3 audit. Write tools expose it as an alias of their existing (already source-relative) `slug` value — additive, non-breaking.
+
+### Fixed
+- **Strong regression proof that `update_page` preserves complex front matter** (#544, PR #546): a new end-to-end test exercises nested maps, lists of maps, translations, custom nested fields, and field ordering, confirming the yaml.v3 node-level rewriter leaves untouched fields byte-identical and does not reorder sections — directly answering the v1.5.3 audit's top trust request.
+
+### Deferred to v1.6.0
+- **Mutation root/data field duplication removal** (#520): the v1.5.3 audit reconfirmed `create_page`/`update_page`/`upload_page_asset`/`delete_page` still duplicate their payload at the root in addition to `data`. Removing the root aliases is a breaking change against the now-documented v1.x compatibility policy (#531) and needs a real deprecation window, not a v1.5.x patch.
+- **Execution planner** (#438): remains blocked on the transactional-edit primitives (`plan_content_change`/`apply_content_plan`, #338/#340) maturing first.
+
 ## [v1.5.3] - 2026-07-18
 
 Follow-up fixes and contract clarifications from the v1.5.2 live audit, plus a real build-pipeline bug found while investigating one of them. Four adjacent design proposals (compact response mode, pre-mutation bundling, AI-readiness rubric, execution planner) were reviewed and locked as design docs but deferred to v1.5.4 for implementation.
