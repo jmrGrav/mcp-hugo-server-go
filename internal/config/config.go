@@ -39,6 +39,29 @@ type Config struct {
 	GoogleIndex         GoogleIndexConfig `yaml:"google_indexing"`
 	OAuth               OAuthConfig       `yaml:"oauth"`
 	RateLimit           RateLimitConfig   `yaml:"rate_limit"`
+	// BlockedShortcodes (#590) names Hugo shortcodes that create_page/update_page
+	// refuse to accept in a page body, matched against the site's own
+	// {{< name >}}/{{% name %}} invocation syntax. This is a best-effort
+	// denylist, not a guarantee the theme's shortcode surface is fully safe:
+	// it was seeded from an audit of the production LoveIt theme this server
+	// was tested against (grep for safeHTML/safeJS/safeURL/safeCSS/Scratch
+	// usage across its layouts/_shortcodes, followed by manual review of each
+	// hit), not a general static analysis of arbitrary themes. That audit
+	// found "raw" (stores .Inner for later unescaped DOM injection), "script"
+	// (emits .Inner as a literal <script> tag), and "style" (emits its first
+	// argument unescaped into a <style> rule — CSS injection, not script
+	// execution, but still author-uncontrolled markup) as genuine bypasses of
+	// markup.goldmark.renderer.unsafe=false, which otherwise already blocks
+	// raw HTML typed directly into Markdown. The same audit's other hits
+	// (echarts/image/mapbox/music/typeit) were reviewed and excluded: each
+	// either routes its content through .Page.RenderString (already
+	// markdown-safe) before any safeHTML pipe, or places .Get values only in
+	// an HTML attribute context Hugo's shortcode templates (html/template)
+	// already auto-escape. Operators must review their own theme's
+	// shortcodes and extend this list for anything with an equivalent
+	// escape hatch under a different name — this list does not, by itself,
+	// make arbitrary agent-authored body content safe against every theme.
+	BlockedShortcodes []string `yaml:"blocked_shortcodes"`
 }
 
 // GitBaselineConfig defines the local Git checkout model used as the trusted
@@ -156,6 +179,7 @@ func Default() Config {
 		OAuth: OAuthConfig{
 			RequirePKCE: true,
 		},
+		BlockedShortcodes: []string{"raw", "rawhtml", "script", "style"},
 	}
 }
 

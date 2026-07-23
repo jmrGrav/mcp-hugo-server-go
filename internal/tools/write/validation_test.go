@@ -72,7 +72,37 @@ func TestValidateBodyFormatRejectsOverLength(t *testing.T) {
 	for i := range long {
 		long[i] = 'a'
 	}
-	if err := validateBodyFormat(string(long)); err == nil {
+	if err := validateBodyFormat(string(long), nil); err == nil {
 		t.Fatal("validateBodyFormat: want error for over-length body, got nil")
+	}
+}
+
+func TestRejectDangerousShortcodesBlocksConfiguredName(t *testing.T) {
+	if err := rejectDangerousShortcodes("before {{< script >}}x{{< /script >}} after", []string{"raw", "script"}); err == nil {
+		t.Fatal("rejectDangerousShortcodes: want error for blocked \"script\" shortcode, got nil")
+	}
+}
+
+func TestRejectDangerousShortcodesIsCaseInsensitive(t *testing.T) {
+	if err := rejectDangerousShortcodes("{{< SCRIPT >}}x{{< /SCRIPT >}}", []string{"script"}); err == nil {
+		t.Fatal("rejectDangerousShortcodes: want error for differently-cased blocked shortcode, got nil")
+	}
+}
+
+func TestRejectDangerousShortcodesAllowsUnlistedName(t *testing.T) {
+	if err := rejectDangerousShortcodes("{{< figure src=\"x.png\" >}}", []string{"raw", "script"}); err != nil {
+		t.Fatalf("rejectDangerousShortcodes: want nil for an unlisted shortcode, got %v", err)
+	}
+}
+
+func TestRejectDangerousShortcodesAllowsPlainTextMentioningName(t *testing.T) {
+	if err := rejectDangerousShortcodes("This post explains Hugo's raw and script shortcodes.", []string{"raw", "script"}); err != nil {
+		t.Fatalf("rejectDangerousShortcodes: want nil for plain-text mention without {{ }} delimiters, got %v", err)
+	}
+}
+
+func TestRejectDangerousShortcodesEmptyBlocklistAllowsEverything(t *testing.T) {
+	if err := rejectDangerousShortcodes("{{< script >}}x{{< /script >}}", nil); err != nil {
+		t.Fatalf("rejectDangerousShortcodes: want nil for an empty blocklist, got %v", err)
 	}
 }
