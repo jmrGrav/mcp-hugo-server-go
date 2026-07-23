@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [v1.6.0] - 2026-07-24
 
 ### Added
 - **`get_backlinks`/`get_related_content`/`get_broken_links` (in-memory fallback path) expose `data.index_staleness`** (#583): populated only when the in-memory site index is behind on-disk content — e.g. a manual `hugo` build or direct filesystem edit that bypassed `build_site`/`create_page`/`delete_page` (the only paths that refresh the index). Absence of the field means the index reflects current source. Detected via a cached, stat-only disk walk (30s TTL) to avoid re-walking the site on every read call.
