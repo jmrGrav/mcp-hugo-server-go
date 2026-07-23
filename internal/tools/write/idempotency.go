@@ -71,6 +71,31 @@ func (s *idempotencyStore) remember(tool, key, requestHash string, out any) erro
 	return nil
 }
 
+// lookup returns the previously remembered result for tool+key, if any,
+// without requiring the caller to resupply (or hash-match) the original
+// mutation payload — unlike replay, which is invoked from inside the
+// mutating tool itself as part of re-attempting the same request. lookup
+// backs get_mutation_status (#586): a read-only way to ask "did my last
+// call actually land" after a timeout/ambiguous response, without knowing
+// or resending the original arguments. Only ever contains successful
+// results (remember is called on the success path only) — a miss here is
+// not proof of failure, only "no confirmed success on record for this key,"
+// which also covers still-in-flight, genuinely failed, expired (TTL), or
+// never-attempted-with-this-key.
+func (s *idempotencyStore) lookup(tool, key string) (json.RawMessage, bool) {
+	if s == nil || key == "" {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked(time.Now())
+	entry, ok := s.entries[s.cacheKey(tool, key)]
+	if !ok {
+		return nil, false
+	}
+	return json.RawMessage(entry.ResultJSON), true
+}
+
 func (s *idempotencyStore) cacheKey(tool, key string) string {
 	return tool + "\x00" + key
 }
