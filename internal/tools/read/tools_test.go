@@ -2790,6 +2790,15 @@ func TestGetSiteHealthTranslationPairInfoFindingDoesNotMoveScore(t *testing.T) {
 	if taxScore, _ := taxonomy["score"].(float64); taxScore != 100 {
 		t.Fatalf("score_breakdown.taxonomy.score = %v, want 100", taxScore)
 	}
+	// #591: the same info-severity finding must also surface at the top
+	// level via advisories_count, so an agent reading only status/score
+	// ("healthy"/100) doesn't miss it without drilling into score_breakdown.
+	if advisoriesCount, _ := data["advisories_count"].(float64); advisoriesCount != 1 {
+		t.Fatalf("data.advisories_count = %v, want 1", advisoriesCount)
+	}
+	if data["status"] != "healthy" {
+		t.Fatalf("data.status = %v, want healthy — advisories_count must not move status", data["status"])
+	}
 }
 
 // TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly covers
@@ -2844,6 +2853,76 @@ func TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly(t *testin
 	}
 	if taxScore, _ := taxonomy["score"].(float64); taxScore >= 100 {
 		t.Fatalf("score_breakdown.taxonomy.score = %v, want < 100 (the finding must show up somewhere, even though it doesn't move the top-level score)", taxScore)
+	}
+	// #591: advisories_count counts ALL taxonomy findings regardless of
+	// severity (unlike score_breakdown.taxonomy.advisories, which is
+	// info-only) — a warning-severity possible_duplicate finding must still
+	// be counted here, since it's just as invisible to status/score as an
+	// info-severity one.
+	if advisoriesCount, _ := data["advisories_count"].(float64); advisoriesCount != 1 {
+		t.Fatalf("data.advisories_count = %v, want 1 (this fixture's warning-severity finding must still be counted)", advisoriesCount)
+	}
+}
+
+// TestGetSiteHealthAdvisoriesCountIncludesCasingVariant is a regression test
+// for the #591 review finding that an info-only definition of
+// advisories_count would report 0 for a site with only casing-drift
+// findings — exactly the "3 casing advisories" motivating case this field
+// exists to surface (Infrastructure/infrastructure same-language drift).
+func TestGetSiteHealthAdvisoriesCountIncludesCasingVariant(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/a/index.md", "---\ntitle: A\ndate: 2026-07-01\ncategories: [Infrastructure]\n---\n")
+	write("posts/b/index.md", "---\ntitle: B\ndate: 2026-07-01\ncategories: [infrastructure]\n---\n")
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithSourceIndex(t, idx, src)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+
+	details, _ := data["taxonomy_inconsistency_details"].([]any)
+	if len(details) == 0 {
+		t.Fatal("taxonomy_inconsistency_details is empty, want the Infrastructure/infrastructure casing_variant finding")
+	}
+	detail := details[0].(map[string]any)
+	if detail["kind"] != "casing_variant" {
+		t.Fatalf("taxonomy_inconsistency_details[0].kind = %v, want casing_variant", detail["kind"])
+	}
+	if data["status"] != "healthy" {
+		t.Fatalf("data.status = %v, want healthy (taxonomy findings never move status)", data["status"])
+	}
+	advisoriesCount, _ := data["advisories_count"].(float64)
+	if advisoriesCount != 1 {
+		t.Fatalf("data.advisories_count = %v, want 1 — a casing_variant (warning-severity) finding must be counted, not just info-severity translation_pair findings", advisoriesCount)
+	}
+
+	// response_mode=compact only reshapes meta (ShapeSuccessOutput) — a
+	// populated top-level scalar like advisories_count must survive it.
+	compactRes := callTool(t, session, "get_site_health", map[string]any{"response_mode": "compact"})
+	if compactRes.IsError {
+		t.Fatalf("get_site_health (compact) returned error: %v", compactRes.Content)
+	}
+	compactData := decodeContent(t, compactRes)
+	compactAdvisoriesCount, _ := compactData["advisories_count"].(float64)
+	if compactAdvisoriesCount != 1 {
+		t.Fatalf("compact mode: data.advisories_count = %v, want 1 (must survive response_mode=compact)", compactAdvisoriesCount)
 	}
 }
 
