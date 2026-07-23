@@ -64,7 +64,39 @@ func TestUploadPageAssetSuccess(t *testing.T) {
 	}
 }
 
-func TestUploadPageAssetRejectsSVG(t *testing.T) {
+// TestUploadPageAssetAcceptsCleanSVG is a regression test for #571: a
+// well-formed SVG using only allowlisted elements/attributes is now
+// accepted, unlike the outright rejection SVG got before this issue.
+func TestUploadPageAssetAcceptsCleanSVG(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24"><path d="M0 0h24v24H0z" fill="#333"/></svg>`
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "icon.svg",
+		"content_base64": b64([]byte(svg)),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("upload_page_asset clean svg failed: %s", raw)
+	}
+	data, err := os.ReadFile(filepath.Join(contentRoot, "posts", "article", "icon.svg"))
+	if err != nil {
+		t.Fatalf("uploaded file not found: %v", err)
+	}
+	if string(data) != svg {
+		t.Fatal("uploaded SVG content mismatch")
+	}
+}
+
+// TestUploadPageAssetRejectsSVGWithScript, ...WithEventHandler, and
+// ...WithExternalReference are regression tests for #571: an SVG carrying
+// any of the confirmed injection vectors is rejected outright with
+// invalid_params, never silently stripped and written as a modified file.
+func TestUploadPageAssetRejectsSVGWithScript(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeBundle(t, contentRoot, "posts/article")
 	session, _, done := newTestServer(t, contentRoot)
@@ -72,15 +104,56 @@ func TestUploadPageAssetRejectsSVG(t *testing.T) {
 
 	res := callTool(t, session, "upload_page_asset", map[string]any{
 		"slug":           "posts/article",
-		"filename":       "cover.svg",
-		"content_base64": b64([]byte("<svg></svg>")),
+		"filename":       "evil.svg",
+		"content_base64": b64([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(document.domain)</script></svg>`)),
 	})
 	if !res.IsError {
-		t.Fatal("upload_page_asset: want error for .svg, got success")
+		t.Fatal("upload_page_asset: want error for SVG with <script>, got success")
 	}
 	raw, _ := json.Marshal(res.Content)
 	if !strings.Contains(string(raw), "invalid_params") {
-		t.Fatalf("upload_page_asset svg error = %s, want invalid_params", raw)
+		t.Fatalf("upload_page_asset svg-script error = %s, want invalid_params", raw)
+	}
+}
+
+func TestUploadPageAssetRejectsSVGWithEventHandler(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "evil.svg",
+		"content_base64": b64([]byte(`<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"></svg>`)),
+	})
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want error for SVG with onload=, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("upload_page_asset svg-onload error = %s, want invalid_params", raw)
+	}
+}
+
+func TestUploadPageAssetRejectsSVGWithExternalReference(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><use xlink:href="http://evil.example/x.svg#a"/></svg>`
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "evil.svg",
+		"content_base64": b64([]byte(svg)),
+	})
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want error for SVG with external xlink:href, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("upload_page_asset svg-external-href error = %s, want invalid_params", raw)
 	}
 }
 
