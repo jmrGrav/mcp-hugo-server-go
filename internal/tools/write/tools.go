@@ -34,14 +34,15 @@ import (
 )
 
 type createPageInput struct {
-	Slug           string   `json:"slug"`
-	Lang           string   `json:"lang,omitempty"`
-	Title          string   `json:"title"`
-	Body           string   `json:"body"`
-	Tags           []string `json:"tags"`
-	Categories     []string `json:"categories"`
-	IdempotencyKey string   `json:"idempotency_key,omitempty"`
-	DryRun         bool     `json:"dry_run,omitempty"`
+	Slug                    string   `json:"slug"`
+	Lang                    string   `json:"lang,omitempty"`
+	Title                   string   `json:"title"`
+	Body                    string   `json:"body"`
+	Tags                    []string `json:"tags"`
+	Categories              []string `json:"categories"`
+	NormalizeTaxonomyCasing bool     `json:"normalize_taxonomy_casing,omitempty"`
+	IdempotencyKey          string   `json:"idempotency_key,omitempty"`
+	DryRun                  bool     `json:"dry_run,omitempty"`
 }
 
 type createPageOutput struct {
@@ -72,21 +73,27 @@ type createPageData struct {
 	Warning            string               `json:"warning,omitempty"`
 	NewRevision        string               `json:"new_revision,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
-	RateLimitRemaining int                  `json:"rate_limit_remaining"`
+	// TaxonomyCasingNormalized/TaxonomyCasingAmbiguous — see the comment on
+	// updatePageData's fields of the same name (#589); create_page shares
+	// the identical normalize_taxonomy_casing contract.
+	TaxonomyCasingNormalized []taxonomyCasingChangeDTO  `json:"taxonomy_casing_normalized,omitempty"`
+	TaxonomyCasingAmbiguous  []taxonomyCasingSkippedDTO `json:"taxonomy_casing_ambiguous,omitempty"`
+	RateLimitRemaining       int                        `json:"rate_limit_remaining"`
 }
 
 type updatePageInput struct {
-	Slug             string   `json:"slug"`
-	Lang             string   `json:"lang,omitempty"`
-	Title            string   `json:"title,omitempty"`
-	Body             string   `json:"body,omitempty"`
-	Tags             []string `json:"tags,omitempty"`
-	Categories       []string `json:"categories,omitempty"`
-	Draft            *bool    `json:"draft,omitempty"`
-	Description      string   `json:"description,omitempty"`
-	ExpectedRevision string   `json:"expected_revision,omitempty"`
-	IdempotencyKey   string   `json:"idempotency_key,omitempty"`
-	DryRun           bool     `json:"dry_run,omitempty"`
+	Slug                    string   `json:"slug"`
+	Lang                    string   `json:"lang,omitempty"`
+	Title                   string   `json:"title,omitempty"`
+	Body                    string   `json:"body,omitempty"`
+	Tags                    []string `json:"tags,omitempty"`
+	Categories              []string `json:"categories,omitempty"`
+	Draft                   *bool    `json:"draft,omitempty"`
+	Description             string   `json:"description,omitempty"`
+	NormalizeTaxonomyCasing bool     `json:"normalize_taxonomy_casing,omitempty"`
+	ExpectedRevision        string   `json:"expected_revision,omitempty"`
+	IdempotencyKey          string   `json:"idempotency_key,omitempty"`
+	DryRun                  bool     `json:"dry_run,omitempty"`
 }
 
 type updatePageOutput struct {
@@ -108,7 +115,19 @@ type updatePageData struct {
 	Warning            string               `json:"warning,omitempty"`
 	NewRevision        string               `json:"new_revision,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
-	RateLimitRemaining int                  `json:"rate_limit_remaining"`
+	// TaxonomyCasingNormalized lists tags/categories rewritten to match a
+	// casing already present elsewhere in the index (#589), populated only
+	// when the caller opted in via normalize_taxonomy_casing. Present only
+	// on non-dry-run success; dry_run previews the diff but does not
+	// resolve casing, so this stays empty on a dry-run response.
+	TaxonomyCasingNormalized []taxonomyCasingChangeDTO `json:"taxonomy_casing_normalized,omitempty"`
+	// TaxonomyCasingAmbiguous lists tags/categories left exactly as typed
+	// because the index already has more than one distinct casing for that
+	// term (pre-existing drift, the #577 casing_variant scenario) —
+	// normalize_taxonomy_casing never guesses which of several existing
+	// spellings is correct.
+	TaxonomyCasingAmbiguous []taxonomyCasingSkippedDTO `json:"taxonomy_casing_ambiguous,omitempty"`
+	RateLimitRemaining      int                        `json:"rate_limit_remaining"`
 }
 
 type deletePageInput struct {
@@ -349,7 +368,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -411,7 +430,24 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if resolvedLang != "" {
 			filePath = filepath.Join(dir, "index."+resolvedLang+".md")
 		}
-		content := buildFrontmatter(in.Title, in.Tags, in.Categories, in.Body)
+		// normalize_taxonomy_casing (#589) resolves against the index as it
+		// stands right now, before this page is written — deliberately
+		// computed from the caller's original in.Tags/in.Categories, not
+		// reused for the idempotency hash below, so a retry's hash never
+		// shifts just because intervening writes changed what "existing
+		// casing" means.
+		writeTags, writeCategories := in.Tags, in.Categories
+		var taxonomyNormalized []taxonomyCasingChangeDTO
+		var taxonomyAmbiguous []taxonomyCasingSkippedDTO
+		if in.NormalizeTaxonomyCasing {
+			var tagChanges, catChanges []taxonomyCasingChangeDTO
+			var tagSkipped, catSkipped []taxonomyCasingSkippedDTO
+			writeTags, tagChanges, tagSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "tag"), "tag", resolvedLang, in.Tags)
+			writeCategories, catChanges, catSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "category"), "category", resolvedLang, in.Categories)
+			taxonomyNormalized = append(tagChanges, catChanges...)
+			taxonomyAmbiguous = append(tagSkipped, catSkipped...)
+		}
+		content := buildFrontmatter(in.Title, writeTags, writeCategories, in.Body)
 
 		// Round-trip guard: verify the generated content parses correctly.
 		if err := validateFrontmatterRoundTrip(content); err != nil {
@@ -427,14 +463,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, newCreatePageOutput(createPageData{
-				Status:             "ok",
-				Slug:               canonicalPublicSlug(in.Slug),
-				SourceKey:          in.Slug,
-				ResolvedLang:       strPtr(resolvedLang),
-				ResolvedSourcePath: strPtr(logicalPath),
-				DryRun:             true,
-				Content:            content,
-				RateLimitRemaining: rateLimitRemaining(limiter),
+				Status:                   "ok",
+				Slug:                     canonicalPublicSlug(in.Slug),
+				SourceKey:                in.Slug,
+				ResolvedLang:             strPtr(resolvedLang),
+				ResolvedSourcePath:       strPtr(logicalPath),
+				DryRun:                   true,
+				Content:                  content,
+				TaxonomyCasingNormalized: taxonomyNormalized,
+				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+				RateLimitRemaining:       rateLimitRemaining(limiter),
 			}), nil
 		}
 
@@ -511,8 +549,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Lang:           resolvedLang,
 			Title:          in.Title,
 			Date:           now,
-			Tags:           in.Tags,
-			Categories:     in.Categories,
+			Tags:           writeTags,
+			Categories:     writeCategories,
 			Body:           in.Body,
 			FrontmatterRaw: map[string]any{"title": in.Title, "date": now, "draft": false},
 			BuildPending:   true,
@@ -533,16 +571,18 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		state := createPageState()
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := newCreatePageOutput(createPageData{
-			Status:             status,
-			Slug:               canonicalPublicSlug(in.Slug),
-			SourceKey:          in.Slug,
-			Path:               logicalPath,
-			ResolvedLang:       strPtr(resolvedLang),
-			ResolvedSourcePath: strPtr(logicalPath),
-			NewRevision:        contentmodel.SourceRevisionBytes([]byte(content)),
-			Warning:            appendLastBuildWarning(warning),
-			State:              &state,
-			RateLimitRemaining: rateLimitRemaining(limiter),
+			Status:                   status,
+			Slug:                     canonicalPublicSlug(in.Slug),
+			SourceKey:                in.Slug,
+			Path:                     logicalPath,
+			ResolvedLang:             strPtr(resolvedLang),
+			ResolvedSourcePath:       strPtr(logicalPath),
+			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
+			Warning:                  appendLastBuildWarning(warning),
+			State:                    &state,
+			TaxonomyCasingNormalized: taxonomyNormalized,
+			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+			RateLimitRemaining:       rateLimitRemaining(limiter),
 		})
 		if idemHash != "" {
 			if err := idem.remember("create_page", in.IdempotencyKey, idemHash, out); err != nil {
@@ -563,6 +603,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. " +
+			"Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. " +
 			"`rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[updatePageInput](),
 		OutputSchema: tools.MustSchema[updatePageOutput](),
@@ -715,9 +756,23 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
 			}
 		}
+		// normalize_taxonomy_casing (#589) — see the comment on the identical
+		// block in create_page above; scoped to resolvedSource.Lang, the
+		// language this write actually targets.
+		writeTags, writeCategories := in.Tags, in.Categories
+		var taxonomyNormalized []taxonomyCasingChangeDTO
+		var taxonomyAmbiguous []taxonomyCasingSkippedDTO
+		if in.NormalizeTaxonomyCasing {
+			var tagChanges, catChanges []taxonomyCasingChangeDTO
+			var tagSkipped, catSkipped []taxonomyCasingSkippedDTO
+			writeTags, tagChanges, tagSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "tag"), "tag", resolvedSource.Lang, in.Tags)
+			writeCategories, catChanges, catSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "category"), "category", resolvedSource.Lang, in.Categories)
+			taxonomyNormalized = append(tagChanges, catChanges...)
+			taxonomyAmbiguous = append(tagSkipped, catSkipped...)
+		}
 		opts := pageUpdateOpts{
-			Tags:        in.Tags,
-			Categories:  in.Categories,
+			Tags:        writeTags,
+			Categories:  writeCategories,
 			Draft:       in.Draft,
 			Description: in.Description,
 		}
@@ -738,14 +793,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			diff := simpleDiff(diffLabel, string(raw), content)
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			return nil, newUpdatePageOutput(updatePageData{
-				Status:             "ok",
-				Slug:               canonicalPublicSlug(in.Slug),
-				SourceKey:          in.Slug,
-				ResolvedLang:       strPtr(resolvedSource.Lang),
-				ResolvedSourcePath: strPtr(logicalPath),
-				DryRun:             true,
-				Diff:               diff,
-				RateLimitRemaining: rateLimitRemaining(limiter),
+				Status:                   "ok",
+				Slug:                     canonicalPublicSlug(in.Slug),
+				SourceKey:                in.Slug,
+				ResolvedLang:             strPtr(resolvedSource.Lang),
+				ResolvedSourcePath:       strPtr(logicalPath),
+				DryRun:                   true,
+				Diff:                     diff,
+				TaxonomyCasingNormalized: taxonomyNormalized,
+				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+				RateLimitRemaining:       rateLimitRemaining(limiter),
 			}), nil
 		}
 
@@ -770,11 +827,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if in.Body != "" {
 			updated.Body = in.Body
 		}
-		if in.Tags != nil {
-			updated.Tags = in.Tags
+		if writeTags != nil {
+			updated.Tags = writeTags
 		}
-		if in.Categories != nil {
-			updated.Categories = in.Categories
+		if writeCategories != nil {
+			updated.Categories = writeCategories
 		}
 		updated.BuildPending = true
 		idx.Upsert(updated)
@@ -786,11 +843,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				if in.Title != "" {
 					pubUpdated.Title = in.Title
 				}
-				if in.Tags != nil {
-					pubUpdated.Tags = in.Tags
+				if writeTags != nil {
+					pubUpdated.Tags = writeTags
 				}
-				if in.Categories != nil {
-					pubUpdated.Categories = in.Categories
+				if writeCategories != nil {
+					pubUpdated.Categories = writeCategories
 				}
 				siteIdx.UpsertPage(pubUpdated)
 			}
@@ -808,15 +865,17 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		state := updatePageState(siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := newUpdatePageOutput(updatePageData{
-			Status:             status,
-			Slug:               canonicalPublicSlug(in.Slug),
-			SourceKey:          in.Slug,
-			ResolvedLang:       strPtr(resolvedSource.Lang),
-			ResolvedSourcePath: strPtr(logicalPath),
-			NewRevision:        contentmodel.SourceRevisionBytes([]byte(content)),
-			Warning:            appendLastBuildWarning(warning),
-			State:              &state,
-			RateLimitRemaining: rateLimitRemaining(limiter),
+			Status:                   status,
+			Slug:                     canonicalPublicSlug(in.Slug),
+			SourceKey:                in.Slug,
+			ResolvedLang:             strPtr(resolvedSource.Lang),
+			ResolvedSourcePath:       strPtr(logicalPath),
+			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
+			Warning:                  appendLastBuildWarning(warning),
+			State:                    &state,
+			TaxonomyCasingNormalized: taxonomyNormalized,
+			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+			RateLimitRemaining:       rateLimitRemaining(limiter),
 		})
 		if idemHash != "" {
 			if err := idem.remember("update_page", in.IdempotencyKey, idemHash, out); err != nil {
