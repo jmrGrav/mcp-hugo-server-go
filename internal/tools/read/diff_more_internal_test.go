@@ -58,6 +58,56 @@ func TestValidateFrontMatterPageAliasWarnings(t *testing.T) {
 	}
 }
 
+func TestHasReservedTestSlugPrefix(t *testing.T) {
+	cases := []struct {
+		name     string
+		slug     string
+		wantFlag bool
+	}{
+		{"mcp-audit- prefix", "posts/mcp-audit-v159-20260720", true},
+		{"test-audit- prefix", "posts/test-audit-0719", true},
+		{"codex- prefix", "posts/codex-boundary-1784381074", true},
+		{"case insensitive", "posts/MCP-AUDIT-something", true},
+		{"nested section", "drafts/mcp-audit-nested-run", true},
+		{"ordinary slug", "posts/hello-world", false},
+		{"contains but doesn't start with prefix", "posts/my-test-run", false},
+		// Regression: this site publishes a real article about a security
+		// audit — a generic bare "audit-"/"test-" prefix would misclassify
+		// it as leftover throwaway content (#584 review finding).
+		{"real published security-audit article", "posts/audit-securite-modsecurity-crowdsec", false},
+		{"bare test- prefix on real content", "posts/test-driven-development-in-go", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := hasReservedTestSlugPrefix(tc.slug)
+			if got != tc.wantFlag {
+				t.Fatalf("hasReservedTestSlugPrefix(%q) = %v, want %v", tc.slug, got, tc.wantFlag)
+			}
+		})
+	}
+}
+
+// TestValidateFrontMatterPageDoesNotIncludeTestPrefixInIssues is a
+// regression test for the #584 review finding that a test-prefixed slug
+// must not be treated as a frontmatter-invalid issue — that would flip a
+// healthy page's status to "invalid" for a hygiene concern, not a defect.
+// The test-content signal lives in validateOutputData.TestContentSlugs
+// instead (see TestValidatePagesWithIssuesFilteredSeparatesTestContentFromInvalid).
+func TestValidateFrontMatterPageDoesNotIncludeTestPrefixInIssues(t *testing.T) {
+	issues := validateFrontMatterPage(
+		hugosite.SourcePage{
+			Slug:           "posts/mcp-audit-v159-20260720",
+			Title:          "Hello",
+			Date:           "2026-07-11",
+			FrontmatterRaw: map[string]any{"title": "Hello", "date": "2026-07-11"},
+		},
+		nil,
+	)
+	if len(issues) != 0 {
+		t.Fatalf("validateFrontMatterPage(test-prefixed but otherwise valid) = %#v, want no issues", issues)
+	}
+}
+
 func runGitInternal(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)

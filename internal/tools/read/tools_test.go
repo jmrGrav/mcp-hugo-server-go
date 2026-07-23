@@ -2380,6 +2380,95 @@ func TestValidateSiteStatusFieldInvalid(t *testing.T) {
 	}
 }
 
+// TestValidateSiteTestContentSlugsIsAdvisoryOnly is a regression test for
+// #584: a page whose slug matches a reserved test/audit prefix but is
+// otherwise valid frontmatter must surface in data.test_content_slugs
+// without being counted as invalid or flipping data.status.
+func TestValidateSiteTestContentSlugsIsAdvisoryOnly(t *testing.T) {
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "mcp-audit-v159-20260720"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "mcp-audit-v159-20260720", "index.md"), []byte("---\ntitle: Audit run\ndate: 2026-07-20\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "audit-securite-modsecurity-crowdsec"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "audit-securite-modsecurity-crowdsec", "index.md"), []byte("---\ntitle: Security audit\ndate: 2026-07-01\n---\nReal article.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Bilingual test bundle (#584 review finding): ListPages returns one
+	// SourcePage per (slug, lang), so this must dedup to a single entry in
+	// test_content_slugs, not one per language variant.
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "test-audit-bilingual"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "test-audit-bilingual", "index.en.md"), []byte("---\ntitle: Bilingual audit run\ndate: 2026-07-20\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "test-audit-bilingual", "index.fr.md"), []byte("---\ntitle: Audit bilingue\ndate: 2026-07-20\n---\nContenu.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg := config.Default()
+	cfg.SiteRoot = root
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex() error = %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex() error = %v", err)
+	}
+
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{"include_valid": true})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if data["status"] != "valid" {
+		t.Fatalf("data.status = %v, want %q — both pages have valid frontmatter, the reserved-prefix match must not flip status", data["status"], "valid")
+	}
+	if data["invalid"] != float64(0) {
+		t.Fatalf("data.invalid = %v, want 0 — test-content match is advisory only", data["invalid"])
+	}
+	testContentSlugs, ok := data["test_content_slugs"].([]any)
+	if !ok || len(testContentSlugs) != 2 {
+		t.Fatalf("data.test_content_slugs = %#v, want exactly 2 entries (mcp-audit-v159-20260720, test-audit-bilingual deduped across en/fr)", data["test_content_slugs"])
+	}
+	var sawSingleLang, sawBilingualCount int
+	for _, s := range testContentSlugs {
+		str, _ := s.(string)
+		if strings.Contains(str, "mcp-audit-v159-20260720") {
+			sawSingleLang++
+		}
+		if strings.Contains(str, "test-audit-bilingual") {
+			sawBilingualCount++
+		}
+		// The real security-audit article ("audit-securite-...") must NOT be
+		// flagged — bare "audit-" is deliberately excluded from the reserved
+		// prefix list to avoid misclassifying legitimate content.
+		if strings.Contains(str, "modsecurity-crowdsec") {
+			t.Fatalf("data.test_content_slugs incorrectly flagged the real security-audit article: %v", testContentSlugs)
+		}
+	}
+	if sawSingleLang != 1 {
+		t.Fatalf("expected exactly 1 entry for mcp-audit-v159-20260720, got %d in %v", sawSingleLang, testContentSlugs)
+	}
+	if sawBilingualCount != 1 {
+		t.Fatalf("expected exactly 1 deduped entry for test-audit-bilingual (en+fr variants), got %d in %v", sawBilingualCount, testContentSlugs)
+	}
+}
+
 // mustSiteWithOneInvalidPage builds a small fixture with one page missing
 // title/date (invalid) and one clean page, for #431's pagination/invalid_only
 // tests below.

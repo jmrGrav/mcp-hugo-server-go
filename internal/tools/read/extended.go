@@ -256,6 +256,12 @@ type validateOutputData struct {
 	HasMore      bool                  `json:"has_more"`
 	NextOffset   *int                  `json:"next_offset,omitempty"`
 	Pages        []frontMatterIssueDTO `json:"pages"`
+
+	// TestContentSlugs lists slugs matching a reserved test/audit prefix
+	// (#584) — advisory only, never affects Invalid/PagesPassed/Status. A
+	// slug landing here means "confirm this isn't leftover throwaway
+	// content before publishing," not "this page's frontmatter is broken."
+	TestContentSlugs []string `json:"test_content_slugs,omitempty"`
 }
 
 type validateOutput struct {
@@ -552,7 +558,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. `test_content_slugs` separately lists any slug matching a reserved test/audit prefix (`mcp-audit-`, `test-audit-`, `codex-`) — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -568,7 +574,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases, resolver), nil
 		})
 
-	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. `test_content_slugs` separately lists any slug matching a reserved test/audit prefix (`mcp-audit-`, `test-audit-`, `codex-`) — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateSiteInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -1115,12 +1121,23 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 
 	allResults := make([]frontMatterIssueDTO, 0, len(pages))
 	invalid := 0
+	// seenTestContentSlugs dedups across language variants: ListPages
+	// returns one SourcePage per (slug, lang), so a bilingual test bundle
+	// (e.g. index.en.md + index.fr.md) would otherwise add the same
+	// canonical slug to testContentSlugs twice.
+	seenTestContentSlugs := make(map[string]bool)
+	var testContentSlugs []string
 	for _, p := range pages {
 		issues := validateFrontMatterPage(p, aliases)
 		if len(issues) > 0 {
 			invalid++
 		}
-		allResults = append(allResults, frontMatterIssueDTO{Slug: canonicalValidationSlug(p, resolver), Lang: p.Lang, Issues: issues})
+		slug := canonicalValidationSlug(p, resolver)
+		if hasReservedTestSlugPrefix(p.Slug) && !seenTestContentSlugs[slug] {
+			seenTestContentSlugs[slug] = true
+			testContentSlugs = append(testContentSlugs, slug)
+		}
+		allResults = append(allResults, frontMatterIssueDTO{Slug: slug, Lang: p.Lang, Issues: issues})
 	}
 
 	filtered := allResults
@@ -1152,16 +1169,17 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 		status = "invalid"
 	}
 	return newValidateOutput(validateOutputData{
-		Status:       status,
-		PagesChecked: total,
-		PagesPassed:  total - invalid,
-		Invalid:      invalid,
-		Returned:     len(results),
-		Limit:        limit,
-		Offset:       offset,
-		HasMore:      meta.HasMore,
-		NextOffset:   meta.NextOffset,
-		Pages:        results,
+		Status:           status,
+		PagesChecked:     total,
+		PagesPassed:      total - invalid,
+		Invalid:          invalid,
+		Returned:         len(results),
+		Limit:            limit,
+		Offset:           offset,
+		HasMore:          meta.HasMore,
+		NextOffset:       meta.NextOffset,
+		Pages:            results,
+		TestContentSlugs: testContentSlugs,
 	}, time.Now().UTC())
 }
 
@@ -1205,6 +1223,30 @@ func effectiveSort(in searchContentInput) string {
 		return "relevance"
 	}
 	return canonicalSort(in.Sort)
+}
+
+// reservedTestSlugPrefixes are slug-segment prefixes observed in this
+// project's own audit history (content/.mcp-audit.log) for throwaway
+// content created during live testing (#584) — narrow and specific on
+// purpose. Deliberately excludes bare "test-"/"audit-": this site publishes
+// real articles about security audits (e.g. "audit-securite-..."), and a
+// generic prefix would misclassify legitimate content as leftover test
+// cruft. This is advisory only (see testContentSlugs) — it never flags a
+// page as frontmatter-invalid.
+var reservedTestSlugPrefixes = []string{"mcp-audit-", "test-audit-", "codex-"}
+
+func hasReservedTestSlugPrefix(slug string) bool {
+	last := slug
+	if i := strings.LastIndex(slug, "/"); i >= 0 {
+		last = slug[i+1:]
+	}
+	last = strings.ToLower(last)
+	for _, prefix := range reservedTestSlugPrefixes {
+		if strings.HasPrefix(last, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) []string {

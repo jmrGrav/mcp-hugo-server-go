@@ -6,6 +6,7 @@ All notable changes to this project are documented here.
 
 ### Added
 - **`get_backlinks`/`get_related_content`/`get_broken_links` (in-memory fallback path) expose `data.index_staleness`** (#583): populated only when the in-memory site index is behind on-disk content — e.g. a manual `hugo` build or direct filesystem edit that bypassed `build_site`/`create_page`/`delete_page` (the only paths that refresh the index). Absence of the field means the index reflects current source. Detected via a cached, stat-only disk walk (30s TTL) to avoid re-walking the site on every read call.
+- **`validate_frontmatter`/`validate_site` expose `data.test_content_slugs`** (#584): a slug whose last segment starts with `mcp-audit-`, `test-audit-`, or `codex-` (case-insensitive — a known subset of the throwaway-content prefixes observed in this project's own audit history, deliberately excluding bare `test-`/`audit-` so real content like a published security-audit article isn't misclassified) is listed here, so it surfaces during routine validation instead of only being caught by an external audit days later. Advisory only — never affects `data.invalid`, per-page `issues`, or `data.status`.
 
 ## [v1.5.9] - 2026-07-20
 
