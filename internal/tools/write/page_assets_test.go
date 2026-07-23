@@ -183,6 +183,92 @@ func TestUploadPageAssetDryRunDoesNotWrite(t *testing.T) {
 	}
 }
 
+// TestUploadPageAssetDryRunDoesNotConsumeQuota is #588's upload_page_asset
+// counterpart to TestDeletePageAssetDryRunDoesNotConsumeDestructiveQuota — an
+// audit found upload_page_asset called limiter.Allow() before checking
+// in.DryRun (the shared create/update quota, not the destructive one).
+func TestUploadPageAssetDryRunDoesNotConsumeQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	rl := config.Default().RateLimit
+	rl.CreateUpdatePerMin = 2
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	var remaining []float64
+	for i := 0; i < 5; i++ {
+		res := callTool(t, session, "upload_page_asset", map[string]any{
+			"slug":           "posts/article",
+			"filename":       "quota-cover.png",
+			"content_base64": b64(minimalPNG),
+			"dry_run":        true,
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("upload_page_asset dry_run %d returned error: %s", i, raw)
+		}
+		data := decodeWriteData(t, res)
+		rem, ok := data["rate_limit_remaining"].(float64)
+		if !ok {
+			t.Fatalf("upload_page_asset dry_run %d: rate_limit_remaining missing", i)
+		}
+		remaining = append(remaining, rem)
+	}
+	for i := 1; i < len(remaining); i++ {
+		if remaining[i] != remaining[0] {
+			t.Fatalf("upload_page_asset dry_run consumed quota: rate_limit_remaining sequence = %v, want constant at %v (dry_run must never call limiter.Allow())", remaining, remaining[0])
+		}
+	}
+	if remaining[0] != float64(rl.CreateUpdatePerMin) {
+		t.Fatalf("upload_page_asset dry_run rate_limit_remaining = %v, want full fresh budget %d", remaining[0], rl.CreateUpdatePerMin)
+	}
+}
+
+// TestUploadPageAssetNonDryRunAlreadyExistsStillConsumesQuota is a
+// discriminating regression test for #588's review: the dry-run fix must be
+// a surgical guard (skip Allow() only when in.DryRun), not a wholesale move
+// of Allow() past the whole dry-run block — a move would have also skipped
+// Allow() for non-dry-run failures like already_exists, silently changing
+// existing, intentional quota-consumption behavior with no other test
+// catching it.
+func TestUploadPageAssetNonDryRunAlreadyExistsStillConsumesQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	rl := config.Default().RateLimit
+	rl.CreateUpdatePerMin = 5
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	if res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "existing.png",
+		"content_base64": b64(minimalPNG),
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first upload_page_asset returned error: %s", raw)
+	}
+
+	// Second (non-dry-run) call to the same filename fails already_exists —
+	// this must still consume 1 token, exactly as it did before #588.
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "existing.png",
+		"content_base64": b64(minimalPNG),
+	})
+	if !res.IsError {
+		t.Fatal("second upload_page_asset to the same filename should fail already_exists")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "already_exists") {
+		t.Fatalf("upload_page_asset second call error = %s, want already_exists", raw)
+	}
+	data := decodeWriteErrorData(t, res)
+	wantRemaining := float64(rl.CreateUpdatePerMin - 2) // first (successful) upload + second (already_exists) each consume one token
+	if got := data["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("upload_page_asset already_exists data.rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
+}
+
 func TestUploadPageAssetDuplicateContentIsAdvisoryOnly(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeBundle(t, contentRoot, "posts/article")

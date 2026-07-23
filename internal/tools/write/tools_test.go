@@ -2494,6 +2494,101 @@ func TestUpdatePageDryRun(t *testing.T) {
 	}
 }
 
+// TestCreatePageDryRunDoesNotConsumeQuota is a regression test for #588: an
+// audit found create_page/update_page/upload_page_asset called
+// limiter.Allow() before checking in.DryRun, unlike delete_page/
+// delete_page_asset (which established the "dry_run must never consume the
+// mutation budget" invariant at #466/#575). A small budget makes any
+// unexpected decrement visible immediately.
+func TestCreatePageDryRunDoesNotConsumeQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.CreateUpdatePerMin = 2
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	var remaining []float64
+	for i := 0; i < 5; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug":       "dry-quota-post",
+			"title":      "Dry Post",
+			"body":       "Preview only.",
+			"tags":       []any{},
+			"categories": []any{},
+			"dry_run":    true,
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page dry_run %d returned error: %s", i, raw)
+		}
+		data := decodeWriteData(t, res)
+		rem, ok := data["rate_limit_remaining"].(float64)
+		if !ok {
+			t.Fatalf("create_page dry_run %d: rate_limit_remaining missing", i)
+		}
+		remaining = append(remaining, rem)
+	}
+	for i := 1; i < len(remaining); i++ {
+		if remaining[i] != remaining[0] {
+			t.Fatalf("create_page dry_run consumed quota: rate_limit_remaining sequence = %v, want constant at %v (dry_run must never call limiter.Allow())", remaining, remaining[0])
+		}
+	}
+	if remaining[0] != float64(rl.CreateUpdatePerMin) {
+		t.Fatalf("create_page dry_run rate_limit_remaining = %v, want full fresh budget %d", remaining[0], rl.CreateUpdatePerMin)
+	}
+}
+
+// TestUpdatePageDryRunDoesNotConsumeQuota is #588's update_page counterpart
+// to TestCreatePageDryRunDoesNotConsumeQuota.
+func TestUpdatePageDryRunDoesNotConsumeQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.CreateUpdatePerMin = 3 // 1 slot consumed by the real create_page setup below, leaving budget headroom to observe
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	if r := callTool(t, session, "create_page", map[string]any{
+		"slug":       "update-dry-quota",
+		"title":      "Original Title",
+		"body":       "Original body.",
+		"tags":       []any{},
+		"categories": []any{},
+	}); r.IsError {
+		raw, _ := json.Marshal(r.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+
+	var remaining []float64
+	for i := 0; i < 5; i++ {
+		res := callTool(t, session, "update_page", map[string]any{
+			"slug":    "update-dry-quota",
+			"title":   "New Title",
+			"dry_run": true,
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("update_page dry_run %d returned error: %s", i, raw)
+		}
+		data := decodeWriteData(t, res)
+		rem, ok := data["rate_limit_remaining"].(float64)
+		if !ok {
+			t.Fatalf("update_page dry_run %d: rate_limit_remaining missing", i)
+		}
+		remaining = append(remaining, rem)
+	}
+	for i := 1; i < len(remaining); i++ {
+		if remaining[i] != remaining[0] {
+			t.Fatalf("update_page dry_run consumed quota: rate_limit_remaining sequence = %v, want constant at %v (dry_run must never call limiter.Allow())", remaining, remaining[0])
+		}
+	}
+	// One real (non-dry-run) create_page call already consumed 1 of the
+	// shared CreateUpdatePerMin budget above, so the fresh remainder here is
+	// rl.CreateUpdatePerMin-1, not the full budget.
+	if want := float64(rl.CreateUpdatePerMin - 1); remaining[0] != want {
+		t.Fatalf("update_page dry_run rate_limit_remaining = %v, want %v (budget after the one real create_page call)", remaining[0], want)
+	}
+}
+
 // TestCreatePageAtomicWriteCheckedRejectsSymlink verifies that create_page
 // fails (and does not write outside content_root) when the target slug
 // directory is a symlink pointing outside — protecting the T2/T3 write window

@@ -393,7 +393,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
 		}
-		if !limiter.Allow() {
+		// Allow() is skipped for dry-run (#588) but otherwise stays at its
+		// original position, so every non-dry-run failure path below
+		// (already_exists, build_in_progress, etc.) keeps consuming quota
+		// exactly as it did before — only the dry-run path changes here.
+		if !in.DryRun && !limiter.Allow() {
 			return nil, createPageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("create_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 
@@ -609,7 +613,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
 		}
-		if !limiter.Allow() {
+		// Allow() is skipped for dry-run (#588) but otherwise stays at its
+		// original position — before the missing/stale expected_revision
+		// checks further down, which is existing, tested behavior: a real
+		// (non-dry-run) update_page attempt that fails revision validation
+		// still consumes 1 token (TestUpdatePageRequiresExpectedRevisionForWrite/
+		// TestUpdatePageRejectsStaleExpectedRevision). Only the dry-run path
+		// changes here.
+		if !in.DryRun && !limiter.Allow() {
 			return nil, updatePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 
@@ -737,6 +748,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				RateLimitRemaining: rateLimitRemaining(limiter),
 			}), nil
 		}
+
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("update_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))

@@ -226,7 +226,13 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			}
 			return toolcontract.WithDataFields(toolcontract.WithRootFields(err, fields), fields)
 		}
-		if !limiter.Allow() {
+		// Allow() is skipped for dry-run (#588) but otherwise stays at its
+		// original position, so every non-dry-run failure path below
+		// (invalid content, already_exists, build_in_progress, etc.) keeps
+		// consuming quota exactly as it did before, and the (potentially
+		// expensive) base64 decode below still happens behind the limiter —
+		// only the dry-run path changes here.
+		if !in.DryRun && !limiter.Allow() {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("upload_page_asset", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 		data, err := decodeAndValidateAssetContent(in.ContentBase64, ext, wantMIME)
