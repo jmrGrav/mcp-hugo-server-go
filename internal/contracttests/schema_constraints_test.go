@@ -191,10 +191,51 @@ func TestContractCompactModeTrimsMetaOnReadTools(t *testing.T) {
 			if got := asString(meta["schema_version"]); got != toolcontract.ToolResultVersion {
 				t.Fatalf("%s compact meta.schema_version = %q, want %q", tc.tool, got, toolcontract.ToolResultVersion)
 			}
-			for _, forbidden := range []string{"generated_at", "release_version", "commit", "build_channel"} {
-				if _, ok := meta[forbidden]; ok {
-					t.Fatalf("%s compact meta unexpectedly contains %q: %v", tc.tool, forbidden, meta[forbidden])
+			// #567: three independent live audits flagged compact mode
+			// dropping release_version/commit/build_channel as confusing —
+			// an agent in compact mode couldn't tell which server build
+			// answered it. These are cheap, static per-process values, not
+			// per-request payload weight, so compact mode now only narrows
+			// data/row-level payload, never meta's release-identity fields.
+			// release_version is always non-empty (toolcontract.NewMeta).
+			// commit/build_channel use `omitempty` and are legitimately
+			// absent for an untagged dev/test build (same caveat as
+			// TestContractSearchPagesDefaultModeKeepsFullMeta below), so
+			// their presence isn't asserted directly here — instead, compare
+			// against the same call's standard-mode meta, which must be
+			// identical apart from generated_at (the one field compact mode
+			// still intentionally trims).
+			if got := asString(meta["release_version"]); got == "" {
+				t.Fatalf("%s compact meta.release_version = empty, want populated", tc.tool)
+			}
+			standardArgs := map[string]any{}
+			for k, v := range tc.args {
+				if k != "response_mode" {
+					standardArgs[k] = v
 				}
+			}
+			standardRes := callTool(t, tc.session, tc.tool, standardArgs)
+			if standardRes.IsError {
+				t.Fatalf("%s (standard mode) returned error: %s", tc.tool, marshalAny(t, standardRes.Content))
+			}
+			standardMeta, ok := decodeContent(t, standardRes)["meta"].(map[string]any)
+			if !ok {
+				t.Fatalf("%s standard-mode meta type = %T, want map[string]any", tc.tool, standardMeta)
+			}
+			delete(standardMeta, "generated_at")
+			if len(meta) != len(standardMeta) {
+				t.Fatalf("%s compact meta = %v, want same keys as standard meta minus generated_at = %v", tc.tool, meta, standardMeta)
+			}
+			for k, v := range standardMeta {
+				if meta[k] != v {
+					t.Fatalf("%s compact meta[%q] = %v, want %v (same as standard mode)", tc.tool, k, meta[k], v)
+				}
+			}
+			// meta.generated_at remains the one intentionally-trimmed field:
+			// the root-level generated_at compatibility field below already
+			// carries that value in compact mode.
+			if _, ok := meta["generated_at"]; ok {
+				t.Fatalf("%s compact meta unexpectedly contains \"generated_at\": %v", tc.tool, meta["generated_at"])
 			}
 			if got := asString(m["generated_at"]); got == "" {
 				t.Fatalf("%s root generated_at = empty, want preserved root timestamp", tc.tool)

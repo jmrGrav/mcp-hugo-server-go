@@ -1,5 +1,15 @@
 # Compact Response Mode Design (`#526`)
 
+> **Superseded in part by #567**: the `meta` trimming decision below (compact
+> keeps only `schema_version`) was reversed after three independent live
+> audits flagged an agent in compact mode being unable to tell which server
+> build answered it. As of #567, compact mode keeps
+> `schema_version`/`release_version`/`commit`/`build_channel` — every `meta`
+> field except `generated_at` — and only ever narrows `data`. The rest of
+> this document (the `response_mode` mechanism itself, `data` shaping) is
+> still current; only the "`meta` keeps only `schema_version`" rationale
+> below is historical.
+
 ## Decision
 
 Extend the existing `response_mode=compact` vocabulary uniformly across the
