@@ -32,6 +32,35 @@ type Index struct {
 	info              map[string]string
 	contentClassifier *ContentClassifier
 	blCache           backlinkCache
+	builtAt           time.Time
+	staleCache        staleCache
+}
+
+// staleCache memoizes StaleAgainstDisk's result for staleCheckInterval so a
+// burst of reader-tool calls (get_backlinks, get_related_content,
+// get_broken_links) doesn't each pay for a full disk walk — the staleness
+// signal is a backstop for out-of-band edits, not a real-time guarantee, so
+// a short cache window is an acceptable trade for read-path cost.
+type staleCache struct {
+	mu        sync.Mutex
+	checkedAt time.Time
+	stale     bool
+	newest    time.Time
+}
+
+// staleCheckInterval is a var, not a const, only so SetStaleCheckIntervalForTesting
+// can shrink it in tests that need to observe a staleness transition without
+// a real 30s sleep. Production code must never change it.
+var staleCheckInterval = 30 * time.Second
+
+// SetStaleCheckIntervalForTesting overrides the staleness-cache TTL for the
+// duration of a test and returns a func to restore the previous value.
+// Exists solely so external test packages (e.g. internal/tools/read) can
+// observe a staleness transition without sleeping for the real interval.
+func SetStaleCheckIntervalForTesting(d time.Duration) func() {
+	prev := staleCheckInterval
+	staleCheckInterval = d
+	return func() { staleCheckInterval = prev }
 }
 
 // Reload rebuilds the index from disk, atomically replacing all in-memory
@@ -48,8 +77,12 @@ func (idx *Index) Reload(cfg config.Config) error {
 	idx.categories = fresh.categories
 	idx.info = fresh.info
 	idx.contentClassifier = fresh.contentClassifier
+	idx.builtAt = fresh.builtAt
 	idx.mu.Unlock()
 	idx.blCache.invalidate()
+	idx.staleCache.mu.Lock()
+	idx.staleCache.checkedAt = time.Time{}
+	idx.staleCache.mu.Unlock()
 	return nil
 }
 
@@ -105,12 +138,109 @@ func (idx *Index) GetBacklinks(targetSlug string) []BacklinkEntry {
 	return m[norm]
 }
 
+// BuiltAt returns when this index's in-memory state was last populated
+// (NewIndex/Reload), independent of when individual pages were published.
+func (idx *Index) BuiltAt() time.Time {
+	if idx == nil {
+		return time.Time{}
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	return idx.builtAt
+}
+
+// StaleAgainstDisk reports whether any HTML file under cfg.SiteRoot has been
+// modified since this index was built, and if so, the most recent such
+// modification time. The index is only refreshed by Reload — called
+// automatically after build_site; create_page/delete_page patch entries
+// in-memory (UpsertPage/RemoveBySlug) but do not advance builtAt — so
+// content that reaches SiteRoot any other way (a manual `hugo` build
+// outside this server, a direct filesystem edit) can desync
+// backlinks/related-content/broken-links results from what's actually on
+// disk without any in-process signal. This is that signal. Result is
+// cached for staleCheckInterval so a burst of reader-tool calls doesn't
+// each pay for a full stat-only disk walk; the signal is a best-effort
+// backstop, not a real-time guarantee.
+func (idx *Index) StaleAgainstDisk(cfg config.Config) (stale bool, newest time.Time) {
+	if idx == nil {
+		return false, time.Time{}
+	}
+	idx.staleCache.mu.Lock()
+	defer idx.staleCache.mu.Unlock()
+	if time.Since(idx.staleCache.checkedAt) < staleCheckInterval {
+		return idx.staleCache.stale, idx.staleCache.newest
+	}
+	stale, newest = idx.computeStaleAgainstDisk(cfg)
+	idx.staleCache.checkedAt = time.Now()
+	idx.staleCache.stale = stale
+	idx.staleCache.newest = newest
+	return stale, newest
+}
+
+// computeStaleAgainstDisk mirrors NewIndex's own walk filters (hidden-path
+// rejection, symlink rejection, isHTMLFile) so it never flags a file the
+// index itself would have skipped — a false "stale" on an intentionally
+// excluded file would undermine trust in the whole signal.
+func (idx *Index) computeStaleAgainstDisk(cfg config.Config) (stale bool, newest time.Time) {
+	builtAt := idx.BuiltAt()
+	root := strings.TrimSpace(cfg.SiteRoot)
+	if root == "" || builtAt.IsZero() {
+		return false, time.Time{}
+	}
+	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if p == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+
+		if cfg.RejectHiddenPath && isHiddenPath(rel) {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !isHTMLFile(filepath.Base(rel)) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if info.ModTime().After(builtAt) {
+			stale = true
+			if info.ModTime().After(newest) {
+				newest = info.ModTime()
+			}
+		}
+		return nil
+	})
+	return stale, newest
+}
+
 func NewIndex(cfg config.Config) (*Index, error) {
+	builtAt := time.Now()
 	root := strings.TrimSpace(cfg.SiteRoot)
 	if root == "" {
 		return &Index{
-			bySlug: map[string]int{},
-			info:   map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": cfg.DefaultLanguage},
+			bySlug:  map[string]int{},
+			info:    map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": cfg.DefaultLanguage},
+			builtAt: builtAt,
 		}, nil
 	}
 
@@ -129,8 +259,9 @@ func NewIndex(cfg config.Config) (*Index, error) {
 	}
 
 	idx := &Index{
-		bySlug: map[string]int{},
-		info:   map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": defaultLang},
+		bySlug:  map[string]int{},
+		info:    map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": defaultLang},
+		builtAt: builtAt,
 	}
 
 	tagSet := map[string]struct{}{}

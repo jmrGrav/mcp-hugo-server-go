@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+- **`get_backlinks`/`get_related_content`/`get_broken_links` (in-memory fallback path) expose `data.index_staleness`** (#583): populated only when the in-memory site index is behind on-disk content — e.g. a manual `hugo` build or direct filesystem edit that bypassed `build_site`/`create_page`/`delete_page` (the only paths that refresh the index). Absence of the field means the index reflects current source. Detected via a cached, stat-only disk walk (30s TTL) to avoid re-walking the site on every read call.
+
 ## [v1.5.9] - 2026-07-20
 
 Follow-up from ChatGPT's and Claude.ai's independent live audits of v1.5.8 (both 9.2/10, 31/31 and 25/41 tools tested — no failures, refinement items only).

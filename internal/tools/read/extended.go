@@ -276,11 +276,12 @@ type brokenLinkDTO struct {
 }
 
 type brokenLinkData struct {
-	TotalPages  int             `json:"total_pages"`
-	BrokenLinks int             `json:"broken_links"`
-	Limit       int             `json:"limit"`
-	Offset      int             `json:"offset"`
-	Links       []brokenLinkDTO `json:"links"`
+	TotalPages  int                `json:"total_pages"`
+	BrokenLinks int                `json:"broken_links"`
+	Limit       int                `json:"limit"`
+	Offset      int                `json:"offset"`
+	Links       []brokenLinkDTO    `json:"links"`
+	IndexInfo   *indexStalenessDTO `json:"index_staleness,omitempty"`
 }
 
 type brokenLinkOutput struct {
@@ -298,10 +299,32 @@ type backlinkDTO struct {
 	URL   string `json:"url"`
 }
 
+// indexStalenessDTO is populated only when the in-memory site index is
+// behind on-disk content (#583) — e.g. a manual `hugo` build or direct
+// filesystem edit that bypassed build_site/create_page/delete_page, the
+// only paths that refresh the index. Omitted entirely when the index is
+// current — the field's presence is itself the "stale" signal, so it
+// carries no separate boolean, to keep the shape unambiguous and cheap on
+// the common (fresh) path.
+type indexStalenessDTO struct {
+	NewestEdit string `json:"newest_edit"`
+}
+
+// staleness checks idx against on-disk content and returns nil when
+// current, so callers can attach it via omitempty without an extra nil check.
+func staleness(idx *site.Index, cfg config.Config) *indexStalenessDTO {
+	stale, newest := idx.StaleAgainstDisk(cfg)
+	if !stale {
+		return nil
+	}
+	return &indexStalenessDTO{NewestEdit: newest.UTC().Format(time.RFC3339)}
+}
+
 type getBacklinksData struct {
-	Slug      string        `json:"slug"`
-	Count     int           `json:"count"`
-	Backlinks []backlinkDTO `json:"backlinks"`
+	Slug      string             `json:"slug"`
+	Count     int                `json:"count"`
+	Backlinks []backlinkDTO      `json:"backlinks"`
+	IndexInfo *indexStalenessDTO `json:"index_staleness,omitempty"`
 }
 
 type getBacklinksOutput struct {
@@ -558,7 +581,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), aliases, resolver), nil
 		})
 
-	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets. `index_staleness` (in-memory path only, not the db_path path) is present only when the index is behind on-disk content — its absence means results reflect current source (#583). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in brokenLinkInput) (*mcp.CallToolResult, brokenLinkOutput, error) {
 			if idx == nil {
 				return nil, brokenLinkOutput{}, fmt.Errorf("index not initialized")
@@ -600,10 +623,11 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Limit:       limit,
 				Offset:      offset,
 				Links:       sliceBrokenLinks(issues, offset, limit),
+				IndexInfo:   staleness(idx, cfg),
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
-	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). This is the same backlinks data get_related_content returns alongside related_pages/suggested_links/translations in one call — use this standalone version when you only need backlinks and want to avoid the cost of the other three facets. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). This is the same backlinks data get_related_content returns alongside related_pages/suggested_links/translations in one call — use this standalone version when you only need backlinks and want to avoid the cost of the other three facets. `index_staleness` is present only when the in-memory index is behind on-disk content (e.g. a manual Hugo build outside this server) — its absence means the index reflects current source; when present, treat the backlinks list as possibly outdated until the next build_site (#583). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
 			if idx == nil {
 				return nil, getBacklinksOutput{}, fmt.Errorf("index not initialized")
@@ -632,6 +656,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Slug:      targetSlug,
 				Count:     len(dtos),
 				Backlinks: dtos,
+				IndexInfo: staleness(idx, cfg),
 			}, time.Now().UTC())
 			return nil, env, nil
 		})
