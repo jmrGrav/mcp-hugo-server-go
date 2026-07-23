@@ -133,10 +133,25 @@ func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 	}
 }
 
+// compactMetaMap trims response_mode=compact's meta object down to only the
+// release-identity fields, which are static per-process values (not
+// per-request work) with no payload-size justification for trimming (#567).
+// Through v1.5.9, compact mode also dropped release_version/commit/
+// build_channel, keeping only schema_version — three independent live
+// audits flagged that as confusing (an agent in compact mode couldn't tell
+// which server build answered it), so as of this change compact only
+// narrows data/row-level payload, never meta's release-identity fields.
+// meta.generated_at is intentionally still dropped here: the root-level
+// generated_at compatibility field (see ShapeSuccessOutput) already carries
+// that value in compact mode. This is an explicit field whitelist, not a
+// "keep everything except generated_at" rule — a future new ResponseMeta
+// field silently disappears in compact mode unless it's added here too.
 func compactMetaMap(meta map[string]any) map[string]any {
-	schemaVersion := meta["schema_version"]
 	return map[string]any{
-		"schema_version": schemaVersion,
+		"schema_version":  meta["schema_version"],
+		"release_version": meta["release_version"],
+		"commit":          meta["commit"],
+		"build_channel":   meta["build_channel"],
 	}
 }
 

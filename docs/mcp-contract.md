@@ -315,23 +315,18 @@ and is now implemented for all anonymous/content.read tools.
 Not every tool supports every parameter — see [Section 6](#6-tool-inventory)
 for which parameters each tool accepts. `response_mode` is now uniformly
 available across the anonymous/content.read surface. In `compact` mode, the
-envelope-level behavior is shared everywhere: `meta` keeps only
-`schema_version`, while the root `generated_at` compatibility field remains
-present. Tool-specific data shaping remains opt-in and tool-defined:
+envelope-level behavior is shared everywhere: `meta` keeps
+`schema_version`/`release_version`/`commit`/`build_channel` — every field
+except `generated_at` — while the root `generated_at` compatibility field
+remains present. `compact` only ever narrows `data`/row-level payload; it
+never trims `meta`'s release-identity fields, since those are cheap, static
+per-process values with no payload-size cost to keep (#567 — reversing the
+narrower #526/#553 trim, after three independent live audits flagged an
+agent in `compact` mode being unable to tell which server build answered
+it). Tool-specific data shaping remains opt-in and tool-defined:
 `search_pages` still narrows each row further with `fields`, and
 `build_agent_context`/`get_page_for_edit`/`export_agent_context` keep their
 own body/section shaping controls.
-
-**Note for anyone comparing responses across calls in the same session**
-(including live audits): a `compact`-mode response's `meta` will look
-meaningfully different from every other tool's `meta` in the same
-session — missing `release_version`/`commit`/`build_channel`
-entirely — purely because `response_mode` was set to `compact` on that one
-call, not because of any inconsistency or regression. `meta.schema_version`
-being the only key present is the expected, by-design shape for `compact`
-mode specifically (#526); it is not evidence of a bug on its own. If a
-non-`compact` call is missing full `meta`, that would be a real bug worth
-reporting — but check `response_mode` on the actual request first (#553).
 
 ---
 
