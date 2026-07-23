@@ -36,16 +36,21 @@ const maxAssetBytes = 10 << 20
 // directory traversal via the filename itself).
 var assetFilenamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$`)
 
-// allowedAssetTypes intentionally excludes SVG: SVG can carry <script>,
-// event-handler attributes, and external entity references that a simple
-// allowlist or hand-rolled sanitizer cannot safely neutralize. Accepting SVG
-// uploads needs a real sanitization story (a follow-up), not a v1 shortcut.
+// allowedAssetTypes. SVG (#571) is gated behind validateSVGContent's strict
+// element/attribute allowlist, not just this extension check — see the
+// ext == ".svg" branch in decodeAndValidateAssetContent. Go's
+// http.DetectContentType has no SVG signature (it sniffs SVG bytes as
+// text/plain or text/xml, never "image/svg+xml"), so the generic
+// sniffed-vs-declared MIME check below doesn't apply to SVG; the structural
+// validator is the actual "is this really SVG, and is it safe" check for
+// that type.
 var allowedAssetTypes = map[string]string{
 	".png":  "image/png",
 	".jpg":  "image/jpeg",
 	".jpeg": "image/jpeg",
 	".gif":  "image/gif",
 	".webp": "image/webp",
+	".svg":  "image/svg+xml",
 }
 
 type uploadPageAssetInput struct {
@@ -93,15 +98,19 @@ func validateAssetFilename(name string) (clean, ext, wantMIME string, err error)
 	ext = strings.ToLower(filepath.Ext(clean))
 	wantMIME, ok := allowedAssetTypes[ext]
 	if !ok {
-		return "", "", "", fmt.Errorf("invalid_params: filename extension %q is not an allowed asset type (png, jpg, jpeg, gif, webp)", ext)
+		return "", "", "", fmt.Errorf("invalid_params: filename extension %q is not an allowed asset type (png, jpg, jpeg, gif, webp, svg)", ext)
 	}
 	return clean, ext, wantMIME, nil
 }
 
 // decodeAndValidateAssetContent decodes base64 asset content, enforces the
-// size cap on the decoded bytes, and sniffs the actual content to confirm it
-// matches the extension the caller declared. Callers must never trust a
-// caller-supplied content-type; only the sniffed bytes decide the MIME type.
+// size cap on the decoded bytes, and confirms it matches the extension the
+// caller declared. Callers must never trust a caller-supplied content-type;
+// for binary image types, only the sniffed bytes decide the MIME type. For
+// ext == ".svg" (#571), byte-sniffing doesn't apply — Go's
+// http.DetectContentType has no SVG signature — so validateSVGContent's
+// strict structural allowlist is the actual "is this really SVG, and is it
+// safe" check instead.
 func decodeAndValidateAssetContent(b64, ext, wantMIME string) ([]byte, error) {
 	if strings.TrimSpace(b64) == "" {
 		return nil, fmt.Errorf("invalid_params: content_base64 must not be empty")
@@ -119,6 +128,12 @@ func decodeAndValidateAssetContent(b64, ext, wantMIME string) ([]byte, error) {
 	}
 	if len(data) > maxAssetBytes {
 		return nil, fmt.Errorf("invalid_params: decoded asset content exceeds %d bytes", maxAssetBytes)
+	}
+	if ext == ".svg" {
+		if err := validateSVGContent(data); err != nil {
+			return nil, fmt.Errorf("invalid_params: %w", err)
+		}
+		return data, nil
 	}
 	sniffLen := len(data)
 	if sniffLen > 512 {
@@ -195,8 +210,9 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		Title: "Upload page asset",
 		Description: "Write a new file (image, etc.) into an existing Hugo page bundle directory, alongside its index.md. " +
 			"Only leaf page bundles (content/<slug>/index.md) have an asset directory; single-file pages (content/<slug>.md) fail with not_a_bundle. " +
-			"Allowed types: png, jpg, jpeg, gif, webp. SVG is not supported yet: safe SVG sanitization needs a real parser, not an allowlist, and is deferred to a follow-up. " +
-			"Content is provided as base64 in content_base64 (max 10MB decoded); the bytes are sniffed to confirm they actually match the declared extension, never trusting a caller-supplied content type. " +
+			"Allowed types: png, jpg, jpeg, gif, webp, svg. " +
+			"Content is provided as base64 in content_base64 (max 10MB decoded); for png/jpg/jpeg/gif/webp the bytes are sniffed to confirm they actually match the declared extension, never trusting a caller-supplied content type. " +
+			"svg uploads are validated by a strict structural parser instead (byte-sniffing can't distinguish SVG from arbitrary XML/text): only an allowlisted set of shape/text/gradient elements and attributes is accepted, event-handler attributes (onload, etc.), <script>, <foreignObject>, <style>, <image>, external href/xlink:href references (only a local \"#id\" fragment reference is allowed), and DOCTYPE/entity declarations are all rejected outright with invalid_svg — never silently stripped and written as a modified file. This is intentionally strict enough that a typical design-tool export (Figma/Illustrator/Inkscape <style> blocks, <metadata>, editor-namespace attributes) will likely fail invalid_svg; optimize/minify the SVG first if that happens. " +
 			"This tool never overwrites: fails with already_exists if filename is already taken in this bundle. " +
 			"If identical content already exists under a different filename in the same bundle, the response includes duplicate_of as an advisory only — the file is still written under the requested name. " +
 			"Callers may provide idempotency_key to safely replay the exact same upload after a timeout or uncertain delivery. " +
