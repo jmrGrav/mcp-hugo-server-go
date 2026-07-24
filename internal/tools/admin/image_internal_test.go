@@ -11,8 +11,8 @@ import (
 
 func TestDefs(t *testing.T) {
 	defs := Defs()
-	if len(defs) != 9 {
-		t.Fatalf("Defs() = %d, want 9", len(defs))
+	if len(defs) != 10 {
+		t.Fatalf("Defs() = %d, want 10", len(defs))
 	}
 	if defs[0].RequiredScope != "write" {
 		t.Fatalf("Defs() first scope = %q", defs[0].RequiredScope)

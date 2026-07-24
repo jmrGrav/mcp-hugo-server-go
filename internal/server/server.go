@@ -236,6 +236,44 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		},
 	)
 	admin.RegisterVerifyPublication(writeServer, idx, srcIdx, cfg)
+	admin.RegisterPublishChanges(writeServer, idx, srcIdx, cfg,
+		func() error {
+			if err := idx.Reload(cfg); err != nil {
+				return err
+			}
+			if srcIdx != nil {
+				srcIdx.ClearAllBuildPending()
+			}
+			return nil
+		},
+		func() error {
+			if siteDB != nil {
+				if err := siteDB.PostBuildSync(idx); err != nil {
+					slog.Warn("publish_changes: db reindex failed", "error", err)
+				}
+				if err := siteDB.SnapshotSiteHealth(); err != nil {
+					slog.Warn("publish_changes: db health snapshot failed", "error", err)
+				}
+			}
+			return nil
+		},
+		func() error {
+			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
+				slog.Warn("publish_changes: cloudflare purge failed", "error", err)
+			}
+			return nil
+		},
+		func() error {
+			urls := sitemapPageURLs(idx)
+			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
+				slog.Warn("publish_changes: indexnow submit failed", "error", err)
+			}
+			if err := googleindex.Submit(cfg.GoogleIndex, urls, googleindex.TypeUpdated); err != nil {
+				slog.Warn("publish_changes: google index submit failed", "error", err)
+			}
+			return nil
+		},
+	)
 	previews := previewstore.New()
 	previewHandler := previews.HTTPHandler()
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
