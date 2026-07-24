@@ -21,14 +21,14 @@ import (
 //	                            explain_structure, get_site_health, get_broken_links, get_backlinks,
 //	                            suggest_links, diff_page, inspect_rendered, validate_frontmatter,
 //	                            validate_site
-//	content.write:        8  — create_page, update_page, delete_page, upload_page_asset,
+//	content.write:        9  — create_page, update_page, delete_page, upload_page_asset,
 //	                            delete_page_asset, get_mutation_status, plan_content_change (no scope
-//	                            gate — see #450), apply_content_plan
+//	                            gate — see #450), apply_content_plan, rollback_change
 //	site.admin:          10  — build_site, preview_build, run_post_build_hooks,
 //	                            generate_hero_image, check_sri_versions, get_runtime_status,
 //	                            get_theme_status, verify_publication, create_preview,
 //	                            publish_changes
-const expectedToolCount = 46
+const expectedToolCount = 47
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())
