@@ -254,6 +254,60 @@ func TestUpdatePageNormalizesCategoryCasing(t *testing.T) {
 	}
 }
 
+// TestUpdatePageNormalizesCategoryCasingOnExplicitBilingualLang is a
+// regression test for #589 as reopened: two independent live audits against
+// production reported normalize_taxonomy_casing as a no-op, and the leading
+// hypothesis (from #604's documented lang-scoping caveat) was that both
+// audits likely omitted `lang` against real bilingual content, where
+// omitting `lang` resolves to the empty-string bucket and finds nothing to
+// match. TestUpdatePageNormalizesCategoryCasing above already proves the
+// matching logic works when everything is in the "" bucket (a
+// single-language/unresolved site); this test proves the same mechanism
+// also works correctly for real per-language content, matching within the
+// exact "fr" bucket when `lang` is passed explicitly — the scenario the
+// reopened issue asked to confirm before concluding whether this is a code
+// bug or purely a documentation gap.
+func TestUpdatePageNormalizesCategoryCasingOnExplicitBilingualLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	// A real bilingual site: every page specifies lang explicitly, unlike
+	// TestUpdatePageNormalizesCategoryCasing's "" (single-language) seeds.
+	writeSeedPage(t, contentRoot, "posts/canonical", "fr", nil, []string{"Infrastructure"})
+	writeSeedPage(t, contentRoot, "posts/canonical", "en", nil, []string{"Infrastructure"})
+	writeSeedPage(t, contentRoot, "posts/target", "fr", nil, nil)
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	expectedRevision := currentRevision(t, filepath.Join(contentRoot, "posts", "target", "index.fr.md"))
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":                      "posts/target",
+		"lang":                      "fr",
+		"categories":                []any{"infrastructure"},
+		"normalize_taxonomy_casing": true,
+		"expected_revision":         expectedRevision,
+	})
+	if res.IsError {
+		t.Fatalf("update_page failed: %s", marshalContent(t, res))
+	}
+	data := decodeWriteData(t, res)
+	normalized, ok := data["taxonomy_casing_normalized"].([]any)
+	if !ok || len(normalized) != 1 {
+		t.Fatalf("data.taxonomy_casing_normalized = %#v, want one entry (normalize_taxonomy_casing must not silently no-op against real bilingual content when lang is passed explicitly, #589)", data["taxonomy_casing_normalized"])
+	}
+	entry := normalized[0].(map[string]any)
+	if entry["type"] != "category" || entry["from"] != "infrastructure" || entry["to"] != "Infrastructure" {
+		t.Fatalf("taxonomy_casing_normalized[0] = %#v, want {type:category from:infrastructure to:Infrastructure}", entry)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(contentRoot, "posts", "target", "index.fr.md"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(raw), "- Infrastructure") || strings.Contains(string(raw), "- infrastructure") {
+		t.Fatalf("updated page did not adopt existing casing:\n%s", raw)
+	}
+}
+
 // TestUpdatePageDryRunPreviewsTaxonomyCasingNormalization confirms
 // normalize_taxonomy_casing resolution is also visible on a dry_run call
 // (the diff/preview path), not only on the real write.
