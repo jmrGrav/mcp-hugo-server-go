@@ -284,6 +284,18 @@ func registerRollbackChange(
 			slog.Error("rollback_change: round-trip guard failed on stored snapshot", "slug", in.Slug, "error", err)
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("validation_error: %w", err))
 		}
+		// Re-run the same blocked-shortcode policy create_page/update_page
+		// enforce on every direct write (#590). A snapshot is a verbatim
+		// copy of whatever content the page held *before* the write that
+		// produced it — for update_page in particular, that's the page's
+		// prior state, which may predate #590's denylist or have been
+		// written before it was extended to include a given shortcode name.
+		// Restoring that content should not be a way to reintroduce a body
+		// direct writes would now reject outright (#636 review finding).
+		if err := rejectDangerousShortcodes(snapshotContent, cfg.BlockedShortcodes); err != nil {
+			slog.Warn("rollback_change: snapshot content invokes a blocked shortcode", "slug", in.Slug, "error", err)
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: %w", err))
+		}
 
 		if in.DryRun {
 			diffLabel := in.Slug + "/" + filepath.Base(filePath)
