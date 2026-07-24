@@ -109,10 +109,19 @@ func decodeWriteData(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return data
 }
 
-func assertWriteSuccessCompatAlias(t *testing.T, root, data map[string]any, field string) {
+// assertRootOnlyField asserts field is a documented root-level-only
+// compatibility field (#466, #510, #522): present at the root, and NOT
+// duplicated under data. Prior to #520/#605, rate_limit_remaining was
+// present in both places with the same value — an undeclared duplication
+// that contradicted docs/mcp-contract.md's own "no other top-level payload
+// duplication" claim for these tools; this now guards against it recurring.
+func assertRootOnlyField(t *testing.T, root, data map[string]any, field string) {
 	t.Helper()
-	if got, want := root[field], data[field]; got != want {
-		t.Fatalf("%s root/data mismatch: root=%v data=%v", field, got, want)
+	if _, present := root[field]; !present {
+		t.Fatalf("%s missing from root", field)
+	}
+	if _, present := data[field]; present {
+		t.Fatalf("%s unexpectedly duplicated under data (root/data payload duplication, #520/#605)", field)
 	}
 }
 
@@ -195,7 +204,7 @@ func TestCreatePage(t *testing.T) {
 	}
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
+	assertRootOnlyField(t, out, dataEnvelope, "rate_limit_remaining")
 	assertWritePageState(t, dataEnvelope["state"], "present", "pending", "not_yet_available", "source_only")
 	if got := dataEnvelope["slug"]; got != "/my-post/" {
 		t.Fatalf("create_page data.slug = %v, want /my-post/ (canonical public form, #554)", got)
@@ -1440,7 +1449,7 @@ func TestUpdatePageSuccess(t *testing.T) {
 	}
 	decoded := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "rate_limit_remaining")
+	assertRootOnlyField(t, decoded, dataEnvelope, "rate_limit_remaining")
 	if got := dataEnvelope["source_key"]; got != "update-me" {
 		t.Fatalf("update_page data.source_key = %v, want update-me", got)
 	}
@@ -1627,7 +1636,7 @@ func TestDeletePageSuccess(t *testing.T) {
 	}
 	decoded := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, decoded, dataEnvelope, "rate_limit_remaining")
+	assertRootOnlyField(t, decoded, dataEnvelope, "rate_limit_remaining")
 	if got := dataEnvelope["source_key"]; got != "to-delete" {
 		t.Fatalf("delete_page data.source_key = %v, want to-delete", got)
 	}
@@ -2236,9 +2245,10 @@ func TestDeletePageDryRun(t *testing.T) {
 	// the budget, so on a fresh caller this must equal the configured burst
 	// (5, config.Default()'s DestructivePerMin), not the zero value a
 	// forgotten field assignment would produce.
-	remaining, ok := m["rate_limit_remaining"].(float64)
+	root := decodeWriteContent(t, res)
+	remaining, ok := root["rate_limit_remaining"].(float64)
 	if !ok || remaining != float64(config.Default().RateLimit.DestructivePerMin) {
-		t.Errorf("dry_run rate_limit_remaining = %#v, want %d (fresh, unconsumed budget)", m["rate_limit_remaining"], config.Default().RateLimit.DestructivePerMin)
+		t.Errorf("dry_run rate_limit_remaining = %#v, want %d (fresh, unconsumed budget)", root["rate_limit_remaining"], config.Default().RateLimit.DestructivePerMin)
 	}
 
 	// File must not have been removed.
@@ -2622,8 +2632,8 @@ func TestCreatePageDryRunDoesNotConsumeQuota(t *testing.T) {
 			raw, _ := json.Marshal(res.Content)
 			t.Fatalf("create_page dry_run %d returned error: %s", i, raw)
 		}
-		data := decodeWriteData(t, res)
-		rem, ok := data["rate_limit_remaining"].(float64)
+		root := decodeWriteContent(t, res)
+		rem, ok := root["rate_limit_remaining"].(float64)
 		if !ok {
 			t.Fatalf("create_page dry_run %d: rate_limit_remaining missing", i)
 		}
@@ -2670,8 +2680,8 @@ func TestUpdatePageDryRunDoesNotConsumeQuota(t *testing.T) {
 			raw, _ := json.Marshal(res.Content)
 			t.Fatalf("update_page dry_run %d returned error: %s", i, raw)
 		}
-		data := decodeWriteData(t, res)
-		rem, ok := data["rate_limit_remaining"].(float64)
+		root := decodeWriteContent(t, res)
+		rem, ok := root["rate_limit_remaining"].(float64)
 		if !ok {
 			t.Fatalf("update_page dry_run %d: rate_limit_remaining missing", i)
 		}

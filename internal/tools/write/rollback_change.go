@@ -126,15 +126,17 @@ type rollbackChangeInput struct {
 }
 
 type rollbackChangeData struct {
-	Status             string               `json:"status,omitempty"`
-	Slug               string               `json:"slug,omitempty"`
-	DryRun             bool                 `json:"dry_run,omitempty"`
-	Diff               string               `json:"diff,omitempty"`
-	BeforeRevision     string               `json:"before_revision,omitempty"`
-	AfterRevision      string               `json:"after_revision,omitempty"`
-	Warning            string               `json:"warning,omitempty"`
-	State              *site.LifecycleState `json:"state,omitempty"`
-	RateLimitRemaining int                  `json:"rate_limit_remaining"`
+	Status         string               `json:"status,omitempty"`
+	Slug           string               `json:"slug,omitempty"`
+	DryRun         bool                 `json:"dry_run,omitempty"`
+	Diff           string               `json:"diff,omitempty"`
+	BeforeRevision string               `json:"before_revision,omitempty"`
+	AfterRevision  string               `json:"after_revision,omitempty"`
+	Warning        string               `json:"warning,omitempty"`
+	State          *site.LifecycleState `json:"state,omitempty"`
+	// RateLimitRemaining — see the comment on createPageData's field of the
+	// same name (#520, #605).
+	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
 }
 
 type rollbackChangeOutput struct {
@@ -143,10 +145,12 @@ type rollbackChangeOutput struct {
 	RateLimitRemaining int                          `json:"rate_limit_remaining"`
 }
 
-func newRollbackChangeOutput(data rollbackChangeData) rollbackChangeOutput {
+// newRollbackChangeOutput — see the comment on newCreatePageOutput (#520,
+// #605): rateLimitRemaining is an explicit parameter, not read off data.
+func newRollbackChangeOutput(data rollbackChangeData, rateLimitRemaining int) rollbackChangeOutput {
 	return rollbackChangeOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		RateLimitRemaining: data.RateLimitRemaining,
+		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
@@ -301,13 +305,12 @@ func registerRollbackChange(
 			diffLabel := in.Slug + "/" + filepath.Base(filePath)
 			diff := simpleDiff(diffLabel, string(raw), snapshotContent)
 			return nil, newRollbackChangeOutput(rollbackChangeData{
-				Status:             "ok",
-				Slug:               canonicalPublicSlug(in.Slug),
-				DryRun:             true,
-				Diff:               diff,
-				BeforeRevision:     currentRevision,
-				RateLimitRemaining: rateLimitRemaining(limiter),
-			}), nil
+				Status:         "ok",
+				Slug:           canonicalPublicSlug(in.Slug),
+				DryRun:         true,
+				Diff:           diff,
+				BeforeRevision: currentRevision,
+			}, rateLimitRemaining(limiter)), nil
 		}
 
 		if err := pg.RevalidateForWrite(filePath); err != nil {
@@ -380,14 +383,13 @@ func registerRollbackChange(
 
 		state := updatePageState(siteIdx != nil, hadPublic)
 		out := newRollbackChangeOutput(rollbackChangeData{
-			Status:             status,
-			Slug:               canonicalPublicSlug(in.Slug),
-			BeforeRevision:     currentRevision,
-			AfterRevision:      contentmodel.SourceRevisionBytes([]byte(snapshotContent)),
-			Warning:            appendLastBuildWarning(warning),
-			State:              &state,
-			RateLimitRemaining: rateLimitRemaining(limiter),
-		})
+			Status:         status,
+			Slug:           canonicalPublicSlug(in.Slug),
+			BeforeRevision: currentRevision,
+			AfterRevision:  contentmodel.SourceRevisionBytes([]byte(snapshotContent)),
+			Warning:        appendLastBuildWarning(warning),
+			State:          &state,
+		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember("rollback_change", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("rollback_change: could not persist idempotency result", "slug", in.Slug, "error", err)

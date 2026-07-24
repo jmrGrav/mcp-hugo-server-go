@@ -79,7 +79,14 @@ type createPageData struct {
 	// the identical normalize_taxonomy_casing contract.
 	TaxonomyCasingNormalized []taxonomyCasingChangeDTO  `json:"taxonomy_casing_normalized,omitempty"`
 	TaxonomyCasingAmbiguous  []taxonomyCasingSkippedDTO `json:"taxonomy_casing_ambiguous,omitempty"`
-	RateLimitRemaining       int                        `json:"rate_limit_remaining"`
+	// RateLimitRemaining is deliberately never set on a success response
+	// (#520, #605) — see the comment on newCreatePageOutput. omitempty (not
+	// present in prior success responses' JSON either, since it was always
+	// explicitly set) keeps the field itself in the schema so the error path
+	// below, which populates it via toolcontract.WithDataFields as a
+	// documented root+data duplication (#466/#510/#522), remains valid
+	// against the same shared OutputSchema.
+	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
 }
 
 type updatePageInput struct {
@@ -128,7 +135,9 @@ type updatePageData struct {
 	// normalize_taxonomy_casing never guesses which of several existing
 	// spellings is correct.
 	TaxonomyCasingAmbiguous []taxonomyCasingSkippedDTO `json:"taxonomy_casing_ambiguous,omitempty"`
-	RateLimitRemaining      int                        `json:"rate_limit_remaining"`
+	// RateLimitRemaining — see the comment on createPageData's field of the
+	// same name (#520, #605).
+	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
 }
 
 type deletePageInput struct {
@@ -164,7 +173,9 @@ type deletePageData struct {
 	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
 	Warning            string                   `json:"warning,omitempty"`
 	State              *site.LifecycleState     `json:"state,omitempty"`
-	RateLimitRemaining int                      `json:"rate_limit_remaining"`
+	// RateLimitRemaining — see the comment on createPageData's field of the
+	// same name (#520, #605).
+	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
 }
 
 // strPtr distinguishes "resolved to the empty string" (e.g. the default
@@ -178,24 +189,29 @@ func writeSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
-func newCreatePageOutput(data createPageData) createPageOutput {
+// newCreatePageOutput/newUpdatePageOutput/newDeletePageOutput take
+// rateLimitRemaining as an explicit parameter rather than reading it off
+// data (#520, #605): data itself never carries this field — it is
+// documented as root-only (docs/mcp-contract.md) — so there is nothing to
+// mirror from, and the two copies previously silently duplicated the value.
+func newCreatePageOutput(data createPageData, rateLimitRemaining int) createPageOutput {
 	return createPageOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		RateLimitRemaining: data.RateLimitRemaining,
+		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
-func newUpdatePageOutput(data updatePageData) updatePageOutput {
+func newUpdatePageOutput(data updatePageData, rateLimitRemaining int) updatePageOutput {
 	return updatePageOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		RateLimitRemaining: data.RateLimitRemaining,
+		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
-func newDeletePageOutput(data deletePageData) deletePageOutput {
+func newDeletePageOutput(data deletePageData, rateLimitRemaining int) deletePageOutput {
 	return deletePageOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		RateLimitRemaining: data.RateLimitRemaining,
+		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
@@ -477,8 +493,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Content:                  content,
 				TaxonomyCasingNormalized: taxonomyNormalized,
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
-				RateLimitRemaining:       rateLimitRemaining(limiter),
-			}), nil
+			}, rateLimitRemaining(limiter)), nil
 		}
 
 		const lockWait = 10 * time.Second
@@ -587,8 +602,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			State:                    &state,
 			TaxonomyCasingNormalized: taxonomyNormalized,
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
-			RateLimitRemaining:       rateLimitRemaining(limiter),
-		})
+		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember("create_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("create_page: could not persist idempotency result", "slug", in.Slug, "error", err)
@@ -809,8 +823,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Diff:                     diff,
 				TaxonomyCasingNormalized: taxonomyNormalized,
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
-				RateLimitRemaining:       rateLimitRemaining(limiter),
-			}), nil
+			}, rateLimitRemaining(limiter)), nil
 		}
 
 		if err := pg.RevalidateForWrite(filePath); err != nil {
@@ -892,8 +905,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			State:                    &state,
 			TaxonomyCasingNormalized: taxonomyNormalized,
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
-			RateLimitRemaining:       rateLimitRemaining(limiter),
-		})
+		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember("update_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("update_page: could not persist idempotency result", "slug", in.Slug, "error", err)
@@ -973,8 +985,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				DryRun:             true,
 				Content:            content,
 				Backlinks:          &bls,
-				RateLimitRemaining: rateLimitRemaining(limiter),
-			}), nil
+			}, rateLimitRemaining(limiter)), nil
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
@@ -1138,8 +1149,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
 			Warning:            deleteWarning,
 			State:              &state,
-			RateLimitRemaining: rateLimitRemaining(limiter),
-		})
+		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember("delete_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("delete_page: could not persist idempotency result", "slug", in.Slug, "error", err)

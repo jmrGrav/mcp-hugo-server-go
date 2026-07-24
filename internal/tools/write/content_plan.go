@@ -211,16 +211,18 @@ type applyContentPlanInput struct {
 }
 
 type applyContentPlanData struct {
-	Status             string               `json:"status,omitempty"`
-	PlanID             string               `json:"plan_id,omitempty"`
-	Slug               string               `json:"slug,omitempty"`
-	DryRun             bool                 `json:"dry_run,omitempty"`
-	BeforeRevision     string               `json:"before_revision,omitempty"`
-	AfterRevision      string               `json:"after_revision,omitempty"`
-	Validation         string               `json:"validation,omitempty"`
-	Warning            string               `json:"warning,omitempty"`
-	State              *site.LifecycleState `json:"state,omitempty"`
-	RateLimitRemaining int                  `json:"rate_limit_remaining"`
+	Status         string               `json:"status,omitempty"`
+	PlanID         string               `json:"plan_id,omitempty"`
+	Slug           string               `json:"slug,omitempty"`
+	DryRun         bool                 `json:"dry_run,omitempty"`
+	BeforeRevision string               `json:"before_revision,omitempty"`
+	AfterRevision  string               `json:"after_revision,omitempty"`
+	Validation     string               `json:"validation,omitempty"`
+	Warning        string               `json:"warning,omitempty"`
+	State          *site.LifecycleState `json:"state,omitempty"`
+	// RateLimitRemaining — see the comment on createPageData's field of the
+	// same name (#520, #605).
+	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
 }
 
 type applyContentPlanOutput struct {
@@ -229,10 +231,12 @@ type applyContentPlanOutput struct {
 	RateLimitRemaining int                          `json:"rate_limit_remaining"`
 }
 
-func newApplyContentPlanOutput(data applyContentPlanData) applyContentPlanOutput {
+// newApplyContentPlanOutput — see the comment on newCreatePageOutput (#520,
+// #605): rateLimitRemaining is an explicit parameter, not read off data.
+func newApplyContentPlanOutput(data applyContentPlanData, rateLimitRemaining int) applyContentPlanOutput {
 	return applyContentPlanOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		RateLimitRemaining: data.RateLimitRemaining,
+		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
@@ -706,15 +710,14 @@ func registerContentPlanTools(
 			}
 			state := updatePageState(siteIdx != nil, hadPublic)
 			return nil, newApplyContentPlanOutput(applyContentPlanData{
-				Status:             "ok",
-				PlanID:             in.PlanID,
-				Slug:               canonicalPublicSlug(entry.Slug),
-				DryRun:             true,
-				BeforeRevision:     entry.Revision,
-				Validation:         "passed",
-				State:              &state,
-				RateLimitRemaining: rateLimitRemaining(limiter),
-			}), nil
+				Status:         "ok",
+				PlanID:         in.PlanID,
+				Slug:           canonicalPublicSlug(entry.Slug),
+				DryRun:         true,
+				BeforeRevision: entry.Revision,
+				Validation:     "passed",
+				State:          &state,
+			}, rateLimitRemaining(limiter)), nil
 		}
 
 		if err := pg.RevalidateForWrite(entry.FilePath); err != nil {
@@ -790,16 +793,15 @@ func registerContentPlanTools(
 
 		state := updatePageState(siteIdx != nil, hadPublic)
 		out := newApplyContentPlanOutput(applyContentPlanData{
-			Status:             status,
-			PlanID:             in.PlanID,
-			Slug:               canonicalPublicSlug(entry.Slug),
-			BeforeRevision:     entry.Revision,
-			AfterRevision:      contentmodel.SourceRevisionBytes([]byte(entry.Content)),
-			Validation:         "passed",
-			Warning:            appendLastBuildWarning(warning),
-			State:              &state,
-			RateLimitRemaining: rateLimitRemaining(limiter),
-		})
+			Status:         status,
+			PlanID:         in.PlanID,
+			Slug:           canonicalPublicSlug(entry.Slug),
+			BeforeRevision: entry.Revision,
+			AfterRevision:  contentmodel.SourceRevisionBytes([]byte(entry.Content)),
+			Validation:     "passed",
+			Warning:        appendLastBuildWarning(warning),
+			State:          &state,
+		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember("apply_content_plan", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("apply_content_plan: could not persist idempotency result", "plan_id", in.PlanID, "error", err)

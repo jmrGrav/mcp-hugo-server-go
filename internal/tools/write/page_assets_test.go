@@ -45,7 +45,7 @@ func TestUploadPageAssetSuccess(t *testing.T) {
 	}
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
-	assertWriteSuccessCompatAlias(t, out, dataEnvelope, "rate_limit_remaining")
+	assertRootOnlyField(t, out, dataEnvelope, "rate_limit_remaining")
 	if dataEnvelope["source_key"] != "posts/article" {
 		t.Fatalf("upload_page_asset data.source_key = %v, want posts/article", dataEnvelope["source_key"])
 	}
@@ -280,8 +280,8 @@ func TestUploadPageAssetDryRunDoesNotConsumeQuota(t *testing.T) {
 			raw, _ := json.Marshal(res.Content)
 			t.Fatalf("upload_page_asset dry_run %d returned error: %s", i, raw)
 		}
-		data := decodeWriteData(t, res)
-		rem, ok := data["rate_limit_remaining"].(float64)
+		root := decodeWriteContent(t, res)
+		rem, ok := root["rate_limit_remaining"].(float64)
 		if !ok {
 			t.Fatalf("upload_page_asset dry_run %d: rate_limit_remaining missing", i)
 		}
@@ -668,8 +668,8 @@ func TestDeletePageAssetDryRunDoesNotConsumeDestructiveQuota(t *testing.T) {
 			raw, _ := json.Marshal(res.Content)
 			t.Fatalf("delete_page_asset dry_run %d returned error: %s", i, raw)
 		}
-		data := decodeWriteData(t, res)
-		rem, ok := data["rate_limit_remaining"].(float64)
+		root := decodeWriteContent(t, res)
+		rem, ok := root["rate_limit_remaining"].(float64)
 		if !ok {
 			t.Fatalf("delete_page_asset dry_run %d: rate_limit_remaining missing", i)
 		}
