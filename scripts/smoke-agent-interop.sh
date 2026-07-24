@@ -158,6 +158,15 @@ mcp_tool_call() {
     body="$(curl "${curl_phase2[@]}" --data "$req")"
     status="200"
   fi
+  # 401 with no bearer is valid when OAuth is enabled — the server correctly
+  # challenges an unauthenticated call, mirroring probe_tools_list's existing
+  # tolerance for the same case (#601). Return 2 (distinct from the generic
+  # failure return 1) so callers can skip their own downstream assertion
+  # instead of double-reporting this as a content/shape failure.
+  if [[ "$status" == "401" && -z "$bearer" ]]; then
+    pass "$label tools/call $tool_name requires auth (HTTP 401)"
+    return 2
+  fi
   if [[ "$status" != "200" ]]; then
     fail "$label tools/call $tool_name: HTTP $status"
     return 1
@@ -329,19 +338,38 @@ if [[ -n "$read_count" && -n "$admin_count" ]]; then
   pass "admin tools/list exposes more tools than read"
 fi
 
-# tools/call smoke — anonymous tools (no auth needed)
-site_info="$(mcp_tool_call "anon" "get_site_information" "{}")"
-if [[ -z "$(jq -r '.content[0].text // empty' <<<"$site_info" 2>/dev/null)" ]]; then
-  fail "get_site_information: empty or missing content"
+# tools/call smoke — anonymous tools (no auth needed on a zero-auth
+# deployment; a 401 is tolerated as a pass on a deployment with OAuth fully
+# enabled, matching probe_tools_list's existing tolerance — see mcp_tool_call).
+# The assignment is the condition of an `if` deliberately: under `set -e`,
+# `x="$(f)"` as a bare statement aborts the script the moment f returns
+# non-zero (even 2, our "already handled, skip" signal) — testing it as an
+# if-condition is the standard way to capture both output and exit status
+# without errexit firing.
+if site_info="$(mcp_tool_call "anon" "get_site_information" "{}")"; then
+  site_info_status=0
 else
-  pass "get_site_information: content present"
+  site_info_status=$?
+fi
+if [[ $site_info_status -ne 2 ]]; then
+  if [[ -z "$(jq -r '.content[0].text // empty' <<<"$site_info" 2>/dev/null)" ]]; then
+    fail "get_site_information: empty or missing content"
+  else
+    pass "get_site_information: content present"
+  fi
 fi
 
-recent="$(mcp_tool_call "anon" "get_recent_posts" '{"limit":3}')"
-if ! jq -e '.content[0].text' <<<"$recent" >/dev/null 2>&1; then
-  fail "get_recent_posts: empty or missing content"
+if recent="$(mcp_tool_call "anon" "get_recent_posts" '{"limit":3}')"; then
+  recent_status=0
 else
-  pass "get_recent_posts: content present"
+  recent_status=$?
+fi
+if [[ $recent_status -ne 2 ]]; then
+  if ! jq -e '.content[0].text' <<<"$recent" >/dev/null 2>&1; then
+    fail "get_recent_posts: empty or missing content"
+  else
+    pass "get_recent_posts: content present"
+  fi
 fi
 
 if [[ -n "${READ_BEARER:-}" ]]; then
