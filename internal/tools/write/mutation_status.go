@@ -60,6 +60,14 @@ func newGetMutationStatusOutput(data getMutationStatusData) getMutationStatusOut
 // Deliberately requires write scope: it exposes the same success payload a
 // write-scoped caller already received once, at the same trust level.
 func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
+	// The retention window is a server-configured deployment knob
+	// (config.Config.IdempotencyTTLSeconds, #616), not fixed at 15 minutes
+	// anymore — describe the actual configured value so this description
+	// never goes stale relative to the running server's config.
+	ttlDesc := "15 minutes"
+	if idem != nil && idem.ttl > 0 {
+		ttlDesc = formatTTLDescription(idem.ttl)
+	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "get_mutation_status",
 		Title: "Get mutation status",
@@ -69,7 +77,7 @@ func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
 			"`result` is its entire original response envelope (success/data/errors/warnings/meta, not just data), byte-identical " +
 			"to what a same-key/same-payload retry of the mutation tool itself would replay. `status: \"unknown\"` means there is no confirmed success on record for this tool+key " +
 			"right now — this does NOT mean the call failed: it equally covers still-in-flight, genuinely failed, expired " +
-			"(entries are retained 15 minutes), or never attempted with this key. Only successful calls are ever recorded here " +
+			"(entries are retained " + ttlDesc + " on this server — a deployment-level setting, shared with the underlying idempotency cache), or never attempted with this key. Only successful calls are ever recorded here " +
 			"(failures are safe to simply retry). When in doubt, retrying the original mutation call with the same " +
 			"idempotency_key and payload is always safe regardless of what this tool reports — it will either replay the " +
 			"already-completed result or execute for the first time. Requires content.write.",

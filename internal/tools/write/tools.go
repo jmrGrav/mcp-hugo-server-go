@@ -364,7 +364,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	// silently consume another's headroom.
 	var mutationMu sync.Mutex
 	mutationLimiters := make(map[string]*rate.Limiter)
-	idem := newIdempotencyStore(15*time.Minute, 256)
+	idem := newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256)
 	plans := newPlanStore(planTTL, planMaxEntries)
 	snapshots := newSnapshotStore(snapshotTTL, snapshotMaxEntries)
 	registerContentPlanTools(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, plans, snapshots)
