@@ -11,6 +11,9 @@ All notable changes to this project are documented here.
 ### Fixed
 - **`scripts/smoke-agent-interop.sh`'s anon `tools/call` checks now tolerate a 401 when OAuth is enabled** (#601): `probe_tools_list` already treated a 401 on an unauthenticated `tools/list` call as a pass (the server correctly challenging, not a regression) on a fully-OAuth-enabled deployment with no true zero-auth anonymous tier; the `tools/call` checks further down (`get_site_information`, `get_recent_posts`) had no equivalent tolerance and would always FAIL on such a deployment, independent of any real regression. `mcp_tool_call` now returns a distinct exit code (2) for this tolerated case so callers can skip their own downstream content assertion instead of double-reporting it as a shape/content failure.
 
+### Security
+- **`upload_page_asset`'s SVG allowlist now rejects external `url(...)` references in `fill`/`stroke`/`clip-path`/`mask`** (#626): the structural allowlist parser added for SVG uploads (#571) already restricted `href`/`xlink:href` to a local fragment reference (`"#id"`), but `fill`/`stroke`/`clip-path`/`mask` — all of which can legally carry a CSS `url(...)` paint reference — were allowlisted with no value check, so an uploaded SVG with e.g. `fill="url(http://attacker.example/x)"` passed validation unmodified and would cause the rendering browser to fetch an attacker-controlled or internal resource whenever the asset was displayed. Every `url(...)` occurrence inside these four attributes is now individually validated (not just the first/last, which a naive trim-based check would miss on a value like `url(#a) url(http://evil)`) and must target a local fragment. Independently verified and fixed following a strix-security[bot] report on PR #600.
+
 ## [v1.6.0] - 2026-07-24
 
 ### Added
