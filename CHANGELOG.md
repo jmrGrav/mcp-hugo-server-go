@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Added
+- **New tools `plan_content_change`/`apply_content_plan`** (#438, design anchor #338, `docs/transactional-edit-design.md`): a server-held, TTL'd (5 min), single-use preview/apply split for editing an existing page. `plan_content_change` takes a small, deliberately non-general operation vocabulary (`update_body`, `set_title`, `add_tag`/`remove_tag`, `add_category`/`remove_category` — computed as a delta against the page's current tags/categories rather than a full-list replacement, `set_draft`, `set_field` with `field: "description"` only), never writes, and returns a `plan_id` plus the exact diff applying it would produce. `apply_content_plan` takes only `plan_id` and writes exactly what was previewed — no body/title/tags resent, nothing re-derived from fresh input. Fails `plan_not_found` if the plan is unknown, already applied, or expired; fails `revision_conflict` if the page changed since the plan was created. `plan_content_change` requires no scope (planning never writes, #450); `apply_content_plan` requires `write`. `rollback_change`/`publish_changes` (#340) are a separate, later layer — `rollback_change` in particular remains unbuilt: this deployment has no controlled git-commit capability, and a server-side content snapshot would violate #379's invariant that only a real commit is a valid rollback target, never "the state before the last apply."
+
 ## [v1.6.0] - 2026-07-24
 
 ### Added

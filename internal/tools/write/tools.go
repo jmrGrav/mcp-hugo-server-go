@@ -364,6 +364,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	var mutationMu sync.Mutex
 	mutationLimiters := make(map[string]*rate.Limiter)
 	idem := newIdempotencyStore(15*time.Minute, 256)
+	plans := newPlanStore(planTTL, planMaxEntries)
+	registerContentPlanTools(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, plans)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
@@ -1396,6 +1398,8 @@ func Defs() []tools.ToolDef {
 		{Name: "upload_page_asset", RequiredScope: "write"},
 		{Name: "delete_page_asset", RequiredScope: "write"},
 		{Name: "get_mutation_status", RequiredScope: "write"},
+		{Name: "plan_content_change", RequiredScope: ""},
+		{Name: "apply_content_plan", RequiredScope: "write"},
 	}
 }
 
