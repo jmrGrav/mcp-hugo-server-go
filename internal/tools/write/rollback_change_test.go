@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 )
 
 // TestRollbackChangeRestoresApplyContentPlanSnapshot is a regression test
@@ -350,5 +352,79 @@ func TestRollbackChangeRestoresUpdatePageSnapshot(t *testing.T) {
 	after := readFileString(t, contentRoot, "posts/first/index.md")
 	if after != before {
 		t.Fatalf("rollback_change did not restore pre-update content:\nbefore=%q\nafter=%q", before, after)
+	}
+}
+
+// TestRollbackChangeRejectsSnapshotWithBlockedShortcode is a regression
+// test for a strix-security finding on PR #636: extending snapshot capture
+// to update_page's primary write path expanded rollback_change's reach to
+// legacy content that predates (or otherwise bypassed) #590's blocked-
+// shortcode denylist. A snapshot is a verbatim copy of whatever content the
+// page held before the write that produced it — create_page/update_page
+// reject a body invoking a blocked shortcode outright, but restoring a
+// snapshot of already-existing content must not be a side door around that
+// same policy.
+func TestRollbackChangeRejectsSnapshotWithBlockedShortcode(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	createRes := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/legacy",
+		"title":      "Legacy Post",
+		"body":       "Clean original body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if createRes.IsError {
+		t.Fatalf("create_page failed: %s", marshalContent(t, createRes))
+	}
+
+	// Simulate legacy content that already contains a shortcode this
+	// server would now reject on a direct write — e.g. written before
+	// #590's denylist existed, or via a path outside this server's own
+	// validation. create_page/update_page can't produce this directly
+	// (that's the whole point of the check being tested), so it's written
+	// straight to disk. The revision is recomputed from the mutated bytes
+	// so the following update_page's expected_revision check sees the
+	// real on-disk state, not the pre-mutation revision create_page
+	// returned.
+	pagePath := filepath.Join(contentRoot, "posts/legacy/index.md")
+	legacyRaw := readFileString(t, contentRoot, "posts/legacy/index.md")
+	legacyRaw = strings.Replace(legacyRaw, "Clean original body.", "Clean original body.\n\n{{< script >}}alert(1){{< /script >}}", 1)
+	if err := os.WriteFile(pagePath, []byte(legacyRaw), 0o644); err != nil {
+		t.Fatalf("failed to write legacy content directly: %v", err)
+	}
+	beforeUpdateRevision := contentmodel.SourceRevisionBytes([]byte(legacyRaw))
+
+	updateRes := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/legacy",
+		"body":              "New clean body.",
+		"expected_revision": beforeUpdateRevision,
+	})
+	if updateRes.IsError {
+		t.Fatalf("update_page failed: %s", marshalContent(t, updateRes))
+	}
+	afterUpdateRevision := decodeWriteData(t, updateRes)["new_revision"].(string)
+
+	// beforeUpdateRevision now points at a snapshot containing the blocked
+	// shortcode. Restoring it must be rejected, not silently written.
+	rollbackRes := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/legacy",
+		"to_revision":       beforeUpdateRevision,
+		"expected_revision": afterUpdateRevision,
+	})
+	if !rollbackRes.IsError {
+		t.Fatal("rollback_change restoring a snapshot with a blocked shortcode should fail")
+	}
+	raw := marshalContent(t, rollbackRes)
+	if !strings.Contains(raw, "blocked shortcode") {
+		t.Fatalf("rollback_change error = %s, want a blocked-shortcode rejection", raw)
+	}
+
+	// The rejected rollback must never have touched disk.
+	stillNew := readFileString(t, contentRoot, "posts/legacy/index.md")
+	if !strings.Contains(stillNew, "New clean body.") {
+		t.Fatalf("rejected rollback_change modified the file on disk: %q", stillNew)
 	}
 }
