@@ -28,6 +28,15 @@ var validAccent = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 // maxImageBytes caps the response body from the image generation API (10 MiB).
 const maxImageBytes = 10 << 20
 
+// HeroImageSuffix is the filename suffix generate_hero_image appends to a
+// slug to produce {HugoRoot}/static/images/{slug}HeroImageSuffix. Exported so
+// delete_page (internal/tools/write) can rederive the exact same path to
+// clean up an orphaned hero image on delete (#606) without duplicating the
+// literal — a single source of truth means a future rename here can't
+// silently desync the cleanup logic from the write path that produced the
+// file in the first place.
+const HeroImageSuffix = "-featured.jpg"
+
 type generateFeaturedImageInput struct {
 	Slug     string   `json:"slug"`
 	Title    string   `json:"title,omitempty"`
@@ -192,7 +201,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 		}
 		// Validate BEFORE MkdirAll so we don't follow a symlink before detecting it.
-		relPath := filepath.Join("static", "images", in.Slug+"-featured.jpg")
+		relPath := filepath.Join("static", "images", in.Slug+HeroImageSuffix)
 		if _, err := outerPg.SafeJoin(relPath); err != nil {
 			slog.Warn("generate_hero_image: path validation failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
@@ -200,7 +209,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		// Create images directory and narrow-scoped guard for the actual write.
 		imagesRoot := filepath.Join(cfg.HugoRoot, "static", "images")
 		if err := os.MkdirAll(imagesRoot, 0o755); err != nil {
-			errPath := filepath.Join(imagesRoot, in.Slug+"-featured.jpg")
+			errPath := filepath.Join(imagesRoot, in.Slug+HeroImageSuffix)
 			slog.Error("generate_hero_image: could not create images directory", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, imageWriteError(errPath)
 		}
@@ -209,7 +218,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			slog.Error("generate_hero_image: could not initialize images guard", "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 		}
-		destPath, err := imagesGuard.SafeJoin(in.Slug + "-featured.jpg")
+		destPath, err := imagesGuard.SafeJoin(in.Slug + HeroImageSuffix)
 		if err != nil {
 			slog.Warn("generate_hero_image: scoped path validation failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
@@ -245,20 +254,20 @@ func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedI
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 	}
 	// Validate BEFORE MkdirAll so we don't follow a symlink before detecting it.
-	relPath := filepath.Join("static", "images", in.Slug+"-featured.jpg")
+	relPath := filepath.Join("static", "images", in.Slug+HeroImageSuffix)
 	if _, err := outerPg.SafeJoin(relPath); err != nil {
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 	}
 	// Create images directory and narrow-scoped guard for the actual write.
 	imagesRoot := filepath.Join(cfg.HugoRoot, "static", "images")
 	if err := os.MkdirAll(imagesRoot, 0o755); err != nil {
-		return nil, generateFeaturedImageOutput{}, imageWriteError(filepath.Join(imagesRoot, in.Slug+"-featured.jpg"))
+		return nil, generateFeaturedImageOutput{}, imageWriteError(filepath.Join(imagesRoot, in.Slug+HeroImageSuffix))
 	}
 	imagesGuard, err := security.New(imagesRoot, true)
 	if err != nil {
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: could not initialize path guard")
 	}
-	destPath, err := imagesGuard.SafeJoin(in.Slug + "-featured.jpg")
+	destPath, err := imagesGuard.SafeJoin(in.Slug + HeroImageSuffix)
 	if err != nil {
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
 	}
