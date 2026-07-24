@@ -272,8 +272,10 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 		t.Fatalf("get_page source-only default error missing 'content_not_found': %s", raw)
 	}
 
-	// With allow_source_fallback the source-only non-draft page is returned.
-	res := callTool(t, session, "get_page", map[string]any{"slug": "/drafts/fresh/", "allow_source_fallback": true})
+	// With allow_source_fallback and content_only=false (explicit opt-out of
+	// the #619 default), the source-only non-draft page's raw body is
+	// returned verbatim.
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/drafts/fresh/", "allow_source_fallback": true, "content_only": false})
 	if res.IsError {
 		t.Fatalf("get_page source-only with allow_source_fallback returned error: %v", res.Content)
 	}
@@ -305,13 +307,14 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 		t.Fatalf("get_page source-only rendered_html_available = %#v, want false", got)
 	}
 
+	// content_only defaults to true (#619) — omitting it entirely reaches
+	// the same source-only-empty-html behavior as explicit content_only=true.
 	resContentOnly := callTool(t, session, "get_page", map[string]any{
 		"slug":                  "/drafts/fresh/",
 		"allow_source_fallback": true,
-		"content_only":          true,
 	})
 	if resContentOnly.IsError {
-		t.Fatalf("get_page source-only with content_only returned error: %v", resContentOnly.Content)
+		t.Fatalf("get_page source-only with default content_only returned error: %v", resContentOnly.Content)
 	}
 	contentOnlyPage := decodeContent(t, resContentOnly)["page"].(map[string]any)
 	if contentOnlyPage["html"] != "" {
@@ -1394,7 +1397,31 @@ func TestGetPageContentOnly(t *testing.T) {
 	}
 }
 
+// TestGetPageFullHTML verifies content_only=false (explicit opt-out) still
+// returns full page HTML including theme chrome (#619).
 func TestGetPageFullHTML(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello", "content_only": false})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page: 'page' is %T, want map", m["page"])
+	}
+	if html, _ := page["html"].(string); html == "" {
+		t.Fatal("get_page: html must be non-empty with content_only=false")
+	}
+}
+
+// TestGetPageDefaultsToContentOnly is a regression test for #619 (BREAKING):
+// omitting content_only entirely now defaults to true, not false — the
+// html field returns just the article body, never full theme chrome.
+func TestGetPageDefaultsToContentOnly(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
 	defer done()
@@ -1408,8 +1435,14 @@ func TestGetPageFullHTML(t *testing.T) {
 	if !ok {
 		t.Fatalf("get_page: 'page' is %T, want map", m["page"])
 	}
-	if html, _ := page["html"].(string); html == "" {
-		t.Fatal("get_page: html must be non-empty when content_only is not set")
+	html, _ := page["html"].(string)
+	if html == "" {
+		t.Fatal("get_page: html must be non-empty by default (article content expected)")
+	}
+	for _, tag := range []string{"<nav", "<header", "<footer"} {
+		if strings.Contains(html, tag) {
+			t.Fatalf("get_page: html contains theme chrome tag %q by default, want content_only=true default: %s", tag, html)
+		}
 	}
 }
 
@@ -1532,7 +1565,7 @@ func TestGetPageDescriptionDocumentsSourceFallbackContract(t *testing.T) {
 		for _, want := range []string{
 			"raw Markdown rather than rendered HTML",
 			"`lang` and `url` are empty",
-			"`content_only=true` is also set, the `html` field is returned empty for source-only fallback results",
+			"with the default content_only=true, the `html` field is returned empty for source-only fallback results",
 		} {
 			if !strings.Contains(tool.Description, want) {
 				t.Fatalf("get_page description missing %q:\n%s", want, tool.Description)

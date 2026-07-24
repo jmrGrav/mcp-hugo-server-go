@@ -203,16 +203,26 @@ implementation.
   need to know which) and drive the existing `build_site` +
   `verify_publication` pipeline, adding an explicit confirmation gate before
   the build actually goes live in the sense `verify_publication` checks.
-- `rollback_change` would resolve its target to a **committed** Git
-  baseline state (per `docs/git-baseline-model.md`'s rollback invariant:
-  only a real `head_commit` is a valid rollback target, never "the state
-  before the last apply") — which is exactly why it cannot be designed
-  further until the committed-vs-source-only distinction from `#379` has a
-  concrete implementation to point at, and why `#340` stays blocked.
+- `rollback_change` **(amended 2026-07-24, see #379's comment thread)**:
+  this deployment has no controlled git-commit capability — the content
+  checkout is host-managed, `baseline_mode: auto`, can be dirty, and no
+  server code path ever runs `git commit`. Building git-commit-based
+  rollback would require the server to become a git writer, a larger,
+  separate scope change. Rather than leave `rollback_change` permanently
+  unbuilt pending that, its rollback target is instead a **server-held
+  snapshot**: the pre-write content `apply_content_plan` captures at the
+  moment it writes a new revision, keyed by `(resolved file, revision)`,
+  guarded by the same `expected_revision` optimistic-concurrency check
+  every other write tool uses. This is deliberately narrower than "any
+  prior state" — only states this server's own `apply_content_plan` calls
+  produced and snapshotted are rollback-able, not arbitrary git history.
+  Git-commit-based rollback remains the eventual target if this deployment
+  gains controlled git-commit capability; this is documented as a
+  considered amendment, not a silent scope-narrowing.
 
 Sequencing, restated: `plan_content_change` → `apply_content_plan` → (human
 or agent decides to) `publish_changes` → optionally, later, `rollback_change`
-targeting a commit that `publish_changes` itself produced. Each arrow is a
+targeting a snapshot `apply_content_plan` itself produced. Each arrow is a
 distinct, separately-confirmed step; none of them collapse.
 
 ### `#340`'s five key questions, answered
@@ -340,12 +350,11 @@ before every edit.
   with extra steps, and would defeat the reviewable-checkpoint purpose.
 - **No build/publish coupling in `apply_content_plan`.** See §4 — that's
   `#340`'s layer, deliberately kept separate.
-- **`#340` implementation stays blocked** on: this design being reviewed,
-  `plan_content_change`/`apply_content_plan` actually existing and being
-  exercised in production long enough to trust the revision-check
-  invariant in §3 holds under real concurrent use, and `docs/git-baseline-
-  model.md`'s committed-state distinction (#379) having a concrete runtime
-  implementation a rollback target can resolve against.
+- **`#340`'s `publish_changes`/`rollback_change` are no longer blocked** —
+  `plan_content_change`/`apply_content_plan` ship in the same milestone as
+  this amendment, and `rollback_change`'s target moved from a git commit
+  (blocked, see §4) to a server-held snapshot `apply_content_plan` itself
+  produces, which has no such dependency.
 
 ## 7. Open questions for the implementation issue
 

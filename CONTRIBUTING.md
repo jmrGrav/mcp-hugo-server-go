@@ -54,6 +54,26 @@ go run ./cmd/check-readme-release
 
 If you did not run a check, say so explicitly in the PR.
 
+## Testing New Parameters and Response Fields
+
+For any PR that adds a new opt-in parameter or a new documented response
+field to an existing tool, include at least one test that (#607):
+
+1. Calls the tool with the new parameter set, against a fixture shaped like
+   realistic production content — not just the simplest fixture that makes
+   the test pass. For example, a fixture exercising a bilingual site's
+   per-language taxonomy behavior should use explicit `lang` suffixes
+   (`index.fr.md`/`index.en.md`), matching how content actually exists on a
+   real deployed site, not a bare `index.md`.
+2. Asserts the *documented* behavior actually occurs — not just "the call
+   succeeds," but that the specific field or effect described in the tool's
+   own description is present and correct.
+
+This closes the gap between "the tool description promises X" and "a test
+proves X happens." A test suite that only exercises the easiest fixture
+shape can pass while the documented behavior silently fails to trigger on
+realistic input — treat that as a review blocker, not a nitpick.
+
 ## AI-Assisted Contributions
 
 AI-assisted coding is allowed.

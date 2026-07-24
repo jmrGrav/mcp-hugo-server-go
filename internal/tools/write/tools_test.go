@@ -31,6 +31,9 @@ type testServerOpts struct {
 	// e.g. for tests that need a low CreateUpdatePerMin/DestructivePerMin to
 	// exercise rate limiting without hundreds of calls.
 	RateLimit *config.RateLimitConfig
+	// HugoRoot, when non-empty, is set on cfg so delete_page's hero image
+	// cleanup (#606) has somewhere to look for {slug}-featured.jpg.
+	HugoRoot string
 }
 
 // newTestServer builds a write-tool MCP server over an in-memory transport and
@@ -53,6 +56,7 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 	cfg := config.Default()
 	cfg.ContentRoot = contentRoot
 	cfg.SiteRoot = o.SiteRoot
+	cfg.HugoRoot = o.HugoRoot
 	if o.RateLimit != nil {
 		cfg.RateLimit = *o.RateLimit
 	}
@@ -1979,6 +1983,103 @@ func TestDeletePageCleansPublicDir(t *testing.T) {
 	}
 	if _, err := os.Stat(publicPageDir); !os.IsNotExist(err) {
 		t.Error("public directory must be removed by delete_page to prevent zombie")
+	}
+}
+
+// TestDeletePageRemovesOrphanedHeroImage verifies that delete_page also
+// removes the {slug}-featured.jpg hero image generate_hero_image would have
+// written to {HugoRoot}/static/images/ (#606). That file lives outside the
+// page's own content bundle directory, keyed only by slug, so plain
+// os.RemoveAll(dir) never reaches it; without this cleanup it accumulates as
+// an orphaned file on disk every time a page with a generated hero image is
+// deleted. generate_hero_image itself isn't exercised here (it depends on an
+// HTTP fetch / local image rendering pipeline out of scope for this test) —
+// instead the hero image file is faked directly at the exact path
+// generate_hero_image would have produced, which is sufficient to prove
+// delete_page's cleanup logic finds and removes it.
+func TestDeletePageRemovesOrphanedHeroImage(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/hero-orphan",
+		"title":      "Hero Orphan",
+		"body":       "body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	// Fake the hero image generate_hero_image would have written.
+	imagesDir := filepath.Join(hugoRoot, "static", "images")
+	if err := os.MkdirAll(imagesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll images dir: %v", err)
+	}
+	heroPath := filepath.Join(imagesDir, "posts/hero-orphan-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll hero image parent dir: %v", err)
+	}
+	if err := os.WriteFile(heroPath, []byte("fake-jpeg-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile hero image: %v", err)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/hero-orphan",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "hero-orphan", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page failed: %s", raw)
+	}
+
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "hero-orphan")); !os.IsNotExist(err) {
+		t.Error("source directory must be removed")
+	}
+	if _, err := os.Stat(heroPath); !os.IsNotExist(err) {
+		t.Error("hero image must be removed by delete_page to avoid an orphaned file (#606)")
+	}
+}
+
+// TestDeletePageWithoutHeroImageSucceeds verifies delete_page still succeeds
+// cleanly (no warning) when HugoRoot is configured but no hero image was
+// ever generated for the deleted slug — the common case, since not every
+// page gets a generate_hero_image call (#606).
+func TestDeletePageWithoutHeroImageSucceeds(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/no-hero",
+		"title":      "No Hero",
+		"body":       "body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/no-hero",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "no-hero", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page failed: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	if w, ok := data["warning"]; ok && w != "" {
+		t.Errorf("expected no warning when no hero image exists, got %q", w)
 	}
 }
 

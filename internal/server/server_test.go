@@ -889,7 +889,12 @@ func TestReaderTokenGetPageRejectsSourceOnlyFallback(t *testing.T) {
 	const bearer = "reader-token"
 	addBearerToken(t, storePath, bearer, "read")
 
-	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page","arguments":{"slug":"/drafts/fresh/","allow_source_fallback":true}}}`)
+	// content_only=false explicit: this test asserts read-scope full
+	// visibility into source-only content (#450), not content_only's own
+	// default (#619) — with the #619 default (true), a source-only page's
+	// html is empty regardless of scope, which would defeat this test's
+	// actual purpose.
+	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page","arguments":{"slug":"/drafts/fresh/","allow_source_fallback":true,"content_only":false}}}`)
 	rec := doMCPCall(t, srv, bearer, payload)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("read get_page status = %d body = %q", rec.Code, rec.Body.String())

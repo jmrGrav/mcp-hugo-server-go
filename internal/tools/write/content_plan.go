@@ -247,6 +247,37 @@ type resolvedPlanOperations struct {
 	Rejected    []planRejectedOperationDTO
 }
 
+// parseFrontmatterMap decodes a source file's YAML frontmatter into a plain
+// map, independent of the (not language-aware) source index — used wherever
+// a handler needs a page's *current* on-disk fields without trusting
+// idx.GetBySlug's possibly-wrong-language or stale cache. See the comment at
+// plan_content_change's call site for why that matters.
+func parseFrontmatterMap(raw []byte) map[string]any {
+	content := string(raw)
+	if !strings.HasPrefix(content, "---") {
+		return nil
+	}
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return nil
+	}
+	fm := map[string]any{}
+	if err := yaml.NewDecoder(strings.NewReader(parts[1])).Decode(&fm); err != nil {
+		return nil
+	}
+	return fm
+}
+
+// currentTaxonomyFromRaw reads tags/categories straight out of a source
+// file's own frontmatter bytes. See parseFrontmatterMap's comment.
+func currentTaxonomyFromRaw(raw []byte) (tags, categories []string) {
+	fm := parseFrontmatterMap(raw)
+	if fm == nil {
+		return nil, nil
+	}
+	return toStringSlice(fm["tags"]), toStringSlice(fm["categories"])
+}
+
 // resolvePlanOperations turns the small, deliberately non-general operation
 // vocabulary (docs/transactional-edit-design.md §2) into the same
 // pageUpdateOpts shape update_page already consumes. add_tag/remove_tag/
@@ -254,25 +285,6 @@ type resolvedPlanOperations struct {
 // tags/categories (from the source index) rather than requiring the caller
 // to resend the full list — the one place this tool's contract genuinely
 // diverges from update_page's "always send the full list" contract.
-// currentTaxonomyFromRaw reads tags/categories straight out of a source
-// file's own frontmatter bytes, independent of the (not language-aware)
-// source index. See the comment at plan_content_change's call site for why
-// this must not be idx.GetBySlug.
-func currentTaxonomyFromRaw(raw []byte) (tags, categories []string) {
-	content := string(raw)
-	if !strings.HasPrefix(content, "---") {
-		return nil, nil
-	}
-	parts := strings.SplitN(content, "---", 3)
-	if len(parts) < 3 {
-		return nil, nil
-	}
-	fm := map[string]any{}
-	if err := yaml.NewDecoder(strings.NewReader(parts[1])).Decode(&fm); err != nil {
-		return nil, nil
-	}
-	return toStringSlice(fm["tags"]), toStringSlice(fm["categories"])
-}
 
 func toStringSlice(v any) []string {
 	switch x := v.(type) {
@@ -428,6 +440,7 @@ func registerContentPlanTools(
 	mutationLimiters map[string]*rate.Limiter,
 	idem *idempotencyStore,
 	plans *planStore,
+	snapshots *snapshotStore,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "plan_content_change",
@@ -693,6 +706,13 @@ func registerContentPlanTools(
 			slog.Error("apply_content_plan: write failed", "plan_id", in.PlanID, "error", err)
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
 		}
+		// Snapshot the pre-write content, keyed by the revision it's about
+		// to stop being, so rollback_change can restore exactly this state
+		// later (#379's amended invariant — see docs/transactional-edit-
+		// design.md §4). Only captured on a successful write: a failed
+		// write never changed the file, so there's nothing new to roll
+		// back from.
+		snapshots.put(entry.FilePath, entry.Revision, string(raw))
 
 		var updated hugosite.SourcePage
 		if existing, hasExisting := idx.GetBySlug(entry.Slug); hasExisting {

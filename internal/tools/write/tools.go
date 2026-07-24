@@ -28,6 +28,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
@@ -365,12 +366,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mutationLimiters := make(map[string]*rate.Limiter)
 	idem := newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256)
 	plans := newPlanStore(planTTL, planMaxEntries)
-	registerContentPlanTools(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, plans)
+	snapshots := newSnapshotStore(snapshotTTL, snapshotMaxEntries)
+	registerContentPlanTools(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, plans, snapshots)
+	registerRollbackChange(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, snapshots)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. Normalization is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using `normalize_taxonomy_casing` (#604). `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -606,6 +609,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. " +
 			"Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. " +
+			"Normalization is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using `normalize_taxonomy_casing` (#604). " +
 			"`body` is rejected with `invalid_params` (including on `dry_run`) if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). " +
 			"`rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[updatePageInput](),
@@ -1066,6 +1070,30 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
+		// Best-effort removal of any hero image generate_hero_image left
+		// behind for this slug (#606). generate_hero_image writes to
+		// {HugoRoot}/static/images/{slug}-featured.jpg, a location outside
+		// the page's own content bundle, so the os.RemoveAll(dir) above
+		// never touches it and it would otherwise accumulate as an orphaned
+		// file every time a page with a generated hero image is deleted.
+		// Never fatal — mirrors the public-dir/DB/audit-log cleanup steps
+		// above, which all surface failures as a non-blocking warning
+		// rather than failing the delete outright, since the source is
+		// already gone by this point and there's nothing to roll back to.
+		if cfg.HugoRoot != "" {
+			if removed, rmErr := removeHeroImage(cfg.HugoRoot, in.Slug); rmErr != nil {
+				msg := fmt.Sprintf("hero image cleanup failed: %v", rmErr)
+				if deleteWarning != "" {
+					deleteWarning += "; " + msg
+				} else {
+					deleteWarning = msg
+				}
+				slog.Warn("delete_page: hero image cleanup failed", "slug", in.Slug, "error", rmErr)
+			} else if removed {
+				slog.Debug("delete_page: removed orphaned hero image", "slug", in.Slug)
+			}
+		}
+
 		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
 		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
 		if auditErr := appendAuditLog(auditLog, entry); auditErr != nil {
@@ -1161,6 +1189,43 @@ func deletePageState(hasSiteRoot, publicCleanupFailed, dbDeleteFailed bool) site
 		state.IndexState = "stale"
 	}
 	return state
+}
+
+// removeHeroImage best-effort removes the {slug}{admin.HeroImageSuffix} hero
+// image admin.registerGenerateFeaturedImage (generate_hero_image) writes to
+// {hugoRoot}/static/images/, keyed only by slug rather than living inside
+// the page's own content bundle (#606). Deleting it here by re-deriving the
+// path from the shared admin.HeroImageSuffix constant — rather than
+// duplicating the "-featured.jpg" literal — keeps this in lockstep with
+// generate_hero_image's own path construction, so a future rename there
+// can't silently desync this cleanup logic from the code that actually
+// produced the file. It's otherwise safe with no rename/reuse ambiguity: a
+// different page necessarily has a different slug and therefore a different
+// filename, so this can never remove another page's hero image, and
+// static/images/ is not used for any other purpose elsewhere in this
+// codebase (page assets uploaded via upload_page_asset live under the
+// page's own content bundle, not here).
+//
+// Returns (removed, err). removed is true only when a file was actually
+// deleted; a hero image that was never generated for this slug is not an
+// error — most deleted pages won't have one.
+func removeHeroImage(hugoRoot, slug string) (bool, error) {
+	imagesRoot := filepath.Join(hugoRoot, "static", "images")
+	guard, err := security.New(imagesRoot, true)
+	if err != nil {
+		return false, err
+	}
+	target, err := guard.SafeJoin(slug + admin.HeroImageSuffix)
+	if err != nil {
+		return false, err
+	}
+	if err := os.Remove(target); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 type frontmatterDoc struct {
@@ -1400,6 +1465,7 @@ func Defs() []tools.ToolDef {
 		{Name: "get_mutation_status", RequiredScope: "write"},
 		{Name: "plan_content_change", RequiredScope: ""},
 		{Name: "apply_content_plan", RequiredScope: "write"},
+		{Name: "rollback_change", RequiredScope: "write"},
 	}
 }
 
