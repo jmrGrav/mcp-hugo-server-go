@@ -7,7 +7,46 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 )
+
+// defaultIdempotencyTTL is used when a caller constructs the write package's
+// Register() with a config.Config whose IdempotencyTTLSeconds is unset or
+// non-positive (e.g. a hand-built Config in a test, bypassing
+// config.Load's own clamping). Derived from config.DefaultIdempotencyTTLSeconds
+// (#616), single-sourcing the value rather than duplicating it, so this
+// package never silently constructs a zero/negative-TTL store, which would
+// defeat idempotency replay protection entirely.
+const defaultIdempotencyTTL = time.Duration(config.DefaultIdempotencyTTLSeconds) * time.Second
+
+// idempotencyTTLFromConfig resolves the configured idempotency-key retention
+// window, falling back to defaultIdempotencyTTL for non-positive values
+// (#616). The TTL is deliberately a server-level setting only — it is never
+// accepted as a per-call tool parameter, since a caller-supplied TTL could
+// be used to shorten the window and evade duplicate-submission protection.
+func idempotencyTTLFromConfig(cfg config.Config) time.Duration {
+	if cfg.IdempotencyTTLSeconds <= 0 {
+		return defaultIdempotencyTTL
+	}
+	return time.Duration(cfg.IdempotencyTTLSeconds) * time.Second
+}
+
+// formatTTLDescription renders a TTL for agent-facing tool descriptions
+// (get_mutation_status, #616) in whole minutes when it divides evenly —
+// matching the "15 minutes" phrasing this text used before the TTL became
+// configurable — and falls back to Duration's own String() (e.g. "90s",
+// "1h30m0s") for values that don't land on a whole minute.
+func formatTTLDescription(d time.Duration) string {
+	if d > 0 && d%time.Minute == 0 {
+		mins := d / time.Minute
+		if mins == 1 {
+			return "1 minute"
+		}
+		return fmt.Sprintf("%d minutes", mins)
+	}
+	return d.String()
+}
 
 type idempotencyEntry struct {
 	RequestHash string

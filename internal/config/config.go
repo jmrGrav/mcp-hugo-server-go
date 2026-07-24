@@ -39,6 +39,17 @@ type Config struct {
 	GoogleIndex         GoogleIndexConfig `yaml:"google_indexing"`
 	OAuth               OAuthConfig       `yaml:"oauth"`
 	RateLimit           RateLimitConfig   `yaml:"rate_limit"`
+	// IdempotencyTTLSeconds (#616) is the retention window for the
+	// idempotency-key store backing create_page/update_page/delete_page/
+	// upload_page_asset/delete_page_asset and the get_mutation_status lookup
+	// (#586). It is deliberately a deployment-level setting rather than a
+	// per-call parameter: a caller-supplied TTL could otherwise be shortened
+	// to evade idempotency/duplicate-submission protection. A longer window
+	// gives an agent more time to positively confirm via get_mutation_status
+	// whether a mutation landed after a connector-level outage, instead of
+	// falling back to a blind (if always-safe) retry. Defaults to 900 (15
+	// minutes), the previously-hardcoded value.
+	IdempotencyTTLSeconds int `yaml:"idempotency_ttl_seconds"`
 	// BlockedShortcodes (#590) names Hugo shortcodes that create_page/update_page
 	// refuse to accept in a page body, matched against the site's own
 	// {{< name >}}/{{% name %}} invocation syntax. This is a best-effort
@@ -179,9 +190,17 @@ func Default() Config {
 		OAuth: OAuthConfig{
 			RequirePKCE: true,
 		},
-		BlockedShortcodes: []string{"raw", "rawhtml", "script", "style"},
+		BlockedShortcodes:     []string{"raw", "rawhtml", "script", "style"},
+		IdempotencyTTLSeconds: DefaultIdempotencyTTLSeconds,
 	}
 }
+
+// DefaultIdempotencyTTLSeconds is the retention window (in seconds) used when
+// idempotency_ttl_seconds is unset or configured to an invalid (non-positive)
+// value. Matches the previously-hardcoded 15-minute TTL (#616). Exported so
+// internal/tools/write can single-source its own defensive fallback rather
+// than duplicating the value.
+const DefaultIdempotencyTTLSeconds = 15 * 60
 
 func Load(path string) (Config, error) {
 	cfg := Default()
@@ -202,7 +221,21 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	cfg.RateLimit.clampMutationLimits()
+	cfg.clampIdempotencyTTL()
 	return cfg, nil
+}
+
+// clampIdempotencyTTL guards against a config file zeroing or negating the
+// idempotency-key retention window: a non-positive TTL would make every
+// mutation call effectively non-idempotent (no replay protection window),
+// silently reintroducing duplicate-submission risk. Fall back to the safe
+// Default() value instead of failing closed, mirroring
+// RateLimitConfig.clampMutationLimits' treatment of the same class of
+// misconfiguration (#616).
+func (c *Config) clampIdempotencyTTL() {
+	if c.IdempotencyTTLSeconds <= 0 {
+		c.IdempotencyTTLSeconds = DefaultIdempotencyTTLSeconds
+	}
 }
 
 // clampMutationLimits guards against a config file zeroing or negating the

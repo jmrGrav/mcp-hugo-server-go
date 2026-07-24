@@ -28,6 +28,49 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.GitBaseline.Mode != "auto" {
 		t.Fatalf("want default git baseline mode auto, got %q", cfg.GitBaseline.Mode)
 	}
+	if cfg.IdempotencyTTLSeconds != 900 {
+		t.Fatalf("want default idempotency_ttl_seconds 900 (15 minutes), got %d", cfg.IdempotencyTTLSeconds)
+	}
+}
+
+// TestLoadConfigIdempotencyTTL is a regression test for #616: the
+// idempotency-key retention window (backing create_page/update_page/
+// delete_page/upload_page_asset/delete_page_asset and get_mutation_status)
+// must be configurable via idempotency_ttl_seconds instead of the
+// previously-hardcoded 15 minutes.
+func TestLoadConfigIdempotencyTTL(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("idempotency_ttl_seconds: 3600\n")
+	f.Close()
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IdempotencyTTLSeconds != 3600 {
+		t.Fatalf("want idempotency_ttl_seconds 3600, got %d", cfg.IdempotencyTTLSeconds)
+	}
+}
+
+// TestLoadConfigClampsNonPositiveIdempotencyTTL guards against a config file
+// zeroing or negating the idempotency TTL, which would make every mutation
+// call effectively non-idempotent (no replay protection window) rather than
+// evading protection outright — still a misconfiguration that must not be
+// allowed to silently take effect. Mirrors
+// TestLoadConfigClampsNonPositiveMutationRateLimits' treatment of the same
+// class of issue for rate limits (#616).
+func TestLoadConfigClampsNonPositiveIdempotencyTTL(t *testing.T) {
+	for _, seconds := range []string{"0", "-5"} {
+		f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+		f.WriteString("idempotency_ttl_seconds: " + seconds + "\n")
+		f.Close()
+		cfg, err := config.Load(f.Name())
+		if err != nil {
+			t.Fatalf("idempotency_ttl_seconds: %s: %v", seconds, err)
+		}
+		if cfg.IdempotencyTTLSeconds != 900 {
+			t.Fatalf("idempotency_ttl_seconds: %s: want clamped to default 900, got %d", seconds, cfg.IdempotencyTTLSeconds)
+		}
+	}
 }
 
 func TestLoadConfig(t *testing.T) {
