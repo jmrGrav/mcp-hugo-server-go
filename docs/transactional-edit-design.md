@@ -214,16 +214,23 @@ implementation.
   moment it writes a new revision, keyed by `(resolved file, revision)`,
   guarded by the same `expected_revision` optimistic-concurrency check
   every other write tool uses. This is deliberately narrower than "any
-  prior state" — only states this server's own `apply_content_plan` calls
-  produced and snapshotted are rollback-able, not arbitrary git history.
+  prior state" — only states this server's own `apply_content_plan` or
+  `update_page` calls produced and snapshotted are rollback-able, not
+  arbitrary git history. `update_page`'s own write path was extended to
+  capture the same kind of snapshot in #629: §5 below is explicit that
+  `update_page` remains the primary tool most real edits actually use, so
+  scoping snapshot capture to `apply_content_plan` alone would have left
+  most edits permanently un-rollback-able. `create_page` is deliberately
+  not snapshotted — there is no meaningful pre-create state to restore to.
   Git-commit-based rollback remains the eventual target if this deployment
   gains controlled git-commit capability; this is documented as a
   considered amendment, not a silent scope-narrowing.
 
-Sequencing, restated: `plan_content_change` → `apply_content_plan` → (human
-or agent decides to) `publish_changes` → optionally, later, `rollback_change`
-targeting a snapshot `apply_content_plan` itself produced. Each arrow is a
-distinct, separately-confirmed step; none of them collapse.
+Sequencing, restated: `plan_content_change` → `apply_content_plan` (or a
+plain `update_page` call) → (human or agent decides to) `publish_changes` →
+optionally, later, `rollback_change` targeting a snapshot either write path
+produced. Each arrow is a distinct, separately-confirmed step; none of them
+collapse.
 
 ### `#340`'s five key questions, answered
 

@@ -821,6 +821,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
 		}
+		// Snapshot the pre-write content, keyed by the revision it's about
+		// to stop being, so rollback_change can restore exactly this state
+		// later (#629 — extends apply_content_plan's own snapshot capture,
+		// see content_plan.go, to update_page's write path too; #379's
+		// amended invariant, docs/transactional-edit-design.md §4). Only
+		// captured on a successful write: a failed write never changed the
+		// file, so there's nothing new to roll back from. create_page is
+		// deliberately not snapshotted — there's no meaningful "pre-create"
+		// state to restore to.
+		snapshots.put(filePath, currentRevision, string(raw))
 		updated := *existing
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang
