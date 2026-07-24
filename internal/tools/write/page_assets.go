@@ -70,18 +70,20 @@ type uploadPageAssetOutput struct {
 }
 
 type uploadPageAssetData struct {
-	Status             string `json:"status,omitempty"`
-	Slug               string `json:"slug"`
-	SourceKey          string `json:"source_key,omitempty"`
-	Filename           string `json:"filename"`
-	Path               string `json:"path,omitempty"`
-	ContentType        string `json:"content_type,omitempty"`
-	SizeBytes          int    `json:"size_bytes,omitempty"`
-	Sha256             string `json:"sha256,omitempty"`
-	DuplicateOf        string `json:"duplicate_of,omitempty"`
-	DryRun             bool   `json:"dry_run,omitempty"`
-	Warning            string `json:"warning,omitempty"`
-	RateLimitRemaining int    `json:"rate_limit_remaining"`
+	Status      string `json:"status,omitempty"`
+	Slug        string `json:"slug"`
+	SourceKey   string `json:"source_key,omitempty"`
+	Filename    string `json:"filename"`
+	Path        string `json:"path,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	SizeBytes   int    `json:"size_bytes,omitempty"`
+	Sha256      string `json:"sha256,omitempty"`
+	DuplicateOf string `json:"duplicate_of,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
+	Warning     string `json:"warning,omitempty"`
+	// RateLimitRemaining — see the comment on createPageData's field of the
+	// same name (#520, #605).
+	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
 }
 
 // validateAssetFilename checks that name is a single safe path component
@@ -321,18 +323,17 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		if in.DryRun {
 			return nil, newUploadPageAssetOutput(uploadPageAssetData{
-				Status:             "ok",
-				Slug:               canonicalPublicSlug(slug),
-				SourceKey:          slug,
-				Filename:           filename,
-				Path:               logicalPath,
-				ContentType:        wantMIME,
-				SizeBytes:          len(data),
-				Sha256:             hash,
-				DuplicateOf:        duplicateOf,
-				DryRun:             true,
-				RateLimitRemaining: rateLimitRemaining(limiter),
-			}), nil
+				Status:      "ok",
+				Slug:        canonicalPublicSlug(slug),
+				SourceKey:   slug,
+				Filename:    filename,
+				Path:        logicalPath,
+				ContentType: wantMIME,
+				SizeBytes:   len(data),
+				Sha256:      hash,
+				DuplicateOf: duplicateOf,
+				DryRun:      true,
+			}, rateLimitRemaining(limiter)), nil
 		}
 
 		if err := pg.RevalidateForWrite(filePath); err != nil {
@@ -348,17 +349,16 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		out := newUploadPageAssetOutput(uploadPageAssetData{
-			Status:             "ok",
-			Slug:               canonicalPublicSlug(slug),
-			SourceKey:          slug,
-			Filename:           filename,
-			Path:               logicalPath,
-			ContentType:        wantMIME,
-			SizeBytes:          len(data),
-			Sha256:             hash,
-			DuplicateOf:        duplicateOf,
-			RateLimitRemaining: rateLimitRemaining(limiter),
-		})
+			Status:      "ok",
+			Slug:        canonicalPublicSlug(slug),
+			SourceKey:   slug,
+			Filename:    filename,
+			Path:        logicalPath,
+			ContentType: wantMIME,
+			SizeBytes:   len(data),
+			Sha256:      hash,
+			DuplicateOf: duplicateOf,
+		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember("upload_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("upload_page_asset: could not persist idempotency result", "slug", slug, "error", err)
@@ -442,29 +442,34 @@ type deletePageAssetOutput struct {
 }
 
 type deletePageAssetData struct {
-	Status             string   `json:"status,omitempty"`
-	Slug               string   `json:"slug,omitempty"`
-	SourceKey          string   `json:"source_key,omitempty"`
-	Filename           string   `json:"filename,omitempty"`
-	Sha256             string   `json:"sha256,omitempty"`
-	DryRun             bool     `json:"dry_run,omitempty"`
-	Referenced         *bool    `json:"referenced,omitempty"`
-	ReferencedIn       []string `json:"referenced_in,omitempty"`
-	Warning            string   `json:"warning,omitempty"`
-	RateLimitRemaining int      `json:"rate_limit_remaining"`
+	Status       string   `json:"status,omitempty"`
+	Slug         string   `json:"slug,omitempty"`
+	SourceKey    string   `json:"source_key,omitempty"`
+	Filename     string   `json:"filename,omitempty"`
+	Sha256       string   `json:"sha256,omitempty"`
+	DryRun       bool     `json:"dry_run,omitempty"`
+	Referenced   *bool    `json:"referenced,omitempty"`
+	ReferencedIn []string `json:"referenced_in,omitempty"`
+	Warning      string   `json:"warning,omitempty"`
+	// RateLimitRemaining — see the comment on createPageData's field of the
+	// same name (#520, #605).
+	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
 }
 
-func newUploadPageAssetOutput(data uploadPageAssetData) uploadPageAssetOutput {
+// newUploadPageAssetOutput/newDeletePageAssetOutput — see the comment on
+// newCreatePageOutput (#520, #605): rateLimitRemaining is an explicit
+// parameter, not read off data, since data never carries this field.
+func newUploadPageAssetOutput(data uploadPageAssetData, rateLimitRemaining int) uploadPageAssetOutput {
 	return uploadPageAssetOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		RateLimitRemaining: data.RateLimitRemaining,
+		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
-func newDeletePageAssetOutput(data deletePageAssetData) deletePageAssetOutput {
+func newDeletePageAssetOutput(data deletePageAssetData, rateLimitRemaining int) deletePageAssetOutput {
 	return deletePageAssetOutput{
 		ToolResponse:       writeSuccessEnvelope(data),
-		RateLimitRemaining: data.RateLimitRemaining,
+		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
@@ -538,16 +543,15 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
 			}
 			return nil, newDeletePageAssetOutput(deletePageAssetData{
-				Status:             "ok",
-				Slug:               canonicalPublicSlug(slug),
-				SourceKey:          slug,
-				Filename:           filename,
-				Sha256:             contentmodel.SourceRevisionBytes(data),
-				DryRun:             true,
-				Referenced:         fileutil.BoolPtr(len(referencedIn) > 0),
-				ReferencedIn:       referencedIn,
-				RateLimitRemaining: rateLimitRemaining(limiter),
-			}), nil
+				Status:       "ok",
+				Slug:         canonicalPublicSlug(slug),
+				SourceKey:    slug,
+				Filename:     filename,
+				Sha256:       contentmodel.SourceRevisionBytes(data),
+				DryRun:       true,
+				Referenced:   fileutil.BoolPtr(len(referencedIn) > 0),
+				ReferencedIn: referencedIn,
+			}, rateLimitRemaining(limiter)), nil
 		}
 
 		if in.ExpectedSha256 == "" && in.ExpectedRevision == "" {
@@ -648,16 +652,15 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		out := newDeletePageAssetOutput(deletePageAssetData{
-			Status:             "ok",
-			Slug:               canonicalPublicSlug(slug),
-			SourceKey:          slug,
-			Filename:           filename,
-			Sha256:             actualHash,
-			Referenced:         fileutil.BoolPtr(len(referencedIn) > 0),
-			ReferencedIn:       referencedIn,
-			Warning:            warning,
-			RateLimitRemaining: rateLimitRemaining(limiter),
-		})
+			Status:       "ok",
+			Slug:         canonicalPublicSlug(slug),
+			SourceKey:    slug,
+			Filename:     filename,
+			Sha256:       actualHash,
+			Referenced:   fileutil.BoolPtr(len(referencedIn) > 0),
+			ReferencedIn: referencedIn,
+			Warning:      warning,
+		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember("delete_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("delete_page_asset: could not persist idempotency result", "slug", slug, "filename", filename, "error", err)
