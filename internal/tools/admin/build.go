@@ -348,153 +348,75 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
-		if cfg.HugoRoot == "" {
-			return nil, buildSiteOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
-		}
-		if !hugosite.ContentMu.TryLock() {
-			return nil, buildSiteOutput{}, fmt.Errorf("build_in_progress: a content mutation or build is already running")
-		}
-		defer hugosite.ContentMu.Unlock()
-
-		if err := checkBuildWritable(cfg.SiteRoot, filepath.Join(cfg.HugoRoot, "resources")); err != nil {
-			buildstatus.RecordFailure("permission_denied", time.Now())
+		data, err := runBuild(ctx, cfg, siteReload...)
+		if err != nil {
 			return nil, buildSiteOutput{}, err
 		}
+		return nil, newBuildSiteOutput(data), nil
+	}))
+}
 
-		timeout := cfg.BuildTimeoutSeconds
-		if timeout <= 0 {
-			timeout = 120
-		}
-		cacheDir := hugoCacheDir(cfg)
-		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-			return nil, buildSiteOutput{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
-		}
-		tctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-		defer cancel()
+// runBuild performs an actual Hugo build and its post-build callbacks —
+// the same logic build_site's own handler runs, extracted so publish_changes
+// (#340, #438) can drive a build without going through the MCP tool
+// dispatch layer a second time. Takes and releases hugosite.ContentMu itself,
+// so callers must not already hold it.
+func runBuild(ctx context.Context, cfg config.Config, siteReload ...func() error) (buildSiteData, error) {
+	if cfg.HugoRoot == "" {
+		return buildSiteData{}, fmt.Errorf("config_error: hugo_root is not configured")
+	}
+	if !hugosite.ContentMu.TryLock() {
+		return buildSiteData{}, fmt.Errorf("build_in_progress: a content mutation or build is already running")
+	}
+	defer hugosite.ContentMu.Unlock()
 
-		start := time.Now()
-		runID := newBuildID(start)
-		args := buildCommandArgs(cacheDir, false)
-		cmd := exec.CommandContext(tctx, "hugo", args...)
-		cmd.Dir = cfg.HugoRoot
-		cmd.Env = boundedCommandEnv()
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		// Kill the whole process group on timeout/cancellation so that shell
-		// wrappers and any children spawned by hugo are also terminated (#240/#243).
-		cmd.Cancel = func() error {
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-			return nil
-		}
-		var stderrBuf bytes.Buffer
-		var stdoutBuf bytes.Buffer
-		cmd.Stderr = &stderrBuf
-		cmd.Stdout = &stdoutBuf
-		err := cmd.Run()
-		durationMs := time.Since(start).Milliseconds()
+	if err := checkBuildWritable(cfg.SiteRoot, filepath.Join(cfg.HugoRoot, "resources")); err != nil {
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildSiteData{}, err
+	}
 
-		exitCode := 0
-		if cmd.ProcessState != nil {
-			exitCode = cmd.ProcessState.ExitCode()
-		}
+	timeout := cfg.BuildTimeoutSeconds
+	if timeout <= 0 {
+		timeout = 120
+	}
+	cacheDir := hugoCacheDir(cfg)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return buildSiteData{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
+	}
+	tctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
 
-		if err != nil {
-			summary := buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot)
-			errClass := classifyBuildFailure(tctx, summary)
-			slog.Error("build_site failed",
-				"build_id", runID,
-				"tool", "build_site",
-				"user", currentUserForLog(),
-				"command", commandString("hugo", args),
-				"cwd", cfg.HugoRoot,
-				"cache_dir", cacheDir,
-				"duration_ms", durationMs,
-				"exit_code", exitCode,
-				"error_class", errClass,
-				"stdout_tail", outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
-				"stderr_tail", outputTail(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
-				"output_summary", summary,
-				"error", err,
-			)
-
-			errKind := "build_error"
-			if tctx.Err() != nil {
-				errKind = "build_timeout"
-			}
-
-			payload := buildErrorPayload{
-				Error:            errKind,
-				ErrorClass:       errClass,
-				ExitCode:         exitCode,
-				Command:          commandString("hugo", args),
-				WorkingDirectory: cfg.HugoRoot,
-				CacheDirectory:   cacheDir,
-				DurationMs:       durationMs,
-				StderrSummary:    summary,
-				StdoutSummary:    outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
-				BuildID:          runID,
-				LogHint:          "Search server logs for build_id=" + runID,
-			}
-			if errClass == "permission_denied" {
-				if suggestion, ok := ownershipDriftSuggestion(summary); ok {
-					payload.Suggestion = suggestion
-				} else {
-					payload.Suggestion = "Verify that site_root and hugo_root/resources are listed in ReadWritePaths in the systemd service override. Run: systemctl cat mcp-hugo-server-go"
-				}
-				payload.DocsURL = buildDocsURL
-			}
-			jsonPayload, _ := json.Marshal(payload)
-			buildstatus.RecordFailure(errClass, time.Now())
-			return nil, buildSiteOutput{}, fmt.Errorf("build_error: %s", jsonPayload)
+	start := time.Now()
+	runID := newBuildID(start)
+	args := buildCommandArgs(cacheDir, false)
+	cmd := exec.CommandContext(tctx, "hugo", args...)
+	cmd.Dir = cfg.HugoRoot
+	cmd.Env = boundedCommandEnv()
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Kill the whole process group on timeout/cancellation so that shell
+	// wrappers and any children spawned by hugo are also terminated (#240/#243).
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
-		buildstatus.RecordSuccess(time.Now())
+		return nil
+	}
+	var stderrBuf bytes.Buffer
+	var stdoutBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+	cmd.Stdout = &stdoutBuf
+	err := cmd.Run()
+	durationMs := time.Since(start).Milliseconds()
 
-		// Run post-build callbacks within a bounded deadline (#241). Optional
-		// side-effect callbacks (CDN purge, search indexing) swallow their errors
-		// at the call site in server.go; any error here means a required step
-		// (index reload, DB sync) failed. Surface as partial_success so callers
-		// know the build succeeded but read state may be stale (#238/#244).
-		const callbackTimeout = 30 * time.Second
-		cbCtx, cbCancel := context.WithTimeout(context.Background(), callbackTimeout)
-		defer cbCancel()
-		var cbWarning string
-	cbLoop:
-		for i, fn := range siteReload {
-			if fn == nil {
-				continue
-			}
-			done := make(chan error, 1)
-			go func(f func() error) { done <- f() }(fn)
-			select {
-			case cbErr := <-done:
-				if cbErr != nil {
-					cbWarning = fmt.Sprintf("post-build callback %d failed: %v", i, cbErr)
-					slog.Warn("build_site: post-build callback failed", "callback_index", i, "error", cbErr)
-				}
-			case <-cbCtx.Done():
-				cbWarning = fmt.Sprintf("post-build callback %d timed out after %s", i, callbackTimeout)
-				slog.Warn("build_site: post-build callback timed out", "callback_index", i, "timeout", callbackTimeout)
-				break cbLoop
-			}
-		}
+	exitCode := 0
+	if cmd.ProcessState != nil {
+		exitCode = cmd.ProcessState.ExitCode()
+	}
 
-		status := "ok"
-		if cbWarning != "" {
-			status = "partial_success"
-		}
-		outputRevision, hashErr := hashTree(cfg.SiteRoot)
-		if hashErr != nil {
-			slog.Warn("build_site: failed to hash output tree", "error", hashErr)
-			if cbWarning == "" {
-				cbWarning = "output revision unavailable after build"
-			} else {
-				cbWarning += "; output revision unavailable after build"
-			}
-			status = "partial_success"
-		}
-		publishReady := status == "ok"
-		slog.Info("build_site completed",
+	if err != nil {
+		summary := buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot)
+		errClass := classifyBuildFailure(tctx, summary)
+		slog.Error("build_site failed",
 			"build_id", runID,
 			"tool", "build_site",
 			"user", currentUserForLog(),
@@ -503,16 +425,107 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 			"cache_dir", cacheDir,
 			"duration_ms", durationMs,
 			"exit_code", exitCode,
-			"status", status,
-			"publish_ready", publishReady,
+			"error_class", errClass,
+			"stdout_tail", outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+			"stderr_tail", outputTail(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+			"output_summary", summary,
+			"error", err,
 		)
-		return nil, newBuildSiteOutput(buildSiteData{
-			Status:         status,
-			DurationMs:     durationMs,
-			BuildID:        runID,
-			OutputRevision: outputRevision,
-			PublishReady:   publishReady,
-			Warning:        cbWarning,
-		}), nil
-	}))
+
+		errKind := "build_error"
+		if tctx.Err() != nil {
+			errKind = "build_timeout"
+		}
+
+		payload := buildErrorPayload{
+			Error:            errKind,
+			ErrorClass:       errClass,
+			ExitCode:         exitCode,
+			Command:          commandString("hugo", args),
+			WorkingDirectory: cfg.HugoRoot,
+			CacheDirectory:   cacheDir,
+			DurationMs:       durationMs,
+			StderrSummary:    summary,
+			StdoutSummary:    outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+			BuildID:          runID,
+			LogHint:          "Search server logs for build_id=" + runID,
+		}
+		if errClass == "permission_denied" {
+			if suggestion, ok := ownershipDriftSuggestion(summary); ok {
+				payload.Suggestion = suggestion
+			} else {
+				payload.Suggestion = "Verify that site_root and hugo_root/resources are listed in ReadWritePaths in the systemd service override. Run: systemctl cat mcp-hugo-server-go"
+			}
+			payload.DocsURL = buildDocsURL
+		}
+		jsonPayload, _ := json.Marshal(payload)
+		buildstatus.RecordFailure(errClass, time.Now())
+		return buildSiteData{}, fmt.Errorf("build_error: %s", jsonPayload)
+	}
+	buildstatus.RecordSuccess(time.Now())
+
+	// Run post-build callbacks within a bounded deadline (#241). Optional
+	// side-effect callbacks (CDN purge, search indexing) swallow their errors
+	// at the call site in server.go; any error here means a required step
+	// (index reload, DB sync) failed. Surface as partial_success so callers
+	// know the build succeeded but read state may be stale (#238/#244).
+	const callbackTimeout = 30 * time.Second
+	cbCtx, cbCancel := context.WithTimeout(context.Background(), callbackTimeout)
+	defer cbCancel()
+	var cbWarning string
+cbLoop:
+	for i, fn := range siteReload {
+		if fn == nil {
+			continue
+		}
+		done := make(chan error, 1)
+		go func(f func() error) { done <- f() }(fn)
+		select {
+		case cbErr := <-done:
+			if cbErr != nil {
+				cbWarning = fmt.Sprintf("post-build callback %d failed: %v", i, cbErr)
+				slog.Warn("build_site: post-build callback failed", "callback_index", i, "error", cbErr)
+			}
+		case <-cbCtx.Done():
+			cbWarning = fmt.Sprintf("post-build callback %d timed out after %s", i, callbackTimeout)
+			slog.Warn("build_site: post-build callback timed out", "callback_index", i, "timeout", callbackTimeout)
+			break cbLoop
+		}
+	}
+
+	status := "ok"
+	if cbWarning != "" {
+		status = "partial_success"
+	}
+	outputRevision, hashErr := hashTree(cfg.SiteRoot)
+	if hashErr != nil {
+		slog.Warn("build_site: failed to hash output tree", "error", hashErr)
+		if cbWarning == "" {
+			cbWarning = "output revision unavailable after build"
+		} else {
+			cbWarning += "; output revision unavailable after build"
+		}
+		status = "partial_success"
+	}
+	publishReady := status == "ok"
+	slog.Info("build_site completed",
+		"build_id", runID,
+		"tool", "build_site",
+		"user", currentUserForLog(),
+		"command", commandString("hugo", args),
+		"cwd", cfg.HugoRoot,
+		"cache_dir", cacheDir,
+		"duration_ms", durationMs,
+		"exit_code", exitCode,
+		"status", status,
+		"publish_ready", publishReady,
+	)
+	return buildSiteData{
+		Status:         status,
+		DurationMs:     durationMs,
+		BuildID:        runID,
+		OutputRevision: outputRevision,
+		PublishReady:   publishReady,
+		Warning:        cbWarning,
+	}, nil
 }

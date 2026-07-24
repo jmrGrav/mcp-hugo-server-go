@@ -57,6 +57,7 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"get_theme_status":     "write",
 		"verify_publication":   "write",
 		"create_preview":       "write",
+		"publish_changes":      "write",
 	}
 
 	got := make(map[string]string, len(want))
@@ -87,8 +88,8 @@ func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
 	if got := len(writepkg.Defs()); got != 8 {
 		t.Fatalf("write tool count = %d, want 8", got)
 	}
-	if got := len(adminpkg.Defs()); got != 9 {
-		t.Fatalf("admin (folded into write) tool count = %d, want 9", got)
+	if got := len(adminpkg.Defs()); got != 10 {
+		t.Fatalf("admin (folded into write) tool count = %d, want 10", got)
 	}
 
 	if got := tools.ScopeRank(""); got != 0 {

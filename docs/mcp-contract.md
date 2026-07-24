@@ -430,6 +430,7 @@ structured too, with the same root/data convergence.
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
 | `verify_publication`      | structured | `data.source/build/public/index`, `data.http_status`, `data.status`, `data.explanation` |
 | `create_preview`          | structured | `data.preview_id`, `data.url`, `data.expires_at`, `data.build`; no root-level duplication as of v1.5.9 (#573) |
+| `publish_changes` | structured | `data.status` (`"published"` only when the build succeeds cleanly — no failed post-build callback — *and* `data.publication.status` is `"fresh"`; otherwise `"build_succeeded_unverified"` — a partial-success build, e.g. a failed CDN purge, never reports `"published"` even if local file/HTTP state happens to read fresh), `data.build` (`build_id`, `duration_ms`, `output_revision?`, `warning?` — the same fields `build_site` returns, nested), `data.publication` (the full `verify_publication` response shape, nested verbatim — not summarized). A failed build surfaces as a tool error (`build_error`/`build_in_progress`), identical to `build_site`'s own behavior; it never reaches `data.status`. Bundles `build_site` + `verify_publication` into one explicit, separately-confirmed step (#340) — never auto-chained onto `apply_content_plan`/`update_page`. Takes `slug` (required — `verify_publication` checks one page) and optional `wait_seconds` (forwarded as-is). Writes only build output and derived indexes, never page source (#438) |
 
 ---
 
