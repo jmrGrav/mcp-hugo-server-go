@@ -365,7 +365,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mutationLimiters := make(map[string]*rate.Limiter)
 	idem := newIdempotencyStore(15*time.Minute, 256)
 	plans := newPlanStore(planTTL, planMaxEntries)
-	registerContentPlanTools(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, plans)
+	snapshots := newSnapshotStore(snapshotTTL, snapshotMaxEntries)
+	registerContentPlanTools(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, plans, snapshots)
+	registerRollbackChange(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, snapshots)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
@@ -1400,6 +1402,7 @@ func Defs() []tools.ToolDef {
 		{Name: "get_mutation_status", RequiredScope: "write"},
 		{Name: "plan_content_change", RequiredScope: ""},
 		{Name: "apply_content_plan", RequiredScope: "write"},
+		{Name: "rollback_change", RequiredScope: "write"},
 	}
 }
 
