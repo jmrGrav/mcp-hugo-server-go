@@ -29,10 +29,23 @@ type listPagesInput struct {
 }
 
 type getPageInput struct {
-	Slug                string `json:"slug"`
-	ContentOnly         bool   `json:"content_only,omitempty"`
+	Slug string `json:"slug"`
+	// ContentOnly defaults to true (#619, BREAKING as of the release that
+	// ships this): a get_page call with content_only omitted previously
+	// returned the full rendered page including theme chrome (nav, footer,
+	// search widgets, share buttons, scripts) — observed live to run to
+	// several thousand tokens for a short article, when the article body
+	// itself was a few hundred. Pass content_only=false explicitly to opt
+	// back into the old full-page behavior.
+	ContentOnly         *bool  `json:"content_only,omitempty"`
 	AllowSourceFallback bool   `json:"allow_source_fallback,omitempty"`
 	ResponseMode        string `json:"response_mode,omitempty"`
+}
+
+// contentOnly resolves getPageInput.ContentOnly's effective value: true
+// unless the caller explicitly passed false (#619).
+func contentOnly(v *bool) bool {
+	return v == nil || *v
 }
 
 type searchPagesInput struct {
@@ -313,8 +326,8 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"By default only published pages are returned. "+
 			"Pass allow_source_fallback=true to also return source-index entries for pages not yet built "+
 			"(e.g. immediately after create_page, before the next Hugo build); draft pages are always excluded. "+
-			"Pass content_only=true to return just the article body (prefers the theme's id=\"content\" wrapper when present, excluding title, TOC, post metadata, share buttons, and prev/next navigation; falls back to <article>/<main>/<body>-minus-chrome otherwise) from the rendered HTML of published pages "+
-			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; if `content_only=true` is also set, the `html` field is returned empty for source-only fallback results). "+
+			"`content_only` defaults to true (BREAKING as of this release — previously defaulted to false): the `html` field returns just the article body (prefers the theme's id=\"content\" wrapper when present, excluding title, TOC, post metadata, share buttons, and prev/next navigation; falls back to <article>/<main>/<body>-minus-chrome otherwise) rather than the full rendered page including theme chrome (nav, footer, search widgets, share buttons, scripts) — the old default ran to several thousand tokens for a short article. Pass content_only=false explicitly to opt back into the full-page HTML. "+
+			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; with the default content_only=true, the `html` field is returned empty for source-only fallback results). "+
 			"`html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
 			"For the raw Markdown source, use get_page_markdown (reader token on OAuth-enabled deployments); for metadata only (no body), use get_page_frontmatter; if you're about to edit or delete this page, use get_page_for_edit instead — it bundles frontmatter, markdown, revision, and quality signals in one call. "+
@@ -353,9 +366,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			}
 			dto := toResolvedPageDetailDTO(resolved, cfg.ContentRoot)
 			dto.State = site.StateForResolvedPage(resolved, cfg.SiteRoot)
-			if in.ContentOnly && resolved.Public != nil {
+			if contentOnly(in.ContentOnly) && resolved.Public != nil {
 				dto.HTML = site.ExtractArticleHTML(dto.HTML)
-			} else if in.ContentOnly {
+			} else if contentOnly(in.ContentOnly) {
 				dto.HTML = ""
 				dto.HTMLOrigin = "none"
 			}

@@ -108,3 +108,78 @@ func TestValidateSVGContentRejectsAnimateElement(t *testing.T) {
 		t.Fatal("validateSVGContent: want error for <animate> (SMIL), got nil")
 	}
 }
+
+// #626: fill/stroke/clip-path/mask can carry a CSS url(...) reference just
+// like href — an external target here is a stored client-side fetch to an
+// attacker-controlled or internal host whenever the asset is rendered, and
+// was previously accepted verbatim because only href/xlink:href were
+// value-checked.
+func TestValidateSVGContentRejectsExternalURLInFill(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(http://attacker.example/x)" width="1" height="1"/></svg>`
+	if err := validateSVGContent([]byte(svg)); err == nil {
+		t.Fatal("validateSVGContent: want error for external url() in fill, got nil")
+	}
+}
+
+func TestValidateSVGContentRejectsExternalURLInStroke(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect stroke="url(https://attacker.example/x)" width="1" height="1"/></svg>`
+	if err := validateSVGContent([]byte(svg)); err == nil {
+		t.Fatal("validateSVGContent: want error for external url() in stroke, got nil")
+	}
+}
+
+func TestValidateSVGContentRejectsExternalURLInClipPath(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect clip-path="url(//attacker.example/x)" width="1" height="1"/></svg>`
+	if err := validateSVGContent([]byte(svg)); err == nil {
+		t.Fatal("validateSVGContent: want error for external url() in clip-path, got nil")
+	}
+}
+
+func TestValidateSVGContentRejectsExternalURLInMask(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect mask="url(http://attacker.example/x)" width="1" height="1"/></svg>`
+	if err := validateSVGContent([]byte(svg)); err == nil {
+		t.Fatal("validateSVGContent: want error for external url() in mask, got nil")
+	}
+}
+
+// A naive "trim the first url( / last )" check would wrongly accept this:
+// the trimmed result ("#a) url(http://attacker.example/x") still starts
+// with "#". validateSVGURLBearingValue must inspect every url(...)
+// occurrence individually, not just the outermost span.
+func TestValidateSVGContentRejectsDoubleURLBypassInFill(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(#a) url(http://attacker.example/x)" width="1" height="1"/></svg>`
+	if err := validateSVGContent([]byte(svg)); err == nil {
+		t.Fatal("validateSVGContent: want error for a local+external url() pair in fill, got nil")
+	}
+}
+
+func TestValidateSVGContentRejectsCaseVariantURLScheme(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="URL(http://attacker.example/x)" width="1" height="1"/></svg>`
+	if err := validateSVGContent([]byte(svg)); err == nil {
+		t.Fatal("validateSVGContent: want error for URL( case variant in fill, got nil")
+	}
+}
+
+func TestValidateSVGContentRejectsWhitespaceInsideURL(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(  http://attacker.example/x  )" width="1" height="1"/></svg>`
+	if err := validateSVGContent([]byte(svg)); err == nil {
+		t.Fatal("validateSVGContent: want error for whitespace-padded external url() in fill, got nil")
+	}
+}
+
+func TestValidateSVGContentAcceptsLocalFragmentURLInFill(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg">
+		<defs><linearGradient id="g1"><stop offset="0" stop-color="#fff"/></linearGradient></defs>
+		<rect fill="url(#g1)" stroke="url('#g1')" width="1" height="1"/>
+	</svg>`
+	if err := validateSVGContent([]byte(svg)); err != nil {
+		t.Fatalf("validateSVGContent: want nil for local fragment url() in fill/stroke, got %v", err)
+	}
+}
+
+func TestValidateSVGContentAcceptsPlainColorInFill(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg"><rect fill="#ff0000" stroke="none" width="1" height="1"/></svg>`
+	if err := validateSVGContent([]byte(svg)); err != nil {
+		t.Fatalf("validateSVGContent: want nil for a plain color value in fill/stroke, got %v", err)
+	}
+}

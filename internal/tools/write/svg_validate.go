@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -47,6 +48,41 @@ var allowedSVGAttributes = map[string]bool{
 	"preserveaspectratio": true, "clip-path": true, "mask": true, "role": true,
 }
 
+// urlBearingSVGAttributes are the allowlisted attributes (besides href/
+// xlink:href, handled separately) whose values can legally embed a CSS
+// `url(...)` paint/reference — e.g. `fill="url(#gradient1)"` to paint with a
+// locally-defined gradient/pattern, or `clip-path="url(#clip1)"` to apply a
+// locally-defined clip path. Every `url(...)` occurrence inside these
+// values must target a local fragment ("#id"); an external URL here is a
+// stored client-side fetch to an attacker-controlled or internal host
+// whenever the asset is rendered (#626), the same class of vector href's
+// local-fragment restriction already exists to prevent.
+var urlBearingSVGAttributes = map[string]bool{
+	"fill": true, "stroke": true, "clip-path": true, "mask": true,
+}
+
+// svgURLFuncPattern matches every `url(...)` occurrence in an attribute
+// value (case-insensitive, tolerant of internal whitespace), capturing the
+// target so each one can be validated individually — a value can legally
+// contain more than one, e.g. a (hypothetical) multi-token value, and a
+// naive "trim first url( / last )" check would wrongly accept
+// `url(#a) url(http://evil)` because the trimmed result still starts with
+// "#".
+var svgURLFuncPattern = regexp.MustCompile(`(?i)url\(\s*(.*?)\s*\)`)
+
+// validateSVGURLBearingValue rejects an attribute value if any `url(...)`
+// reference inside it does not target a local fragment ("#id").
+func validateSVGURLBearingValue(local, elementName, value string) error {
+	for _, match := range svgURLFuncPattern.FindAllStringSubmatch(value, -1) {
+		target := strings.TrimSpace(match[1])
+		target = strings.Trim(target, `"'`)
+		if !strings.HasPrefix(target, "#") {
+			return fmt.Errorf("invalid_svg: %q must reference only a local fragment (\"url(#id)\") on <%s>, got %q", local, elementName, value)
+		}
+	}
+	return nil
+}
+
 // validateSVGContent rejects an uploaded SVG asset outright on any
 // disallowed construct (#571) — consistent with upload_page_asset's
 // existing never-trust-declared-type posture, and the safest of the two
@@ -64,6 +100,9 @@ var allowedSVGAttributes = map[string]bool{
 //   - only allowlisted attributes (allowedSVGAttributes), plus href/
 //     xlink:href restricted to a local fragment reference ("#id") — never a
 //     URL, data URI, or javascript: scheme
+//   - every url(...) reference inside fill/stroke/clip-path/mask
+//     (urlBearingSVGAttributes) restricted to a local fragment
+//     ("url(#id)") — never an external host (#626)
 func validateSVGContent(data []byte) error {
 	dec := xml.NewDecoder(bytes.NewReader(data))
 	dec.Strict = true
@@ -115,6 +154,11 @@ func validateSVGContent(data []byte) error {
 				}
 				if !allowedSVGAttributes[local] {
 					return fmt.Errorf("invalid_svg: disallowed attribute %q on <%s>", local, name)
+				}
+				if urlBearingSVGAttributes[local] {
+					if err := validateSVGURLBearingValue(local, name, attr.Value); err != nil {
+						return err
+					}
 				}
 			}
 		}
