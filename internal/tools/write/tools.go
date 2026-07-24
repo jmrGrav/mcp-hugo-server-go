@@ -28,6 +28,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
@@ -1069,6 +1070,30 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
+		// Best-effort removal of any hero image generate_hero_image left
+		// behind for this slug (#606). generate_hero_image writes to
+		// {HugoRoot}/static/images/{slug}-featured.jpg, a location outside
+		// the page's own content bundle, so the os.RemoveAll(dir) above
+		// never touches it and it would otherwise accumulate as an orphaned
+		// file every time a page with a generated hero image is deleted.
+		// Never fatal — mirrors the public-dir/DB/audit-log cleanup steps
+		// above, which all surface failures as a non-blocking warning
+		// rather than failing the delete outright, since the source is
+		// already gone by this point and there's nothing to roll back to.
+		if cfg.HugoRoot != "" {
+			if removed, rmErr := removeHeroImage(cfg.HugoRoot, in.Slug); rmErr != nil {
+				msg := fmt.Sprintf("hero image cleanup failed: %v", rmErr)
+				if deleteWarning != "" {
+					deleteWarning += "; " + msg
+				} else {
+					deleteWarning = msg
+				}
+				slog.Warn("delete_page: hero image cleanup failed", "slug", in.Slug, "error", rmErr)
+			} else if removed {
+				slog.Debug("delete_page: removed orphaned hero image", "slug", in.Slug)
+			}
+		}
+
 		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
 		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
 		if auditErr := appendAuditLog(auditLog, entry); auditErr != nil {
@@ -1164,6 +1189,43 @@ func deletePageState(hasSiteRoot, publicCleanupFailed, dbDeleteFailed bool) site
 		state.IndexState = "stale"
 	}
 	return state
+}
+
+// removeHeroImage best-effort removes the {slug}{admin.HeroImageSuffix} hero
+// image admin.registerGenerateFeaturedImage (generate_hero_image) writes to
+// {hugoRoot}/static/images/, keyed only by slug rather than living inside
+// the page's own content bundle (#606). Deleting it here by re-deriving the
+// path from the shared admin.HeroImageSuffix constant — rather than
+// duplicating the "-featured.jpg" literal — keeps this in lockstep with
+// generate_hero_image's own path construction, so a future rename there
+// can't silently desync this cleanup logic from the code that actually
+// produced the file. It's otherwise safe with no rename/reuse ambiguity: a
+// different page necessarily has a different slug and therefore a different
+// filename, so this can never remove another page's hero image, and
+// static/images/ is not used for any other purpose elsewhere in this
+// codebase (page assets uploaded via upload_page_asset live under the
+// page's own content bundle, not here).
+//
+// Returns (removed, err). removed is true only when a file was actually
+// deleted; a hero image that was never generated for this slug is not an
+// error — most deleted pages won't have one.
+func removeHeroImage(hugoRoot, slug string) (bool, error) {
+	imagesRoot := filepath.Join(hugoRoot, "static", "images")
+	guard, err := security.New(imagesRoot, true)
+	if err != nil {
+		return false, err
+	}
+	target, err := guard.SafeJoin(slug + admin.HeroImageSuffix)
+	if err != nil {
+		return false, err
+	}
+	if err := os.Remove(target); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 type frontmatterDoc struct {
