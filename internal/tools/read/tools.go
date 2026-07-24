@@ -447,6 +447,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if err != nil {
 				return nil, getRelatedContentOutput{}, err
 			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, getRelatedContentOutput{}, err
+			}
 			limit := clampLimit(in.Limit, 5, 20)
 			ref := resolvedPublicPage(resolved)
 			if resolved.Public != nil {
@@ -534,6 +537,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		func(ctx context.Context, _ *mcp.CallToolRequest, in exportAgentContextInput) (*mcp.CallToolResult, exportAgentContextOutput, error) {
 			if idx == nil {
 				return nil, exportAgentContextOutput{}, fmt.Errorf("index not initialized")
+			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, exportAgentContextOutput{}, err
 			}
 			readerSafe := site.IsReaderProfile(ctx)
 			includeBody := true
@@ -1065,6 +1071,17 @@ func clampLimit(v, defaultVal, maxVal int) int {
 		return maxVal
 	}
 	return v
+}
+
+// negativeLimitError — see the identical helper's comment in
+// internal/tools/anonymous/tools.go (#641): 0 must keep meaning "use the
+// default" (clampLimit's existing, documented behavior), only negative
+// values are rejected as a likely caller-side bug.
+func negativeLimitError(v int) error {
+	if v < 0 {
+		return fmt.Errorf("invalid_params: limit must not be negative")
+	}
+	return nil
 }
 
 func nullsafeStrings(s []string) []string {

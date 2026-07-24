@@ -1705,3 +1705,56 @@ func assertPageState(t *testing.T, raw any, source, build, public, index string)
 		t.Fatalf("index_state = %v, want %q", got, index)
 	}
 }
+
+// TestNegativeLimitRejectedAcrossTools is a regression test for #641: a
+// negative limit (e.g. a miscalculated pagination offset/limit on the
+// caller's side) was silently treated the same as an omitted limit,
+// clamping to the tool's default instead of surfacing the caller's bug.
+// limit: 0 must keep working exactly as before (clampLimit's documented
+// "0 means use the default" contract, tools.WithMaxLimit's own comment) --
+// only a genuinely negative value is now rejected.
+func TestNegativeLimitRejectedAcrossTools(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	cases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_pages", map[string]any{"limit": -1}},
+		{"search_pages", map[string]any{"query": "hello", "limit": -1}},
+		{"get_recent_posts", map[string]any{"limit": -1}},
+		{"get_sitemap", map[string]any{"limit": -1}},
+		{"get_feed", map[string]any{"limit": -1}},
+	}
+	for _, tc := range cases {
+		res := callTool(t, session, tc.tool, tc.args)
+		if !res.IsError {
+			t.Errorf("%s limit=-1: expected invalid_params error, got success", tc.tool)
+			continue
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "invalid_params") {
+			t.Errorf("%s limit=-1 error = %s, want invalid_params", tc.tool, raw)
+		}
+	}
+
+	// limit: 0 must be unaffected -- still means "use the default", not an error.
+	zeroCases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_pages", map[string]any{"limit": 0}},
+		{"search_pages", map[string]any{"query": "hello", "limit": 0}},
+		{"get_recent_posts", map[string]any{"limit": 0}},
+		{"get_sitemap", map[string]any{"limit": 0}},
+		{"get_feed", map[string]any{"limit": 0}},
+	}
+	for _, tc := range zeroCases {
+		res := callTool(t, session, tc.tool, tc.args)
+		if res.IsError {
+			t.Errorf("%s limit=0: expected success (0 means use default), got error: %v", tc.tool, res.Content)
+		}
+	}
+}

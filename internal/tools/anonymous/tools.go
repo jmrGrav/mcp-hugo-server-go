@@ -317,6 +317,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if idx == nil {
 				return nil, listPagesOutput{}, fmt.Errorf("index not initialized")
 			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, listPagesOutput{}, err
+			}
 			limit := clampLimit(in.Limit, 50, 50)
 			all := idx.ContentPages()
 			offset := in.Offset
@@ -411,6 +414,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if err != nil {
 				return nil, searchPagesOutput{}, err
 			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, searchPagesOutput{}, err
+			}
 			limit := clampLimit(in.Limit, 50, 50)
 			offset := in.Offset
 			if offset < 0 {
@@ -464,6 +470,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
 			if idx == nil {
 				return nil, getRecentPostsOutput{}, fmt.Errorf("index not initialized")
+			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, getRecentPostsOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 10, 50)
 			offset := in.Offset
@@ -523,6 +532,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			if idx == nil {
 				return nil, getSitemapOutput{}, fmt.Errorf("index not initialized")
 			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, getSitemapOutput{}, err
+			}
 			all := idx.Sitemap()
 			if in.ExcludeTaxonomies {
 				classifier := site.NewClassifierFromPages(all)
@@ -560,6 +572,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		func(_ context.Context, _ *mcp.CallToolRequest, in getFeedInput) (*mcp.CallToolResult, getFeedOutput, error) {
 			if idx == nil {
 				return nil, getFeedOutput{}, fmt.Errorf("index not initialized")
+			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, getFeedOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 20, 50)
 			offset := in.Offset
@@ -683,6 +698,20 @@ func clampLimit(v, defaultVal, maxVal int) int {
 		return maxVal
 	}
 	return v
+}
+
+// negativeLimitError reports whether v is a negative limit, distinct from
+// zero (#641): clampLimit's v <= 0 branch deliberately treats 0 as "use the
+// default" (see tools.WithMaxLimit's comment — a real, accepted request
+// shape callers may rely on), so this must not fire for v == 0. A negative
+// value most likely indicates a caller-side bug (a miscalculated
+// pagination offset/limit); previously it was silently treated the same as
+// 0, hiding that bug behind a default-limit response instead of surfacing it.
+func negativeLimitError(v int) error {
+	if v < 0 {
+		return fmt.Errorf("invalid_params: limit must not be negative")
+	}
+	return nil
 }
 
 // resolveSourceKey looks up the source-relative, language-prefix-stripped
