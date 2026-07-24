@@ -268,6 +268,25 @@ func parseFrontmatterMap(raw []byte) map[string]any {
 	return fm
 }
 
+// bodyFromRaw extracts the Markdown body from a source file's raw bytes,
+// matching hugosite.splitFrontmatter's own convention exactly
+// (strings.TrimSpace of everything after the second "---" delimiter) since
+// callers store the result into the same hugosite.SourcePage.Body field
+// that function populates at index-build time (#643) — a mismatched
+// convention here would silently desync in-memory source index bodies from
+// what a fresh index rebuild would produce for the same file.
+func bodyFromRaw(raw []byte) string {
+	content := string(raw)
+	if !strings.HasPrefix(content, "---") {
+		return content
+	}
+	parts := strings.SplitN(content, "---", 3)
+	if len(parts) < 3 {
+		return content
+	}
+	return strings.TrimSpace(parts[2])
+}
+
 // currentTaxonomyFromRaw reads tags/categories straight out of a source
 // file's own frontmatter bytes. See parseFrontmatterMap's comment.
 func currentTaxonomyFromRaw(raw []byte) (tags, categories []string) {
