@@ -1446,6 +1446,61 @@ func TestGetPageDefaultsToContentOnly(t *testing.T) {
 	}
 }
 
+// TestGetPageIncludeTermsDefaultsToTrue is a regression test for #618:
+// tag_terms/category_terms default to present (non-breaking), matching
+// existing behavior — only an explicit include_terms=false omits them.
+func TestGetPageIncludeTermsDefaultsToTrue(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page: 'page' is %T, want map", m["page"])
+	}
+	if _, ok := page["tag_terms"]; !ok {
+		t.Fatal("get_page: tag_terms missing by default, want present (include_terms defaults to true)")
+	}
+	// category_terms is omitted here regardless of include_terms — this
+	// fixture's /posts/hello has no categories in the HTML index, so
+	// NormalizeTaxonomyTerms([]) legitimately produces an empty (and thus
+	// omitempty-omitted) slice. tag_terms alone is sufficient to prove the
+	// default doesn't strip terms.
+}
+
+// TestGetPageIncludeTermsFalseOmitsTerms is a regression test for #618:
+// include_terms=false omits tag_terms/category_terms while leaving the
+// plainer tags/categories string arrays untouched.
+func TestGetPageIncludeTermsFalseOmitsTerms(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello", "include_terms": false})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page: 'page' is %T, want map", m["page"])
+	}
+	if _, ok := page["tag_terms"]; ok {
+		t.Fatal("get_page: tag_terms present with include_terms=false, want omitted")
+	}
+	if _, ok := page["category_terms"]; ok {
+		t.Fatal("get_page: category_terms present with include_terms=false, want omitted")
+	}
+	if _, ok := page["tags"]; !ok {
+		t.Fatal("get_page: tags missing with include_terms=false, want present (only *_terms is opt-in)")
+	}
+}
+
 func TestReadOnlyAnnotations(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

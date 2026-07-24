@@ -40,11 +40,26 @@ type getPageInput struct {
 	ContentOnly         *bool  `json:"content_only,omitempty"`
 	AllowSourceFallback bool   `json:"allow_source_fallback,omitempty"`
 	ResponseMode        string `json:"response_mode,omitempty"`
+	// IncludeTerms defaults to true (#618): tag_terms/category_terms are
+	// richer {label,slug,source} objects that duplicate the plainer
+	// tags/categories string arrays already present on every response —
+	// 3-4x the bytes for the same information in the common case where a
+	// caller only needs the plain names. Pass include_terms=false to omit
+	// them. Default stays true for now (non-breaking, unlike #619's
+	// content_only flip) since this is new opt-out surface, not a
+	// documented-broken default.
+	IncludeTerms *bool `json:"include_terms,omitempty"`
 }
 
 // contentOnly resolves getPageInput.ContentOnly's effective value: true
 // unless the caller explicitly passed false (#619).
 func contentOnly(v *bool) bool {
+	return v == nil || *v
+}
+
+// includeTerms resolves getPageInput.IncludeTerms's effective value: true
+// unless the caller explicitly passed false (#618).
+func includeTerms(v *bool) bool {
 	return v == nil || *v
 }
 
@@ -331,6 +346,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			"`html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
 			"For the raw Markdown source, use get_page_markdown (reader token on OAuth-enabled deployments); for metadata only (no body), use get_page_frontmatter; if you're about to edit or delete this page, use get_page_for_edit instead — it bundles frontmatter, markdown, revision, and quality signals in one call. "+
+			"`include_terms` defaults to true: `tag_terms`/`category_terms` are richer `{label,slug,source}` objects returned alongside the plainer `tags`/`categories` string arrays — the same information at 3-4x the size (#618). Pass include_terms=false to omit them when you only need the plain names. "+
 			"Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageInput) (*mcp.CallToolResult, getPageOutput, error) {
 			if idx == nil && srcIdx == nil {
@@ -371,6 +387,10 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			} else if contentOnly(in.ContentOnly) {
 				dto.HTML = ""
 				dto.HTMLOrigin = "none"
+			}
+			if !includeTerms(in.IncludeTerms) {
+				dto.TagTerms = nil
+				dto.CategoryTerms = nil
 			}
 			return nil, newGetPageOutput(getPageData{Page: dto}), nil
 		})
