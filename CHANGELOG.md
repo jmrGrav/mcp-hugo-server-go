@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Fixed
+- **`rollback_change` now restores the in-memory source index's `Body` field, not just `Tags`/`Categories`/`Title`/`Revision`** (#643): after a real (non-`dry_run`) rollback, `get_page_markdown` — which reads a page's body straight from the in-memory `SourceIndex` entry before the next full rebuild — kept serving the pre-rollback body, while every other field on that same entry (and every other tool: `get_page`'s rendered HTML, `diff_page`'s direct disk read, and `revision`/`tags` on `get_page_markdown`'s own response) was already correctly reverted. `index_state` reported `"fresh"`, giving a caller no signal to distrust the response. Root cause: `rollback_change`'s index-upsert code copied the existing `SourcePage` struct wholesale and reassigned `FilePath`/`Lang`/`Title`/`Tags`/`Categories`/`BuildPending`, but never reassigned `Body` — unlike `update_page`'s equivalent upsert, which does. Fixed by extracting the restored body from the snapshot content (`bodyFromRaw`, matching `hugosite.splitFrontmatter`'s own trimming convention exactly, since both write into the same `SourcePage.Body` field) and assigning it alongside the other restored fields. Reproduced independently twice against production before the fix (a full `create_page`→`plan_content_change`→`apply_content_plan`→`publish_changes`→`rollback_change`→`build_site` cycle both times), and caught by a new regression test that fails without the fix and passes with it.
+
 ## [v1.6.1] - 2026-07-24
 
 ### Documentation

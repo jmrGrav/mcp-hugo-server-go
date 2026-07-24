@@ -428,3 +428,67 @@ func TestRollbackChangeRejectsSnapshotWithBlockedShortcode(t *testing.T) {
 		t.Fatalf("rejected rollback_change modified the file on disk: %q", stillNew)
 	}
 }
+
+// TestRollbackChangeUpdatesInMemorySourceIndexBody is a regression test for
+// #643: rollback_change wrote the restored content to disk correctly, but
+// never reassigned the in-memory SourceIndex entry's Body field — only
+// Tags/Categories/Title/Revision were updated on the upserted entry. Every
+// tool reading a page's body from the source index before the next full
+// index rebuild (get_page_markdown in particular) kept serving the
+// pre-rollback body as a result, with no staleness signal (index_state
+// still reported "fresh"). This asserts the fix directly against the index
+// entry rollback_change updates, the same one get_page_markdown reads from.
+func TestRollbackChangeUpdatesInMemorySourceIndexBody(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, idx, done := newTestServer(t, contentRoot)
+	defer done()
+
+	originalEntry, ok := idx.GetBySlug("posts/article")
+	if !ok {
+		t.Fatal("posts/article missing from source index after writeBundle")
+	}
+	originalBody := originalEntry.Body
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug":       "posts/article",
+		"operations": []any{map[string]any{"op": "update_body", "body": "Changed body for #643 regression test."}},
+	})
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+	target := decodeWriteData(t, planRes)["target"].(map[string]any)
+	beforeRevision := target["revision"].(string)
+
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
+	}
+	afterApplyRevision := decodeWriteData(t, applyRes)["after_revision"].(string)
+
+	changedEntry, ok := idx.GetBySlug("posts/article")
+	if !ok {
+		t.Fatal("posts/article missing from source index after apply_content_plan")
+	}
+	if !strings.Contains(changedEntry.Body, "Changed body for #643 regression test.") {
+		t.Fatalf("source index Body not updated by apply_content_plan: %q", changedEntry.Body)
+	}
+
+	rollbackRes := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/article",
+		"to_revision":       beforeRevision,
+		"expected_revision": afterApplyRevision,
+	})
+	if rollbackRes.IsError {
+		t.Fatalf("rollback_change failed: %s", marshalContent(t, rollbackRes))
+	}
+
+	restoredEntry, ok := idx.GetBySlug("posts/article")
+	if !ok {
+		t.Fatal("posts/article missing from source index after rollback_change")
+	}
+	if restoredEntry.Body != originalBody {
+		t.Fatalf("source index Body not restored by rollback_change:\nwant=%q\ngot=%q", originalBody, restoredEntry.Body)
+	}
+	if strings.Contains(restoredEntry.Body, "Changed body for #643 regression test.") {
+		t.Fatal("source index Body still contains post-apply content after rollback_change — #643 regression")
+	}
+}

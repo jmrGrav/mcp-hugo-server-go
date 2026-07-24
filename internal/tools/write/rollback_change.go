@@ -345,6 +345,12 @@ func registerRollbackChange(
 		}
 		updated.Tags = restoredTags
 		updated.Categories = restoredCategories
+		// #643: the in-memory source index's Body field was never
+		// reassigned here, so get_page_markdown (which reads straight from
+		// this index entry) kept serving the pre-rollback body while every
+		// other field on the same entry — Tags/Categories/Title/Revision —
+		// was correctly restored, with index_state still reporting "fresh".
+		updated.Body = bodyFromRaw([]byte(snapshotContent))
 		updated.BuildPending = true
 		idx.Upsert(updated)
 
