@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [v1.6.1] - 2026-07-24
 
 ### Documentation
 - **`normalize_taxonomy_casing`'s language-scoping caveat** (#604): `create_page`/`update_page`'s tool descriptions and their row in `docs/mcp-contract.md` now explicitly call out that matching is scoped to the *exact* `lang` bucket of the page being written — on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` on a `normalize_taxonomy_casing` call resolves to an empty-string bucket with no existing forms to match, and silently no-ops. No behavior change; this closes a gap where the no-op looked identical to a broken feature.
