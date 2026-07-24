@@ -55,6 +55,25 @@ for the full mapping and rationale.
 
 The current tool inventory is documented in [docs/tools.md](docs/tools.md) and should be treated as the source of truth for scope mapping and tool naming.
 
+## Slug formats: `slug` vs `source_key`
+
+Tool payloads use two different shapes for the same page identity, and mixing them up is a recurring source of confusion (#610):
+
+- **`slug` on read-tool outputs** (`list_pages`, `search_pages`, `get_recent_posts`, `get_sitemap`, `get_feed`, `get_page`, etc.) is the canonical **public URL form**, e.g. `/posts/my-article/` (or `/en/posts/my-article/` for a non-default language).
+- **`slug` on write-tool inputs** (`create_page`, `update_page`, `delete_page`, `upload_page_asset`, `delete_page_asset`) expects the **source-relative `source_key` form**, e.g. `posts/my-article` — no leading/trailing slashes, no language prefix. (`suggest_links`, a read-scoped tool, is the exception: its `slug` input takes the public URL form, matching read-tool outputs.)
+- To avoid reformatting by hand, every read tool that returns `slug` also returns `source_key` alongside it, in exactly the form the write tools' `slug` input expects. Feed `source_key` from a read-tool result straight into a write tool's `slug` parameter.
+
+See [docs/mcp-contract.md](docs/mcp-contract.md) for the full per-tool field reference.
+
+## Recommended authoring workflow
+
+For a fresh article, the suggested call order is:
+
+1. `list_content_types` — confirm the content type and required front matter.
+2. `suggest_links(tags, categories, body)` — run against your draft tags/body *before* writing, to surface internal-linking candidates while the content is still easy to adjust (#623).
+3. `create_page` — write the page (`create_page`'s own description also cross-references `suggest_links` as a pre-write step).
+4. `verify_publication` — confirm the change actually went live after a build.
+
 ## Security model
 
 - Anonymous callers and `read`-scoped callers see the same tool set — `read` carries no additional visibility restriction (#450).
