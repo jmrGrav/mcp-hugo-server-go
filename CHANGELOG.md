@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Security
+- **`upload_page_asset`'s SVG allowlist now rejects external `url(...)` references in `fill`/`stroke`/`clip-path`/`mask`** (#626): the structural allowlist parser added for SVG uploads (#571) already restricted `href`/`xlink:href` to a local fragment reference (`"#id"`), but `fill`/`stroke`/`clip-path`/`mask` — all of which can legally carry a CSS `url(...)` paint reference — were allowlisted with no value check, so an uploaded SVG with e.g. `fill="url(http://attacker.example/x)"` passed validation unmodified and would cause the rendering browser to fetch an attacker-controlled or internal resource whenever the asset was displayed. Every `url(...)` occurrence inside these four attributes is now individually validated (not just the first/last, which a naive trim-based check would miss on a value like `url(#a) url(http://evil)`) and must target a local fragment. Independently verified and fixed following a strix-security[bot] report on PR #600.
+
 ## [v1.6.0] - 2026-07-24
 
 ### Added
