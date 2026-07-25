@@ -3,9 +3,9 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
