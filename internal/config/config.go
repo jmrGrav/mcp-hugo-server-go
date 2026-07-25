@@ -73,6 +73,21 @@ type Config struct {
 	// escape hatch under a different name — this list does not, by itself,
 	// make arbitrary agent-authored body content safe against every theme.
 	BlockedShortcodes []string `yaml:"blocked_shortcodes"`
+	// ForceDryRunAll (#611), when true, overrides every mutation tool's
+	// per-call `dry_run` argument to true server-wide — create_page,
+	// update_page, delete_page, upload_page_asset, delete_page_asset,
+	// apply_content_plan, and rollback_change all become read-only previews
+	// regardless of what a caller passes. Intended for safely exercising the
+	// full write-tool surface during a live audit or CI smoke run without
+	// every caller having to remember `dry_run: true` on every call, and
+	// without touching rate-limit quota (dry-run calls already don't consume
+	// it). Deliberately a single server-wide config flag, not a per-caller/
+	// per-session mechanism — matches this repo's existing preference for
+	// the simplest mechanism proportionate to the actual use case (avoiding
+	// new OAuth/session plumbing for what safe-audit/CI use cases need).
+	// Each affected tool's response still reports `data.dry_run: true` as
+	// normal, so the override is directly visible to the caller, not silent.
+	ForceDryRunAll bool `yaml:"force_dry_run_all"`
 }
 
 // GitBaselineConfig defines the local Git checkout model used as the trusted

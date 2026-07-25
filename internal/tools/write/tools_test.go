@@ -34,6 +34,10 @@ type testServerOpts struct {
 	// HugoRoot, when non-empty, is set on cfg so delete_page's hero image
 	// cleanup (#606) has somewhere to look for {slug}-featured.jpg.
 	HugoRoot string
+	// ForceDryRunAll, when true, sets cfg.ForceDryRunAll (#611) so every
+	// mutation tool call in the test session behaves as if dry_run: true
+	// were passed, regardless of what the test actually sends.
+	ForceDryRunAll bool
 }
 
 // newTestServer builds a write-tool MCP server over an in-memory transport and
@@ -60,6 +64,7 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 	if o.RateLimit != nil {
 		cfg.RateLimit = *o.RateLimit
 	}
+	cfg.ForceDryRunAll = o.ForceDryRunAll
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg, o.SiteDB, o.SiteIdx)
