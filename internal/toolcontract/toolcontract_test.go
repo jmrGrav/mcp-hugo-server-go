@@ -153,6 +153,19 @@ func TestParseToolErrorMissingRequiredParameter(t *testing.T) {
 	}
 }
 
+func TestParseToolErrorInfersFilenameField(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("invalid_params: filename must be a single path component matching ^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$"))
+	if got.Code != "invalid_params" {
+		t.Fatalf("Code = %q, want invalid_params", got.Code)
+	}
+	if got.Field != "filename" {
+		t.Fatalf("Field = %q, want filename", got.Field)
+	}
+	if got.Resolution == nil || got.Resolution.Parameter != "filename" {
+		t.Fatalf("Resolution = %#v, want retry_with_parameter on filename", got.Resolution)
+	}
+}
+
 func TestParseToolErrorRevisionConflict(t *testing.T) {
 	got := ParseToolError(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
 	if got.Code != "revision_conflict" {

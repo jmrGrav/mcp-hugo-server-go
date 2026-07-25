@@ -325,40 +325,61 @@ func TestGenerateFeaturedImageDescriptionWhenConfigured(t *testing.T) {
 	t.Fatal("generate_hero_image not found in tools list")
 }
 
-func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
-	siteRoot := t.TempDir()
-	cfg := config.Default()
-	cfg.SiteRoot = siteRoot
-	cfg.ImageGenURL = "http://127.0.0.1:0" // unreachable; validation must fire first
+func TestGenerateFeaturedImageRejectsHostileSlugCorpus(t *testing.T) {
+	cases := []struct {
+		name string
+		slug string
+	}{
+		{name: "raw traversal", slug: "../../etc/passwd"},
+		{name: "encoded traversal", slug: "%2e%2e/escape"},
+		{name: "double encoded traversal", slug: "%252e%252e/escape"},
+		{name: "backslash traversal", slug: `..\\escape`},
+		{name: "absolute path", slug: "/tmp/escape"},
+		{name: "unicode confusable slash", slug: "posts∕escape"},
+		{name: "control character", slug: "posts/\x07escape"},
+	}
 
-	session, done := newTestServer(t, cfg)
-	defer done()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hugoRoot := t.TempDir()
+			cfg := config.Default()
+			cfg.HugoRoot = hugoRoot
+			cfg.SiteRoot = t.TempDir()
+			cfg.ImageGenURL = "http://127.0.0.1:0" // unreachable; validation must fire first
 
-	res, err := callTool(t, session, "generate_hero_image", map[string]any{
-		"slug":   "../../etc/passwd",
-		"prompt": "traversal test",
-	})
-	if err != nil {
-		t.Fatalf("unexpected transport error: %v", err)
-	}
-	if !res.IsError {
-		t.Fatal("expected error for traversal slug, got success")
-	}
-	text := resultText(res)
-	if !strings.Contains(text, "invalid_params") {
-		t.Fatalf("error text %q does not contain 'invalid_params'", text)
-	}
-	m := decodeStructuredResult(t, res)
-	errors, ok := m["errors"].([]any)
-	if !ok || len(errors) != 1 {
-		t.Fatalf("structured errors = %#v", m["errors"])
-	}
-	err0 := errors[0].(map[string]any)
-	if got := err0["code"]; got != "invalid_params" {
-		t.Fatalf("generate_hero_image error code = %v, want invalid_params", got)
-	}
-	if got := err0["field"]; got != "slug" {
-		t.Fatalf("generate_hero_image error field = %v, want slug", got)
+			session, done := newTestServer(t, cfg)
+			defer done()
+
+			res, err := callTool(t, session, "generate_hero_image", map[string]any{
+				"slug":   tc.slug,
+				"prompt": "traversal test",
+			})
+			if err != nil {
+				t.Fatalf("unexpected transport error: %v", err)
+			}
+			if !res.IsError {
+				t.Fatalf("generate_hero_image(%q): want invalid_params, got success", tc.slug)
+			}
+			text := resultText(res)
+			if !strings.Contains(text, "invalid_params") {
+				t.Fatalf("error text %q does not contain 'invalid_params'", text)
+			}
+			m := decodeStructuredResult(t, res)
+			errors, ok := m["errors"].([]any)
+			if !ok || len(errors) != 1 {
+				t.Fatalf("structured errors = %#v", m["errors"])
+			}
+			err0 := errors[0].(map[string]any)
+			if got := err0["code"]; got != "invalid_params" {
+				t.Fatalf("generate_hero_image error code = %v, want invalid_params", got)
+			}
+			if got := err0["field"]; got != "slug" {
+				t.Fatalf("generate_hero_image error field = %v, want slug", got)
+			}
+			if _, statErr := os.Stat(filepath.Join(hugoRoot, "static", "images")); !os.IsNotExist(statErr) {
+				t.Fatalf("generate_hero_image(%q) must not create static/images on rejected input", tc.slug)
+			}
+		})
 	}
 }
 

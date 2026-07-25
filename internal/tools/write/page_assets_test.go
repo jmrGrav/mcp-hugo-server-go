@@ -180,6 +180,44 @@ func TestUploadPageAssetRejectsMimeMismatch(t *testing.T) {
 	}
 }
 
+func TestUploadPageAssetRejectsHostileFilenameCorpus(t *testing.T) {
+	cases := []struct {
+		name     string
+		filename string
+	}{
+		{name: "raw traversal", filename: "../cover.png"},
+		{name: "encoded traversal", filename: "%2e%2e.png"},
+		{name: "double encoded traversal", filename: "%252e%252e.png"},
+		{name: "backslash traversal", filename: `..\\cover.png`},
+		{name: "absolute path", filename: "/tmp/cover.png"},
+		{name: "unicode confusable slash", filename: "cover∕evil.png"},
+		{name: "control character", filename: "co\x07ver.png"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contentRoot := t.TempDir()
+			writeBundle(t, contentRoot, "posts/article")
+			session, _, done := newTestServer(t, contentRoot)
+			defer done()
+
+			res := callTool(t, session, "upload_page_asset", map[string]any{
+				"slug":           "posts/article",
+				"filename":       tc.filename,
+				"content_base64": b64(minimalPNG),
+			})
+			if !res.IsError {
+				t.Fatalf("upload_page_asset(%q): want invalid_params, got success", tc.filename)
+			}
+			assertSingleStructuredWriteErrorField(t, res, "invalid_params", "filename")
+
+			if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); !os.IsNotExist(err) {
+				t.Fatalf("upload_page_asset(%q) must not create cover.png on rejection", tc.filename)
+			}
+		})
+	}
+}
+
 func TestUploadPageAssetRejectsExistingFilename(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeBundle(t, contentRoot, "posts/article")
