@@ -1886,7 +1886,15 @@ func TestCreatePageRejectsInvalidLang(t *testing.T) {
 	}
 }
 
-func TestDeletePageMultilingualBundleStillSucceeds(t *testing.T) {
+// TestDeletePageMultilingualBundleWithoutLangIsAmbiguous is the core
+// regression test for #682: previously, omitting lang on a bilingual bundle
+// silently resolved to one language file (via the alphabetically-first-pick
+// inspectDeleteSource helper) and then deleted the ENTIRE bundle directory —
+// a real data-loss risk, since an agent intending to delete one translation
+// could delete all of them. Deletion must now be rejected outright, matching
+// update_page's existing ambiguous_language contract, and must not touch
+// disk at all.
+func TestDeletePageMultilingualBundleWithoutLangIsAmbiguous(t *testing.T) {
 	contentRoot := t.TempDir()
 	pageDir := filepath.Join(contentRoot, "posts", "bilingual-delete")
 	if err := os.MkdirAll(pageDir, 0o755); err != nil {
@@ -1906,12 +1914,91 @@ func TestDeletePageMultilingualBundleStillSucceeds(t *testing.T) {
 		"slug":              "posts/bilingual-delete",
 		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.en.md")),
 	})
+	if !res.IsError {
+		t.Fatal("delete_page without lang on a bilingual bundle must fail with ambiguous_language, not silently pick one and delete both")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "ambiguous_language") {
+		t.Fatalf("delete_page error = %s, want ambiguous_language", raw)
+	}
+	for _, lang := range []string{"fr", "en"} {
+		if _, err := os.Stat(filepath.Join(pageDir, "index."+lang+".md")); err != nil {
+			t.Errorf("index.%s.md must survive a rejected ambiguous delete: %v", lang, err)
+		}
+	}
+}
+
+// TestDeletePageOneLanguageSurvivesTheOther proves the actual fix for #682:
+// deleting one language of a bilingual bundle with an explicit lang must
+// remove only that language's source file — the other translation must
+// still exist on disk AND still be resolvable via the in-memory source
+// index (the blind spot a filesystem-only check would miss, since the old
+// whole-slug idx.Delete would have dropped the survivor from the index even
+// if the file itself were left on disk).
+func TestDeletePageOneLanguageSurvivesTheOther(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual-delete")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: FR\n---\nBonjour"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN\n---\nHello"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, idx, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/bilingual-delete",
+		"lang":              "en",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.en.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
-		t.Fatalf("delete_page on multilingual bundle failed: %s", raw)
+		t.Fatalf("delete_page(lang=en) failed: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	if got, _ := data["bundle_fully_removed"].(bool); got {
+		t.Error("bundle_fully_removed = true, want false — the fr translation still exists")
+	}
+
+	if _, err := os.Stat(filepath.Join(pageDir, "index.en.md")); !os.IsNotExist(err) {
+		t.Fatal("index.en.md must be removed")
+	}
+	if _, err := os.Stat(filepath.Join(pageDir, "index.fr.md")); err != nil {
+		t.Fatalf("index.fr.md must survive: %v", err)
+	}
+
+	// The survivor must still be resolvable via the in-memory index, not
+	// just present on disk — this is the check that catches a whole-slug
+	// idx.Delete silently dropping it from the index even though the file
+	// itself was left alone.
+	if _, ok := idx.GetBySlugLang("posts/bilingual-delete", "fr"); !ok {
+		t.Fatal("the fr translation must still be resolvable via the in-memory SourceIndex after deleting only en")
+	}
+	if _, ok := idx.GetBySlugLang("posts/bilingual-delete", "en"); ok {
+		t.Fatal("the en translation must no longer be resolvable via the in-memory SourceIndex")
+	}
+
+	// Deleting the last remaining language must remove the whole bundle.
+	res2 := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/bilingual-delete",
+		"lang":              "fr",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.fr.md")),
+	})
+	if res2.IsError {
+		raw, _ := json.Marshal(res2.Content)
+		t.Fatalf("delete_page(lang=fr, last remaining) failed: %s", raw)
+	}
+	data2 := decodeWriteData(t, res2)
+	if got, _ := data2["bundle_fully_removed"].(bool); !got {
+		t.Error("bundle_fully_removed = false, want true — fr was the last remaining language")
 	}
 	if _, err := os.Stat(pageDir); !os.IsNotExist(err) {
-		t.Fatal("delete_page must remove multilingual bundle directory")
+		t.Fatal("delete_page must remove the bundle directory once the last language is gone")
 	}
 }
 

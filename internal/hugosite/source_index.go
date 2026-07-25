@@ -204,8 +204,12 @@ func (idx *SourceIndex) Upsert(page SourcePage) {
 	idx.rebuildMaps()
 }
 
-// Delete removes the index entry for slug. It must be called while ContentMu
-// is held for writing.
+// Delete removes every index entry for slug, across all languages. It must
+// be called while ContentMu is held for writing. Only appropriate when the
+// entire page bundle (every language file) is being removed from disk — for
+// a single-language deletion of a bilingual bundle, use DeleteLang instead,
+// or this would silently drop the surviving translation from the in-memory
+// index while its source file is still on disk (#682).
 func (idx *SourceIndex) Delete(slug string) {
 	if idx == nil || len(idx.pages) == 0 {
 		return
@@ -213,6 +217,24 @@ func (idx *SourceIndex) Delete(slug string) {
 	filtered := idx.pages[:0]
 	for _, page := range idx.pages {
 		if page.Slug == slug {
+			continue
+		}
+		filtered = append(filtered, page)
+	}
+	idx.pages = filtered
+	idx.rebuildMaps()
+}
+
+// DeleteLang removes only the index entry matching both slug and lang,
+// leaving any other language variant of the same bundle untouched (#682).
+// It must be called while ContentMu is held for writing.
+func (idx *SourceIndex) DeleteLang(slug, lang string) {
+	if idx == nil || len(idx.pages) == 0 {
+		return
+	}
+	filtered := idx.pages[:0]
+	for _, page := range idx.pages {
+		if page.Slug == slug && page.Lang == lang {
 			continue
 		}
 		filtered = append(filtered, page)
