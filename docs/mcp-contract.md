@@ -381,7 +381,7 @@ content, including drafts, for every tool in this table.
 | `check_ai_readiness` | structured  | `data.status`, `data.checks`, `data.warnings`, `data.suggestions`; deterministic Markdown/frontmatter-only audit for heading hierarchy, section lengths, paragraph lengths, metadata presence, internal-link density, and citation structure. Explicitly does **not** cover rendered HTML, SEO, build freshness, or broken-link correctness (#437); does not yet support `response_mode` compact shaping (#526) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo; supports `response_mode` compact envelope shaping (§5.2, #526); top-level duplication removed (#495) |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state`; supports `response_mode` compact envelope shaping (§5.2, #526); a non-default-language page's route prefix (e.g. `en` in `/en/posts/foo/`) is stripped before section counting and only ever surfaced via `data.languages`, never as a `data.sections[*].name` (#459); top-level duplication removed (#495) |
-| `get_site_health`       | structured  | `data.score`, `data.status`, counts; supports `response_mode` compact envelope shaping (§5.2, #526); `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); `data.advisories_count` is the total count of `data.taxonomy_inconsistency_details` findings across *both* `info` and `warning` severity, at the top level next to `score`/`status` — never moves either; deliberately broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings (#591); top-level duplication removed (#495) |
+| `get_site_health`       | structured  | `data.score`, `data.status`, counts; supports `response_mode` compact envelope shaping (§5.2, #526); `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); `data.advisories_count` is the total count of `data.taxonomy_inconsistency_details` findings across *both* `info` and `warning` severity, at the top level next to `score`/`status` — never moves `score`; deliberately broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings (#591); `data.status` is `"healthy_with_advisories"` rather than `"healthy"` whenever `advisories_count > 0` on an otherwise-healthy site — `score` itself still never moves for a taxonomy finding, so `status` alone no longer masks one (#681); top-level duplication removed (#495) |
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`; supports `response_mode` compact envelope shaping (§5.2, #526); `data.index_staleness` (`newest_edit`, `likely_source`) is present only on the in-memory fallback path (not the `db_path` pre-computed-graph path) when the index is behind on-disk content — absent means current (#583); `likely_source` is `"mcp_pending_build"` or `"external_or_unknown"`, a coarse best-effort hint (#617); top-level duplication removed (#495) |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`; supports `response_mode` compact envelope shaping (§5.2, #526); `data.index_staleness` (`newest_edit`, `likely_source`) is present only when the index is behind on-disk content — absent means current (#583); `likely_source` is `"mcp_pending_build"` or `"external_or_unknown"`, a coarse best-effort hint (#617); top-level duplication removed (#495) |
 | `suggest_links`         | structured  | `data.suggested_links` is canonical; supports `response_mode` compact envelope shaping (§5.2, #526); the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); top-level duplication removed (#495) |
@@ -706,8 +706,23 @@ the two categories this server computes a real signal for today. It omits
 publishing a fabricated 100 for a category with no underlying check would
 be more misleading than omitting it.
 
-No behavior change: `score`/`status` are identical to pre-#419 for every
-input, including sites with `alias_mismatch`/`possible_duplicate` findings.
+No behavior change vs. pre-#419: `score` is identical for every input,
+including sites with `alias_mismatch`/`possible_duplicate` findings.
+`status`, however, changed under #681 below — it is no longer identical to
+pre-#419 whenever a taxonomy finding is present.
+
+### `status: "healthy_with_advisories"` (#681)
+
+A follow-up live audit found the `score`/`status`-never-moves guarantee
+above made `status` misleading on its own: a site could show
+`score: 100, status: "healthy"` while `advisories_count` was non-zero, and
+an agent that only reads `status` at a glance had no signal to look
+further. `get_site_health` now reports `status: "healthy_with_advisories"`
+instead of `"healthy"` whenever `advisories_count > 0` and the site would
+otherwise be healthy — presentation only, same as #419: `score` and
+`score_breakdown` are unchanged, and a `warning` vs. `info` severity
+finding still affects `status` identically (both count toward
+`advisories_count`, which is all that drives this status value).
 
 ## 6.9. `verify_publication` Bounded Wait (#421)
 
