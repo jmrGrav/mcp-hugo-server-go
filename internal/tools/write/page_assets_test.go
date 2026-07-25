@@ -1,6 +1,7 @@
 package write_test
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"os"
@@ -215,6 +216,79 @@ func TestUploadPageAssetRejectsHostileFilenameCorpus(t *testing.T) {
 				t.Fatalf("upload_page_asset(%q) must not create cover.png on rejection", tc.filename)
 			}
 		})
+	}
+}
+
+func TestUploadPageAssetRejectsFakeJPEG(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.jpg",
+		"content_base64": b64([]byte("this is plain text, not a jpeg")),
+	})
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want error for fake jpeg, got success")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "invalid_params") || !strings.Contains(raw, ".jpg") {
+		t.Fatalf("upload_page_asset fake-jpeg error = %s, want invalid_params mentioning .jpg", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.jpg")); !os.IsNotExist(err) {
+		t.Fatal("upload_page_asset must not write a file when sniffing rejects fake jpeg content")
+	}
+}
+
+func TestUploadPageAssetAcceptsUppercaseExtension(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "COVER.PNG",
+		"content_base64": b64(minimalPNG),
+	})
+	if res.IsError {
+		t.Fatalf("upload_page_asset uppercase extension failed: %s", marshalContent(t, res))
+	}
+	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["filename"]; got != "COVER.PNG" {
+		t.Fatalf("upload_page_asset data.filename = %v, want COVER.PNG", got)
+	}
+	if got := dataEnvelope["content_type"]; got != "image/png" {
+		t.Fatalf("upload_page_asset data.content_type = %v, want image/png", got)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "COVER.PNG")); err != nil {
+		t.Fatalf("expected uppercase filename to be written unchanged: %v", err)
+	}
+}
+
+func TestUploadPageAssetRejectsOversizedDecodedContent(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	tooLarge := bytes.Repeat([]byte("a"), 10<<20+1)
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "too-large.png",
+		"content_base64": b64(tooLarge),
+	})
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want error for decoded payload > 10 MiB, got success")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "invalid_params") || !strings.Contains(raw, "decoded asset content exceeds") {
+		t.Fatalf("upload_page_asset oversize error = %s, want decoded-size invalid_params", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "too-large.png")); !os.IsNotExist(err) {
+		t.Fatal("upload_page_asset must not leave a partial file after rejecting oversized content")
 	}
 }
 
