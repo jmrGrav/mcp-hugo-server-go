@@ -124,7 +124,7 @@ func RegisterListPageRevisions(s *mcp.Server, idx *site.Index, srcIdx *hugosite.
 				return nil, unavailable(strings.TrimSpace(err.Error())), nil
 			}
 
-			var revisions []pageRevisionDTO
+			revisions := []pageRevisionDTO{}
 			if strings.TrimSpace(raw) != "" {
 				for _, line := range strings.Split(raw, "\n") {
 					line = strings.TrimSpace(line)

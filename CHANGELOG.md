@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Fixed
+- **`get_rate_limits` (#614) no longer rejected as `unknown_tool` for a caller holding a valid `write`-scoped token** (#675): a live v1.6.3 audit found the new tool failed with a permission error even though every other `write`-scoped tool worked fine in the same session with the same token. Root cause: `internal/oauth/acl.go`'s `ScopePolicy.checkOne` resolves a tool's required scope via the registry built at startup from each package's `Defs()` — `get_rate_limits` was wired as a real tool (`registerGetRateLimits`, #614/#656) but never added to `write.Defs()`, so `RequiredScopeFor` returned `known=false` and every caller was denied outright, regardless of scope. The same class of gap was previously caught as a drive-by for `plan_page`/`list_page_revisions` during #612; this instance slipped through because `get_rate_limits` shipped in a separate PR that didn't touch `Defs()`. Fixed by adding the missing `Defs()` entry, plus two new regression tests (`TestACLGetRateLimitsResolvesKnownScope`, `TestACLEveryWriteToolResolvesKnownScope`) — the latter asserts every tool `write.Defs()` declares actually resolves to a known scope, so this exact bug class can't recur silently.
+- **`list_page_revisions` now returns `revisions: []`, not `null`, for a page inside a real git repository that was never itself committed** (#676): every other listing tool on this server (`list_pages`, `get_sitemap`, ...) uses the empty-array convention when there's nothing to report; `list_page_revisions`'s `status: "ok"` path (a git repo exists, but `git log --follow` returns nothing for this specific file) left the underlying Go slice `nil`, encoding as JSON `null` — a client that assumes an array and calls `.length`/iterates without a null-check breaks specifically on this tool. Fixed by initializing the slice as `[]pageRevisionDTO{}` before the loop.
+
+### Documentation
+- **`normalize_taxonomy_casing`'s `lang`-scoping caveat is now the first sentence of the parameter's description, not an aside after the main explanation** (#677): #604 already documented that matching is scoped to the exact `lang` bucket of the page being written, but two independent live audits (pre- and post-#604) still missed it and read the resulting no-op as a broken feature. No behavior change — the caveat now leads both `create_page`'s and `update_page`'s description text instead of following the "what this flag does" explanation.
+
 ## [v1.6.3] - 2026-07-25
 
 ### Added
