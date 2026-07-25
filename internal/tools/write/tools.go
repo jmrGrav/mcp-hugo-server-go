@@ -342,10 +342,22 @@ func appendLastBuildWarning(warning string) string {
 	return warning + "; " + advisory
 }
 
-// normalizeInputSlug strips leading and trailing slashes so agents that pass
-// /posts/foo/ and posts/foo reach the same content directory and source-index
-// entry (#265).
-func normalizeInputSlug(s string) string { return strings.Trim(s, "/") }
+// normalizeInputSlug canonicalizes the two supported caller forms:
+//   - posts/foo
+//   - /posts/foo/
+//
+// It deliberately does NOT rewrite a lone-leading-slash form like
+// "/tmp/escape" or "/posts/foo" into a valid source slug. Those inputs are
+// left intact so the existing slug/path validators reject them fail-closed
+// instead of silently normalizing a hostile absolute-looking path into a
+// writable relative slug (#691).
+func normalizeInputSlug(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "/") && !strings.HasSuffix(s, "/") {
+		return s
+	}
+	return strings.Trim(s, "/")
+}
 
 // canonicalPublicSlug converts a source-relative slug ("posts/x") to the
 // canonical public-route form ("/posts/x/") already used by read tools

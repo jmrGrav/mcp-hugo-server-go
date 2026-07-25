@@ -362,6 +362,49 @@ func TestGenerateFeaturedImage_TraversalSlug(t *testing.T) {
 	}
 }
 
+func TestGenerateFeaturedImageRejectsHostileSlugCorpus(t *testing.T) {
+	siteRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.ImageGenURL = "http://127.0.0.1:0" // unreachable; validation must fire first
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	for _, slug := range []string{
+		"/tmp/escape",
+		"%2e%2e/escape",
+		"%252e%252e/escape",
+		`..\\escape`,
+		"posts/evil\nname",
+	} {
+		t.Run(slug, func(t *testing.T) {
+			res, err := callTool(t, session, "generate_hero_image", map[string]any{
+				"slug":   slug,
+				"prompt": "hostile slug corpus",
+			})
+			if err != nil {
+				t.Fatalf("unexpected transport error: %v", err)
+			}
+			if !res.IsError {
+				t.Fatalf("generate_hero_image(%q): want error, got success", slug)
+			}
+			m := decodeStructuredResult(t, res)
+			errors, ok := m["errors"].([]any)
+			if !ok || len(errors) != 1 {
+				t.Fatalf("structured errors = %#v", m["errors"])
+			}
+			err0 := errors[0].(map[string]any)
+			if got := err0["code"]; got != "invalid_params" {
+				t.Fatalf("generate_hero_image(%q) code = %v, want invalid_params", slug, got)
+			}
+			if got := err0["field"]; got != "slug" {
+				t.Fatalf("generate_hero_image(%q) field = %v, want slug", slug, got)
+			}
+		})
+	}
+}
+
 // TestGenerateFeaturedImage_SymlinkedImagesDir_APIMode verifies that
 // generate_hero_image (API mode) fails closed when static/images is
 // symlinked to a directory outside hugo_root. Uses RejectSymlinks=false to
