@@ -1886,7 +1886,15 @@ func TestCreatePageRejectsInvalidLang(t *testing.T) {
 	}
 }
 
-func TestDeletePageMultilingualBundleStillSucceeds(t *testing.T) {
+// TestDeletePageMultilingualBundleWithoutLangIsAmbiguous is the core
+// regression test for #682: previously, omitting lang on a bilingual bundle
+// silently resolved to one language file (via the alphabetically-first-pick
+// inspectDeleteSource helper) and then deleted the ENTIRE bundle directory —
+// a real data-loss risk, since an agent intending to delete one translation
+// could delete all of them. Deletion must now be rejected outright, matching
+// update_page's existing ambiguous_language contract, and must not touch
+// disk at all.
+func TestDeletePageMultilingualBundleWithoutLangIsAmbiguous(t *testing.T) {
 	contentRoot := t.TempDir()
 	pageDir := filepath.Join(contentRoot, "posts", "bilingual-delete")
 	if err := os.MkdirAll(pageDir, 0o755); err != nil {
@@ -1906,12 +1914,236 @@ func TestDeletePageMultilingualBundleStillSucceeds(t *testing.T) {
 		"slug":              "posts/bilingual-delete",
 		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.en.md")),
 	})
+	if !res.IsError {
+		t.Fatal("delete_page without lang on a bilingual bundle must fail with ambiguous_language, not silently pick one and delete both")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "ambiguous_language") {
+		t.Fatalf("delete_page error = %s, want ambiguous_language", raw)
+	}
+	for _, lang := range []string{"fr", "en"} {
+		if _, err := os.Stat(filepath.Join(pageDir, "index."+lang+".md")); err != nil {
+			t.Errorf("index.%s.md must survive a rejected ambiguous delete: %v", lang, err)
+		}
+	}
+}
+
+// TestDeletePageOneLanguageSurvivesTheOther proves the actual fix for #682:
+// deleting one language of a bilingual bundle with an explicit lang must
+// remove only that language's source file — the other translation must
+// still exist on disk AND still be resolvable via the in-memory source
+// index (the blind spot a filesystem-only check would miss, since the old
+// whole-slug idx.Delete would have dropped the survivor from the index even
+// if the file itself were left on disk).
+func TestDeletePageOneLanguageSurvivesTheOther(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual-delete")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: FR\n---\nBonjour"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN\n---\nHello"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, idx, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/bilingual-delete",
+		"lang":              "en",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.en.md")),
+	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
-		t.Fatalf("delete_page on multilingual bundle failed: %s", raw)
+		t.Fatalf("delete_page(lang=en) failed: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	if got, _ := data["bundle_fully_removed"].(bool); got {
+		t.Error("bundle_fully_removed = true, want false — the fr translation still exists")
+	}
+
+	if _, err := os.Stat(filepath.Join(pageDir, "index.en.md")); !os.IsNotExist(err) {
+		t.Fatal("index.en.md must be removed")
+	}
+	if _, err := os.Stat(filepath.Join(pageDir, "index.fr.md")); err != nil {
+		t.Fatalf("index.fr.md must survive: %v", err)
+	}
+
+	// The survivor must still be resolvable via the in-memory index, not
+	// just present on disk — this is the check that catches a whole-slug
+	// idx.Delete silently dropping it from the index even though the file
+	// itself was left alone.
+	if _, ok := idx.GetBySlugLang("posts/bilingual-delete", "fr"); !ok {
+		t.Fatal("the fr translation must still be resolvable via the in-memory SourceIndex after deleting only en")
+	}
+	if _, ok := idx.GetBySlugLang("posts/bilingual-delete", "en"); ok {
+		t.Fatal("the en translation must no longer be resolvable via the in-memory SourceIndex")
+	}
+
+	// Deleting the last remaining language must remove the whole bundle.
+	res2 := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/bilingual-delete",
+		"lang":              "fr",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.fr.md")),
+	})
+	if res2.IsError {
+		raw, _ := json.Marshal(res2.Content)
+		t.Fatalf("delete_page(lang=fr, last remaining) failed: %s", raw)
+	}
+	data2 := decodeWriteData(t, res2)
+	if got, _ := data2["bundle_fully_removed"].(bool); !got {
+		t.Error("bundle_fully_removed = false, want true — fr was the last remaining language")
 	}
 	if _, err := os.Stat(pageDir); !os.IsNotExist(err) {
-		t.Fatal("delete_page must remove multilingual bundle directory")
+		t.Fatal("delete_page must remove the bundle directory once the last language is gone")
+	}
+}
+
+// TestDeletePageRejectsPathTraversalLang is a regression test for a Strix
+// finding on the first version of #682's fix: delete_page passed in.Lang
+// directly into contentmodel.ResolvePageSource, which builds candidate
+// paths with filepath.Join("index."+lang+".md") — an unvalidated lang like
+// "../../victim" let a caller resolve (and then delete) a file entirely
+// outside the requested slug's own bundle, bypassing the slug's own
+// PathGuard check. lang must now be rejected by the same validateLangParam
+// create_page/update_page already use before it ever reaches path
+// resolution, and the victim page must survive untouched.
+func TestDeletePageRejectsPathTraversalLang(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	victimDir := filepath.Join(contentRoot, "posts", "victim")
+	if err := os.MkdirAll(victimDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll victim: %v", err)
+	}
+	victimPath := filepath.Join(victimDir, "index.md")
+	if err := os.WriteFile(victimPath, []byte("---\ntitle: Victim\n---\nDo not delete me."), 0o644); err != nil {
+		t.Fatalf("WriteFile victim: %v", err)
+	}
+
+	attackerDir := filepath.Join(contentRoot, "posts", "attacker")
+	if err := os.MkdirAll(attackerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll attacker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(attackerDir, "index.md"), []byte("---\ntitle: Attacker\n---\nBody."), 0o644); err != nil {
+		t.Fatalf("WriteFile attacker: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/attacker",
+		"lang":              "../../victim",
+		"expected_revision": currentRevision(t, victimPath),
+	})
+	if !res.IsError {
+		t.Fatal("delete_page with a path-traversal lang must fail with invalid_params, not resolve outside the requested slug")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("delete_page error = %s, want invalid_params", raw)
+	}
+
+	if _, err := os.Stat(victimPath); err != nil {
+		t.Fatalf("victim page must survive a rejected path-traversal lang: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(attackerDir, "index.md")); err != nil {
+		t.Fatalf("attacker's own page must be untouched by a rejected call: %v", err)
+	}
+}
+
+// TestDeletePageInvalidLangRejectedNotWholeBundleFallback is a regression
+// test for a second Strix finding on the first version of #682's fix: when
+// lang was explicitly given but didn't match any file on disk,
+// source_file_not_found was downgraded to the same empty-resolvedSource
+// case used for genuinely source-less (public-only) content — which skips
+// the expected_revision requirement entirely and drives the whole-bundle
+// deletion branch. An explicit, non-matching lang must now be rejected
+// outright, leaving every language file on disk untouched, instead of
+// silently wiping the whole bundle with no revision guard.
+func TestDeletePageInvalidLangRejectedNotWholeBundleFallback(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual-delete")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: FR\n---\nBonjour"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN\n---\nHello"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// Deliberately no expected_revision — the old bug's whole-bundle
+	// fallback would have skipped the revision requirement entirely.
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/bilingual-delete",
+		"lang": "de",
+	})
+	if !res.IsError {
+		t.Fatal("delete_page with a non-existent lang on a real bundle must fail, not fall back to whole-bundle deletion")
+	}
+
+	for _, lang := range []string{"fr", "en"} {
+		if _, err := os.Stat(filepath.Join(pageDir, "index."+lang+".md")); err != nil {
+			t.Errorf("index.%s.md must survive a rejected invalid-lang delete: %v", lang, err)
+		}
+	}
+}
+
+// TestDeletePageRejectsSymlinkSwapBeforeUnlink is a regression test for a
+// Strix finding on the #682 fix: the new single-file delete branch called
+// os.Remove(resolvedSource.SourcePath) without revalidating for a symlink
+// swap between the earlier SafeJoin/resolve and the actual unlink, unlike
+// every other write path (create_page, update_page, upload_page_asset,
+// rollback_change) which all call pg.RevalidateForWrite immediately before
+// touching disk. If the slug directory is replaced with a symlink pointing
+// outside content_root after validation, delete_page must refuse to follow
+// it rather than deleting a file under the symlink target.
+func TestDeletePageRejectsSymlinkSwapBeforeUnlink(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	pageDir := filepath.Join(contentRoot, "posts", "escape-delete")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.md"), []byte("---\ntitle: Real\n---\nBody."), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// Swap the slug directory for a symlink pointing outside content_root,
+	// with a bait index.md at the target so resolution and the revision
+	// read still succeed — mimicking a race won before delete_page's unlink.
+	target := t.TempDir()
+	targetIndex := filepath.Join(target, "index.md")
+	if err := os.WriteFile(targetIndex, []byte("---\ntitle: Bait\n---\nOutside content root."), 0o644); err != nil {
+		t.Fatalf("WriteFile bait: %v", err)
+	}
+	if err := os.RemoveAll(pageDir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if err := os.Symlink(target, pageDir); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/escape-delete",
+		"expected_revision": currentRevision(t, targetIndex),
+	})
+	if !res.IsError {
+		t.Fatal("delete_page must reject a slug directory swapped for a symlink, got success")
+	}
+	if _, err := os.Stat(targetIndex); err != nil {
+		t.Fatalf("bait file outside content_root must survive a rejected symlink-swap delete: %v", err)
 	}
 }
 

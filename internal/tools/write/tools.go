@@ -236,6 +236,7 @@ func computeTaxonomyDelta(old, next []string) taxonomyDeltaDTO {
 
 type deletePageInput struct {
 	Slug             string `json:"slug"`
+	Lang             string `json:"lang,omitempty"`
 	ExpectedRevision string `json:"expected_revision,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	DryRun           bool   `json:"dry_run,omitempty"`
@@ -267,6 +268,13 @@ type deletePageData struct {
 	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
 	Warning            string                   `json:"warning,omitempty"`
 	State              *site.LifecycleState     `json:"state,omitempty"`
+	// BundleFullyRemoved (#682) is true when the entire page bundle
+	// directory (every language file, plus any shared assets) was removed —
+	// either because no lang was in play (no source file at all) or because
+	// the deleted language was the last one remaining. false means only the
+	// single resolved language's source file was removed and the bundle
+	// (other language(s), assets) still exists on disk.
+	BundleFullyRemoved bool `json:"bundle_fully_removed,omitempty"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -1058,7 +1066,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. `data.bundle_fully_removed` reports which of those happened. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -1090,7 +1098,49 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
 		}
-		resolvedSource := inspectDeleteSource(dir)
+		// Validate lang the same way create_page/update_page already do
+		// (validateLangParam) before it ever reaches path resolution —
+		// contentmodel.ResolvePageSource builds candidate paths with
+		// filepath.Join("index."+lang+".md"), so an unvalidated lang like
+		// "../../victim" would let a caller resolve (and then delete)
+		// an arbitrary file outside the requested slug's bundle, bypassing
+		// the slug's own PathGuard check entirely (caught by Strix on the
+		// first version of this fix).
+		validatedLang, langErr := validateLangParam(in.Lang)
+		if langErr != nil {
+			return nil, deletePageOutput{}, wrapErr(langErr)
+		}
+
+		// Resolve to a single language file via the same
+		// contentmodel.ResolvePageSource machinery update_page already uses
+		// (#682), instead of the old inspectDeleteSource helper which just
+		// picked the alphabetically-first index.*.md file and never errored
+		// on ambiguity — that let one call silently target either language
+		// of a bilingual bundle depending on file naming. A page with no
+		// source file at all (public-only content) is not an error here;
+		// delete_page has always tolerated that case — but only when the
+		// caller never asked for a specific lang. If lang was explicitly
+		// given and simply doesn't match any file, that must be rejected
+		// outright, not silently downgraded to the source-less path: the
+		// source-less path skips the expected_revision requirement and
+		// drives the whole-bundle-deletion branch, which would let an
+		// invalid lang wipe every translation instead of failing cleanly
+		// (also caught by Strix on the first version of this fix).
+		resolved, resolveErr := contentmodel.ResolvePageSource(in.Slug, validatedLang, cfg.ContentRoot)
+		var resolvedSource contentmodel.ResolvedSource
+		switch {
+		case resolveErr == nil:
+			resolvedSource = resolved
+		case strings.HasPrefix(resolveErr.Error(), "ambiguous_language:"):
+			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("%s", resolveErr.Error()))
+		case strings.HasPrefix(resolveErr.Error(), "source_file_not_found:"):
+			if validatedLang != "" {
+				return nil, deletePageOutput{}, wrapErr(resolveErr)
+			}
+			resolvedSource = contentmodel.ResolvedSource{}
+		default:
+			return nil, deletePageOutput{}, wrapErr(resolveErr)
+		}
 
 		// Fetching the limiter is not itself a budget-consuming operation —
 		// only Allow() below is — so hoisting it above the dry-run block
@@ -1167,9 +1217,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if strings.TrimSpace(in.IdempotencyKey) != "" {
 			hash, hashErr := requestHash(struct {
 				Slug             string `json:"slug"`
+				Lang             string `json:"lang,omitempty"`
 				ExpectedRevision string `json:"expected_revision,omitempty"`
 			}{
 				Slug:             in.Slug,
+				Lang:             validatedLang,
 				ExpectedRevision: in.ExpectedRevision,
 			})
 			if hashErr != nil {
@@ -1198,17 +1250,53 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
 		}
 
-		if err := os.RemoveAll(dir); err != nil {
+		// Delete only the resolved language's source file, not the whole
+		// bundle directory (#682) — a bilingual bundle (index.fr.md +
+		// index.en.md) must survive the deletion of one translation. The
+		// bundle directory (and any shared assets) is only removed once no
+		// index.*.md file remains, or when there was never a source file to
+		// begin with (public-only content, matching the pre-#682 behavior
+		// for that case).
+		bundleFullyRemoved := true
+		if resolvedSource.SourcePath != "" {
+			// Revalidate immediately before the single-file unlink, closing
+			// the TOCTOU window between the earlier SafeJoin/resolve and
+			// this delete: the slug directory could have been swapped for a
+			// symlink in between, which would otherwise let os.Remove
+			// follow it and delete a file outside content_root (Strix
+			// finding on the #682 fix — every other write path already
+			// revalidates this way right before touching disk).
+			if err := pg.RevalidateForWrite(resolvedSource.SourcePath); err != nil {
+				slog.Warn("delete_page: symlink detected before delete", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in delete path"))
+			}
+			if err := os.Remove(resolvedSource.SourcePath); err != nil {
+				slog.Error("delete_page: remove source file failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
+			}
+			bundleFullyRemoved = !bundleHasRemainingLangFiles(dir)
+			if bundleFullyRemoved {
+				if err := os.RemoveAll(dir); err != nil {
+					slog.Error("delete_page: remove bundle dir failed", "slug", in.Slug, "error", err)
+					return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
+				}
+			}
+		} else if err := os.RemoveAll(dir); err != nil {
 			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
 			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
 		}
-		idx.Delete(in.Slug)
-		if siteIdx != nil {
-			siteIdx.RemoveBySlug(in.Slug)
+
+		if bundleFullyRemoved {
+			idx.Delete(in.Slug)
+		} else {
+			idx.DeleteLang(in.Slug, resolvedSource.Lang)
 		}
 		var deleteWarning string
 		dbDeleteFailed := false
-		if siteDB != nil {
+		if bundleFullyRemoved && siteIdx != nil {
+			siteIdx.RemoveBySlug(in.Slug)
+		}
+		if bundleFullyRemoved && siteDB != nil {
 			if err := siteDB.DeletePage(in.Slug); err != nil {
 				// Source and in-memory indexes are already gone; surface the DB
 				// staleness explicitly so callers know get_broken_links may be
@@ -1219,7 +1307,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 		publicCleanupFailed := false
-		if cfg.SiteRoot != "" {
+		if !bundleFullyRemoved {
+			// A translation survives on disk — removing SiteRoot/slug would
+			// wipe that survivor's live public output too, since Hugo's
+			// rendered output for a bundle is not scoped per language file
+			// the same way the source tree is (#682). Getting per-language
+			// public-output mapping exactly right is a separate, harder
+			// problem; for now, surface that a rebuild is needed instead of
+			// silently deleting the surviving language's public page.
+			deleteWarning = "public output for the removed language was not touched — the page bundle still has other language(s); run build_site/publish_changes to reconcile public output"
+		} else if cfg.SiteRoot != "" {
 			publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
 			if rmErr := os.RemoveAll(publicPath); rmErr != nil {
 				// Source is already gone; surface the zombie so the caller knows
@@ -1238,14 +1335,16 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		// Best-effort removal of any hero image generate_hero_image left
 		// behind for this slug (#606). generate_hero_image writes to
 		// {HugoRoot}/static/images/{slug}-featured.jpg, a location outside
-		// the page's own content bundle, so the os.RemoveAll(dir) above
-		// never touches it and it would otherwise accumulate as an orphaned
-		// file every time a page with a generated hero image is deleted.
-		// Never fatal — mirrors the public-dir/DB/audit-log cleanup steps
-		// above, which all surface failures as a non-blocking warning
-		// rather than failing the delete outright, since the source is
-		// already gone by this point and there's nothing to roll back to.
-		if cfg.HugoRoot != "" {
+		// the page's own content bundle, so the bundle removal above never
+		// touches it and it would otherwise accumulate as an orphaned file
+		// every time a page with a generated hero image is deleted. Skipped
+		// entirely when the bundle survives (#682) — the hero image is a
+		// whole-page-level asset shared across translations, not scoped to
+		// one language. Never fatal — mirrors the public-dir/DB/audit-log
+		// cleanup steps above, which all surface failures as a non-blocking
+		// warning rather than failing the delete outright, since the source
+		// is already gone by this point and there's nothing to roll back to.
+		if bundleFullyRemoved && cfg.HugoRoot != "" {
 			if removed, rmErr := removeHeroImage(cfg.HugoRoot, in.Slug); rmErr != nil {
 				msg := fmt.Sprintf("hero image cleanup failed: %v", rmErr)
 				if deleteWarning != "" {
@@ -1293,6 +1392,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
 			Warning:            deleteWarning,
 			State:              &state,
+			BundleFullyRemoved: bundleFullyRemoved,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, out); err != nil {
@@ -1625,6 +1725,28 @@ func inferLangFromIndexFile(path string) string {
 		return ""
 	}
 	return strings.TrimSuffix(strings.TrimPrefix(base, "index."), ".md")
+}
+
+// bundleHasRemainingLangFiles reports whether dir still contains any
+// index.md/index.<lang>.md file (#682) — used by delete_page after removing
+// one language's source file to decide whether the bundle directory (and
+// any shared assets) should also be removed, or whether another
+// translation is still present and the directory must survive.
+func bundleHasRemainingLangFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == "index.md" || (strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md")) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveExistingSource(contentRoot, slug, lang string) (contentmodel.ResolvedSource, error) {
