@@ -44,7 +44,30 @@ type createPageInput struct {
 	NormalizeTaxonomyCasing bool     `json:"normalize_taxonomy_casing,omitempty"`
 	IdempotencyKey          string   `json:"idempotency_key,omitempty"`
 	DryRun                  bool     `json:"dry_run,omitempty"`
+	// TestContent (#661) is a deliberate, explicit opt-in — never inferred
+	// from slug/title — marking this page as disposable test/audit content.
+	// When set, the page is always created with draft:true regardless of
+	// any other setting, and frontmatter records test_content:true,
+	// test_content_owner (if given), and test_content_expires_at (now +
+	// TTLHours, default 24h). #608's post-build stale-content check honors
+	// test_content_expires_at unconditionally, independent of the
+	// server-wide stale_test_content_threshold_hours setting — the caller
+	// explicitly asked for TTL tracking on this specific page, so it must
+	// work even when the server-wide sweep is disabled.
+	TestContent *testContentInput `json:"test_content,omitempty"`
 }
+
+// testContentInput is create_page's opt-in test-content marker (#661).
+// TTLHours <= 0 means "use the default" (24h); a negative value is
+// rejected as invalid_params the same way negative limit values are
+// elsewhere in this repo (#641) — zero/omitted is a legitimate "use
+// default," a genuinely negative value is a caller-side bug.
+type testContentInput struct {
+	TTLHours int    `json:"ttl_hours,omitempty"`
+	Owner    string `json:"owner,omitempty"`
+}
+
+const testContentDefaultTTLHours = 24
 
 type createPageOutput struct {
 	toolcontract.ToolResponse[createPageData]
@@ -79,6 +102,11 @@ type createPageData struct {
 	// the identical normalize_taxonomy_casing contract.
 	TaxonomyCasingNormalized []taxonomyCasingChangeDTO  `json:"taxonomy_casing_normalized,omitempty"`
 	TaxonomyCasingAmbiguous  []taxonomyCasingSkippedDTO `json:"taxonomy_casing_ambiguous,omitempty"`
+	// TestContentExpiresAt echoes the effective test_content expiry (#661)
+	// back to the caller when the request opted in via `test_content` —
+	// confirms the TTL actually applied (in case ttl_hours was omitted and
+	// the default was used) without requiring a follow-up read.
+	TestContentExpiresAt string `json:"test_content_expires_at,omitempty"`
 	// RateLimitRemaining is deliberately never set on a success response
 	// (#520, #605) — see the comment on newCreatePageOutput. omitempty (not
 	// present in prior success responses' JSON either, since it was always
@@ -468,7 +496,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. Normalization is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using `normalize_taxonomy_casing` (#604). `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` (default `ttl_hours`: 24) — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. Normalization is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using `normalize_taxonomy_casing` (#604). `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -506,6 +534,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
 			return nil, createPageOutput{}, wrapErr(err)
+		}
+		if in.TestContent != nil && in.TestContent.TTLHours < 0 {
+			return nil, createPageOutput{}, wrapErr(fmt.Errorf("invalid_params: test_content.ttl_hours must not be negative"))
 		}
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
@@ -550,7 +581,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			taxonomyNormalized = append(tagChanges, catChanges...)
 			taxonomyAmbiguous = append(tagSkipped, catSkipped...)
 		}
-		content := buildFrontmatter(in.Title, writeTags, writeCategories, in.Body)
+		content, testContentExpiresAt := buildFrontmatter(in.Title, writeTags, writeCategories, in.Body, in.TestContent)
 
 		// Round-trip guard: verify the generated content parses correctly.
 		if err := validateFrontmatterRoundTrip(content); err != nil {
@@ -575,6 +606,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Content:                  content,
 				TaxonomyCasingNormalized: taxonomyNormalized,
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+				TestContentExpiresAt:     testContentExpiresAt,
 			}, rateLimitRemaining(limiter)), nil
 		}
 
@@ -645,6 +677,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
+		frontmatterRaw := map[string]any{"title": in.Title, "date": now, "draft": in.TestContent != nil}
+		if in.TestContent != nil {
+			frontmatterRaw["test_content"] = true
+			if in.TestContent.Owner != "" {
+				frontmatterRaw["test_content_owner"] = in.TestContent.Owner
+			}
+			frontmatterRaw["test_content_expires_at"] = testContentExpiresAt
+		}
 		created := hugosite.SourcePage{
 			Slug:           in.Slug,
 			FilePath:       filePath,
@@ -654,7 +694,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			Tags:           writeTags,
 			Categories:     writeCategories,
 			Body:           in.Body,
-			FrontmatterRaw: map[string]any{"title": in.Title, "date": now, "draft": false},
+			Draft:          in.TestContent != nil,
+			FrontmatterRaw: frontmatterRaw,
 			BuildPending:   true,
 		}
 		idx.Upsert(created)
@@ -684,6 +725,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			State:                    &state,
 			TaxonomyCasingNormalized: taxonomyNormalized,
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+			TestContentExpiresAt:     testContentExpiresAt,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "create_page", in.IdempotencyKey, idemHash, out); err != nil {
@@ -1357,9 +1399,21 @@ type frontmatterDoc struct {
 	Tags       []string `yaml:"tags"`
 	Categories []string `yaml:"categories"`
 	Draft      bool     `yaml:"draft"`
+	// TestContent/TestContentOwner/TestContentExpiresAt (#661) are only
+	// ever set via create_page's explicit opt-in test_content parameter —
+	// never inferred from slug/title, so a real published page that
+	// happens to start with e.g. "codex-" is never wrongly constrained.
+	TestContent          bool   `yaml:"test_content,omitempty"`
+	TestContentOwner     string `yaml:"test_content_owner,omitempty"`
+	TestContentExpiresAt string `yaml:"test_content_expires_at,omitempty"`
 }
 
-func buildFrontmatter(title string, tags, categories []string, body string) string {
+// buildFrontmatter renders a new page's frontmatter+body. testContent, when
+// non-nil (#661), forces Draft:true regardless of any other setting and
+// records test_content/test_content_owner/test_content_expires_at —
+// computed here so the caller-visible response and the on-disk frontmatter
+// always agree on the exact expiry that was applied.
+func buildFrontmatter(title string, tags, categories []string, body string, testContent *testContentInput) (string, string) {
 	if tags == nil {
 		tags = []string{}
 	}
@@ -1373,6 +1427,16 @@ func buildFrontmatter(title string, tags, categories []string, body string) stri
 		Categories: categories,
 		Draft:      false,
 	}
+	if testContent != nil {
+		ttlHours := testContent.TTLHours
+		if ttlHours <= 0 {
+			ttlHours = testContentDefaultTTLHours
+		}
+		doc.Draft = true
+		doc.TestContent = true
+		doc.TestContentOwner = testContent.Owner
+		doc.TestContentExpiresAt = time.Now().UTC().Add(time.Duration(ttlHours) * time.Hour).Format(time.RFC3339)
+	}
 	raw, _ := marshalWithIndent(doc, 2)
 	var sb strings.Builder
 	sb.WriteString("---\n")
@@ -1382,7 +1446,7 @@ func buildFrontmatter(title string, tags, categories []string, body string) stri
 		sb.WriteString("\n\n")
 		sb.WriteString(body)
 	}
-	return sb.String()
+	return sb.String(), doc.TestContentExpiresAt
 }
 
 func buildFrontmatterFromMap(fm map[string]any, body string) string {

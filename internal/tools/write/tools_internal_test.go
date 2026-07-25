@@ -60,7 +60,7 @@ func TestCallerLimiterZeroOrNegativePerMinuteFailsOpen(t *testing.T) {
 }
 
 func TestWriteHelpers(t *testing.T) {
-	fm := buildFrontmatter("Title", []string{"go"}, []string{"docs"}, "Body")
+	fm, _ := buildFrontmatter("Title", []string{"go"}, []string{"docs"}, "Body", nil)
 	if !strings.Contains(fm, "Title") || !strings.Contains(fm, "draft: false") || !strings.Contains(fm, "Body") {
 		t.Fatalf("buildFrontmatter() = %q", fm)
 	}
@@ -133,7 +133,7 @@ func TestSimpleDiff(t *testing.T) {
 }
 
 func TestWriteHelperBranches(t *testing.T) {
-	fm := buildFrontmatter("Title", nil, nil, "")
+	fm, _ := buildFrontmatter("Title", nil, nil, "", nil)
 	if !strings.Contains(fm, "tags: []") || !strings.Contains(fm, "categories: []") {
 		t.Fatalf("buildFrontmatter(nil slices) = %q", fm)
 	}
