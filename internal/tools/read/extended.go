@@ -329,16 +329,41 @@ type backlinkDTO struct {
 // the common (fresh) path.
 type indexStalenessDTO struct {
 	NewestEdit string `json:"newest_edit"`
+	// LikelySource is a coarse, best-effort hint at *why* the index is
+	// stale (#617), distinguishing "this server's own known, expected
+	// pending write" from "some other, unrecorded reason" (most plausibly
+	// an out-of-band edit outside this server, e.g. direct SSH/git) —
+	// without any new per-caller/per-session identity tracking. Derived
+	// entirely from the existing BuildPending bookkeeping create_page/
+	// update_page/apply_content_plan/rollback_change already maintain: if
+	// any source page currently has a pending MCP-originated write not yet
+	// built, that's reported as "mcp_pending_build"; otherwise
+	// "external_or_unknown". This can't attribute staleness to a specific
+	// caller/session, and a real coincidence (an MCP write pending AND an
+	// unrelated external edit at the same time) would still report
+	// "mcp_pending_build" — it is a hint for faster diagnosis, not a
+	// guarantee of the true cause.
+	LikelySource string `json:"likely_source,omitempty"`
 }
 
 // staleness checks idx against on-disk content and returns nil when
 // current, so callers can attach it via omitempty without an extra nil check.
-func staleness(idx *site.Index, cfg config.Config) *indexStalenessDTO {
+// srcIdx may be nil (some registration paths run without a source index);
+// LikelySource is simply omitted in that case.
+func staleness(idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) *indexStalenessDTO {
 	stale, newest := idx.StaleAgainstDisk(cfg)
 	if !stale {
 		return nil
 	}
-	return &indexStalenessDTO{NewestEdit: newest.UTC().Format(time.RFC3339)}
+	dto := &indexStalenessDTO{NewestEdit: newest.UTC().Format(time.RFC3339)}
+	if srcIdx != nil {
+		if srcIdx.HasPendingBuild() {
+			dto.LikelySource = "mcp_pending_build"
+		} else {
+			dto.LikelySource = "external_or_unknown"
+		}
+	}
+	return dto
 }
 
 type getBacklinksData struct {
@@ -607,7 +632,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), aliases, resolver), nil
 		})
 
-	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets. `index_staleness` (in-memory path only, not the db_path path) is present only when the index is behind on-disk content — its absence means results reflect current source (#583). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets. `index_staleness` (in-memory path only, not the db_path path) is present only when the index is behind on-disk content — its absence means results reflect current source (#583). When present, `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` means this server has a known, expected write awaiting the next build_site/publish_changes; `\"external_or_unknown\"` means the disk changed with no such record on file — most plausibly an edit made outside this server (e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in brokenLinkInput) (*mcp.CallToolResult, brokenLinkOutput, error) {
 			if idx == nil {
 				return nil, brokenLinkOutput{}, fmt.Errorf("index not initialized")
@@ -652,11 +677,11 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Limit:       limit,
 				Offset:      offset,
 				Links:       sliceBrokenLinks(issues, offset, limit),
-				IndexInfo:   staleness(idx, cfg),
+				IndexInfo:   staleness(idx, srcIdx, cfg),
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
-	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). This is the same backlinks data get_related_content returns alongside related_pages/suggested_links/translations in one call — use this standalone version when you only need backlinks and want to avoid the cost of the other three facets. `index_staleness` is present only when the in-memory index is behind on-disk content (e.g. a manual Hugo build outside this server) — its absence means the index reflects current source; when present, treat the backlinks list as possibly outdated until the next build_site (#583). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). This is the same backlinks data get_related_content returns alongside related_pages/suggested_links/translations in one call — use this standalone version when you only need backlinks and want to avoid the cost of the other three facets. `index_staleness` is present only when the in-memory index is behind on-disk content (e.g. a manual Hugo build outside this server) — its absence means the index reflects current source; when present, treat the backlinks list as possibly outdated until the next build_site (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
 			if idx == nil {
 				return nil, getBacklinksOutput{}, fmt.Errorf("index not initialized")
@@ -685,7 +710,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Slug:      targetSlug,
 				Count:     len(dtos),
 				Backlinks: dtos,
-				IndexInfo: staleness(idx, cfg),
+				IndexInfo: staleness(idx, srcIdx, cfg),
 			}, time.Now().UTC())
 			return nil, env, nil
 		})

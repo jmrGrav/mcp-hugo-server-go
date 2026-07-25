@@ -333,3 +333,46 @@ func TestSourceIndexMaintainsLanguageIndexesAcrossUpsertAndDelete(t *testing.T) 
 		t.Fatal("GetBySlugLang(en) should miss deleted multilingual slug")
 	}
 }
+
+// TestHasPendingBuildReflectsBuildPendingFlags is the regression test for
+// #617: HasPendingBuild must report true as soon as any source page carries
+// a BuildPending write (the same bookkeeping create_page/update_page/
+// apply_content_plan/rollback_change already set), and false again once
+// ClearAllBuildPending runs (the existing post-build reload path).
+func TestHasPendingBuildReflectsBuildPendingFlags(t *testing.T) {
+	dir := fixturesContentRoot(t)
+	idx, err := hugosite.NewSourceIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if idx.HasPendingBuild() {
+		t.Fatal("HasPendingBuild() = true before any pending write, want false")
+	}
+
+	idx.Upsert(hugosite.SourcePage{
+		Slug:           "pending-post",
+		Title:          "Pending Post",
+		Body:           "hello",
+		FrontmatterRaw: map[string]any{"title": "Pending Post"},
+		BuildPending:   true,
+	})
+
+	if !idx.HasPendingBuild() {
+		t.Fatal("HasPendingBuild() = false after an Upsert with BuildPending: true, want true")
+	}
+
+	idx.ClearAllBuildPending()
+	if idx.HasPendingBuild() {
+		t.Fatal("HasPendingBuild() = true after ClearAllBuildPending(), want false")
+	}
+}
+
+// TestHasPendingBuildNilSafe confirms a nil *SourceIndex (some registration
+// paths run without a source index) never panics.
+func TestHasPendingBuildNilSafe(t *testing.T) {
+	var idx *hugosite.SourceIndex
+	if idx.HasPendingBuild() {
+		t.Error("HasPendingBuild() on nil index = true, want false")
+	}
+}
