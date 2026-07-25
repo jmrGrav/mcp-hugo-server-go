@@ -72,6 +72,10 @@ func TestContentHelperFunctions(t *testing.T) {
 	if got := toPageDTOs(pages, nil, nil, "", ""); len(got) != 3 || got[1].Slug != "/posts/b/" {
 		t.Fatalf("toPageDTOs() = %#v", got)
 	}
+	snippets := map[string]string{"/posts/a/": "alpha snippet"}
+	if got := toPageDTOsWithSnippets(pages[:1], nil, snippets, nil, "", ""); len(got) != 1 || got[0].Snippet != "alpha snippet" {
+		t.Fatalf("toPageDTOsWithSnippets() = %#v", got)
+	}
 	if got := countSections(pages); len(got) == 0 || got[0].Name == "" {
 		t.Fatalf("countSections() = %#v", got)
 	}
@@ -173,6 +177,34 @@ func TestValidationHelpers(t *testing.T) {
 	health := buildSiteHealth(&site.Index{}, src, nil)
 	if health.SourcePages != 2 || health.DraftPages != 1 {
 		t.Fatalf("buildSiteHealth() = %#v", health)
+	}
+}
+
+func TestReaderSafeResolvedPage(t *testing.T) {
+	public := site.Page{Slug: "/posts/demo/", Title: "Demo", URL: "https://example.test/posts/demo/", Lang: "fr"}
+	source := &hugosite.SourcePage{Slug: "posts/demo", Lang: "fr", Body: "draft body"}
+	resolved := site.ResolvedPage{Public: &public, Source: source}
+
+	got, err := readerSafeResolvedPage(context.Background(), resolved, "posts/demo")
+	if err != nil {
+		t.Fatalf("readerSafeResolvedPage(non-reader) error = %v", err)
+	}
+	if got.Public == nil || got.Public.Slug != "/posts/demo/" {
+		t.Fatalf("readerSafeResolvedPage(non-reader) = %#v, want public page preserved", got)
+	}
+
+	readerCtx := site.WithAccessProfile(context.Background(), site.AccessProfileReader)
+	got, err = readerSafeResolvedPage(readerCtx, resolved, "posts/demo")
+	if err != nil {
+		t.Fatalf("readerSafeResolvedPage(reader public) error = %v", err)
+	}
+	if got.Public == nil || got.Source != nil {
+		t.Fatalf("readerSafeResolvedPage(reader public) = %#v, want public-only resolved page", got)
+	}
+
+	_, err = readerSafeResolvedPage(readerCtx, site.ResolvedPage{Source: source}, "posts/demo")
+	if err == nil || !strings.Contains(err.Error(), "content_not_public") {
+		t.Fatalf("readerSafeResolvedPage(reader source-only) error = %v, want content_not_public", err)
 	}
 }
 

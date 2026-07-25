@@ -45,7 +45,7 @@ jobs:
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
           echo "Coverage: ${COVERAGE}%"
-          awk -v cov="$COVERAGE" 'BEGIN { if (cov + 0 < 79) { print "Coverage " cov "% is below 79%"; exit 1 } }'
+          awk -v cov="$COVERAGE" 'BEGIN { if (cov + 0 < 85) { print "Coverage " cov "% is below 85%"; exit 1 } }'
 
   # Boot the real binary with a synthetic config and assert all 7 IsItAgentReady
   # discovery endpoints respond correctly, and that scopes_supported contains

@@ -617,7 +617,8 @@ func splitValues(raw string) []string {
 	parts := strings.Split(raw, ",")
 	out := make([]string, 0, len(parts))
 	for _, part := range parts {
-		part = strings.TrimSpace(strings.Trim(part, `"'`))
+		part = strings.TrimSpace(part)
+		part = strings.Trim(part, `"'`)
 		if part != "" {
 			out = append(out, part)
 		}

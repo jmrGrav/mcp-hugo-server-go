@@ -1,11 +1,15 @@
 package toolcontract
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type shapeFixture struct {
@@ -163,5 +167,185 @@ func TestResponseModeFromInput(t *testing.T) {
 				t.Fatalf("ResponseModeFromInput(%s) = %q, want %q", tt.name, got, tt.wantMode)
 			}
 		})
+	}
+}
+
+type wrapFixtureInput struct {
+	ResponseMode string `json:"response_mode,omitempty"`
+}
+
+type wrapFixtureOutput struct {
+	ToolResponse[map[string]any]
+	RequestContext     *RequestContext `json:"request_context,omitempty"`
+	RateLimitRemaining int             `json:"rate_limit_remaining,omitempty"`
+}
+
+func TestWithRootFieldsAndWithDataFieldsCloneValues(t *testing.T) {
+	baseErr := errors.New("boom")
+	root := map[string]any{"rate_limit_remaining": 59}
+	data := map[string]any{"rate_limit_remaining": 59}
+	wrapped := WithDataFields(WithRootFields(baseErr, root), data)
+	root["rate_limit_remaining"] = 0
+	data["rate_limit_remaining"] = 0
+
+	gotRoot := rootFieldsFrom(wrapped)
+	if gotRoot["rate_limit_remaining"] != 59 {
+		t.Fatalf("rootFieldsFrom() = %#v, want cloned original values", gotRoot)
+	}
+	gotData := dataFieldsFrom(wrapped)
+	if gotData["rate_limit_remaining"] != 59 {
+		t.Fatalf("dataFieldsFrom() = %#v, want cloned original values", gotData)
+	}
+}
+
+func TestWrappedErrorUnwrapsToOriginal(t *testing.T) {
+	baseErr := errors.New("boom")
+	withCtx := WithRequestContext(baseErr, RequestContext{Slug: "posts/demo"})
+	withRoot := WithRootFields(baseErr, map[string]any{"rate_limit_remaining": 3})
+	withData := WithDataFields(baseErr, map[string]any{"rate_limit_remaining": 3})
+
+	for _, wrapped := range []error{withCtx, withRoot, withData} {
+		if !errors.Is(wrapped, baseErr) {
+			t.Fatalf("errors.Is(%T, baseErr) = false, want true", wrapped)
+		}
+	}
+}
+
+func TestErrorParsingHelpers(t *testing.T) {
+	if code, msg := splitErrorPrefix("invalid_params: slug must not be empty"); code != "invalid_params" || msg != "slug must not be empty" {
+		t.Fatalf("splitErrorPrefix(machine) = (%q, %q)", code, msg)
+	}
+	if code, msg := splitErrorPrefix("Unexpected runtime explosion"); code != "tool_error" || msg != "Unexpected runtime explosion" {
+		t.Fatalf("splitErrorPrefix(non-machine) = (%q, %q)", code, msg)
+	}
+	if !isMachineCode("revision_conflict") || isMachineCode("revision-conflict") {
+		t.Fatal("isMachineCode() did not distinguish allowed machine code format")
+	}
+	if got := missingRequiredField("body must not be empty"); got != "body" {
+		t.Fatalf("missingRequiredField(body) = %q, want body", got)
+	}
+	if got := missingRequiredField("accent must not be empty"); got != "" {
+		t.Fatalf("missingRequiredField(unsupported) = %q, want empty", got)
+	}
+	if got := inferField("style must be one of: tech, geo"); got != "style" {
+		t.Fatalf("inferField(style) = %q, want style", got)
+	}
+	if got := inferField("uploaded content does not match declared extension \".png\""); got != "filename" {
+		t.Fatalf("inferField(mime mismatch) = %q, want filename (#688's inferField fix, already merged)", got)
+	}
+	if got := parseAllowedValues(`type must be one of: "post", "page" (case-insensitive)`); len(got) != 2 || got[0] != "post" || got[1] != "page" {
+		t.Fatalf("parseAllowedValues(one-of) = %#v, want [post page]", got)
+	}
+	if got := parseAllowedValues(`page "posts/x" has multiple language files; specify lang (available: "en", "fr")`); len(got) != 2 || got[0] != "en" || got[1] != "fr" {
+		t.Fatalf("parseAllowedValues(available) = %#v, want [en fr]", got)
+	}
+	if got := parseAllowedValues("no enum here"); got != nil {
+		t.Fatalf("parseAllowedValues(no match) = %#v, want nil", got)
+	}
+	if got := parseRetryAfterSeconds("rate_limit_exceeded: create_page is limited to 5 per minute (retry_after_seconds=1.5)"); got == nil || *got != 1.5 {
+		t.Fatalf("parseRetryAfterSeconds(valid) = %#v, want 1.5", got)
+	}
+	if got := parseRetryAfterSeconds("rate_limit_exceeded: retry_after_seconds=oops"); got != nil {
+		t.Fatalf("parseRetryAfterSeconds(invalid) = %#v, want nil", got)
+	}
+	if got := splitValues(` "en" , 'fr' , de `); len(got) != 3 || got[0] != "en" || got[1] != "fr" || got[2] != "de" {
+		t.Fatalf("splitValues() = %#v, want [en fr de]", got)
+	}
+}
+
+func TestFailureInitializesCanonicalEnvelope(t *testing.T) {
+	meta := NewMeta("v1.6.3", time.Date(2026, 7, 25, 21, 0, 0, 0, time.UTC))
+	got := Failure(meta, NewError("invalid_params", "bad slug"))
+	if got.Success {
+		t.Fatal("Failure().Success = true, want false")
+	}
+	if got.Data == nil {
+		t.Fatal("Failure().Data = nil, want empty map")
+	}
+	if len(got.Errors) != 1 || got.Errors[0].Code != "invalid_params" {
+		t.Fatalf("Failure().Errors = %#v, want one invalid_params error", got.Errors)
+	}
+	if got.GeneratedAt != meta.GeneratedAt {
+		t.Fatalf("Failure().GeneratedAt = %q, want %q", got.GeneratedAt, meta.GeneratedAt)
+	}
+}
+
+func TestWrapToolShapesCompactSuccess(t *testing.T) {
+	origCommit := buildinfo.Commit
+	origChannel := buildinfo.BuildChannel
+	buildinfo.Commit = "abc123"
+	buildinfo.BuildChannel = "release"
+	t.Cleanup(func() {
+		buildinfo.Commit = origCommit
+		buildinfo.BuildChannel = origChannel
+	})
+
+	handler := WrapTool(func(ctx context.Context, req *mcp.CallToolRequest, in wrapFixtureInput) (*mcp.CallToolResult, wrapFixtureOutput, error) {
+		meta := NewMeta("v1.6.3", time.Date(2026, 7, 25, 21, 5, 0, 0, time.UTC))
+		out := wrapFixtureOutput{ToolResponse: Success(map[string]any{"status": "ok"}, meta)}
+		return &mcp.CallToolResult{}, out, nil
+	})
+
+	_, out, err := handler(context.Background(), &mcp.CallToolRequest{}, wrapFixtureInput{ResponseMode: "compact"})
+	if err != nil {
+		t.Fatalf("WrapTool() error = %v", err)
+	}
+	if out.Meta.GeneratedAt != "" {
+		t.Fatalf("compact success kept meta.generated_at = %q, want empty", out.Meta.GeneratedAt)
+	}
+	if out.GeneratedAt == "" {
+		t.Fatal("compact success removed root generated_at")
+	}
+	if out.Meta.ReleaseVersion != "v1.6.3" || out.Meta.Commit != "abc123" || out.Meta.BuildChannel != "release" {
+		t.Fatalf("compact success meta = %#v, want release identity fields preserved", out.Meta)
+	}
+}
+
+func TestWrapToolReturnsStructuredErrorForInvalidResponseMode(t *testing.T) {
+	handler := WrapTool(func(ctx context.Context, req *mcp.CallToolRequest, in wrapFixtureInput) (*mcp.CallToolResult, wrapFixtureOutput, error) {
+		t.Fatal("handler should not run when response_mode is invalid")
+		return nil, wrapFixtureOutput{}, nil
+	})
+
+	res, out, err := handler(context.Background(), &mcp.CallToolRequest{}, wrapFixtureInput{ResponseMode: "full"})
+	if err != nil {
+		t.Fatalf("WrapTool() error = %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("WrapTool() result = %#v, want structured error result", res)
+	}
+	if out.Success {
+		t.Fatal("typed error output reported success=true")
+	}
+	if len(out.Errors) == 0 || out.Errors[0].Code != "invalid_params" {
+		t.Fatalf("typed error output = %#v, want invalid_params", out.Errors)
+	}
+}
+
+func TestWrapToolCarriesRequestContextAndCompatFieldsOnError(t *testing.T) {
+	handler := WrapTool(func(ctx context.Context, req *mcp.CallToolRequest, in wrapFixtureInput) (*mcp.CallToolResult, wrapFixtureOutput, error) {
+		err := fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")
+		err = WithRequestContext(err, RequestContext{Slug: "posts/demo", RequestedLang: "fr"})
+		err = WithRootFields(err, map[string]any{"rate_limit_remaining": 59})
+		err = WithDataFields(err, map[string]any{"rate_limit_remaining": 59})
+		return nil, wrapFixtureOutput{}, err
+	})
+
+	res, out, err := handler(context.Background(), &mcp.CallToolRequest{}, wrapFixtureInput{})
+	if err != nil {
+		t.Fatalf("WrapTool() error = %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("WrapTool() result = %#v, want error result", res)
+	}
+	if out.RequestContext == nil || out.RequestContext.Slug != "posts/demo" || out.RequestContext.RequestedLang != "fr" {
+		t.Fatalf("typed error request_context = %#v, want slug/lang preserved", out.RequestContext)
+	}
+	if out.RateLimitRemaining != 59 {
+		t.Fatalf("typed error rate_limit_remaining = %d, want 59", out.RateLimitRemaining)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok || !strings.Contains(text.Text, "revision_conflict") {
+		t.Fatalf("error content = %#v, want human-readable revision_conflict text", res.Content)
 	}
 }

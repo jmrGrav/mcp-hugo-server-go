@@ -42,3 +42,28 @@ func TestEffectiveReleaseVersionAndBuildChannel(t *testing.T) {
 		t.Fatalf("EffectiveBuildChannel() = %q, want explicit override", got)
 	}
 }
+
+func TestEffectiveBuildChannelFallbacks(t *testing.T) {
+	origVersion := Version
+	origRelease := ReleaseVersion
+	origChannel := BuildChannel
+	defer func() {
+		Version = origVersion
+		ReleaseVersion = origRelease
+		BuildChannel = origChannel
+	}()
+
+	Version = "custom-build"
+	ReleaseVersion = ""
+	BuildChannel = ""
+	if got := EffectiveBuildChannel(); got != "custom" {
+		t.Fatalf("EffectiveBuildChannel() = %q, want custom", got)
+	}
+
+	Version = "   "
+	ReleaseVersion = ""
+	BuildChannel = ""
+	if got := EffectiveBuildChannel(); got != "dev" {
+		t.Fatalf("EffectiveBuildChannel() = %q, want dev", got)
+	}
+}

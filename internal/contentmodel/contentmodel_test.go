@@ -1,6 +1,8 @@
 package contentmodel
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,5 +131,72 @@ func TestResolvePageSourceRejectsTraversal(t *testing.T) {
 	_, err := ResolvePageSource("../outside", "", root)
 	if err == nil || !strings.Contains(err.Error(), "invalid_slug") {
 		t.Fatalf("ResolvePageSource() error = %v, want invalid_slug", err)
+	}
+}
+
+func TestSourceRevisionBytesAndSourceRevision(t *testing.T) {
+	raw := []byte("---\ntitle: demo\n---\nbody\n")
+	sum := sha256.Sum256(raw)
+	want := "sha256:" + hex.EncodeToString(sum[:])
+	if got := SourceRevisionBytes(raw); got != want {
+		t.Fatalf("SourceRevisionBytes() = %q, want %q", got, want)
+	}
+
+	path := filepath.Join(t.TempDir(), "index.md")
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	got, err := SourceRevision(path)
+	if err != nil {
+		t.Fatalf("SourceRevision() error = %v", err)
+	}
+	if got != want {
+		t.Fatalf("SourceRevision() = %q, want %q", got, want)
+	}
+}
+
+func TestSourceRevisionReadFailure(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.md")
+	_, err := SourceRevision(missing)
+	if err == nil || !strings.Contains(err.Error(), "read source for revision") {
+		t.Fatalf("SourceRevision() error = %v, want wrapped read failure", err)
+	}
+}
+
+func TestIsReservedTestSlug(t *testing.T) {
+	tests := []struct {
+		slug string
+		want bool
+	}{
+		{slug: "posts/mcp-audit-20260725", want: true},
+		{slug: "/posts/Test-Audit-0718", want: true},
+		{slug: "documentation/CODEX-feature-probe", want: true},
+		{slug: "posts/audit-securite-cloudflare", want: false},
+		{slug: "posts/test-production-guidance", want: false},
+	}
+
+	for _, tt := range tests {
+		if got := IsReservedTestSlug(tt.slug); got != tt.want {
+			t.Fatalf("IsReservedTestSlug(%q) = %v, want %v", tt.slug, got, tt.want)
+		}
+	}
+}
+
+func TestExtractLang(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/tmp/posts/hello/index.fr.md", want: "fr"},
+		{path: "/tmp/posts/hello/index.en-US.md", want: "en-US"},
+		{path: "/tmp/posts/hello.md", want: ""},
+		{path: "/tmp/posts/hello.fr.md", want: "fr"},
+		{path: "/tmp/posts/hello", want: ""},
+	}
+
+	for _, tt := range tests {
+		if got := extractLang(tt.path); got != tt.want {
+			t.Fatalf("extractLang(%q) = %q, want %q", tt.path, got, tt.want)
+		}
 	}
 }

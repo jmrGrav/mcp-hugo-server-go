@@ -1,6 +1,9 @@
 package site
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestContentClassifierClassifiesHugoGeneratedPages(t *testing.T) {
 	idx := &Index{
@@ -144,5 +147,40 @@ func TestContentPagesExcludeTaxonomyPaginationSectionsAndTechnicalFiles(t *testi
 	}
 	if got[0].Slug != "/posts/foo/" || got[1].Slug != "/about/" || got[2].Slug != "/fr/posts/bonjour/" {
 		t.Fatalf("ContentPages() = %#v", got)
+	}
+}
+
+func TestClassifierAccessorAndNormalizeSlugExport(t *testing.T) {
+	idx := &Index{
+		entries: []entry{
+			{page: Page{Slug: "/posts/demo/"}},
+		},
+	}
+
+	classifier := idx.Classifier()
+	if classifier == nil {
+		t.Fatal("Classifier() returned nil")
+	}
+	if !classifier.IsArticle(Page{Slug: "/posts/demo/"}) {
+		t.Fatal("Classifier() should classify posts/demo as article")
+	}
+
+	if got := NormalizeSlug("posts/demo"); got != "/posts/demo/" {
+		t.Fatalf("NormalizeSlug() = %q, want /posts/demo/", got)
+	}
+	if got := NormalizeSlug(""); got != "/" {
+		t.Fatalf("NormalizeSlug(\"\") = %q, want /", got)
+	}
+}
+
+func TestSetStaleCheckIntervalForTestingRestoresPreviousValue(t *testing.T) {
+	original := staleCheckInterval
+	restore := SetStaleCheckIntervalForTesting(5 * time.Millisecond)
+	if staleCheckInterval != 5*time.Millisecond {
+		t.Fatalf("staleCheckInterval = %v, want 5ms", staleCheckInterval)
+	}
+	restore()
+	if staleCheckInterval != original {
+		t.Fatalf("staleCheckInterval after restore = %v, want %v", staleCheckInterval, original)
 	}
 }
