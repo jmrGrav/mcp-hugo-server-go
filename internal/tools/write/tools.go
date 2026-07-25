@@ -236,6 +236,7 @@ func computeTaxonomyDelta(old, next []string) taxonomyDeltaDTO {
 
 type deletePageInput struct {
 	Slug             string `json:"slug"`
+	Lang             string `json:"lang,omitempty"`
 	ExpectedRevision string `json:"expected_revision,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	DryRun           bool   `json:"dry_run,omitempty"`
@@ -262,6 +263,8 @@ type deletePageData struct {
 	SourceKey          string                   `json:"source_key,omitempty"`
 	ResolvedLang       *string                  `json:"resolved_lang,omitempty"`
 	ResolvedSourcePath *string                  `json:"resolved_source_path,omitempty"`
+	RemovedPaths       []string                 `json:"removed_paths,omitempty"`
+	BundleRemoved      bool                     `json:"bundle_removed"`
 	DryRun             bool                     `json:"dry_run,omitempty"`
 	Content            string                   `json:"content,omitempty"`
 	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
@@ -1058,7 +1061,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. For multilingual bundles, provide `lang` (e.g. `fr`, `en`) to delete only that language file; omitting `lang` when multiple language files exist returns `ambiguous_language` instead of silently deleting the whole bundle. The bundle directory is removed only when no content files remain. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of the resolved source file (e.g. get_page_for_edit), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -1073,10 +1076,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 		in.Slug = normalizeInputSlug(in.Slug)
 		wrapErr := func(err error) error {
-			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug})
+			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
 		}
 		if in.Slug == "" {
 			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
+		}
+		lang, err := validateLangParam(in.Lang)
+		if err != nil {
+			return nil, deletePageOutput{}, wrapErr(err)
 		}
 
 		dir, err := pg.SafeJoin(in.Slug)
@@ -1090,8 +1097,6 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
 		}
-		resolvedSource := inspectDeleteSource(dir)
-
 		// Fetching the limiter is not itself a budget-consuming operation —
 		// only Allow() below is — so hoisting it above the dry-run block
 		// lets dry-run report an accurate rate_limit_remaining without
@@ -1104,6 +1109,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				"rate_limit_remaining": rateLimitRemaining(limiter),
 			}
 			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
+		}
+
+		resolvedSource := inspectDeleteSource(dir)
+		if hasPageContentFiles(dir) {
+			resolvedSource, err = resolveExistingSource(cfg.ContentRoot, in.Slug, lang)
+			if err != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+			}
 		}
 
 		// dry_run: return page content + backlinks that would break, without touching disk (#267).
@@ -1126,6 +1139,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				SourceKey:          in.Slug,
 				ResolvedLang:       strPtr(resolvedSource.Lang),
 				ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
+				RemovedPaths:       logicalRemovedPaths(cfg.ContentRoot, resolvedSource.SourcePath),
 				DryRun:             true,
 				Content:            content,
 				Backlinks:          &bls,
@@ -1198,40 +1212,84 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
 		}
 
-		if err := os.RemoveAll(dir); err != nil {
-			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
+		removedPaths := logicalRemovedPaths(cfg.ContentRoot, resolvedSource.SourcePath)
+		bundleRemoved := false
+		hadPublicVariant := false
+		removedPublicSlugs := publicSlugsForDelete(siteIdx, cfg, in.Slug, resolvedSource.Lang)
+
+		if resolvedSource.SourcePath != "" {
+			if err := os.Remove(resolvedSource.SourcePath); err != nil {
+				slog.Error("delete_page: remove source failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
+			}
+			if !hasPageContentFiles(dir) {
+				if err := os.RemoveAll(dir); err != nil {
+					slog.Error("delete_page: remove bundle failed", "slug", in.Slug, "dir", dir, "error", err)
+					return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
+				}
+				bundleRemoved = true
+				removedPaths = append(removedPaths, fileutil.LogicalContentPath(cfg.ContentRoot, dir))
+			}
+		} else {
+			if err := os.RemoveAll(dir); err != nil {
+				slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
+			}
+			bundleRemoved = true
+			removedPaths = append(removedPaths, fileutil.LogicalContentPath(cfg.ContentRoot, dir))
 		}
-		idx.Delete(in.Slug)
+
+		if bundleRemoved {
+			idx.Delete(in.Slug)
+		} else {
+			idx.DeleteLang(in.Slug, resolvedSource.Lang)
+		}
 		if siteIdx != nil {
-			siteIdx.RemoveBySlug(in.Slug)
+			for _, publicSlug := range removedPublicSlugs {
+				hadPublicVariant = true
+				siteIdx.RemoveBySlug(publicSlug)
+			}
 		}
 		var deleteWarning string
 		dbDeleteFailed := false
 		if siteDB != nil {
-			if err := siteDB.DeletePage(in.Slug); err != nil {
+			var dbErr error
+			if bundleRemoved {
+				dbErr = siteDB.DeletePage(in.Slug)
+			} else if remaining, ok := idx.GetBySlug(in.Slug); ok {
+				dbErr = siteDB.SyncSourcePage(*remaining)
+			} else {
+				dbErr = fmt.Errorf("remaining source variant could not be resolved after partial delete")
+			}
+			if dbErr != nil {
 				// Source and in-memory indexes are already gone; surface the DB
 				// staleness explicitly so callers know get_broken_links may be
 				// stale until the next build (#242).
-				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", err)
+				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", dbErr)
 				dbDeleteFailed = true
-				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", err)
+				slog.Warn("delete_page: db sync failed", "slug", in.Slug, "error", dbErr)
 			}
 		}
 		publicCleanupFailed := false
 		if cfg.SiteRoot != "" {
-			publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
-			if rmErr := os.RemoveAll(publicPath); rmErr != nil {
-				// Source is already gone; surface the zombie so the caller knows
-				// the public output is still live (#239).
-				msg := fmt.Sprintf("source deleted but public output cleanup failed: %v", rmErr)
-				if deleteWarning != "" {
-					deleteWarning += "; " + msg
-				} else {
-					deleteWarning = msg
+			publicTargets := removedPublicSlugs
+			if len(publicTargets) == 0 && bundleRemoved {
+				publicTargets = []string{canonicalPublicSlug(in.Slug)}
+			}
+			for _, publicSlug := range publicTargets {
+				publicPath := filepath.Join(cfg.SiteRoot, strings.Trim(publicSlug, "/"))
+				if rmErr := os.RemoveAll(publicPath); rmErr != nil {
+					// Source is already gone; surface the zombie so the caller knows
+					// the public output is still live (#239).
+					msg := fmt.Sprintf("source deleted but public output cleanup failed: %v", rmErr)
+					if deleteWarning != "" {
+						deleteWarning += "; " + msg
+					} else {
+						deleteWarning = msg
+					}
+					publicCleanupFailed = true
+					slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
 				}
-				publicCleanupFailed = true
-				slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
 			}
 		}
 
@@ -1281,6 +1339,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		}
 
 		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
+		if !bundleRemoved {
+			state = updatePageState(siteIdx != nil, hadPublicVariant)
+			if dbDeleteFailed {
+				state.IndexState = "stale"
+			}
+		}
 		status := "ok"
 		if deleteWarning != "" {
 			status = "partial_success"
@@ -1291,6 +1355,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			SourceKey:          in.Slug,
 			ResolvedLang:       strPtr(resolvedSource.Lang),
 			ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
+			RemovedPaths:       removedPaths,
+			BundleRemoved:      bundleRemoved,
 			Warning:            deleteWarning,
 			State:              &state,
 		}, rateLimitRemaining(limiter))
@@ -1617,6 +1683,59 @@ func inspectDeleteSource(dir string) contentmodel.ResolvedSource {
 		SourcePath: path,
 		Lang:       inferLangFromIndexFile(path),
 	}
+}
+
+func hasPageContentFiles(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == "index.md" || (strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md")) {
+			return true
+		}
+	}
+	return false
+}
+
+func logicalRemovedPaths(contentRoot, sourcePath string) []string {
+	if strings.TrimSpace(sourcePath) == "" {
+		return nil
+	}
+	return []string{fileutil.LogicalContentPath(contentRoot, sourcePath)}
+}
+
+func publicSlugsForDelete(siteIdx *site.Index, cfg config.Config, sourceKey, resolvedLang string) []string {
+	if siteIdx == nil {
+		return nil
+	}
+	targetLang := resolvedLang
+	if targetLang == "" {
+		targetLang = cfg.DefaultLanguage
+	}
+	seen := make(map[string]bool)
+	var out []string
+	for _, pg := range siteIdx.Sitemap() {
+		if targetLang != "" && pg.Lang != targetLang {
+			continue
+		}
+		for _, candidate := range site.SourceSlugCandidates(strings.Trim(pg.Slug, "/")) {
+			if candidate != sourceKey {
+				continue
+			}
+			if !seen[pg.Slug] {
+				seen[pg.Slug] = true
+				out = append(out, pg.Slug)
+			}
+			break
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func inferLangFromIndexFile(path string) string {

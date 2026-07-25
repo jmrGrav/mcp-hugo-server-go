@@ -1886,7 +1886,7 @@ func TestCreatePageRejectsInvalidLang(t *testing.T) {
 	}
 }
 
-func TestDeletePageMultilingualBundleStillSucceeds(t *testing.T) {
+func TestDeletePageMultilingualRequiresLangAndDeletesSingleVariant(t *testing.T) {
 	contentRoot := t.TempDir()
 	pageDir := filepath.Join(contentRoot, "posts", "bilingual-delete")
 	if err := os.MkdirAll(pageDir, 0o755); err != nil {
@@ -1899,19 +1899,74 @@ func TestDeletePageMultilingualBundleStillSucceeds(t *testing.T) {
 		t.Fatalf("WriteFile en: %v", err)
 	}
 
-	session, _, done := newTestServer(t, contentRoot)
+	session, srcIdx, done := newTestServer(t, contentRoot)
 	defer done()
+
+	ambiguous := callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/bilingual-delete",
+	})
+	if !ambiguous.IsError {
+		t.Fatal("delete_page on multilingual bundle without lang should fail")
+	}
+	ambiguousBody := marshalContent(t, ambiguous)
+	if !strings.Contains(ambiguousBody, "ambiguous_language") {
+		t.Fatalf("delete_page ambiguous error = %s, want ambiguous_language", ambiguousBody)
+	}
 
 	res := callTool(t, session, "delete_page", map[string]any{
 		"slug":              "posts/bilingual-delete",
+		"lang":              "en",
 		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.en.md")),
 	})
 	if res.IsError {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("delete_page on multilingual bundle failed: %s", raw)
 	}
+	if _, err := os.Stat(filepath.Join(pageDir, "index.en.md")); !os.IsNotExist(err) {
+		t.Fatal("delete_page must remove only the selected language file")
+	}
+	if _, err := os.Stat(filepath.Join(pageDir, "index.fr.md")); err != nil {
+		t.Fatalf("delete_page must preserve the other language file: %v", err)
+	}
+	if _, err := os.Stat(pageDir); err != nil {
+		t.Fatalf("delete_page must keep the bundle directory while another language remains: %v", err)
+	}
+	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["resolved_lang"]; got != "en" {
+		t.Fatalf("delete_page multilingual data.resolved_lang = %v, want en", got)
+	}
+	if got := dataEnvelope["resolved_source_path"]; got != "content/posts/bilingual-delete/index.en.md" {
+		t.Fatalf("delete_page multilingual data.resolved_source_path = %v, want content/posts/bilingual-delete/index.en.md", got)
+	}
+	if got := dataEnvelope["bundle_removed"]; got != false {
+		t.Fatalf("delete_page multilingual data.bundle_removed = %v, want false", got)
+	}
+	removedPaths, ok := dataEnvelope["removed_paths"].([]any)
+	if !ok || len(removedPaths) != 1 || removedPaths[0] != "content/posts/bilingual-delete/index.en.md" {
+		t.Fatalf("delete_page multilingual data.removed_paths = %#v, want only the selected source file", dataEnvelope["removed_paths"])
+	}
+	if _, ok := srcIdx.GetBySlugLang("posts/bilingual-delete", "en"); ok {
+		t.Fatal("source index must not retain the deleted language variant")
+	}
+	if _, ok := srcIdx.GetBySlugLang("posts/bilingual-delete", "fr"); !ok {
+		t.Fatal("source index must retain the surviving language variant")
+	}
+
+	finalDelete := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/bilingual-delete",
+		"lang":              "fr",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.fr.md")),
+	})
+	if finalDelete.IsError {
+		raw, _ := json.Marshal(finalDelete.Content)
+		t.Fatalf("delete_page final multilingual delete failed: %s", raw)
+	}
 	if _, err := os.Stat(pageDir); !os.IsNotExist(err) {
-		t.Fatal("delete_page must remove multilingual bundle directory")
+		t.Fatal("delete_page must remove the bundle directory once the last language file is gone")
+	}
+	finalData := decodeWriteData(t, finalDelete)
+	if got := finalData["bundle_removed"]; got != true {
+		t.Fatalf("delete_page final multilingual data.bundle_removed = %v, want true", got)
 	}
 }
 

@@ -37,6 +37,7 @@ func TestWriteToolSchemasPresent(t *testing.T) {
 
 	deleteTool := got["delete_page"]
 	assertSchemaHasProperties(t, deleteTool, "outputSchema.data", "status", "slug", "source_key", "resolved_source_path", "rate_limit_remaining")
+	assertSchemaHasProperties(t, deleteTool, "inputSchema", "slug", "lang", "expected_revision", "dry_run")
 }
 
 func TestWriteToolAnnotationsDescribeIdempotency(t *testing.T) {

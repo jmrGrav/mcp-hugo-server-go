@@ -221,6 +221,24 @@ func (idx *SourceIndex) Delete(slug string) {
 	idx.rebuildMaps()
 }
 
+// DeleteLang removes only the requested slug/language variant from the index.
+// lang=="" targets the default-language file (`index.md` / leaf `.md`).
+// It must be called while ContentMu is held for writing.
+func (idx *SourceIndex) DeleteLang(slug, lang string) {
+	if idx == nil || len(idx.pages) == 0 {
+		return
+	}
+	filtered := idx.pages[:0]
+	for _, page := range idx.pages {
+		if page.Slug == slug && page.Lang == lang {
+			continue
+		}
+		filtered = append(filtered, page)
+	}
+	idx.pages = filtered
+	idx.rebuildMaps()
+}
+
 func (idx *SourceIndex) ClearAllBuildPending() {
 	if idx == nil {
 		return
