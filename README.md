@@ -74,6 +74,19 @@ For a fresh article, the suggested call order is:
 3. `create_page` — write the page (`create_page`'s own description also cross-references `suggest_links` as a pre-write step).
 4. `verify_publication` — confirm the change actually went live after a build.
 
+## Multi-page editorial changes
+
+When a single logical change spans several pages (e.g. renaming a category across an entire series, or a coordinated cross-linking pass), don't call `publish_changes` after each page — it triggers a full site build, so publishing once per page instead of once for the whole batch costs a build per page for no benefit and makes a half-applied batch briefly visible on the live site between builds.
+
+The recommended shape (#631):
+
+1. For each page: `plan_content_change` → review the returned preview/diff → if it looks right, `apply_content_plan` immediately.
+   Apply each plan right after previewing it rather than collecting previews for the whole batch first — `plan_content_change`'s `plan_id` is a single-use preview with a 5-minute TTL (`data.plan_expires_at`), so a plan-everything-then-apply-everything ordering risks the earliest plans expiring before you get to them on a large batch.
+2. Track the `plan_id`/`revision` returned for each page as you go — `apply_content_plan` fails closed with `revision_conflict` if a page changed since its plan was made, and `rollback_change` (per page, using the tracked revision) is how you undo any single page in the batch if something downstream turns out wrong.
+3. Once every page in the batch has been applied, call `publish_changes` **once** for the whole site.
+
+No new orchestration tool is needed for this — `apply_content_plan`'s existing per-page revision pinning and `rollback_change`'s per-page undo already compose into this pattern; a batch-level primitive would just be a wrapper around the same three calls.
+
 ## Security model
 
 - Anonymous callers and `read`-scoped callers see the same tool set — `read` carries no additional visibility restriction (#450).
