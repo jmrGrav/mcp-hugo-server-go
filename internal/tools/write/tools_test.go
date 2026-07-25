@@ -2850,3 +2850,143 @@ func TestDeletePageAuditLogErrorSurfacedAsWarning(t *testing.T) {
 		t.Errorf("expected 'audit_error' in response warning, got: %s", raw)
 	}
 }
+
+// TestUpdatePageTagsDeltaOnDryRun is the core regression test for #645:
+// update_page's tags/categories are a whole-list replacement, but the
+// response should report a per-term added/removed/unchanged breakdown —
+// the same "which parts of my request would actually apply" visibility
+// plan_content_change gives its add_tag/remove_tag vocabulary, narrowly
+// scoped to tags/categories. Checked on dry_run specifically, since that's
+// the diagnostic-quality gap the issue raised.
+func TestUpdatePageTagsDeltaOnDryRun(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	if r := callTool(t, session, "create_page", map[string]any{
+		"slug": "delta-dry", "title": "T", "body": "B",
+		"tags": []any{"go", "hugo"}, "categories": []any{"tech"},
+	}); r.IsError {
+		raw, _ := json.Marshal(r.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug": "delta-dry", "tags": []any{"hugo", "mcp"}, "dry_run": true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page dry_run returned error: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	tagsDelta, ok := data["tags_delta"].(map[string]any)
+	if !ok {
+		t.Fatalf("data.tags_delta missing or wrong type: %#v", data)
+	}
+	assertStringSet(t, "tags_delta.added", tagsDelta["added"], "mcp")
+	assertStringSet(t, "tags_delta.removed", tagsDelta["removed"], "go")
+	assertStringSet(t, "tags_delta.unchanged", tagsDelta["unchanged"], "hugo")
+
+	// categories omitted from the request entirely: no categories_delta at all.
+	if _, present := data["categories_delta"]; present {
+		t.Errorf("data.categories_delta present when categories was omitted from the request: %#v", data["categories_delta"])
+	}
+}
+
+// TestUpdatePageCategoriesDeltaPopulatedOnRealWrite confirms tags_delta/
+// categories_delta are populated on a real (non-dry-run) write too, not
+// only on dry_run.
+func TestUpdatePageCategoriesDeltaPopulatedOnRealWrite(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	if r := callTool(t, session, "create_page", map[string]any{
+		"slug": "delta-real", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{"news", "tech"},
+	}); r.IsError {
+		raw, _ := json.Marshal(r.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug": "delta-real", "categories": []any{"tech", "guides"},
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "delta-real", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page expected success, got error: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	categoriesDelta, ok := data["categories_delta"].(map[string]any)
+	if !ok {
+		t.Fatalf("data.categories_delta missing or wrong type: %#v", data)
+	}
+	assertStringSet(t, "categories_delta.added", categoriesDelta["added"], "guides")
+	assertStringSet(t, "categories_delta.removed", categoriesDelta["removed"], "news")
+	assertStringSet(t, "categories_delta.unchanged", categoriesDelta["unchanged"], "tech")
+}
+
+// TestUpdatePageTagsDeltaEmptyListClearsAll confirms an explicit empty
+// tags list (a valid "clear them all" request, distinct from omitting the
+// key entirely) reports every existing tag as removed, none unchanged.
+func TestUpdatePageTagsDeltaEmptyListClearsAll(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	if r := callTool(t, session, "create_page", map[string]any{
+		"slug": "delta-clear", "title": "T", "body": "B",
+		"tags": []any{"go", "hugo"}, "categories": []any{},
+	}); r.IsError {
+		raw, _ := json.Marshal(r.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug": "delta-clear", "tags": []any{}, "dry_run": true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page dry_run returned error: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	tagsDelta, ok := data["tags_delta"].(map[string]any)
+	if !ok {
+		t.Fatalf("data.tags_delta missing or wrong type for an explicit empty tags list: %#v", data)
+	}
+	assertStringSet(t, "tags_delta.removed", tagsDelta["removed"], "go", "hugo")
+	if v, present := tagsDelta["added"]; present {
+		t.Errorf("tags_delta.added = %v, want omitted for an empty tags list", v)
+	}
+	if v, present := tagsDelta["unchanged"]; present {
+		t.Errorf("tags_delta.unchanged = %v, want omitted when clearing all tags", v)
+	}
+}
+
+func assertStringSet(t *testing.T, label string, v any, want ...string) {
+	t.Helper()
+	var got []string
+	if v != nil {
+		arr, ok := v.([]any)
+		if !ok {
+			t.Fatalf("%s = %#v (%T), want []string-like", label, v, v)
+		}
+		for _, item := range arr {
+			s, _ := item.(string)
+			got = append(got, s)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%s = %v, want %v", label, got, want)
+	}
+	gotSet := make(map[string]bool, len(got))
+	for _, g := range got {
+		gotSet[g] = true
+	}
+	for _, w := range want {
+		if !gotSet[w] {
+			t.Errorf("%s = %v, missing expected member %q", label, got, w)
+		}
+	}
+}
