@@ -1441,6 +1441,9 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[
 	default:
 		health.Status = "critical"
 	}
+	if health.Status == "healthy" && health.AdvisoriesCount > 0 {
+		health.Status = "healthy_with_advisories"
+	}
 	return health
 }
 

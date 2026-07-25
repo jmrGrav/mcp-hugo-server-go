@@ -2885,14 +2885,15 @@ func TestGetSiteHealthTranslationPairInfoFindingDoesNotMoveScore(t *testing.T) {
 	if taxScore, _ := taxonomy["score"].(float64); taxScore != 100 {
 		t.Fatalf("score_breakdown.taxonomy.score = %v, want 100", taxScore)
 	}
-	// #591: the same info-severity finding must also surface at the top
+	// #591/#681: the same info-severity finding must also surface at the top
 	// level via advisories_count, so an agent reading only status/score
-	// ("healthy"/100) doesn't miss it without drilling into score_breakdown.
+	// doesn't miss it without drilling into score_breakdown. The score stays
+	// 100, but the status string now advertises the advisory presence.
 	if advisoriesCount, _ := data["advisories_count"].(float64); advisoriesCount != 1 {
 		t.Fatalf("data.advisories_count = %v, want 1", advisoriesCount)
 	}
-	if data["status"] != "healthy" {
-		t.Fatalf("data.status = %v, want healthy — advisories_count must not move status", data["status"])
+	if data["status"] != "healthy_with_advisories" {
+		t.Fatalf("data.status = %v, want healthy_with_advisories", data["status"])
 	}
 }
 
@@ -2931,8 +2932,8 @@ func TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly(t *testin
 	data := decodeContent(t, res)
 
 	status, _ := data["status"].(string)
-	if status != "healthy" {
-		t.Fatalf("status = %q, want healthy", status)
+	if status != "healthy_with_advisories" {
+		t.Fatalf("status = %q, want healthy_with_advisories", status)
 	}
 	score, _ := data["score"].(float64)
 	if score != 100 {
@@ -3000,8 +3001,8 @@ func TestGetSiteHealthAdvisoriesCountIncludesCasingVariant(t *testing.T) {
 	if detail["kind"] != "casing_variant" {
 		t.Fatalf("taxonomy_inconsistency_details[0].kind = %v, want casing_variant", detail["kind"])
 	}
-	if data["status"] != "healthy" {
-		t.Fatalf("data.status = %v, want healthy (taxonomy findings never move status)", data["status"])
+	if data["status"] != "healthy_with_advisories" {
+		t.Fatalf("data.status = %v, want healthy_with_advisories (taxonomy findings do not move score, but they should now surface in status)", data["status"])
 	}
 	advisoriesCount, _ := data["advisories_count"].(float64)
 	if advisoriesCount != 1 {
