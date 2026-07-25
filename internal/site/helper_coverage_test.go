@@ -11,7 +11,8 @@ import (
 )
 
 func TestAccessProfileHelpers(t *testing.T) {
-	if got := WithAccessProfile(nil, AccessProfileReader); got != nil {
+	var nilCtx context.Context
+	if got := WithAccessProfile(nilCtx, AccessProfileReader); got != nil {
 		t.Fatalf("WithAccessProfile(nil, reader) = %#v, want nil", got)
 	}
 
@@ -20,10 +21,10 @@ func TestAccessProfileHelpers(t *testing.T) {
 		t.Fatal("WithAccessProfile(ctx, empty) should return the original context")
 	}
 
-	if got := AccessProfileFromContext(nil); got != "" {
+	if got := AccessProfileFromContext(nilCtx); got != "" {
 		t.Fatalf("AccessProfileFromContext(nil) = %q, want empty", got)
 	}
-	if IsReaderProfile(nil) {
+	if IsReaderProfile(nilCtx) {
 		t.Fatal("IsReaderProfile(nil) = true, want false")
 	}
 
