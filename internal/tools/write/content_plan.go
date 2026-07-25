@@ -220,6 +220,7 @@ type applyContentPlanData struct {
 	Validation     string               `json:"validation,omitempty"`
 	Warning        string               `json:"warning,omitempty"`
 	State          *site.LifecycleState `json:"state,omitempty"`
+	RateLimit      *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -628,8 +629,10 @@ func registerContentPlanTools(
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			fields := map[string]any{"rate_limit_remaining": rateLimitRemaining(limiter)}
-			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
+			)
 		}
 		if !in.DryRun && !limiter.Allow() {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(rateLimitExceededErr("apply_content_plan", cfg.RateLimit.CreateUpdatePerMin, limiter))
@@ -720,6 +723,7 @@ func registerContentPlanTools(
 				BeforeRevision: entry.Revision,
 				Validation:     "passed",
 				State:          &state,
+				RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
 		}
 
@@ -804,6 +808,7 @@ func registerContentPlanTools(
 			Validation:     "passed",
 			Warning:        appendLastBuildWarning(warning),
 			State:          &state,
+			RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "apply_content_plan", in.IdempotencyKey, idemHash, out); err != nil {

@@ -3,6 +3,7 @@ package write
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
@@ -21,8 +22,49 @@ import (
 type rateLimitBucket struct {
 	Remaining         int     `json:"remaining"`
 	Limit             int     `json:"limit"`
+	WindowSeconds     int     `json:"window_seconds"`
+	Scope             string  `json:"scope"`
+	ResetAt           string  `json:"reset_at"`
 	RetryAfterSeconds float64 `json:"retry_after_seconds"`
 }
+
+const (
+	rateLimitScopeCreateUpdateUpload = "create_update_upload"
+	rateLimitScopeDestructive        = "destructive"
+	rateLimitWindowSeconds           = 60
+)
+
+func newRateLimitBucket(l *rate.Limiter, limit int, scope string, now time.Time) rateLimitBucket {
+	retryAfter := rateLimitRetryAfterSeconds(l)
+	resetAt := now.UTC()
+	if retryAfter > 0 {
+		resetAt = resetAt.Add(time.Duration(retryAfter * float64(time.Second)))
+	}
+	return rateLimitBucket{
+		Remaining:         rateLimitRemaining(l),
+		Limit:             limit,
+		WindowSeconds:     rateLimitWindowSeconds,
+		Scope:             scope,
+		ResetAt:           resetAt.Format(time.RFC3339),
+		RetryAfterSeconds: retryAfter,
+	}
+}
+
+func rateLimitRootFields(l *rate.Limiter) map[string]any {
+	return map[string]any{
+		"rate_limit_remaining": rateLimitRemaining(l),
+	}
+}
+
+func rateLimitDataFields(l *rate.Limiter, limit int, scope string, now time.Time) map[string]any {
+	bucket := newRateLimitBucket(l, limit, scope, now)
+	return map[string]any{
+		"rate_limit_remaining": bucket.Remaining,
+		"rate_limit":           bucket,
+	}
+}
+
+func ptrRateLimitBucket(bucket rateLimitBucket) *rateLimitBucket { return &bucket }
 
 // getRateLimitsInput is empty — get_rate_limits takes no parameters; the
 // caller identity it reports on comes entirely from context (the same
@@ -70,16 +112,8 @@ func registerGetRateLimits(s *mcp.Server, cfg config.Config, mutationMu *sync.Mu
 		deleteLimiter := callerLimiter(deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 
 		return nil, newGetRateLimitsOutput(getRateLimitsData{
-			CreateUpdateUpload: rateLimitBucket{
-				Remaining:         rateLimitRemaining(createLimiter),
-				Limit:             cfg.RateLimit.CreateUpdatePerMin,
-				RetryAfterSeconds: rateLimitRetryAfterSeconds(createLimiter),
-			},
-			Destructive: rateLimitBucket{
-				Remaining:         rateLimitRemaining(deleteLimiter),
-				Limit:             cfg.RateLimit.DestructivePerMin,
-				RetryAfterSeconds: rateLimitRetryAfterSeconds(deleteLimiter),
-			},
+			CreateUpdateUpload: newRateLimitBucket(createLimiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
+			Destructive:        newRateLimitBucket(deleteLimiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
 		}), nil
 	}))
 }

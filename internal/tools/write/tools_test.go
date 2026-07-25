@@ -678,6 +678,16 @@ func TestCreatePageExposesRateLimitRemaining(t *testing.T) {
 		if !ok {
 			t.Fatalf("create_page %d: rate_limit_remaining = %#v, want present numeric field", i, out["rate_limit_remaining"])
 		}
+		bucket, ok := decodeWriteData(t, res)["rate_limit"].(map[string]any)
+		if !ok {
+			t.Fatalf("create_page %d: data.rate_limit = %#v, want object", i, decodeWriteData(t, res)["rate_limit"])
+		}
+		if got := bucket["remaining"]; got != rem {
+			t.Fatalf("create_page %d: data.rate_limit.remaining = %v, want %v", i, got, rem)
+		}
+		if got := bucket["scope"]; got != "create_update_upload" {
+			t.Fatalf("create_page %d: data.rate_limit.scope = %v, want create_update_upload", i, got)
+		}
 		remaining = append(remaining, rem)
 	}
 	for i := 1; i < len(remaining); i++ {
@@ -1086,6 +1096,16 @@ func TestUpdatePageRejectsStaleExpectedRevision(t *testing.T) {
 	if got := data["rate_limit_remaining"]; got != wantRemaining {
 		t.Fatalf("update_page stale revision data.rate_limit_remaining = %v, want %v", got, wantRemaining)
 	}
+	bucket, ok := data["rate_limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("update_page stale revision data.rate_limit = %#v, want object", data["rate_limit"])
+	}
+	if got := bucket["remaining"]; got != wantRemaining {
+		t.Fatalf("update_page stale revision data.rate_limit.remaining = %v, want %v", got, wantRemaining)
+	}
+	if got := bucket["scope"]; got != "create_update_upload" {
+		t.Fatalf("update_page stale revision data.rate_limit.scope = %v, want create_update_upload", got)
+	}
 }
 
 func TestDeletePageRequiresExpectedRevisionForWrite(t *testing.T) {
@@ -1120,6 +1140,16 @@ func TestDeletePageRequiresExpectedRevisionForWrite(t *testing.T) {
 	data := decodeWriteErrorData(t, res)
 	if got := data["rate_limit_remaining"]; got != wantRemaining {
 		t.Fatalf("delete_page missing expected_revision data.rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
+	bucket, ok := data["rate_limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("delete_page missing expected_revision data.rate_limit = %#v, want object", data["rate_limit"])
+	}
+	if got := bucket["remaining"]; got != wantRemaining {
+		t.Fatalf("delete_page missing expected_revision data.rate_limit.remaining = %v, want %v", got, wantRemaining)
+	}
+	if got := bucket["scope"]; got != "destructive" {
+		t.Fatalf("delete_page missing expected_revision data.rate_limit.scope = %v, want destructive", got)
 	}
 }
 

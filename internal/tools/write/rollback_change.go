@@ -134,6 +134,7 @@ type rollbackChangeData struct {
 	AfterRevision  string               `json:"after_revision,omitempty"`
 	Warning        string               `json:"warning,omitempty"`
 	State          *site.LifecycleState `json:"state,omitempty"`
+	RateLimit      *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -210,8 +211,10 @@ func registerRollbackChange(
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			fields := map[string]any{"rate_limit_remaining": rateLimitRemaining(limiter)}
-			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
+			)
 		}
 		if !in.DryRun && !limiter.Allow() {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(rateLimitExceededErr("rollback_change", cfg.RateLimit.CreateUpdatePerMin, limiter))
@@ -313,6 +316,7 @@ func registerRollbackChange(
 				DryRun:         true,
 				Diff:           diff,
 				BeforeRevision: currentRevision,
+				RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
 		}
 
@@ -392,6 +396,7 @@ func registerRollbackChange(
 			AfterRevision:  contentmodel.SourceRevisionBytes([]byte(snapshotContent)),
 			Warning:        appendLastBuildWarning(warning),
 			State:          &state,
+			RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "rollback_change", in.IdempotencyKey, idemHash, out); err != nil {
