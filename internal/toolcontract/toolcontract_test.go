@@ -179,6 +179,12 @@ func TestParseToolErrorRevisionConflictAssetRecommendsListPageAssets(t *testing.
 	if got.Resolution == nil || got.Resolution.RecommendedTool != "list_page_assets" {
 		t.Fatalf("Resolution = %#v, want RecommendedTool=list_page_assets", got.Resolution)
 	}
+	if got.Field != "expected_sha256" {
+		t.Fatalf("Field = %q, want expected_sha256", got.Field)
+	}
+	if got.Resolution.Parameter != "expected_sha256" {
+		t.Fatalf("Resolution.Parameter = %q, want expected_sha256", got.Resolution.Parameter)
+	}
 }
 
 // TestParseToolErrorAssetReferencedRecommendsForce is a regression test for
