@@ -2097,6 +2097,56 @@ func TestDeletePageInvalidLangRejectedNotWholeBundleFallback(t *testing.T) {
 	}
 }
 
+// TestDeletePageRejectsSymlinkSwapBeforeUnlink is a regression test for a
+// Strix finding on the #682 fix: the new single-file delete branch called
+// os.Remove(resolvedSource.SourcePath) without revalidating for a symlink
+// swap between the earlier SafeJoin/resolve and the actual unlink, unlike
+// every other write path (create_page, update_page, upload_page_asset,
+// rollback_change) which all call pg.RevalidateForWrite immediately before
+// touching disk. If the slug directory is replaced with a symlink pointing
+// outside content_root after validation, delete_page must refuse to follow
+// it rather than deleting a file under the symlink target.
+func TestDeletePageRejectsSymlinkSwapBeforeUnlink(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	pageDir := filepath.Join(contentRoot, "posts", "escape-delete")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.md"), []byte("---\ntitle: Real\n---\nBody."), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// Swap the slug directory for a symlink pointing outside content_root,
+	// with a bait index.md at the target so resolution and the revision
+	// read still succeed — mimicking a race won before delete_page's unlink.
+	target := t.TempDir()
+	targetIndex := filepath.Join(target, "index.md")
+	if err := os.WriteFile(targetIndex, []byte("---\ntitle: Bait\n---\nOutside content root."), 0o644); err != nil {
+		t.Fatalf("WriteFile bait: %v", err)
+	}
+	if err := os.RemoveAll(pageDir); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if err := os.Symlink(target, pageDir); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/escape-delete",
+		"expected_revision": currentRevision(t, targetIndex),
+	})
+	if !res.IsError {
+		t.Fatal("delete_page must reject a slug directory swapped for a symlink, got success")
+	}
+	if _, err := os.Stat(targetIndex); err != nil {
+		t.Fatalf("bait file outside content_root must survive a rejected symlink-swap delete: %v", err)
+	}
+}
+
 // TestUpdatePageDryRunMultilingualPath verifies that the dry_run diff header
 // names the resolved file (index.fr.md) not the hardcoded fallback (index.md).
 // Regression for issue #257.

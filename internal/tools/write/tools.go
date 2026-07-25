@@ -1259,6 +1259,17 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		// for that case).
 		bundleFullyRemoved := true
 		if resolvedSource.SourcePath != "" {
+			// Revalidate immediately before the single-file unlink, closing
+			// the TOCTOU window between the earlier SafeJoin/resolve and
+			// this delete: the slug directory could have been swapped for a
+			// symlink in between, which would otherwise let os.Remove
+			// follow it and delete a file outside content_root (Strix
+			// finding on the #682 fix — every other write path already
+			// revalidates this way right before touching disk).
+			if err := pg.RevalidateForWrite(resolvedSource.SourcePath); err != nil {
+				slog.Warn("delete_page: symlink detected before delete", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in delete path"))
+			}
 			if err := os.Remove(resolvedSource.SourcePath); err != nil {
 				slog.Error("delete_page: remove source file failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
 				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
