@@ -1098,6 +1098,19 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
 			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
 		}
+		// Validate lang the same way create_page/update_page already do
+		// (validateLangParam) before it ever reaches path resolution —
+		// contentmodel.ResolvePageSource builds candidate paths with
+		// filepath.Join("index."+lang+".md"), so an unvalidated lang like
+		// "../../victim" would let a caller resolve (and then delete)
+		// an arbitrary file outside the requested slug's bundle, bypassing
+		// the slug's own PathGuard check entirely (caught by Strix on the
+		// first version of this fix).
+		validatedLang, langErr := validateLangParam(in.Lang)
+		if langErr != nil {
+			return nil, deletePageOutput{}, wrapErr(langErr)
+		}
+
 		// Resolve to a single language file via the same
 		// contentmodel.ResolvePageSource machinery update_page already uses
 		// (#682), instead of the old inspectDeleteSource helper which just
@@ -1105,8 +1118,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		// on ambiguity — that let one call silently target either language
 		// of a bilingual bundle depending on file naming. A page with no
 		// source file at all (public-only content) is not an error here;
-		// delete_page has always tolerated that case.
-		resolved, resolveErr := contentmodel.ResolvePageSource(in.Slug, in.Lang, cfg.ContentRoot)
+		// delete_page has always tolerated that case — but only when the
+		// caller never asked for a specific lang. If lang was explicitly
+		// given and simply doesn't match any file, that must be rejected
+		// outright, not silently downgraded to the source-less path: the
+		// source-less path skips the expected_revision requirement and
+		// drives the whole-bundle-deletion branch, which would let an
+		// invalid lang wipe every translation instead of failing cleanly
+		// (also caught by Strix on the first version of this fix).
+		resolved, resolveErr := contentmodel.ResolvePageSource(in.Slug, validatedLang, cfg.ContentRoot)
 		var resolvedSource contentmodel.ResolvedSource
 		switch {
 		case resolveErr == nil:
@@ -1114,6 +1134,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		case strings.HasPrefix(resolveErr.Error(), "ambiguous_language:"):
 			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("%s", resolveErr.Error()))
 		case strings.HasPrefix(resolveErr.Error(), "source_file_not_found:"):
+			if validatedLang != "" {
+				return nil, deletePageOutput{}, wrapErr(resolveErr)
+			}
 			resolvedSource = contentmodel.ResolvedSource{}
 		default:
 			return nil, deletePageOutput{}, wrapErr(resolveErr)
@@ -1198,7 +1221,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				ExpectedRevision string `json:"expected_revision,omitempty"`
 			}{
 				Slug:             in.Slug,
-				Lang:             in.Lang,
+				Lang:             validatedLang,
 				ExpectedRevision: in.ExpectedRevision,
 			})
 			if hashErr != nil {

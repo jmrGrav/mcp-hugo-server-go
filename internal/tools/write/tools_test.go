@@ -2002,6 +2002,101 @@ func TestDeletePageOneLanguageSurvivesTheOther(t *testing.T) {
 	}
 }
 
+// TestDeletePageRejectsPathTraversalLang is a regression test for a Strix
+// finding on the first version of #682's fix: delete_page passed in.Lang
+// directly into contentmodel.ResolvePageSource, which builds candidate
+// paths with filepath.Join("index."+lang+".md") — an unvalidated lang like
+// "../../victim" let a caller resolve (and then delete) a file entirely
+// outside the requested slug's own bundle, bypassing the slug's own
+// PathGuard check. lang must now be rejected by the same validateLangParam
+// create_page/update_page already use before it ever reaches path
+// resolution, and the victim page must survive untouched.
+func TestDeletePageRejectsPathTraversalLang(t *testing.T) {
+	contentRoot := t.TempDir()
+
+	victimDir := filepath.Join(contentRoot, "posts", "victim")
+	if err := os.MkdirAll(victimDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll victim: %v", err)
+	}
+	victimPath := filepath.Join(victimDir, "index.md")
+	if err := os.WriteFile(victimPath, []byte("---\ntitle: Victim\n---\nDo not delete me."), 0o644); err != nil {
+		t.Fatalf("WriteFile victim: %v", err)
+	}
+
+	attackerDir := filepath.Join(contentRoot, "posts", "attacker")
+	if err := os.MkdirAll(attackerDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll attacker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(attackerDir, "index.md"), []byte("---\ntitle: Attacker\n---\nBody."), 0o644); err != nil {
+		t.Fatalf("WriteFile attacker: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/attacker",
+		"lang":              "../../victim",
+		"expected_revision": currentRevision(t, victimPath),
+	})
+	if !res.IsError {
+		t.Fatal("delete_page with a path-traversal lang must fail with invalid_params, not resolve outside the requested slug")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("delete_page error = %s, want invalid_params", raw)
+	}
+
+	if _, err := os.Stat(victimPath); err != nil {
+		t.Fatalf("victim page must survive a rejected path-traversal lang: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(attackerDir, "index.md")); err != nil {
+		t.Fatalf("attacker's own page must be untouched by a rejected call: %v", err)
+	}
+}
+
+// TestDeletePageInvalidLangRejectedNotWholeBundleFallback is a regression
+// test for a second Strix finding on the first version of #682's fix: when
+// lang was explicitly given but didn't match any file on disk,
+// source_file_not_found was downgraded to the same empty-resolvedSource
+// case used for genuinely source-less (public-only) content — which skips
+// the expected_revision requirement entirely and drives the whole-bundle
+// deletion branch. An explicit, non-matching lang must now be rejected
+// outright, leaving every language file on disk untouched, instead of
+// silently wiping the whole bundle with no revision guard.
+func TestDeletePageInvalidLangRejectedNotWholeBundleFallback(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual-delete")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: FR\n---\nBonjour"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN\n---\nHello"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// Deliberately no expected_revision — the old bug's whole-bundle
+	// fallback would have skipped the revision requirement entirely.
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/bilingual-delete",
+		"lang": "de",
+	})
+	if !res.IsError {
+		t.Fatal("delete_page with a non-existent lang on a real bundle must fail, not fall back to whole-bundle deletion")
+	}
+
+	for _, lang := range []string{"fr", "en"} {
+		if _, err := os.Stat(filepath.Join(pageDir, "index."+lang+".md")); err != nil {
+			t.Errorf("index.%s.md must survive a rejected invalid-lang delete: %v", lang, err)
+		}
+	}
+}
+
 // TestUpdatePageDryRunMultilingualPath verifies that the dry_run diff header
 // names the resolved file (index.fr.md) not the hardcoded fallback (index.md).
 // Regression for issue #257.
