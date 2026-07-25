@@ -2600,6 +2600,54 @@ func TestDeletePageDryRunCompactOmitsFullSourceBody(t *testing.T) {
 	}
 }
 
+func TestDeletePageDryRunReportsGeneratedHeroImage(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/dry-run-hero", "title": "Dry Run Hero", "body": "preview body",
+		"tags": []any{"go"}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "dry-run-hero-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(heroPath, []byte("hero-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/dry-run-hero", "dry_run": true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page dry_run failed: %s", raw)
+	}
+
+	data := decodeWriteData(t, res)
+	generated, ok := data["generated_assets"].([]any)
+	if !ok || len(generated) != 1 {
+		t.Fatalf("delete_page dry_run generated_assets = %#v, want one generated asset", data["generated_assets"])
+	}
+	ga, ok := generated[0].(map[string]any)
+	if !ok {
+		t.Fatalf("generated_assets[0] type = %T, want map[string]any", generated[0])
+	}
+	if got := ga["path"]; got != "static/images/posts/dry-run-hero-featured.jpg" {
+		t.Fatalf("generated_assets[0].path = %v, want static/images/posts/dry-run-hero-featured.jpg", got)
+	}
+	if got := ga["kind"]; got != "global_static" {
+		t.Fatalf("generated_assets[0].kind = %v, want global_static", got)
+	}
+}
+
 // TestDeletePageRealDeleteOmitsBacklinksCount is a regression test for a
 // contract-drift bug introduced alongside #687's dry-run backlinks_count
 // field: it was declared as a plain int with no omitempty, so a real

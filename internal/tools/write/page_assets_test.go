@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 )
 
 // minimalPNG is enough leading bytes for http.DetectContentType to sniff
@@ -756,6 +757,82 @@ func TestDeletePageAssetDryRunPreviewsWithoutDeleting(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); err != nil {
 		t.Fatalf("delete_page_asset dry_run must not delete the file: %v", err)
+	}
+}
+
+func TestDeletePageAssetDeletesGeneratedHeroImageWhenScopeIsGenerated(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "article-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heroBytes := []byte("hero-bytes")
+	if err := os.WriteFile(heroPath, heroBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/article",
+		"filename":        "article-featured.jpg",
+		"scope":           "generated",
+		"expected_sha256": contentmodel.SourceRevisionBytes(heroBytes),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page_asset generated hero failed: %s", raw)
+	}
+	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["scope"]; got != "generated" {
+		t.Fatalf("delete_page_asset data.scope = %v, want generated", got)
+	}
+	if got := dataEnvelope["path"]; got != "static/images/posts/article-featured.jpg" {
+		t.Fatalf("delete_page_asset data.path = %v, want static/images/posts/article-featured.jpg", got)
+	}
+	if _, err := os.Stat(heroPath); !os.IsNotExist(err) {
+		t.Fatal("delete_page_asset must remove the generated hero image")
+	}
+}
+
+func TestDeletePageAssetDryRunPreviewsGeneratedHeroImage(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "article-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heroBytes := []byte("hero-bytes")
+	if err := os.WriteFile(heroPath, heroBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":     "posts/article",
+		"filename": "article-featured.jpg",
+		"scope":    "generated",
+		"dry_run":  true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page_asset generated dry_run failed: %s", raw)
+	}
+	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["scope"]; got != "generated" {
+		t.Fatalf("delete_page_asset dry_run data.scope = %v, want generated", got)
+	}
+	if got := dataEnvelope["sha256"]; got != contentmodel.SourceRevisionBytes(heroBytes) {
+		t.Fatalf("delete_page_asset dry_run data.sha256 = %v, want current hero hash", got)
+	}
+	if _, err := os.Stat(heroPath); err != nil {
+		t.Fatalf("delete_page_asset dry_run must not delete the generated hero image: %v", err)
 	}
 }
 
