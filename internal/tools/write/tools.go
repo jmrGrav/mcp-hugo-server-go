@@ -135,9 +135,75 @@ type updatePageData struct {
 	// normalize_taxonomy_casing never guesses which of several existing
 	// spellings is correct.
 	TaxonomyCasingAmbiguous []taxonomyCasingSkippedDTO `json:"taxonomy_casing_ambiguous,omitempty"`
+	// TagsDelta/CategoriesDelta give update_page's whole-list-replacement
+	// tags/categories the same "which parts of my request would actually
+	// apply" visibility plan_content_change's operations_applied/rejected
+	// gives its add_tag/remove_tag vocabulary (#645) — narrowly scoped to
+	// tags/categories specifically, since update_page already computes a
+	// delta-like signal for them (normalize_taxonomy_casing's rewrite
+	// detection), unlike title/body/draft/description, which stay a single
+	// whole-value diff. Populated whenever the caller explicitly includes
+	// `tags`/`categories` in the request (even an empty list, meaning
+	// "clear them all") — omitted when the key is left out entirely,
+	// matching applyPageUpdates's own nil-means-unchanged contract. A pure,
+	// cheap list comparison against the existing page's current tags/
+	// categories (post taxonomy-casing-normalization, if requested) — no
+	// index lookups beyond what normalize_taxonomy_casing already does — so
+	// unlike TaxonomyCasingNormalized/TaxonomyCasingAmbiguous this is always
+	// populated on both dry_run and a real write, not withheld on either.
+	TagsDelta       *taxonomyDeltaDTO `json:"tags_delta,omitempty"`
+	CategoriesDelta *taxonomyDeltaDTO `json:"categories_delta,omitempty"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
+}
+
+// taxonomyDeltaDTO reports which tags/categories a whole-list-replacement
+// update_page call actually adds, removes, or leaves unchanged relative to
+// the page's current value (#645) — each list omitted when empty, so an
+// unchanged field's delta reads as an empty object rather than three empty
+// arrays.
+type taxonomyDeltaDTO struct {
+	Added     []string `json:"added,omitempty"`
+	Removed   []string `json:"removed,omitempty"`
+	Unchanged []string `json:"unchanged,omitempty"`
+}
+
+// computeTaxonomyDelta compares old (the page's current value) against
+// next (the value that will actually be written, post any taxonomy-casing
+// normalization) and reports the per-term outcome. Order-independent,
+// duplicate-safe (a term appearing twice in either list is reported once).
+func computeTaxonomyDelta(old, next []string) taxonomyDeltaDTO {
+	oldSet := make(map[string]bool, len(old))
+	for _, v := range old {
+		oldSet[v] = true
+	}
+	nextSet := make(map[string]bool, len(next))
+	for _, v := range next {
+		nextSet[v] = true
+	}
+	var d taxonomyDeltaDTO
+	seen := make(map[string]bool, len(next))
+	for _, v := range next {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		if oldSet[v] {
+			d.Unchanged = append(d.Unchanged, v)
+		} else {
+			d.Added = append(d.Added, v)
+		}
+	}
+	seenOld := make(map[string]bool, len(old))
+	for _, v := range old {
+		if seenOld[v] || nextSet[v] {
+			continue
+		}
+		seenOld[v] = true
+		d.Removed = append(d.Removed, v)
+	}
+	return d
 }
 
 type deletePageInput struct {
@@ -632,6 +698,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		Title: "Update page",
 		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
 			"Use title/body to revise content. Use tags/categories/draft/description to update front matter fields. " +
+			"`tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). " +
 			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
 			"Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); " +
@@ -810,6 +877,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			taxonomyNormalized = append(tagChanges, catChanges...)
 			taxonomyAmbiguous = append(tagSkipped, catSkipped...)
 		}
+		var tagsDelta, categoriesDelta *taxonomyDeltaDTO
+		if in.Tags != nil {
+			d := computeTaxonomyDelta(existing.Tags, writeTags)
+			tagsDelta = &d
+		}
+		if in.Categories != nil {
+			d := computeTaxonomyDelta(existing.Categories, writeCategories)
+			categoriesDelta = &d
+		}
 		opts := pageUpdateOpts{
 			Tags:        writeTags,
 			Categories:  writeCategories,
@@ -842,6 +918,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Diff:                     diff,
 				TaxonomyCasingNormalized: taxonomyNormalized,
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+				TagsDelta:                tagsDelta,
+				CategoriesDelta:          categoriesDelta,
 			}, rateLimitRemaining(limiter)), nil
 		}
 
@@ -924,6 +1002,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			State:                    &state,
 			TaxonomyCasingNormalized: taxonomyNormalized,
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+			TagsDelta:                tagsDelta,
+			CategoriesDelta:          categoriesDelta,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, out); err != nil {
