@@ -501,6 +501,21 @@ func TestDeletePageAssetHashMismatchFailsWithRevisionConflict(t *testing.T) {
 	if !strings.Contains(string(raw), "revision_conflict") {
 		t.Fatalf("delete_page_asset hash-mismatch error = %s, want revision_conflict", raw)
 	}
+	env := decodeWriteContent(t, res)
+	if code := firstErrorCode(t, env); code != "revision_conflict" {
+		t.Fatalf("delete_page_asset hash-mismatch code = %q, want revision_conflict", code)
+	}
+	errors, ok := env["errors"].([]any)
+	if !ok || len(errors) == 0 {
+		t.Fatalf("delete_page_asset hash-mismatch errors = %#v, want non-empty []any", env["errors"])
+	}
+	first, ok := errors[0].(map[string]any)
+	if !ok {
+		t.Fatalf("delete_page_asset hash-mismatch errors[0] type = %T, want map[string]any", errors[0])
+	}
+	if field, _ := first["field"].(string); field != "expected_sha256" {
+		t.Fatalf("delete_page_asset hash-mismatch field = %q, want expected_sha256", field)
+	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.png")); err != nil {
 		t.Fatalf("delete_page_asset must not delete the file on a hash mismatch: %v", err)
 	}

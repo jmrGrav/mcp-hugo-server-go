@@ -388,12 +388,15 @@ func ParseToolError(err error) ToolError {
 		// list_page_assets is the tool that actually re-supplies
 		// expected_sha256/expected_revision for this case.
 		recommendedTool := "get_page_for_edit"
+		parameter := "expected_revision"
 		if strings.Contains(message, "asset") {
 			recommendedTool = "list_page_assets"
+			parameter = "expected_sha256"
+			out.Field = "expected_sha256"
 		}
 		out.Resolution = &ErrorResolution{
 			Action:          "reread_then_retry",
-			Parameter:       "expected_revision",
+			Parameter:       parameter,
 			RecommendedTool: recommendedTool,
 		}
 	case "asset_referenced":
