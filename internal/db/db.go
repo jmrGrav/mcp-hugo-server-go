@@ -368,14 +368,49 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 	return nil
 }
 
-// PostBuildSync reindexes the public site index after a successful build.
+// PostBuildSync reindexes the public site index after a successful build,
+// then prunes any published DB rows for pages no longer in the sitemap.
+//
+// The prune step closes a reconciliation gap (#646): delete_page performs a
+// best-effort siteDB.DeletePage call that can fail independently of the disk
+// removal (reported via the existing partial_success/warning convention).
+// Previously, the only code path that ever cleaned up such an orphaned row
+// was StartupSync, which runs once at process boot — on a long-running,
+// low-traffic deployment a failed delete could leave a stale row (and a
+// stale search_content hit) in place for weeks. Running the same prune on
+// every post-build callback means it self-heals on the very next build.
 func (d *DB) PostBuildSync(siteIdx *site.Index) error {
 	if siteIdx == nil {
 		return nil
 	}
+	want := make(map[string]bool, len(siteIdx.Sitemap()))
 	for _, p := range siteIdx.Sitemap() {
+		want[p.Slug] = true
 		if err := d.SyncPublicPage(p, siteIdx); err != nil {
 			slog.Warn("db: post-build sync: public page", "slug", p.Slug, "error", err)
+		}
+	}
+
+	rows, err := d.db.Query("SELECT slug FROM pages WHERE published = 1")
+	if err != nil {
+		slog.Warn("db: post-build sync: list published pages", "error", err)
+		return nil
+	}
+	var stale []string
+	for rows.Next() {
+		var slug string
+		if err := rows.Scan(&slug); err != nil {
+			continue
+		}
+		if !want[slug] {
+			stale = append(stale, slug)
+		}
+	}
+	rows.Close()
+
+	for _, slug := range stale {
+		if err := d.DeletePage(slug); err != nil {
+			slog.Warn("db: post-build sync: delete stale page", "slug", slug, "error", err)
 		}
 	}
 	return nil

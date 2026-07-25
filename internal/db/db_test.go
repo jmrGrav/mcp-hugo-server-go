@@ -277,3 +277,51 @@ func TestHashGatedSkip(t *testing.T) {
 		t.Error("expected updated page to appear in FTS after title change")
 	}
 }
+
+// TestPostBuildSyncPrunesStalePublishedPages guards against a reconciliation
+// gap (#646): if a delete_page call's best-effort siteDB.DeletePage sync
+// fails independently of the disk removal, the page vanishes from the
+// sitemap but its row (and FTS entry) previously survived in the DB until
+// the next process restart's StartupSync — PostBuildSync only ever upserted
+// pages present in the sitemap and never pruned ones that disappeared.
+// This test simulates that: sync a page while it's in the sitemap, then
+// call PostBuildSync again with it removed, and assert the stale row (and
+// its search hit) is gone without a restart.
+func TestPostBuildSyncPrunesStalePublishedPages(t *testing.T) {
+	d := openTestDB(t)
+
+	siteIdx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	siteIdx.UpsertPage(site.Page{
+		Slug:  "/going-away/",
+		Title: "GoingAwayUniqueTitle",
+		URL:   "https://example.test/going-away/",
+		Lang:  "en",
+	})
+
+	if err := d.PostBuildSync(siteIdx); err != nil {
+		t.Fatalf("PostBuildSync (1st): %v", err)
+	}
+	if results, _ := d.Search("GoingAwayUniqueTitle", 10); len(results) != 1 {
+		t.Fatalf("expected page indexed after 1st PostBuildSync, got %d hits", len(results))
+	}
+
+	// Simulate delete_page's disk removal succeeding while its own
+	// siteDB.DeletePage call failed: the page is gone from the sitemap, but
+	// no DeletePage was ever issued for it directly.
+	siteIdx.RemoveBySlug("/going-away/")
+
+	if err := d.PostBuildSync(siteIdx); err != nil {
+		t.Fatalf("PostBuildSync (2nd): %v", err)
+	}
+
+	results, err := d.Search("GoingAwayUniqueTitle", 10)
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected stale page pruned after next PostBuildSync, still got %d hits: %#v", len(results), results)
+	}
+}
