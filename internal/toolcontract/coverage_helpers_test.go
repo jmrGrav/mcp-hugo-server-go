@@ -1,11 +1,15 @@
 package toolcontract
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type shapeFixture struct {
@@ -163,5 +167,130 @@ func TestResponseModeFromInput(t *testing.T) {
 				t.Fatalf("ResponseModeFromInput(%s) = %q, want %q", tt.name, got, tt.wantMode)
 			}
 		})
+	}
+}
+
+type wrapFixtureInput struct {
+	ResponseMode string `json:"response_mode,omitempty"`
+}
+
+type wrapFixtureOutput struct {
+	ToolResponse[map[string]any]
+	RequestContext     *RequestContext `json:"request_context,omitempty"`
+	RateLimitRemaining int             `json:"rate_limit_remaining,omitempty"`
+}
+
+func TestWithRootFieldsAndWithDataFieldsCloneValues(t *testing.T) {
+	baseErr := errors.New("boom")
+	root := map[string]any{"rate_limit_remaining": 59}
+	data := map[string]any{"rate_limit_remaining": 59}
+	wrapped := WithDataFields(WithRootFields(baseErr, root), data)
+	root["rate_limit_remaining"] = 0
+	data["rate_limit_remaining"] = 0
+
+	gotRoot := rootFieldsFrom(wrapped)
+	if gotRoot["rate_limit_remaining"] != 59 {
+		t.Fatalf("rootFieldsFrom() = %#v, want cloned original values", gotRoot)
+	}
+	gotData := dataFieldsFrom(wrapped)
+	if gotData["rate_limit_remaining"] != 59 {
+		t.Fatalf("dataFieldsFrom() = %#v, want cloned original values", gotData)
+	}
+}
+
+func TestFailureInitializesCanonicalEnvelope(t *testing.T) {
+	meta := NewMeta("v1.6.3", time.Date(2026, 7, 25, 21, 0, 0, 0, time.UTC))
+	got := Failure(meta, NewError("invalid_params", "bad slug"))
+	if got.Success {
+		t.Fatal("Failure().Success = true, want false")
+	}
+	if got.Data == nil {
+		t.Fatal("Failure().Data = nil, want empty map")
+	}
+	if len(got.Errors) != 1 || got.Errors[0].Code != "invalid_params" {
+		t.Fatalf("Failure().Errors = %#v, want one invalid_params error", got.Errors)
+	}
+	if got.GeneratedAt != meta.GeneratedAt {
+		t.Fatalf("Failure().GeneratedAt = %q, want %q", got.GeneratedAt, meta.GeneratedAt)
+	}
+}
+
+func TestWrapToolShapesCompactSuccess(t *testing.T) {
+	origCommit := buildinfo.Commit
+	origChannel := buildinfo.BuildChannel
+	buildinfo.Commit = "abc123"
+	buildinfo.BuildChannel = "release"
+	t.Cleanup(func() {
+		buildinfo.Commit = origCommit
+		buildinfo.BuildChannel = origChannel
+	})
+
+	handler := WrapTool(func(ctx context.Context, req *mcp.CallToolRequest, in wrapFixtureInput) (*mcp.CallToolResult, wrapFixtureOutput, error) {
+		meta := NewMeta("v1.6.3", time.Date(2026, 7, 25, 21, 5, 0, 0, time.UTC))
+		out := wrapFixtureOutput{ToolResponse: Success(map[string]any{"status": "ok"}, meta)}
+		return &mcp.CallToolResult{}, out, nil
+	})
+
+	_, out, err := handler(context.Background(), &mcp.CallToolRequest{}, wrapFixtureInput{ResponseMode: "compact"})
+	if err != nil {
+		t.Fatalf("WrapTool() error = %v", err)
+	}
+	if out.Meta.GeneratedAt != "" {
+		t.Fatalf("compact success kept meta.generated_at = %q, want empty", out.Meta.GeneratedAt)
+	}
+	if out.GeneratedAt == "" {
+		t.Fatal("compact success removed root generated_at")
+	}
+	if out.Meta.ReleaseVersion != "v1.6.3" || out.Meta.Commit != "abc123" || out.Meta.BuildChannel != "release" {
+		t.Fatalf("compact success meta = %#v, want release identity fields preserved", out.Meta)
+	}
+}
+
+func TestWrapToolReturnsStructuredErrorForInvalidResponseMode(t *testing.T) {
+	handler := WrapTool(func(ctx context.Context, req *mcp.CallToolRequest, in wrapFixtureInput) (*mcp.CallToolResult, wrapFixtureOutput, error) {
+		t.Fatal("handler should not run when response_mode is invalid")
+		return nil, wrapFixtureOutput{}, nil
+	})
+
+	res, out, err := handler(context.Background(), &mcp.CallToolRequest{}, wrapFixtureInput{ResponseMode: "full"})
+	if err != nil {
+		t.Fatalf("WrapTool() error = %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("WrapTool() result = %#v, want structured error result", res)
+	}
+	if out.Success {
+		t.Fatal("typed error output reported success=true")
+	}
+	if len(out.Errors) == 0 || out.Errors[0].Code != "invalid_params" {
+		t.Fatalf("typed error output = %#v, want invalid_params", out.Errors)
+	}
+}
+
+func TestWrapToolCarriesRequestContextAndCompatFieldsOnError(t *testing.T) {
+	handler := WrapTool(func(ctx context.Context, req *mcp.CallToolRequest, in wrapFixtureInput) (*mcp.CallToolResult, wrapFixtureOutput, error) {
+		err := fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")
+		err = WithRequestContext(err, RequestContext{Slug: "posts/demo", RequestedLang: "fr"})
+		err = WithRootFields(err, map[string]any{"rate_limit_remaining": 59})
+		err = WithDataFields(err, map[string]any{"rate_limit_remaining": 59})
+		return nil, wrapFixtureOutput{}, err
+	})
+
+	res, out, err := handler(context.Background(), &mcp.CallToolRequest{}, wrapFixtureInput{})
+	if err != nil {
+		t.Fatalf("WrapTool() error = %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("WrapTool() result = %#v, want error result", res)
+	}
+	if out.RequestContext == nil || out.RequestContext.Slug != "posts/demo" || out.RequestContext.RequestedLang != "fr" {
+		t.Fatalf("typed error request_context = %#v, want slug/lang preserved", out.RequestContext)
+	}
+	if out.RateLimitRemaining != 59 {
+		t.Fatalf("typed error rate_limit_remaining = %d, want 59", out.RateLimitRemaining)
+	}
+	text, ok := res.Content[0].(*mcp.TextContent)
+	if !ok || !strings.Contains(text.Text, "revision_conflict") {
+		t.Fatalf("error content = %#v, want human-readable revision_conflict text", res.Content)
 	}
 }

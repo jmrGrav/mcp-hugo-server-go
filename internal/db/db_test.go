@@ -180,6 +180,7 @@ func TestSnapshotHealth(t *testing.T) {
 	}
 }
 
+
 func TestStartupSync(t *testing.T) {
 	d := openTestDB(t)
 

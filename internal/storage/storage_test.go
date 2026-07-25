@@ -33,6 +33,32 @@ func TestMemoryStoreLifecycle(t *testing.T) {
 	}
 }
 
+func TestMemoryValidateAccessTokenDetails(t *testing.T) {
+	s := NewMemory().(*memoryStore)
+	future := time.Now().Add(time.Hour)
+	expired := time.Now().Add(-time.Hour)
+	if err := s.AddAccessToken("tok-live", "content.read", future); err != nil {
+		t.Fatalf("AddAccessToken(live) error = %v", err)
+	}
+	if err := s.AddAccessToken("tok-expired", "content.write", expired); err != nil {
+		t.Fatalf("AddAccessToken(expired) error = %v", err)
+	}
+
+	scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-live")
+	if !ok || scope != "content.read" {
+		t.Fatalf("ValidateAccessTokenDetails(live) = (%q, %v, %v)", scope, expiresAt, ok)
+	}
+	if !expiresAt.Equal(future) {
+		t.Fatalf("ValidateAccessTokenDetails(live).expiresAt = %v, want %v", expiresAt, future)
+	}
+	if scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-expired"); ok || scope != "" || !expiresAt.IsZero() {
+		t.Fatalf("ValidateAccessTokenDetails(expired) = (%q, %v, %v), want zero values and ok=false", scope, expiresAt, ok)
+	}
+	if scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-missing"); ok || scope != "" || !expiresAt.IsZero() {
+		t.Fatalf("ValidateAccessTokenDetails(missing) = (%q, %v, %v), want zero values and ok=false", scope, expiresAt, ok)
+	}
+}
+
 func TestRefreshTokenLifecycleAllStores(t *testing.T) {
 	t.Parallel()
 
@@ -203,6 +229,37 @@ func TestJSONStoreSaveError(t *testing.T) {
 	}
 	if err := s.AddAccessToken("tok", "content.read", time.Now().Add(time.Hour)); err == nil {
 		t.Fatal("expected AddAccessToken() to fail when temp file cannot be written")
+	}
+}
+
+func TestJSONValidateAccessTokenDetails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.json")
+	sAny, err := NewJSON(path)
+	if err != nil {
+		t.Fatalf("NewJSON() error = %v", err)
+	}
+	s := sAny.(*jsonStore)
+	future := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	expired := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	if err := s.AddAccessToken("tok-live", "content.read", future); err != nil {
+		t.Fatalf("AddAccessToken(live) error = %v", err)
+	}
+	if err := s.AddAccessToken("tok-expired", "content.write", expired); err != nil {
+		t.Fatalf("AddAccessToken(expired) error = %v", err)
+	}
+
+	scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-live")
+	if !ok || scope != "content.read" {
+		t.Fatalf("ValidateAccessTokenDetails(live) = (%q, %v, %v)", scope, expiresAt, ok)
+	}
+	if !expiresAt.Equal(time.Unix(future.Unix(), 0)) {
+		t.Fatalf("ValidateAccessTokenDetails(live).expiresAt = %v, want %v", expiresAt, time.Unix(future.Unix(), 0))
+	}
+	if scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-expired"); ok || scope != "" || !expiresAt.IsZero() {
+		t.Fatalf("ValidateAccessTokenDetails(expired) = (%q, %v, %v), want zero values and ok=false", scope, expiresAt, ok)
+	}
+	if scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-missing"); ok || scope != "" || !expiresAt.IsZero() {
+		t.Fatalf("ValidateAccessTokenDetails(missing) = (%q, %v, %v), want zero values and ok=false", scope, expiresAt, ok)
 	}
 }
 

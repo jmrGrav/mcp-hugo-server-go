@@ -3,6 +3,7 @@ package db
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -215,5 +216,59 @@ func TestStartupSyncDedupesMultilingualBundle(t *testing.T) {
 	}
 	if got := countRows(t, d, "pages", bareSlug); got != 0 {
 		t.Fatalf("pages rows for bare source slug %q = %d, want 0 (both language variants deduped against their public counterparts)", bareSlug, got)
+	}
+}
+
+func TestMinHelper(t *testing.T) {
+	if got := min(1, 2); got != 1 {
+		t.Fatalf("min(1,2) = %d, want 1", got)
+	}
+	if got := min(9, -3); got != -3 {
+		t.Fatalf("min(9,-3) = %d, want -3", got)
+	}
+	if got := min(4, 4); got != 4 {
+		t.Fatalf("min(4,4) = %d, want 4", got)
+	}
+}
+
+func TestSnapshotSiteHealth(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer d.Close()
+
+	if err := d.SyncPublicPage(site.Page{
+		Slug:    "/source/",
+		Title:   "Source",
+		URL:     "https://example.test/source/",
+		Lang:    "en",
+		RawHTML: `<a href="/missing/">Broken</a>`,
+	}, nil); err != nil {
+		t.Fatalf("SyncPublicPage() error = %v", err)
+	}
+	if err := d.SyncPublicPage(site.Page{
+		Slug:  "/healthy/",
+		Title: "Healthy",
+		URL:   "https://example.test/healthy/",
+		Lang:  "en",
+	}, nil); err != nil {
+		t.Fatalf("SyncPublicPage(healthy) error = %v", err)
+	}
+
+	if err := d.SnapshotSiteHealth(); err != nil {
+		t.Fatalf("SnapshotSiteHealth() error = %v", err)
+	}
+
+	var payload string
+	if err := d.db.QueryRow(`SELECT payload FROM site_health_snapshots ORDER BY id DESC LIMIT 1`).Scan(&payload); err != nil {
+		t.Fatalf("QueryRow(snapshot) error = %v", err)
+	}
+	if !strings.Contains(payload, `"total_pages":2`) {
+		t.Fatalf("snapshot payload = %q, want total_pages=2", payload)
+	}
+	if !strings.Contains(payload, `"broken_links":1`) {
+		t.Fatalf("snapshot payload = %q, want broken_links=1", payload)
 	}
 }

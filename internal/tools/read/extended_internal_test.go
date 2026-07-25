@@ -72,6 +72,10 @@ func TestContentHelperFunctions(t *testing.T) {
 	if got := toPageDTOs(pages, nil, nil, "", ""); len(got) != 3 || got[1].Slug != "/posts/b/" {
 		t.Fatalf("toPageDTOs() = %#v", got)
 	}
+	snippets := map[string]string{"/posts/a/": "alpha snippet"}
+	if got := toPageDTOsWithSnippets(pages[:1], nil, snippets, nil, "", ""); len(got) != 1 || got[0].Snippet != "alpha snippet" {
+		t.Fatalf("toPageDTOsWithSnippets() = %#v", got)
+	}
 	if got := countSections(pages); len(got) == 0 || got[0].Name == "" {
 		t.Fatalf("countSections() = %#v", got)
 	}

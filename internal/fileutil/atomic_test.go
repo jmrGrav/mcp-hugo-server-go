@@ -140,6 +140,31 @@ func TestAtomicCreateCheckedRejectsExistingFile(t *testing.T) {
 	}
 }
 
+func TestAtomicCreateCheckedBytesSucceedsAndRejectsExistingFile(t *testing.T) {
+	base := t.TempDir()
+	pg, err := security.New(base, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+
+	filePath := filepath.Join(base, "bundle", "cover.png")
+	first := []byte{0x89, 'P', 'N', 'G'}
+	if err := fileutil.AtomicCreateCheckedBytes(filePath, first, pg); err != nil {
+		t.Fatalf("AtomicCreateCheckedBytes(first): %v", err)
+	}
+	if err := fileutil.AtomicCreateCheckedBytes(filePath, []byte("other"), pg); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("AtomicCreateCheckedBytes(second) error = %v, want fs.ErrExist", err)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(data) != string(first) {
+		t.Fatalf("content = %q, want %q", string(data), string(first))
+	}
+}
+
 func TestBoolPtr(t *testing.T) {
 	if !*fileutil.BoolPtr(true) {
 		t.Fatal("BoolPtr(true) returned false")

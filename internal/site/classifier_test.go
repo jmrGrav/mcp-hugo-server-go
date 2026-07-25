@@ -146,3 +146,26 @@ func TestContentPagesExcludeTaxonomyPaginationSectionsAndTechnicalFiles(t *testi
 		t.Fatalf("ContentPages() = %#v", got)
 	}
 }
+
+func TestClassifierAccessorAndNormalizeSlugExport(t *testing.T) {
+	idx := &Index{
+		entries: []entry{
+			{page: Page{Slug: "/posts/demo/"}},
+		},
+	}
+
+	classifier := idx.Classifier()
+	if classifier == nil {
+		t.Fatal("Classifier() returned nil")
+	}
+	if !classifier.IsArticle(Page{Slug: "/posts/demo/"}) {
+		t.Fatal("Classifier() should classify posts/demo as article")
+	}
+
+	if got := NormalizeSlug("posts/demo"); got != "/posts/demo/" {
+		t.Fatalf("NormalizeSlug() = %q, want /posts/demo/", got)
+	}
+	if got := NormalizeSlug(""); got != "/" {
+		t.Fatalf("NormalizeSlug(\"\") = %q, want /", got)
+	}
+}
