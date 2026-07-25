@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Fixed
+- **`PostBuildSync` now prunes DB rows for pages no longer in the sitemap, instead of only ever upserting** (#646): `delete_page` performs a best-effort `siteDB.DeletePage` call independent of the disk removal, reported via the existing `partial_success`/warning convention when it fails. Previously, the *only* code path that ever cleaned up a page row left behind by such a failure was `StartupSync`, which runs once at process boot — on a long-running, low-traffic deployment, a failed delete could leave a stale row (and a stale `search_content` hit for a page that no longer exists) in place for weeks until the next restart. `PostBuildSync`, which already runs after every `build_site`/`publish_changes`, now also deletes any `published=1` row whose slug is absent from the current sitemap, so the gap self-heals on the very next build instead of waiting for a restart. This is a narrower, more honestly-scoped fix than the issue's original "consolidate all SQLite sync into one transactional path" framing — the DB-layer writes (`SyncSourcePage`/`DeletePage`) were already each wrapped in a single transaction, and the two bugs that originally motivated the issue (#643, #589) turned out on inspection to be unrelated to DB sync atomicity. Backed by a new regression test, `TestPostBuildSyncPrunesStalePublishedPages`, which fails without the fix.
+
 ## [v1.6.2] - 2026-07-25
 
 ### Documentation
