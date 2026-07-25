@@ -217,6 +217,42 @@ func TestACLWriteScopeBlockedForRead(t *testing.T) {
 	}
 }
 
+// TestACLGetRateLimitsResolvesKnownScope is a targeted regression test for
+// #675: get_rate_limits (#614) was registered as a real tool via
+// registerGetRateLimits in tools.go's Register(), but was never added to
+// write.Defs() — so ScopePolicy.checkOne resolved it as known=false and
+// denied every caller with "unknown_tool", regardless of actual scope. A
+// write-scoped caller must be allowed to call it, and an anonymous/read
+// caller must not.
+func TestACLGetRateLimitsResolvesKnownScope(t *testing.T) {
+	p := buildTestPolicy()
+	body := toolsCallBody("get_rate_limits")
+	if !p.AllowRequest(body, "write") {
+		t.Fatal("write scope must be allowed to call get_rate_limits")
+	}
+	if p.AllowRequest(body, "") {
+		t.Fatal("anonymous/read must not be allowed to call get_rate_limits (write scope required)")
+	}
+}
+
+// TestACLEveryWriteToolResolvesKnownScope guards against #675's whole class
+// of bug recurring silently: a tool wired via toolswrite.Register but never
+// added to write.Defs() resolves as known=false and is denied outright for
+// every caller, independent of scope — which looks identical to a real
+// permission error from the caller's side. Every entry write.Defs() itself
+// declares must resolve to a known scope in the policy built from that exact
+// list, so any future tool that reuses this exact Defs()-omission bug is
+// caught the moment it's exercised by any test that builds a policy this way.
+func TestACLEveryWriteToolResolvesKnownScope(t *testing.T) {
+	p := buildTestPolicy()
+	for _, d := range toolswrite.Defs() {
+		body := toolsCallBody(d.Name)
+		if !p.AllowRequest(body, "write") {
+			t.Errorf("write tool %q (RequiredScope=%q) not allowed for write scope — likely missing from Defs()", d.Name, d.RequiredScope)
+		}
+	}
+}
+
 // TestACLFormerSiteAdminToolNowRequiresWrite documents the #450 fold: tools
 // that used to require a separate "site.admin" scope (rank 3 in the old
 // 4-tier model) are now RequiredScope: "write" with no exceptions, and

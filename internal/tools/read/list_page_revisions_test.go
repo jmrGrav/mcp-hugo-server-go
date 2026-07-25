@@ -145,3 +145,56 @@ func TestListPageRevisionsWithoutGitReturnsUnavailableStatus(t *testing.T) {
 		t.Fatal("expected warning explaining git is unavailable")
 	}
 }
+
+// TestListPageRevisionsUncommittedPageReturnsEmptyArrayNotNull is a
+// regression test for #676: a page inside a real git repository, but never
+// itself committed (source_only relative to git), previously encoded
+// `revisions` as JSON `null` (a nil Go slice) instead of `[]` — the only
+// listing tool on this server that didn't follow the empty-array convention
+// `list_pages`/`get_sitemap`/etc. all use, breaking a client that assumes an
+// array to iterate or call .length on.
+func TestListPageRevisionsUncommittedPageReturnsEmptyArrayNotNull(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	if err := os.MkdirAll(contentRoot, 0o755); err != nil {
+		t.Fatalf("mkdir contentRoot: %v", err)
+	}
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.email", "test@example.test")
+	runGit(t, root, "config", "user.name", "Test User")
+	// Commit an unrelated file so the repo has a real HEAD and git log runs
+	// cleanly, but the target page itself is never added/committed.
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("placeholder\n"), 0o644); err != nil {
+		t.Fatalf("write placeholder: %v", err)
+	}
+	runGit(t, root, "add", "README.md")
+	runGit(t, root, "commit", "-m", "initial")
+
+	pagePath := filepath.Join(contentRoot, "posts", "uncommitted", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Uncommitted\n---\nNever committed.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+
+	session, done := newDiffPageClient(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "list_page_revisions", map[string]any{"slug": "/posts/uncommitted/"})
+	if res.IsError {
+		t.Fatalf("list_page_revisions returned error: %v", res.Content)
+	}
+
+	data := decodeContent(t, res)
+	if got := data["status"]; got != "ok" {
+		t.Fatalf("list_page_revisions status = %v, want ok (page is inside a real git repo)", got)
+	}
+	// A JSON-null revisions field would fail this type assertion (ok=false),
+	// not merely report a mismatched length — this is what actually proves
+	// the field is encoded as [], not null.
+	revisions, ok := data["revisions"].([]any)
+	if !ok || len(revisions) != 0 {
+		t.Fatalf("list_page_revisions revisions = %#v, want an empty array (not null)", data["revisions"])
+	}
+}
