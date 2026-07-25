@@ -234,6 +234,9 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			}
 			return nil
 		}},
+		admin.PostBuildCallback{Name: "stale_test_content_check", Fn: func() error {
+			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
+		}},
 	)
 	admin.RegisterVerifyPublication(writeServer, idx, srcIdx, cfg)
 	admin.RegisterPublishChanges(writeServer, idx, srcIdx, cfg,
@@ -272,6 +275,9 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 				slog.Warn("publish_changes: google index submit failed", "error", err)
 			}
 			return nil
+		}},
+		admin.PostBuildCallback{Name: "stale_test_content_check", Fn: func() error {
+			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
 		}},
 	)
 	previews := previewstore.New()

@@ -88,6 +88,21 @@ type Config struct {
 	// Each affected tool's response still reports `data.dry_run: true` as
 	// normal, so the override is directly visible to the caller, not silent.
 	ForceDryRunAll bool `yaml:"force_dry_run_all"`
+	// StaleTestContentThresholdHours (#608) is the age (in hours) past which
+	// a still-published page whose slug matches contentmodel's reserved
+	// test-content prefix convention (mcp-audit-/test-audit-/codex-, #584)
+	// triggers a post-build advisory warning. validate_frontmatter/
+	// validate_site's test_content_slugs already *detects* this on demand;
+	// this check goes one step further by surfacing it proactively on every
+	// build_site/publish_changes, so a forgotten test page doesn't require
+	// an operator to think to ask. Report-only: it never deletes or
+	// modifies anything, matching this repo's existing "advisory, not
+	// automatic remediation" posture for destructive-adjacent signals
+	// (get_broken_links, get_site_health). Off by default (0): an operator
+	// opts in by setting a positive value (e.g. 24 for one day), so
+	// upgrading to a version with this field never silently changes an
+	// existing deployment's behavior or log volume.
+	StaleTestContentThresholdHours int `yaml:"stale_test_content_threshold_hours"`
 }
 
 // GitBaselineConfig defines the local Git checkout model used as the trusted
