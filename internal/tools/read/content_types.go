@@ -66,107 +66,114 @@ func RegisterListContentTypes(s *mcp.Server, srcIdx *hugosite.SourceIndex, cfg c
 	addReadOnlyTool(s, "list_content_types", "List content types",
 		"Discover the site's Hugo content types/sections: which archetype template (if any) governs new pages of each type, what front matter fields are expected (union of the archetype's declared fields and fields observed on existing pages of that type), and how many source pages of each type currently exist. Use this before create_page on an unfamiliar site instead of guessing section/front matter conventions. `page_count` and observed-page-derived fields are omitted for the reader profile; archetype-derived fields (site configuration, not page content) remain visible. Hugo section-index files (`_index.md`/`_index.<lang>.md`, including the site's homepage) are never listed in `content_types` — they're structural, not a creatable content type — but remain discoverable under `special_files`, where `section: \"\"` specifically means the site's root/home index (not a missing value). A root-level single-file page (e.g. `content/some-slug.md`, directly under the content root rather than under a section directory) is listed as its own one-off content type named after its own slug, with `page_count: 1` — this is by design (top-level sections are derived from page slugs, #642), not a bug, but means a single stray or throwaway root-level page will show up as a distinct \"type\" alongside real, established sections. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ listContentTypesInput) (*mcp.CallToolResult, listContentTypesOutput, error) {
-			archetypes := discoverArchetypes(cfg.HugoRoot)
-			observed := map[string]int{}
-			observedFields := map[string]map[string]struct{}{}
-			sectionIndexLangs := map[string]map[string]struct{}{}
-			qSrc := sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx))
-			if qSrc != nil {
-				for _, p := range qSrc.ListPages(0, 0) {
-					if section, ok := sectionIndexSection(p.Slug); ok {
-						langs := sectionIndexLangs[section]
-						if langs == nil {
-							langs = map[string]struct{}{}
-							sectionIndexLangs[section] = langs
-						}
-						if p.Lang != "" {
-							langs[p.Lang] = struct{}{}
-						}
-						continue
-					}
-					name := firstSlugSegment(p.Slug)
-					if name == "" {
-						continue
-					}
-					observed[name]++
-					fields := observedFields[name]
-					if fields == nil {
-						fields = map[string]struct{}{}
-						observedFields[name] = fields
-					}
-					for k := range p.FrontmatterRaw {
-						fields[k] = struct{}{}
-					}
-				}
-			}
-
-			names := make(map[string]struct{}, len(archetypes)+len(observed))
-			for name := range archetypes {
-				names[name] = struct{}{}
-			}
-			for name := range observed {
-				names[name] = struct{}{}
-			}
-			out := make([]contentTypeDTO, 0, len(names))
-			for name := range names {
-				dto := contentTypeDTO{Name: name}
-				arch, hasArch := archetypes[name]
-				count, hasObserved := observed[name]
-				switch {
-				case hasArch && hasObserved:
-					dto.Source = "archetype+observed"
-				case hasArch:
-					dto.Source = "archetype"
-				default:
-					dto.Source = "observed"
-				}
-
-				fieldSet := map[string]struct{}{}
-				if hasArch {
-					dto.ArchetypePath = arch.path
-					for _, f := range arch.fields {
-						fieldSet[f] = struct{}{}
-					}
-				}
-				if hasObserved {
-					dto.PageCount = count
-					for f := range observedFields[name] {
-						fieldSet[f] = struct{}{}
-					}
-				}
-				if len(fieldSet) > 0 {
-					fields := make([]string, 0, len(fieldSet))
-					for f := range fieldSet {
-						fields = append(fields, f)
-					}
-					sort.Strings(fields)
-					dto.ExpectedFields = fields
-				}
-				out = append(out, dto)
-			}
-			sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-
-			var specialFiles []specialFileDTO
-			if len(sectionIndexLangs) > 0 {
-				sections := make([]string, 0, len(sectionIndexLangs))
-				for section := range sectionIndexLangs {
-					sections = append(sections, section)
-				}
-				sort.Strings(sections)
-				specialFiles = make([]specialFileDTO, 0, len(sections))
-				for _, section := range sections {
-					langSet := sectionIndexLangs[section]
-					langs := make([]string, 0, len(langSet))
-					for lang := range langSet {
-						langs = append(langs, lang)
-					}
-					sort.Strings(langs)
-					specialFiles = append(specialFiles, specialFileDTO{Kind: "section_index", Section: section, Languages: langs})
-				}
-			}
-
+			out, specialFiles := computeContentTypes(ctx, srcIdx, cfg)
 			return nil, newListContentTypesOutput(listContentTypesData{ContentTypes: out, SpecialFiles: specialFiles}, time.Now().UTC()), nil
 		})
+}
+
+// computeContentTypes is list_content_types's own computation, extracted
+// so plan_page (#622) can bundle the identical result without duplicating
+// the archetype/observed-page scan.
+func computeContentTypes(ctx context.Context, srcIdx *hugosite.SourceIndex, cfg config.Config) ([]contentTypeDTO, []specialFileDTO) {
+	archetypes := discoverArchetypes(cfg.HugoRoot)
+	observed := map[string]int{}
+	observedFields := map[string]map[string]struct{}{}
+	sectionIndexLangs := map[string]map[string]struct{}{}
+	qSrc := sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx))
+	if qSrc != nil {
+		for _, p := range qSrc.ListPages(0, 0) {
+			if section, ok := sectionIndexSection(p.Slug); ok {
+				langs := sectionIndexLangs[section]
+				if langs == nil {
+					langs = map[string]struct{}{}
+					sectionIndexLangs[section] = langs
+				}
+				if p.Lang != "" {
+					langs[p.Lang] = struct{}{}
+				}
+				continue
+			}
+			name := firstSlugSegment(p.Slug)
+			if name == "" {
+				continue
+			}
+			observed[name]++
+			fields := observedFields[name]
+			if fields == nil {
+				fields = map[string]struct{}{}
+				observedFields[name] = fields
+			}
+			for k := range p.FrontmatterRaw {
+				fields[k] = struct{}{}
+			}
+		}
+	}
+
+	names := make(map[string]struct{}, len(archetypes)+len(observed))
+	for name := range archetypes {
+		names[name] = struct{}{}
+	}
+	for name := range observed {
+		names[name] = struct{}{}
+	}
+	out := make([]contentTypeDTO, 0, len(names))
+	for name := range names {
+		dto := contentTypeDTO{Name: name}
+		arch, hasArch := archetypes[name]
+		count, hasObserved := observed[name]
+		switch {
+		case hasArch && hasObserved:
+			dto.Source = "archetype+observed"
+		case hasArch:
+			dto.Source = "archetype"
+		default:
+			dto.Source = "observed"
+		}
+
+		fieldSet := map[string]struct{}{}
+		if hasArch {
+			dto.ArchetypePath = arch.path
+			for _, f := range arch.fields {
+				fieldSet[f] = struct{}{}
+			}
+		}
+		if hasObserved {
+			dto.PageCount = count
+			for f := range observedFields[name] {
+				fieldSet[f] = struct{}{}
+			}
+		}
+		if len(fieldSet) > 0 {
+			fields := make([]string, 0, len(fieldSet))
+			for f := range fieldSet {
+				fields = append(fields, f)
+			}
+			sort.Strings(fields)
+			dto.ExpectedFields = fields
+		}
+		out = append(out, dto)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+
+	var specialFiles []specialFileDTO
+	if len(sectionIndexLangs) > 0 {
+		sections := make([]string, 0, len(sectionIndexLangs))
+		for section := range sectionIndexLangs {
+			sections = append(sections, section)
+		}
+		sort.Strings(sections)
+		specialFiles = make([]specialFileDTO, 0, len(sections))
+		for _, section := range sections {
+			langSet := sectionIndexLangs[section]
+			langs := make([]string, 0, len(langSet))
+			for lang := range langSet {
+				langs = append(langs, lang)
+			}
+			sort.Strings(langs)
+			specialFiles = append(specialFiles, specialFileDTO{Kind: "section_index", Section: section, Languages: langs})
+		}
+	}
+	return out, specialFiles
 }
 
 type archetypeInfo struct {
