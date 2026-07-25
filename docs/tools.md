@@ -63,6 +63,7 @@ available.
 - `get_sitemap` - Read sitemap
 - `get_feed` - Read feed
 - `get_site_information` - Read site metadata
+- `get_changelog` - Get changelog
 
 ## `read` (reader tier; on OAuth-enabled deployments, obtain a Bearer token first)
 

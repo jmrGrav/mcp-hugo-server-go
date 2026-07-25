@@ -730,15 +730,15 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 	}
 }
 
-func TestToolsListAuthenticatedReturnsThirtyTools(t *testing.T) {
+func TestToolsListAuthenticatedReturnsThirtyOneTools(t *testing.T) {
 	// mustOAuthServer includes a read client for http://localhost:9999/cb,
 	// so obtainBearerToken (which DCR-registers with that redirect URI) gets a
 	// read token via resolveRegistrationScope (#249).
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 30 {
-		t.Fatalf("authenticated tools/list = %d tools, want 30; got %v", len(names), names)
+	if len(names) != 31 {
+		t.Fatalf("authenticated tools/list = %d tools, want 31; got %v", len(names), names)
 	}
 	for _, name := range []string{"get_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "check_ai_readiness", "search_content", "explain_structure", "get_site_health", "diff_page", "validate_frontmatter", "validate_site", "suggest_links"} {
 		found := false
@@ -762,8 +762,8 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	addBearerToken(t, storePath, bearer, "read")
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 30 {
-		t.Fatalf("reader tools/list = %d tools, want 30; got %v", len(names), names)
+	if len(names) != 31 {
+		t.Fatalf("reader tools/list = %d tools, want 31; got %v", len(names), names)
 	}
 	for _, name := range []string{
 		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
@@ -1387,8 +1387,8 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	rewriteTokenScopeToLegacyMCP(t, storePath, bearer)
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 30 {
-		t.Fatalf("legacy mcp tools/list = %d tools, want 30; got %v", len(names), names)
+	if len(names) != 31 {
+		t.Fatalf("legacy mcp tools/list = %d tools, want 31; got %v", len(names), names)
 	}
 	for _, bad := range []string{"create_page", "update_page", "delete_page", "build_site"} {
 		for _, n := range names {

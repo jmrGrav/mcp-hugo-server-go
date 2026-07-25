@@ -1178,5 +1178,7 @@ func Defs() []tools.ToolDef {
 		{Name: "diff_page", RequiredScope: ""},
 		{Name: "validate_frontmatter", RequiredScope: ""},
 		{Name: "validate_site", RequiredScope: ""},
+		{Name: "plan_page", RequiredScope: ""},
+		{Name: "list_page_revisions", RequiredScope: ""},
 	}
 }
