@@ -97,6 +97,7 @@ type createPageData struct {
 	Warning            string               `json:"warning,omitempty"`
 	NewRevision        string               `json:"new_revision,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
+	RateLimit          *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// TaxonomyCasingNormalized/TaxonomyCasingAmbiguous — see the comment on
 	// updatePageData's fields of the same name (#589); create_page shares
 	// the identical normalize_taxonomy_casing contract.
@@ -151,6 +152,7 @@ type updatePageData struct {
 	Warning            string               `json:"warning,omitempty"`
 	NewRevision        string               `json:"new_revision,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
+	RateLimit          *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// TaxonomyCasingNormalized lists tags/categories rewritten to match a
 	// casing already present elsewhere in the index (#589), populated only
 	// when the caller opted in via normalize_taxonomy_casing. Present only
@@ -277,6 +279,7 @@ type deletePageData struct {
 	Content            string                         `json:"content,omitempty"`
 	Backlinks          *[]deletePageBacklinkDTO       `json:"backlinks,omitempty"`
 	GeneratedAssets    *[]deletePageGeneratedAssetDTO `json:"generated_assets,omitempty"`
+	RateLimit          *rateLimitBucket               `json:"rate_limit,omitempty"`
 	// BacklinksCount is only ever populated on a dry_run response (compact
 	// or not) — it's a pointer with omitempty so it stays entirely absent
 	// from a real (non-dry-run) delete's response, where no backlink scan
@@ -584,10 +587,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			fields := map[string]any{
-				"rate_limit_remaining": rateLimitRemaining(limiter),
-			}
-			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
+			)
 		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
 		// original position, so every non-dry-run failure path below
@@ -647,6 +650,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				ResolvedSourcePath:       strPtr(logicalPath),
 				DryRun:                   true,
 				Content:                  content,
+				RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 				TaxonomyCasingNormalized: taxonomyNormalized,
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 				TestContentExpiresAt:     testContentExpiresAt,
@@ -766,6 +770,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
 			Warning:                  appendLastBuildWarning(warning),
 			State:                    &state,
+			RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			TaxonomyCasingNormalized: taxonomyNormalized,
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 			TestContentExpiresAt:     testContentExpiresAt,
@@ -841,10 +846,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			fields := map[string]any{
-				"rate_limit_remaining": rateLimitRemaining(limiter),
-			}
-			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
+			)
 		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
 		// original position — before the missing/stale expected_revision
@@ -1001,6 +1006,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				ResolvedSourcePath:       strPtr(logicalPath),
 				DryRun:                   true,
 				Diff:                     diff,
+				RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 				TaxonomyCasingNormalized: taxonomyNormalized,
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 				TagsDelta:                tagsDelta,
@@ -1085,6 +1091,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
 			Warning:                  appendLastBuildWarning(warning),
 			State:                    &state,
+			RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			TaxonomyCasingNormalized: taxonomyNormalized,
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 			TagsDelta:                tagsDelta,
@@ -1185,10 +1192,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			fields := map[string]any{
-				"rate_limit_remaining": rateLimitRemaining(limiter),
-			}
-			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
+			)
 		}
 		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 		if err != nil {
@@ -1236,6 +1243,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				Backlinks:          backlinksValue,
 				GeneratedAssets:    generatedAssetsValue,
 				BacklinksCount:     &backlinksCount,
+				RateLimit:          ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
@@ -1456,6 +1464,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			State:              &state,
 			GeneratedAssets:    generatedAssetsValue,
 			BundleFullyRemoved: bundleFullyRemoved,
+			RateLimit:          ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, out); err != nil {

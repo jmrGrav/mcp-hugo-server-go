@@ -71,17 +71,18 @@ type uploadPageAssetOutput struct {
 }
 
 type uploadPageAssetData struct {
-	Status      string `json:"status,omitempty"`
-	Slug        string `json:"slug"`
-	SourceKey   string `json:"source_key,omitempty"`
-	Filename    string `json:"filename"`
-	Path        string `json:"path,omitempty"`
-	ContentType string `json:"content_type,omitempty"`
-	SizeBytes   int    `json:"size_bytes,omitempty"`
-	Sha256      string `json:"sha256,omitempty"`
-	DuplicateOf string `json:"duplicate_of,omitempty"`
-	DryRun      bool   `json:"dry_run,omitempty"`
-	Warning     string `json:"warning,omitempty"`
+	Status      string           `json:"status,omitempty"`
+	Slug        string           `json:"slug"`
+	SourceKey   string           `json:"source_key,omitempty"`
+	Filename    string           `json:"filename"`
+	Path        string           `json:"path,omitempty"`
+	ContentType string           `json:"content_type,omitempty"`
+	SizeBytes   int              `json:"size_bytes,omitempty"`
+	Sha256      string           `json:"sha256,omitempty"`
+	DuplicateOf string           `json:"duplicate_of,omitempty"`
+	DryRun      bool             `json:"dry_run,omitempty"`
+	Warning     string           `json:"warning,omitempty"`
+	RateLimit   *rateLimitBucket `json:"rate_limit,omitempty"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -243,10 +244,10 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			fields := map[string]any{
-				"rate_limit_remaining": rateLimitRemaining(limiter),
-			}
-			return toolcontract.WithDataFields(toolcontract.WithRootFields(err, fields), fields)
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(err, rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
+			)
 		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
 		// original position, so every non-dry-run failure path below
@@ -337,6 +338,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				Sha256:      hash,
 				DuplicateOf: duplicateOf,
 				DryRun:      true,
+				RateLimit:   ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
 		}
 
@@ -362,6 +364,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			SizeBytes:   len(data),
 			Sha256:      hash,
 			DuplicateOf: duplicateOf,
+			RateLimit:   ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "upload_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
@@ -458,18 +461,19 @@ type deletePageAssetOutput struct {
 }
 
 type deletePageAssetData struct {
-	Status       string   `json:"status,omitempty"`
-	Slug         string   `json:"slug,omitempty"`
-	SourceKey    string   `json:"source_key,omitempty"`
-	Scope        string   `json:"scope,omitempty"`
-	Path         string   `json:"path,omitempty"`
-	Kind         string   `json:"kind,omitempty"`
-	Filename     string   `json:"filename,omitempty"`
-	Sha256       string   `json:"sha256,omitempty"`
-	DryRun       bool     `json:"dry_run,omitempty"`
-	Referenced   *bool    `json:"referenced,omitempty"`
-	ReferencedIn []string `json:"referenced_in,omitempty"`
-	Warning      string   `json:"warning,omitempty"`
+	Status       string           `json:"status,omitempty"`
+	Slug         string           `json:"slug,omitempty"`
+	SourceKey    string           `json:"source_key,omitempty"`
+	Scope        string           `json:"scope,omitempty"`
+	Path         string           `json:"path,omitempty"`
+	Kind         string           `json:"kind,omitempty"`
+	Filename     string           `json:"filename,omitempty"`
+	Sha256       string           `json:"sha256,omitempty"`
+	DryRun       bool             `json:"dry_run,omitempty"`
+	Referenced   *bool            `json:"referenced,omitempty"`
+	ReferencedIn []string         `json:"referenced_in,omitempty"`
+	Warning      string           `json:"warning,omitempty"`
+	RateLimit    *rateLimitBucket `json:"rate_limit,omitempty"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -627,10 +631,10 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 		wrapErrWithLimiter := func(err error) error {
-			fields := map[string]any{
-				"rate_limit_remaining": rateLimitRemaining(limiter),
-			}
-			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
+			)
 		}
 
 		if in.DryRun {
@@ -658,6 +662,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				DryRun:       true,
 				Referenced:   fileutil.BoolPtr(len(referencedIn) > 0),
 				ReferencedIn: referencedIn,
+				RateLimit:    ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
 		}
 
@@ -771,6 +776,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			Referenced:   fileutil.BoolPtr(len(referencedIn) > 0),
 			ReferencedIn: referencedIn,
 			Warning:      warning,
+			RateLimit:    ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "delete_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
