@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -817,9 +818,11 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 		date string
 	}
 	bodyLower := strings.ToLower(body)
+	lexicalQuery := lexicalSuggestionQuery(body)
 	classifier := site.NewClassifierFromPages(idx.Sitemap())
 	excludeTranslationKey := translationKey(excludeSlug)
-	var candidates []scored
+	var taxonomyCandidates []scored
+	var lexicalCandidates []scored
 	evaluated := 0
 	for _, pg := range idx.Sitemap() {
 		// Skip taxonomy list pages, home page, and the source page itself (N1).
@@ -836,26 +839,48 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 		sharedTagTerms := taxonomy.SharedTerms(pg.Tags, refTags)
 		sharedCatTerms := taxonomy.SharedTerms(pg.Categories, refCats)
 		score := len(sharedTagTerms)*2 + len(sharedCatTerms)
-		if score == 0 {
-			continue
-		}
 		// E1/W2: guard empty title; use phrase-boundary check to avoid false positives
 		// (e.g. title "Go" matching "go to the store").
 		titleLower := strings.ToLower(strings.TrimSpace(pg.Title))
 		mention := bodyLower != "" && titleLower != "" && containsPhrase(bodyLower, titleLower)
-		candidates = append(candidates, scored{
+		if score > 0 {
+			taxonomyCandidates = append(taxonomyCandidates, scored{
+				date: pg.Date,
+				dto: linkSuggestionDTO{
+					Slug:             pg.Slug,
+					Title:            pg.Title,
+					URL:              pg.URL,
+					AnchorText:       pg.Title,
+					SharedTags:       taxonomy.Slugs(sharedTagTerms),
+					SharedCategories: taxonomy.Slugs(sharedCatTerms),
+					Score:            score,
+					BodyMention:      mention,
+				},
+			})
+			continue
+		}
+		if lexicalQuery == "" {
+			continue
+		}
+		lexicalScore := scoreContentPage(pg, lexicalQuery)
+		if lexicalScore == 0 {
+			continue
+		}
+		lexicalCandidates = append(lexicalCandidates, scored{
 			date: pg.Date,
 			dto: linkSuggestionDTO{
-				Slug:             pg.Slug,
-				Title:            pg.Title,
-				URL:              pg.URL,
-				AnchorText:       pg.Title,
-				SharedTags:       taxonomy.Slugs(sharedTagTerms),
-				SharedCategories: taxonomy.Slugs(sharedCatTerms),
-				Score:            score,
-				BodyMention:      mention,
+				Slug:        pg.Slug,
+				Title:       pg.Title,
+				URL:         pg.URL,
+				AnchorText:  pg.Title,
+				Score:       lexicalScore,
+				BodyMention: mention,
 			},
 		})
+	}
+	candidates := taxonomyCandidates
+	if len(candidates) == 0 {
+		candidates = lexicalCandidates
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		// Priority: body mention → score → recency (W3).
@@ -877,6 +902,32 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 		out[i] = c.dto
 	}
 	return out, evaluated
+}
+
+func lexicalSuggestionQuery(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+	seen := map[string]bool{}
+	terms := strings.FieldsFunc(strings.ToLower(body), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r)
+	})
+	filtered := make([]string, 0, len(terms))
+	for _, term := range terms {
+		if len(term) < 4 && !keepShortLexicalTerm(term) {
+			continue
+		}
+		if seen[term] {
+			continue
+		}
+		seen[term] = true
+		filtered = append(filtered, term)
+	}
+	return strings.Join(filtered, " ")
+}
+
+func keepShortLexicalTerm(term string) bool {
+	return len(term) == 3
 }
 
 func sourceIndexForProfile(srcIdx *hugosite.SourceIndex, readerSafe bool) *hugosite.SourceIndex {
