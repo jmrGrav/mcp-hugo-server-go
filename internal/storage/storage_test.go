@@ -263,6 +263,43 @@ func TestSQLiteStoreLifecycle(t *testing.T) {
 	}
 }
 
+func TestSQLiteValidateAccessTokenDetails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.sqlite")
+	sAny, err := NewSQLite(path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer sAny.Close()
+	s := sAny.(*sqliteStore)
+
+	future := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	expired := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	if err := s.AddAccessToken("tok-live", "content.read", future); err != nil {
+		t.Fatalf("AddAccessToken(live) error = %v", err)
+	}
+	if err := s.AddAccessToken("tok-expired", "content.write", expired); err != nil {
+		t.Fatalf("AddAccessToken(expired) error = %v", err)
+	}
+
+	scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-live")
+	if !ok {
+		t.Fatal("ValidateAccessTokenDetails(live) = not ok, want ok")
+	}
+	if scope != "content.read" {
+		t.Fatalf("ValidateAccessTokenDetails(live).scope = %q, want content.read", scope)
+	}
+	if !expiresAt.Equal(time.Unix(future.Unix(), 0)) {
+		t.Fatalf("ValidateAccessTokenDetails(live).expiresAt = %v, want %v", expiresAt, time.Unix(future.Unix(), 0))
+	}
+
+	if scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-expired"); ok || scope != "" || !expiresAt.IsZero() {
+		t.Fatalf("ValidateAccessTokenDetails(expired) = (%q, %v, %v), want zero values and ok=false", scope, expiresAt, ok)
+	}
+	if scope, expiresAt, ok := s.ValidateAccessTokenDetails("tok-missing"); ok || scope != "" || !expiresAt.IsZero() {
+		t.Fatalf("ValidateAccessTokenDetails(missing) = (%q, %v, %v), want zero values and ok=false", scope, expiresAt, ok)
+	}
+}
+
 func TestSQLiteStoreUpsertOAuthClient(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "clients.sqlite")
 	storeAny, err := NewSQLite(path)

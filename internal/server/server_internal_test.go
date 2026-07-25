@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	toolsadmin "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	toolsanon "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
@@ -267,5 +269,105 @@ func TestMCPBearerAuthMiddlewareInvalidBearerPreservesInvalidTokenMarker(t *test
 	wwwAuth := rec.Header().Get("WWW-Authenticate")
 	if !strings.Contains(wwwAuth, `error="invalid_token"`) {
 		t.Fatalf("WWW-Authenticate = %q, want invalid_token marker", wwwAuth)
+	}
+}
+
+func TestInterceptResponseWriterFlushBufferedToReal(t *testing.T) {
+	rec := httptest.NewRecorder()
+	iw := newInterceptResponseWriter(rec)
+	iw.Header().Set("Content-Type", "application/json")
+	iw.Header().Add("X-Test", "one")
+	iw.WriteHeader(http.StatusAccepted)
+	if _, err := iw.Write([]byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	iw.flushBufferedToReal()
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusAccepted)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	if got := rec.Header().Get("X-Test"); got != "one" {
+		t.Fatalf("X-Test = %q, want one", got)
+	}
+	if got := rec.Body.String(); got != `{"ok":true}` {
+		t.Fatalf("body = %q, want JSON payload", got)
+	}
+}
+
+func TestMCPBearerAuthMiddlewareInvalidFormatPreservesChallengeShape(t *testing.T) {
+	mw := newMCPBearerAuthMiddleware(func(context.Context, string, *http.Request) (*sdkauth.TokenInfo, error) {
+		t.Fatal("verifier should not run when bearer header format is invalid")
+		return nil, nil
+	}, "https://mcp.test", "https://mcp.test/.well-known/oauth-protected-resource")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Basic nope")
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("next handler should not run on invalid bearer format")
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d want 401", rec.Code)
+	}
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(wwwAuth, `realm="https://mcp.test"`) {
+		t.Fatalf("WWW-Authenticate = %q, want realm", wwwAuth)
+	}
+	if strings.Contains(wwwAuth, `error="invalid_token"`) {
+		t.Fatalf("WWW-Authenticate = %q, invalid format must not be marked invalid_token", wwwAuth)
+	}
+}
+
+func TestMCPBearerAuthMiddlewareValidBearerReachesNextWithoutCorruption(t *testing.T) {
+	store := storage.NewMemory()
+	svc := oauth.NewService(config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		Resource:              "https://mcp.test/mcp",
+		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
+	}, store)
+	if err := store.AddAccessToken(oauth.HashToken("token-valid"), "reader", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
+	}
+
+	var (
+		called bool
+		gotBR  mcpBearerResult
+		gotOK  bool
+	)
+	mw := newMCPBearerAuthMiddleware(oauthTokenVerifier(svc), "https://mcp.test", "https://mcp.test/.well-known/oauth-protected-resource")
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer token-valid")
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		gotBR, gotOK = bearerResultFromContext(r.Context())
+		w.Header().Set("X-Next", "yes")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("ok"))
+	})).ServeHTTP(rec, req)
+
+	if !called {
+		t.Fatal("next handler was not called for valid bearer")
+	}
+	if !gotOK {
+		t.Fatal("bearerResultFromContext() = not ok, want ok")
+	}
+	if gotBR.scope != "read" || !gotBR.legacy || gotBR.tokenHash != oauth.HashToken("token-valid") {
+		t.Fatalf("bearerResultFromContext() = %#v, want canonical scope, legacy alias marker, and token hash", gotBR)
+	}
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if got := rec.Header().Get("X-Next"); got != "yes" {
+		t.Fatalf("X-Next = %q, want yes", got)
+	}
+	if got := rec.Body.String(); got != "ok" {
+		t.Fatalf("body = %q, want ok", got)
 	}
 }
