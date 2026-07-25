@@ -1,11 +1,25 @@
 package oauth
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
 )
+
+type errReader struct{}
+
+func (errReader) Read(_ []byte) (int, error) {
+	return 0, errors.New("entropy unavailable")
+}
+
+func withCryptoRandFailure(t *testing.T) {
+	t.Helper()
+	prev := cryptoRandReader
+	cryptoRandReader = errReader{}
+	t.Cleanup(func() { cryptoRandReader = prev })
+}
 
 func TestServiceHelperValidationBranches(t *testing.T) {
 	svc := NewService(config.OAuthConfig{

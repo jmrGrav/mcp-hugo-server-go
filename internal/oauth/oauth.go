@@ -47,6 +47,8 @@ const CtxCallerIP ctxKey = "caller_ip"
 // than failing, since some deployments run with OAuth off entirely.
 const CtxTokenID ctxKey = "oauth_token_id"
 
+var cryptoRandReader io.Reader = rand.Reader
+
 type Service struct {
 	cfg              config.OAuthConfig
 	store            storage.Store
@@ -291,7 +293,10 @@ func (s *Service) registerClient(req RegistrationRequest) (*RegistrationResponse
 			return nil, fmt.Errorf("invalid_redirect_uri")
 		}
 	}
-	id := randomString(24)
+	id, err := randomString(24)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate client id: %w", err)
+	}
 	// Public DCR clients always get "read", never a privileged scope inherited
 	// from redirect_uri overlap with a pre-registered client. See the #497
 	// fix note below for why that inheritance was unsafe. Clients that need
@@ -416,7 +421,10 @@ func (s *Service) issueAuthCode(sourceIP, responseType, clientID, redirectURI, s
 	if err != nil {
 		return "", err
 	}
-	code := randomString(32)
+	code, err := randomString(32)
+	if err != nil {
+		return "", fmt.Errorf("server_error: generate authorization code: %w", err)
+	}
 	s.mu.Lock()
 	s.codes[code] = authCode{
 		ClientID:            clientID,
@@ -476,8 +484,14 @@ func (s *Service) exchangeRefreshToken(clientID, clientSecret, refreshToken stri
 	if len(c.GrantTypes) > 0 && !slices.Contains(c.GrantTypes, "refresh_token") {
 		return nil, fmt.Errorf("unauthorized_client")
 	}
-	accessToken := randomString(32)
-	refreshTokenNext := randomString(32)
+	accessToken, err := randomString(32)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate access token: %w", err)
+	}
+	refreshTokenNext, err := randomString(32)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate refresh token: %w", err)
+	}
 	accessExpiry := time.Now().Add(time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second)
 	refreshExpiry := time.Now().Add(time.Duration(s.cfg.RefreshTokenTTLSeconds) * time.Second)
 	scope, ok, err := s.store.ExchangeRefreshToken(
@@ -505,12 +519,18 @@ func (s *Service) exchangeRefreshToken(clientID, clientSecret, refreshToken stri
 }
 
 func (s *Service) issueBearerPair(clientID, scope string) (*TokenResponse, error) {
-	token := randomString(32)
+	token, err := randomString(32)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate access token: %w", err)
+	}
 	accessTTL := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
 	if err := s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(accessTTL)); err != nil {
 		return nil, fmt.Errorf("server_error: store token: %w", err)
 	}
-	refreshToken := randomString(32)
+	refreshToken, err := randomString(32)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate refresh token: %w", err)
+	}
 	refreshTTL := time.Duration(s.cfg.RefreshTokenTTLSeconds) * time.Second
 	if err := s.store.AddRefreshToken(HashToken(refreshToken), clientID, scope, time.Now().Add(refreshTTL)); err != nil {
 		return nil, fmt.Errorf("server_error: store refresh token: %w", err)
@@ -539,7 +559,7 @@ func (s *Service) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.registerClient(req)
 	if err != nil {
 		slog.Info("oauth_register", "outcome", "error", "error", oauthRegisterErrorCode(err))
-		writeOAuthError(w, oauthRegisterErrorCode(err), http.StatusBadRequest)
+		writeOAuthError(w, oauthRegisterErrorCode(err), oauthRegisterErrorStatus(err))
 		return
 	}
 	slog.Info("oauth_register", "outcome", "success", "client_id", resp.ClientID,
@@ -614,7 +634,7 @@ func (s *Service) HandleAuthorize(w http.ResponseWriter, r *http.Request) {
 			"redirect_uri_host", safeRedirectURI.Hostname(), "pkce_used", pkceUsed,
 			"error", oauthAuthorizeErrorCode(err))
 		status := oauthAuthorizeErrorStatus(err)
-		if strings.Contains(err.Error(), "unauthorized_client") || strings.Contains(err.Error(), "access_denied") {
+		if strings.Contains(err.Error(), "unauthorized_client") || strings.Contains(err.Error(), "access_denied") || strings.HasPrefix(err.Error(), "server_error") {
 			http.Error(w, oauthAuthorizeErrorCode(err), status)
 			return
 		}
@@ -657,7 +677,7 @@ func (s *Service) HandleToken(w http.ResponseWriter, r *http.Request) {
 				// that the client should re-register immediately.
 				w.Header().Set("Retry-After", "0")
 			}
-			writeOAuthError(w, errCode, http.StatusBadRequest)
+			writeOAuthError(w, errCode, oauthTokenErrorStatus(err))
 			return
 		}
 		slog.Info("oauth_token", "grant_type", grantType, "outcome", "success", "scope", resp.Scope)
@@ -752,6 +772,8 @@ func writeOAuthError(w http.ResponseWriter, code string, status int) {
 func oauthAuthorizeErrorCode(err error) string {
 	msg := err.Error()
 	switch {
+	case strings.HasPrefix(msg, "server_error"):
+		return "server_error"
 	case strings.HasPrefix(msg, "unsupported_response_type"):
 		return "unsupported_response_type"
 	case strings.HasPrefix(msg, "access_denied"):
@@ -766,6 +788,9 @@ func oauthAuthorizeErrorCode(err error) string {
 }
 
 func oauthAuthorizeErrorStatus(err error) int {
+	if strings.HasPrefix(err.Error(), "server_error") {
+		return http.StatusInternalServerError
+	}
 	if strings.HasPrefix(err.Error(), "access_denied") {
 		return http.StatusForbidden
 	}
@@ -806,6 +831,8 @@ func oauthTokenErrorStatus(err error) int {
 func oauthRegisterErrorCode(err error) string {
 	msg := err.Error()
 	switch {
+	case strings.HasPrefix(msg, "server_error"):
+		return "server_error"
 	case strings.Contains(msg, "registration_disabled") || strings.Contains(msg, "dynamic_client_registration_disabled"):
 		return "invalid_request"
 	case strings.Contains(msg, "redirect_uri"):
@@ -813,6 +840,13 @@ func oauthRegisterErrorCode(err error) string {
 	default:
 		return "invalid_client_metadata"
 	}
+}
+
+func oauthRegisterErrorStatus(err error) int {
+	if strings.HasPrefix(err.Error(), "server_error") {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadRequest
 }
 
 func CodeChallengeS256(verifier string) string {
@@ -833,10 +867,10 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func randomString(bytesLen int) string {
+func randomString(bytesLen int) (string, error) {
 	b := make([]byte, bytesLen)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed")
+	if _, err := io.ReadFull(cryptoRandReader, b); err != nil {
+		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(b)
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }

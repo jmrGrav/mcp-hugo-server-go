@@ -62,8 +62,16 @@ type AgentClaimResponse struct {
 
 func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 	issuer := s.cfg.Issuer
-	regID := "reg_" + randomString(20)
-	assertion := "arleo_assert_" + randomString(32)
+	regSuffix, err := randomString(20)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate registration id: %w", err)
+	}
+	assertionSuffix, err := randomString(32)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate assertion token: %w", err)
+	}
+	regID := "reg_" + regSuffix
+	assertion := "arleo_assert_" + assertionSuffix
 	now := time.Now()
 	assertionExpires := now.Add(time.Hour)
 	issuedScope := "read"
@@ -74,7 +82,11 @@ func (s *Service) registerAgentAnonymous() (*AgentIdentityResponse, error) {
 		issuedScope = "read"
 		claimed = true
 	} else {
-		claimToken = "clm_" + randomString(24)
+		claimSuffix, err := randomString(24)
+		if err != nil {
+			return nil, fmt.Errorf("server_error: generate claim token: %w", err)
+		}
+		claimToken = "clm_" + claimSuffix
 		claimExpires = now.Add(10 * time.Minute)
 	}
 
@@ -138,7 +150,10 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 		return nil, fmt.Errorf("invalid_grant: claim_required")
 	}
 
-	token := randomString(32)
+	token, err := randomString(32)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate access token: %w", err)
+	}
 	ttl := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
 	if reg.IssuedScope == "" {
 		reg.IssuedScope = "read"
@@ -172,7 +187,11 @@ func (s *Service) initiateClaim(claimToken string) (*AgentClaimResponse, error) 
 		return nil, fmt.Errorf("claim_expired")
 	}
 
-	attemptID := "cla_" + randomString(20)
+	attemptSuffix, err := randomString(20)
+	if err != nil {
+		return nil, fmt.Errorf("server_error: generate claim attempt id: %w", err)
+	}
+	attemptID := "cla_" + attemptSuffix
 	expiresAt := time.Now().Add(10 * time.Minute)
 	s.agentClaims[attemptID] = agentClaim{
 		RegistrationID: reg.RegistrationID,
@@ -212,7 +231,11 @@ func (s *Service) HandleAgentIdentity(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	switch req.Type {
 	case "anonymous":
-		resp, _ := s.registerAgentAnonymous()
+		resp, err := s.registerAgentAnonymous()
+		if err != nil {
+			writeAgentAuthError(w, "server_error", http.StatusInternalServerError)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(resp)
 	default:
 		writeAgentAuthError(w, "invalid_request", http.StatusBadRequest)
