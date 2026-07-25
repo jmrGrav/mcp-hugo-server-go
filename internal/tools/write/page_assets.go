@@ -304,7 +304,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			}
 			idemHash = h
 			var cached uploadPageAssetOutput
-			hit, replayErr := idem.replay("upload_page_asset", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "upload_page_asset", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -360,7 +360,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			DuplicateOf: duplicateOf,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember("upload_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := idem.remember(idempotencyCallerKey(ctx), "upload_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("upload_page_asset: could not persist idempotency result", "slug", slug, "error", err)
 			}
 		}
@@ -599,7 +599,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			}
 			idemHash = h
 			var cached deletePageAssetOutput
-			hit, replayErr := idem.replay("delete_page_asset", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "delete_page_asset", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -662,7 +662,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			Warning:      warning,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember("delete_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := idem.remember(idempotencyCallerKey(ctx), "delete_page_asset", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("delete_page_asset: could not persist idempotency result", "slug", slug, "filename", filename, "error", err)
 			}
 		}

@@ -69,14 +69,14 @@ func newIdempotencyStore(ttl time.Duration, maxEntries int) *idempotencyStore {
 	}
 }
 
-func (s *idempotencyStore) replay(tool, key, requestHash string, out any) (bool, error) {
+func (s *idempotencyStore) replay(callerKey, tool, key, requestHash string, out any) (bool, error) {
 	if s == nil || key == "" {
 		return false, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
-	entry, ok := s.entries[s.cacheKey(tool, key)]
+	entry, ok := s.entries[s.cacheKey(callerKey, tool, key)]
 	if !ok {
 		return false, nil
 	}
@@ -89,7 +89,7 @@ func (s *idempotencyStore) replay(tool, key, requestHash string, out any) (bool,
 	return true, nil
 }
 
-func (s *idempotencyStore) remember(tool, key, requestHash string, out any) error {
+func (s *idempotencyStore) remember(callerKey, tool, key, requestHash string, out any) error {
 	if s == nil || key == "" {
 		return nil
 	}
@@ -101,7 +101,7 @@ func (s *idempotencyStore) remember(tool, key, requestHash string, out any) erro
 	defer s.mu.Unlock()
 	now := time.Now()
 	s.pruneLocked(now)
-	s.entries[s.cacheKey(tool, key)] = idempotencyEntry{
+	s.entries[s.cacheKey(callerKey, tool, key)] = idempotencyEntry{
 		RequestHash: requestHash,
 		ResultJSON:  raw,
 		CreatedAt:   now,
@@ -110,8 +110,8 @@ func (s *idempotencyStore) remember(tool, key, requestHash string, out any) erro
 	return nil
 }
 
-// lookup returns the previously remembered result for tool+key, if any,
-// without requiring the caller to resupply (or hash-match) the original
+// lookup returns the previously remembered result for callerKey+tool+key, if
+// any, without requiring the caller to resupply (or hash-match) the original
 // mutation payload — unlike replay, which is invoked from inside the
 // mutating tool itself as part of re-attempting the same request. lookup
 // backs get_mutation_status (#586): a read-only way to ask "did my last
@@ -121,22 +121,28 @@ func (s *idempotencyStore) remember(tool, key, requestHash string, out any) erro
 // not proof of failure, only "no confirmed success on record for this key,"
 // which also covers still-in-flight, genuinely failed, expired (TTL), or
 // never-attempted-with-this-key.
-func (s *idempotencyStore) lookup(tool, key string) (json.RawMessage, bool) {
+func (s *idempotencyStore) lookup(callerKey, tool, key string) (json.RawMessage, bool) {
 	if s == nil || key == "" {
 		return nil, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
-	entry, ok := s.entries[s.cacheKey(tool, key)]
+	entry, ok := s.entries[s.cacheKey(callerKey, tool, key)]
 	if !ok {
 		return nil, false
 	}
 	return json.RawMessage(entry.ResultJSON), true
 }
 
-func (s *idempotencyStore) cacheKey(tool, key string) string {
-	return tool + "\x00" + key
+// cacheKey namespaces every entry by callerKey (the requesting bearer
+// token's hash, see oauth.CtxTokenID) ahead of tool+key, so idempotency-key
+// state can never be read or replayed across two different callers (#627) —
+// previously get_mutation_status's lookup path had no caller dimension at
+// all, so any caller who guessed or was told another caller's tool+key could
+// read that caller's mutation result.
+func (s *idempotencyStore) cacheKey(callerKey, tool, key string) string {
+	return callerKey + "\x00" + tool + "\x00" + key
 }
 
 func (s *idempotencyStore) pruneLocked(now time.Time) {

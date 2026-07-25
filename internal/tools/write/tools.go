@@ -279,6 +279,19 @@ func mutationCallerKey(ctx context.Context) string {
 	return ip
 }
 
+// idempotencyCallerKey isolates the idempotency store by requesting bearer
+// token (#627): distinct tokens always belong to distinct OAuth clients (or
+// distinct sessions of the same client), so keying on the token hash already
+// carried in context (oauth.CtxTokenID) closes the cross-client leak where
+// any caller could look up or replay another caller's idempotency-key
+// result via the same tool+key. Falls back to a shared "" bucket when OAuth
+// is disabled entirely (no bearer, no isolation boundary to enforce) or in
+// tests that don't populate the context value.
+func idempotencyCallerKey(ctx context.Context) string {
+	id, _ := ctx.Value(oauth.CtxTokenID).(string)
+	return id
+}
+
 // callerLimiter returns (or creates) a per-caller rate.Limiter allowing
 // perMinute calls/minute with a burst equal to perMinute, generalizing the
 // pattern originally hardcoded to delete_page's 5/min. perMinute <= 0
@@ -542,7 +555,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			idemHash = hash
 			var cached createPageOutput
-			hit, replayErr := idem.replay("create_page", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "create_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, createPageOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -604,7 +617,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember("create_page", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := idem.remember(idempotencyCallerKey(ctx), "create_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("create_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
 		}
@@ -754,7 +767,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			idemHash = hash
 			var cached updatePageOutput
-			hit, replayErr := idem.replay("update_page", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -907,7 +920,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember("update_page", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := idem.remember(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("update_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
 		}
@@ -1033,7 +1046,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			idemHash = hash
 			var cached deletePageOutput
-			hit, replayErr := idem.replay("delete_page", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, deletePageOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -1151,7 +1164,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			State:              &state,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember("delete_page", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := idem.remember(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("delete_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
 		}

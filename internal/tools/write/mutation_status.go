@@ -89,14 +89,17 @@ func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
-	}, toolcontract.WrapTool(func(_ context.Context, _ *mcp.CallToolRequest, in getMutationStatusInput) (*mcp.CallToolResult, getMutationStatusOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in getMutationStatusInput) (*mcp.CallToolResult, getMutationStatusOutput, error) {
 		if !mutationStatusLookupTools[in.Tool] {
 			return nil, getMutationStatusOutput{}, fmt.Errorf("invalid_params: tool must be one of create_page, update_page, delete_page, upload_page_asset, delete_page_asset")
 		}
 		if in.IdempotencyKey == "" {
 			return nil, getMutationStatusOutput{}, fmt.Errorf("invalid_params: idempotency_key must not be empty")
 		}
-		raw, found := idem.lookup(in.Tool, in.IdempotencyKey)
+		// Scoped to the requesting caller's own bearer token (#627): without
+		// this, any write-scoped caller could look up any other caller's
+		// mutation result just by knowing (or guessing) their tool+key.
+		raw, found := idem.lookup(idempotencyCallerKey(ctx), in.Tool, in.IdempotencyKey)
 		status := "unknown"
 		var result map[string]any
 		if found {

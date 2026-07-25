@@ -35,6 +35,18 @@ const CtxScope ctxKey = "oauth_scope"
 // underlying http.Request.
 const CtxCallerIP ctxKey = "caller_ip"
 
+// CtxTokenID carries a stable per-bearer-token identifier (the same hash
+// used to key the access-token store, see HashToken) so tool handlers can
+// scope caller-specific state — namely the write package's idempotency
+// store, see #627 — without access to the raw bearer token itself. Distinct
+// bearer tokens always belong to distinct OAuth clients (or distinct
+// sessions of the same client), so this closes the cross-client leak in
+// get_mutation_status where any caller could look up any other caller's
+// idempotency-key result. Empty when OAuth is disabled or no bearer was
+// presented; callers must treat "" as its own single shared bucket rather
+// than failing, since some deployments run with OAuth off entirely.
+const CtxTokenID ctxKey = "oauth_token_id"
+
 type Service struct {
 	cfg              config.OAuthConfig
 	store            storage.Store

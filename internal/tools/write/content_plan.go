@@ -650,7 +650,7 @@ func registerContentPlanTools(
 			}
 			idemHash = hash
 			var cached applyContentPlanOutput
-			hit, replayErr := idem.replay("apply_content_plan", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "apply_content_plan", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, applyContentPlanOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -803,7 +803,7 @@ func registerContentPlanTools(
 			State:          &state,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember("apply_content_plan", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := idem.remember(idempotencyCallerKey(ctx), "apply_content_plan", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("apply_content_plan: could not persist idempotency result", "plan_id", in.PlanID, "error", err)
 			}
 		}

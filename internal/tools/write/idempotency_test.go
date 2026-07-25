@@ -56,19 +56,87 @@ func TestIdempotencyStoreExpiresByConfiguredTTL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("requestHash: %v", err)
 	}
-	if err := store.remember("create_page", "ttl-key", hash, in); err != nil {
+	if err := store.remember("caller-a", "create_page", "ttl-key", hash, in); err != nil {
 		t.Fatalf("remember: %v", err)
 	}
 
 	// Immediately after remember, the entry must still be present.
-	if _, found := store.lookup("create_page", "ttl-key"); !found {
+	if _, found := store.lookup("caller-a", "create_page", "ttl-key"); !found {
 		t.Fatal("lookup immediately after remember: expected entry to be present")
 	}
 
 	// After the configured 1-second TTL elapses, the entry must be gone —
 	// with the hardcoded 15-minute default this assertion would fail.
 	time.Sleep(1200 * time.Millisecond)
-	if _, found := store.lookup("create_page", "ttl-key"); found {
+	if _, found := store.lookup("caller-a", "create_page", "ttl-key"); found {
 		t.Fatal("lookup after configured TTL elapsed: expected entry to have expired")
+	}
+}
+
+// TestIdempotencyStoreIsolatesByCallerKey is the discriminating regression
+// test for #627: two different callers (distinct bearer-token hashes, see
+// oauth.CtxTokenID) using the exact same tool+idempotency_key must not see
+// each other's remembered result. Before this fix, cacheKey only ever
+// combined tool+key, so any caller who knew (or guessed) another caller's
+// idempotency_key for a given tool could replay or look up that caller's
+// mutation result — this test fails under the pre-fix two-argument cacheKey
+// and passes once callerKey is part of it.
+func TestIdempotencyStoreIsolatesByCallerKey(t *testing.T) {
+	store := newIdempotencyStore(time.Hour, 256)
+
+	type payload struct {
+		Value string `json:"value"`
+	}
+	in := payload{Value: "caller-a-secret-result"}
+	hash, err := requestHash(in)
+	if err != nil {
+		t.Fatalf("requestHash: %v", err)
+	}
+
+	const sharedTool = "create_page"
+	const sharedKey = "shared-idempotency-key"
+
+	if err := store.remember("caller-a", sharedTool, sharedKey, hash, in); err != nil {
+		t.Fatalf("remember (caller-a): %v", err)
+	}
+
+	// caller-a can look up its own result.
+	if _, found := store.lookup("caller-a", sharedTool, sharedKey); !found {
+		t.Fatal("caller-a lookup: expected its own entry to be present")
+	}
+
+	// caller-b, using the identical tool+key, must NOT see caller-a's result.
+	if _, found := store.lookup("caller-b", sharedTool, sharedKey); found {
+		t.Fatal("caller-b lookup: leaked caller-a's mutation result across the caller boundary (#627)")
+	}
+
+	// replay must behave the same way: caller-b gets no hit, not caller-a's
+	// cached response, even though the tool+key match exactly.
+	var cached payload
+	hit, replayErr := store.replay("caller-b", sharedTool, sharedKey, hash, &cached)
+	if replayErr != nil {
+		t.Fatalf("caller-b replay: unexpected error %v", replayErr)
+	}
+	if hit {
+		t.Fatalf("caller-b replay: leaked caller-a's cached result across the caller boundary (#627): got %+v", cached)
+	}
+
+	// Two callers can independently use the identical tool+key without
+	// conflicting with each other (this is the isolation actually being
+	// bought, not just "caller-b sees nothing").
+	otherIn := payload{Value: "caller-b-own-result"}
+	otherHash, err := requestHash(otherIn)
+	if err != nil {
+		t.Fatalf("requestHash (caller-b): %v", err)
+	}
+	if err := store.remember("caller-b", sharedTool, sharedKey, otherHash, otherIn); err != nil {
+		t.Fatalf("remember (caller-b): %v", err)
+	}
+	var cachedA payload
+	if _, err := store.replay("caller-a", sharedTool, sharedKey, hash, &cachedA); err != nil {
+		t.Fatalf("caller-a replay after caller-b remember: unexpected error %v", err)
+	}
+	if cachedA.Value != "caller-a-secret-result" {
+		t.Fatalf("caller-a's own entry was overwritten by caller-b's remember: got %+v", cachedA)
 	}
 }

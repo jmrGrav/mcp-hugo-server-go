@@ -12,8 +12,9 @@ import (
 )
 
 type mcpBearerResult struct {
-	scope  string
-	legacy bool
+	scope     string
+	legacy    bool
+	tokenHash string
 }
 
 type interceptResponseWriter struct {
@@ -149,8 +150,9 @@ func oauthTokenVerifier(oauthSvc *oauth.Service) sdkauth.TokenVerifier {
 			Expiration: expiresAt,
 			Extra: map[string]any{
 				"mcp_bearer": mcpBearerResult{
-					scope:  scope,
-					legacy: legacy,
+					scope:     scope,
+					legacy:    legacy,
+					tokenHash: oauth.HashToken(token),
 				},
 			},
 		}, nil

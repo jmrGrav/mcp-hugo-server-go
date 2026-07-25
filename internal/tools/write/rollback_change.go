@@ -238,7 +238,7 @@ func registerRollbackChange(
 			}
 			idemHash = hash
 			var cached rollbackChangeOutput
-			hit, replayErr := idem.replay("rollback_change", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "rollback_change", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, rollbackChangeOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -391,7 +391,7 @@ func registerRollbackChange(
 			State:          &state,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember("rollback_change", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := idem.remember(idempotencyCallerKey(ctx), "rollback_change", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("rollback_change: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
 		}

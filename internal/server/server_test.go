@@ -2156,3 +2156,111 @@ clients:
 		}
 	}
 }
+
+// toolCallResultData extracts the tool's own JSON payload (the text content
+// item's "text" field, which every tool response marshals its ToolResponse
+// envelope into) from a raw tools/call SSE response body.
+func toolCallResultData(t *testing.T, body string) map[string]any {
+	t.Helper()
+	var envelope struct {
+		Result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			IsError bool `json:"isError"`
+		} `json:"result"`
+	}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		data := line
+		if strings.HasPrefix(line, "data: ") {
+			data = strings.TrimPrefix(line, "data: ")
+		}
+		if err := json.Unmarshal([]byte(data), &envelope); err == nil && len(envelope.Result.Content) > 0 {
+			if envelope.Result.IsError {
+				t.Fatalf("tool call returned an error result: %s", body)
+			}
+			var out map[string]any
+			if err := json.Unmarshal([]byte(envelope.Result.Content[0].Text), &out); err != nil {
+				t.Fatalf("decode tool result text: %v (%q)", err, envelope.Result.Content[0].Text)
+			}
+			return out
+		}
+	}
+	t.Fatalf("tools/call response did not contain a parseable result: %q", body)
+	return nil
+}
+
+// TestGetMutationStatusIsolatedByCallerAcrossHTTP is the end-to-end
+// counterpart to internal/tools/write's TestIdempotencyStoreIsolatesByCallerKey
+// (#627): that test proves the store isolates two callerKeys handed to it
+// directly, but does not prove the real HTTP request path ever produces two
+// distinct callerKeys in the first place — a silently empty
+// oauth.CtxTokenID would make every caller share one bucket and the fix
+// would be a no-op despite every other test passing. This test drives two
+// distinct bearer tokens through the actual /mcp HTTP handler: caller A
+// creates a page with an idempotency_key, then caller B calls
+// get_mutation_status with the identical tool+key and must see "unknown",
+// not caller A's result — while caller A, using the same key, still sees
+// "succeeded".
+func TestGetMutationStatusIsolatedByCallerAcrossHTTP(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.OAuth = config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		AccessTokenTTLSeconds: 3600,
+		StorageBackend:        "sqlite",
+		StoragePath:           storePath,
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+
+	const callerA = "caller-a-bearer-token"
+	const callerB = "caller-b-bearer-token"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	const sharedKey = "e2e-shared-idempotency-key"
+	createPayload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/e2e-caller-isolation","title":"E2E","body":"Body","tags":[],"categories":[],"idempotency_key":"` + sharedKey + `"}}}`)
+	createRec := doMCPCall(t, srv, callerA, createPayload)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page (caller A) status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+	createData := toolCallResultData(t, createRec.Body.String())
+	if status, _ := createData["data"].(map[string]any)["status"].(string); status != "ok" {
+		t.Fatalf("create_page (caller A) data.status = %v, want ok: %#v", createData["data"], createData)
+	}
+
+	statusPayload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_mutation_status","arguments":{"tool":"create_page","idempotency_key":"` + sharedKey + `"}}}`)
+
+	// Caller B, using the exact same tool+key, must NOT see caller A's result.
+	bRec := doMCPCall(t, srv, callerB, statusPayload)
+	if bRec.Code != http.StatusOK {
+		t.Fatalf("get_mutation_status (caller B) status = %d body = %q", bRec.Code, bRec.Body.String())
+	}
+	bData := toolCallResultData(t, bRec.Body.String())
+	if status, _ := bData["data"].(map[string]any)["status"].(string); status != "unknown" {
+		t.Fatalf("get_mutation_status (caller B) data.status = %q, want unknown — leaked caller A's mutation result across the caller boundary (#627): %#v", status, bData["data"])
+	}
+
+	// Caller A, the legitimate owner, must still see its own result.
+	aRec := doMCPCall(t, srv, callerA, statusPayload)
+	if aRec.Code != http.StatusOK {
+		t.Fatalf("get_mutation_status (caller A) status = %d body = %q", aRec.Code, aRec.Body.String())
+	}
+	aData := toolCallResultData(t, aRec.Body.String())
+	if status, _ := aData["data"].(map[string]any)["status"].(string); status != "succeeded" {
+		t.Fatalf("get_mutation_status (caller A) data.status = %q, want succeeded: %#v", status, aData["data"])
+	}
+}
