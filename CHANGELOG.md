@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [v1.6.2] - 2026-07-25
 
 ### Documentation
 - **`list_content_types`/`explain_structure` now document that a root-level single-file page is listed as its own one-off content type/section** (#642): observed live as a throwaway test page showing up as a distinct "content type" with `page_count: 1` — confirmed to be existing, intentional behavior (consistent with other real root-level pages like `hall-of-fame`/`privacy-policies`), not a regression, so this documents the behavior in both tools' descriptions (and `explain_structure`'s own `notes` field) rather than changing it, per the issue's own "discuss before implementing" guidance on any actual behavior change.
