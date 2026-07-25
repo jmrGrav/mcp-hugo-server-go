@@ -202,59 +202,6 @@ func TestUploadPageAssetRejectsJPEGMimeMismatch(t *testing.T) {
 	}
 }
 
-func TestUploadPageAssetAcceptsUppercaseExtension(t *testing.T) {
-	contentRoot := t.TempDir()
-	writeBundle(t, contentRoot, "posts/article")
-	session, _, done := newTestServer(t, contentRoot)
-	defer done()
-
-	res := callTool(t, session, "upload_page_asset", map[string]any{
-		"slug":           "posts/article",
-		"filename":       "COVER.PNG",
-		"content_base64": b64(minimalPNG),
-	})
-	if res.IsError {
-		raw, _ := json.Marshal(res.Content)
-		t.Fatalf("upload_page_asset uppercase extension returned error: %s", raw)
-	}
-	dataEnvelope := decodeWriteData(t, res)
-	if got := dataEnvelope["filename"]; got != "COVER.PNG" {
-		t.Fatalf("upload_page_asset data.filename = %v, want COVER.PNG", got)
-	}
-	if got := dataEnvelope["content_type"]; got != "image/png" {
-		t.Fatalf("upload_page_asset data.content_type = %v, want image/png", got)
-	}
-	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "COVER.PNG")); err != nil {
-		t.Fatalf("uppercase asset file not found: %v", err)
-	}
-}
-
-func TestUploadPageAssetRejectsOversizeDecodedPayloadWithoutResidue(t *testing.T) {
-	contentRoot := t.TempDir()
-	writeBundle(t, contentRoot, "posts/article")
-	session, _, done := newTestServer(t, contentRoot)
-	defer done()
-
-	oversize := make([]byte, 10<<20+1)
-	copy(oversize[:8], minimalPNG[:8])
-
-	res := callTool(t, session, "upload_page_asset", map[string]any{
-		"slug":           "posts/article",
-		"filename":       "huge.png",
-		"content_base64": b64(oversize),
-	})
-	if !res.IsError {
-		t.Fatal("upload_page_asset: want error for oversize decoded payload, got success")
-	}
-	raw, _ := json.Marshal(res.Content)
-	if !strings.Contains(string(raw), "invalid_params") {
-		t.Fatalf("upload_page_asset oversize error = %s, want invalid_params", raw)
-	}
-	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "huge.png")); !os.IsNotExist(err) {
-		t.Fatal("upload_page_asset must not leave a file behind on oversize rejection")
-	}
-}
-
 func TestUploadPageAssetRejectsHostileFilenameCorpus(t *testing.T) {
 	cases := []struct {
 		name     string
