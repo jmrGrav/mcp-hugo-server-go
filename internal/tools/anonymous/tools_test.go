@@ -243,6 +243,73 @@ func TestGetPageBySlug(t *testing.T) {
 	}
 }
 
+func newSourceOnlyBilingualDefaultLangSession(t *testing.T) (*mcp.ClientSession, func()) {
+	t.Helper()
+	htmlDir := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	writeSource := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeSource("posts/source-only/index.fr.md", "---\ntitle: Bonjour FR\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nBonjour depuis la source francaise.\n")
+	writeSource("posts/source-only/index.en.md", "---\ntitle: Hello EN\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nHello from the English source.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
+func TestGetPagePrefersDefaultLanguageForSourceOnlyMultilingualPage(t *testing.T) {
+	session, done := newSourceOnlyBilingualDefaultLangSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{
+		"slug":                  "/posts/source-only/",
+		"allow_source_fallback": true,
+		"content_only":          false,
+	})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page := m["page"].(map[string]any)
+	if got := page["lang"]; got != "fr" {
+		t.Fatalf("page.lang = %v, want fr", got)
+	}
+	if got := page["resolved_lang"]; got != "fr" {
+		t.Fatalf("page.resolved_lang = %v, want fr", got)
+	}
+	if got := page["resolved_source_path"]; got != "content/posts/source-only/index.fr.md" {
+		t.Fatalf("page.resolved_source_path = %v, want content/posts/source-only/index.fr.md", got)
+	}
+	html, _ := page["html"].(string)
+	if !strings.Contains(html, "Bonjour depuis la source francaise.") {
+		t.Fatalf("page.html = %q, want French source content", html)
+	}
+}
+
 func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	contentRoot := t.TempDir()
 	full := filepath.Join(contentRoot, "drafts", "fresh", "index.md")

@@ -909,6 +909,7 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage, contentRoot string) pag
 		TagTerms:           taxonomy.Normalize(tags),
 		CategoryTerms:      taxonomy.Normalize(cats),
 		Date:               src.Date,
+		Lang:               src.Lang,
 		ResolvedLang:       src.Lang,
 		ResolvedSourcePath: fileutil.LogicalContentPath(contentRoot, resolved.SourcePath),
 		Revision:           resolvedSourceRevision(resolved.SourcePath),

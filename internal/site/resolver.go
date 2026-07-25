@@ -69,6 +69,13 @@ func (r *PageResolver) resolveSource(sourceSlug, lang string) (*hugosite.SourceP
 			}
 		}
 	}
+	if r.cfg.DefaultLanguage != "" {
+		for _, c := range candidates {
+			if p, ok := r.srcIdx.GetBySlugLang(c, r.cfg.DefaultLanguage); ok {
+				return p, true
+			}
+		}
+	}
 	for _, c := range candidates {
 		if p, ok := r.srcIdx.GetBySlug(c); ok {
 			return p, true

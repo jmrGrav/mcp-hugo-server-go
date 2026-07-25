@@ -124,6 +124,43 @@ func TestPageResolverResolvesSourceOnlyPageAfterCreateWithoutBuild(t *testing.T)
 	}
 }
 
+func TestPageResolverPrefersDefaultLanguageForSourceOnlyMultilingualPage(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSourcePage(t, contentRoot, "posts/hello/index.fr.md", "---\ntitle: Bonjour\n---\nBonjour FR\n")
+	writeSourcePage(t, contentRoot, "posts/hello/index.en.md", "---\ntitle: Hello\n---\nHello EN\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	resolver := NewPageResolver(&Index{bySlug: map[string]int{}}, srcIdx, config.Config{
+		ContentRoot:      contentRoot,
+		DefaultLanguage:  "fr",
+		RejectSymlinks:   true,
+		RejectHiddenPath: true,
+	})
+
+	got, ok := resolver.Resolve("/posts/hello/")
+	if !ok {
+		t.Fatal("Resolve(source-only bilingual) not found")
+	}
+	if got.Public != nil {
+		t.Fatalf("Resolve(source-only bilingual).Public = %#v want nil", got.Public)
+	}
+	if got.Source == nil {
+		t.Fatal("Resolve(source-only bilingual).Source = nil, want source page")
+	}
+	if got.Source.Lang != "fr" {
+		t.Fatalf("Resolve(source-only bilingual).Source.Lang = %q, want fr", got.Source.Lang)
+	}
+	if got.Source.Body != "Bonjour FR" {
+		t.Fatalf("Resolve(source-only bilingual).Source.Body = %q, want Bonjour FR", got.Source.Body)
+	}
+	wantPath := filepath.Join(contentRoot, "posts", "hello", "index.fr.md")
+	if got.SourcePath != wantPath {
+		t.Fatalf("Resolve(source-only bilingual).SourcePath = %q want %q", got.SourcePath, wantPath)
+	}
+}
+
 func TestPageResolverResolvesPublicOnlyPageWithHTMLFallback(t *testing.T) {
 	idx := &Index{
 		entries: []entry{{page: Page{Slug: "/generated/", Title: "Generated", RawHTML: "<main>Generated only</main>"}}},

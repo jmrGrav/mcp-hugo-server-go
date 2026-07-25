@@ -1664,6 +1664,44 @@ func newMultilingualHelloReadSession(t *testing.T) (*mcp.ClientSession, func()) 
 	return newTestClientWithCfg(t, idx, cfg, srcIdx)
 }
 
+func newSourceOnlyBilingualDefaultLangReadSession(t *testing.T) (*mcp.ClientSession, func()) {
+	t.Helper()
+	cfg := config.Default()
+	htmlDir := t.TempDir()
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.SiteRoot = htmlDir
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	writeSource := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeSource("posts/source-only/index.fr.md", "---\ntitle: Bonjour FR\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nBonjour depuis la source francaise.\n")
+	writeSource("posts/source-only/index.en.md", "---\ntitle: Hello EN\ntags: [Hugo]\ncategories: [Infrastructure]\n---\nHello from the English source.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
 func newEditorialGraphSession(t *testing.T) (*mcp.ClientSession, func()) {
 	t.Helper()
 	htmlDir := t.TempDir()
@@ -1837,6 +1875,66 @@ func TestRichReadToolsPreferMatchingLanguageSource(t *testing.T) {
 		md, _ := ctx["markdown"].(string)
 		if !strings.Contains(md, "Hello from the English source.") {
 			t.Fatalf("markdown = %q, want English source content", md)
+		}
+	})
+}
+
+func TestReadToolsPreferDefaultLanguageForSourceOnlyMultilingualPage(t *testing.T) {
+	session, done := newSourceOnlyBilingualDefaultLangReadSession(t)
+	defer done()
+
+	t.Run("get_page_frontmatter", func(t *testing.T) {
+		res := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/posts/source-only/"})
+		if res.IsError {
+			t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+		}
+		fm := decodeContent(t, res)["frontmatter"].(map[string]any)
+		if got := fm["lang"]; got != "fr" {
+			t.Fatalf("frontmatter.lang = %v, want fr", got)
+		}
+		if got := fm["resolved_lang"]; got != "fr" {
+			t.Fatalf("frontmatter.resolved_lang = %v, want fr", got)
+		}
+		if got := asString(t, fm["resolved_source_path"]); got != "content/posts/source-only/index.fr.md" {
+			t.Fatalf("frontmatter.resolved_source_path = %q, want content/posts/source-only/index.fr.md", got)
+		}
+	})
+
+	t.Run("get_page_markdown", func(t *testing.T) {
+		res := callTool(t, session, "get_page_markdown", map[string]any{"slug": "/posts/source-only/"})
+		if res.IsError {
+			t.Fatalf("get_page_markdown returned error: %v", res.Content)
+		}
+		page := decodeContent(t, res)["page"].(map[string]any)
+		if got := page["resolved_lang"]; got != "fr" {
+			t.Fatalf("page.resolved_lang = %v, want fr", got)
+		}
+		if got := asString(t, page["resolved_source_path"]); got != "content/posts/source-only/index.fr.md" {
+			t.Fatalf("page.resolved_source_path = %q, want content/posts/source-only/index.fr.md", got)
+		}
+		if md, _ := page["markdown"].(string); !strings.Contains(md, "Bonjour depuis la source francaise.") {
+			t.Fatalf("markdown = %q, want French source body", md)
+		}
+	})
+
+	t.Run("get_page_for_edit", func(t *testing.T) {
+		res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/source-only/"})
+		if res.IsError {
+			t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+		}
+		page := decodeContent(t, res)["page"].(map[string]any)
+		fm := page["frontmatter"].(map[string]any)
+		if got := fm["lang"]; got != "fr" {
+			t.Fatalf("frontmatter.lang = %v, want fr", got)
+		}
+		if got := fm["resolved_lang"]; got != "fr" {
+			t.Fatalf("frontmatter.resolved_lang = %v, want fr", got)
+		}
+		if got := asString(t, fm["resolved_source_path"]); got != "content/posts/source-only/index.fr.md" {
+			t.Fatalf("frontmatter.resolved_source_path = %q, want content/posts/source-only/index.fr.md", got)
+		}
+		if md, _ := page["markdown"].(string); !strings.Contains(md, "Bonjour depuis la source francaise.") {
+			t.Fatalf("markdown = %q, want French source body", md)
 		}
 	})
 }
