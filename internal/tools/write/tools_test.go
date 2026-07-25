@@ -191,6 +191,25 @@ func marshalContent(t *testing.T, res *mcp.CallToolResult) string {
 	return string(raw)
 }
 
+func assertSingleStructuredWriteErrorField(t *testing.T, res *mcp.CallToolResult, code, field string) {
+	t.Helper()
+	env := decodeWriteErrorEnvelope(t, res)
+	errors, ok := env["errors"].([]any)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("structured errors = %#v, want exactly one error", env["errors"])
+	}
+	err0, ok := errors[0].(map[string]any)
+	if !ok {
+		t.Fatalf("structured errors[0] type = %T, want map[string]any", errors[0])
+	}
+	if got := err0["code"]; got != code {
+		t.Fatalf("structured error code = %v, want %q", got, code)
+	}
+	if got := err0["field"]; got != field {
+		t.Fatalf("structured error field = %v, want %q", got, field)
+	}
+}
+
 func TestCreatePage(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
@@ -406,6 +425,51 @@ func TestCreatePageSymlinkBlocked(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatal("expected error for symlink slug, got success")
+	}
+}
+
+func TestCreatePageRejectsHostileSlugCorpus(t *testing.T) {
+	cases := []struct {
+		name string
+		slug string
+	}{
+		{name: "raw traversal", slug: "../escape"},
+		{name: "encoded traversal", slug: "%2e%2e/escape"},
+		{name: "double encoded traversal", slug: "%252e%252e/escape"},
+		{name: "backslash traversal", slug: `..\\escape`},
+		{name: "absolute path", slug: "/tmp/escape"},
+		{name: "unicode confusable slash", slug: "posts∕escape"},
+		{name: "control character", slug: "posts/\x07escape"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contentRoot := t.TempDir()
+			session, _, done := newTestServer(t, contentRoot)
+			defer done()
+
+			res := callTool(t, session, "create_page", map[string]any{
+				"slug":       tc.slug,
+				"title":      "Hostile slug",
+				"body":       "",
+				"tags":       []any{},
+				"categories": []any{},
+			})
+			if !res.IsError {
+				t.Fatalf("create_page(%q): want invalid_params, got success", tc.slug)
+			}
+			if raw := marshalContent(t, res); !strings.Contains(raw, "invalid_params") {
+				t.Fatalf("create_page(%q) raw error = %s, want invalid_params", tc.slug, raw)
+			}
+
+			entries, err := os.ReadDir(contentRoot)
+			if err != nil {
+				t.Fatalf("ReadDir(contentRoot): %v", err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("create_page(%q) wrote unexpected entries under content root: %v", tc.slug, entries)
+			}
+		})
 	}
 }
 

@@ -569,7 +569,7 @@ func missingRequiredField(message string) string {
 }
 
 func inferField(message string) string {
-	prefixes := []string{"slug", "title", "query", "lang", "type", "style", "accent"}
+	prefixes := []string{"slug", "title", "query", "lang", "type", "style", "accent", "filename"}
 	for _, field := range prefixes {
 		if strings.HasPrefix(message, field+" ") {
 			return field
