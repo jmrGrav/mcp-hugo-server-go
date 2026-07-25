@@ -1501,6 +1501,42 @@ func TestGetPageIncludeTermsFalseOmitsTerms(t *testing.T) {
 	}
 }
 
+// TestGetPageCompactOmitsRenderedHTMLAndTermPayloads is a regression test for
+// #687: response_mode=compact must not ship the full rendered HTML payload
+// for a long page-selection step, and it should also drop the richer term
+// expansions that duplicate tags/categories.
+func TestGetPageCompactOmitsRenderedHTMLAndTermPayloads(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{
+		"slug":          "/posts/hello",
+		"response_mode": "compact",
+		"content_only":  false,
+	})
+	if res.IsError {
+		t.Fatalf("get_page compact returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page compact page type = %T", m["page"])
+	}
+	if html, _ := page["html"].(string); html != "" {
+		t.Fatalf("get_page compact html = %q, want empty string", html)
+	}
+	if _, ok := page["tag_terms"]; ok {
+		t.Fatal("get_page compact tag_terms present, want omitted")
+	}
+	if _, ok := page["category_terms"]; ok {
+		t.Fatal("get_page compact category_terms present, want omitted")
+	}
+	if got := page["rendered_html_available"]; got != true {
+		t.Fatalf("get_page compact rendered_html_available = %v, want true", got)
+	}
+}
+
 func TestReadOnlyAnnotations(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

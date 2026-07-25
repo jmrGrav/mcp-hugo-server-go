@@ -384,15 +384,25 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					}
 				}
 			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, getPageOutput{}, err
+			}
 			dto := toResolvedPageDetailDTO(resolved, cfg.ContentRoot)
 			dto.State = site.StateForResolvedPage(resolved, cfg.SiteRoot)
-			if contentOnly(in.ContentOnly) && resolved.Public != nil {
+			if mode == toolcontract.ResponseModeCompact {
+				dto.HTML = ""
+				if resolved.Public != nil {
+					dto.HTMLOrigin = "rendered_public"
+					dto.RenderedHTMLAvail = true
+				}
+			} else if contentOnly(in.ContentOnly) && resolved.Public != nil {
 				dto.HTML = site.ExtractArticleHTML(dto.HTML)
 			} else if contentOnly(in.ContentOnly) {
 				dto.HTML = ""
 				dto.HTMLOrigin = "none"
 			}
-			if !includeTerms(in.IncludeTerms) {
+			if mode == toolcontract.ResponseModeCompact || !includeTerms(in.IncludeTerms) {
 				dto.TagTerms = nil
 				dto.CategoryTerms = nil
 			}

@@ -2494,6 +2494,48 @@ func TestDeletePageDryRun(t *testing.T) {
 	}
 }
 
+// TestDeletePageDryRunCompactOmitsFullSourceBody is a regression test for
+// #687: a preview-oriented compact dry-run must not return the entire source
+// body by default. It should still expose deletion scope and backlink count.
+func TestDeletePageDryRunCompactOmitsFullSourceBody(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/dry-run-compact", "title": "Dry Run Compact", "body": strings.Repeat("body ", 200),
+		"tags": []any{"go"}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":          "posts/dry-run-compact",
+		"dry_run":       true,
+		"response_mode": "compact",
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page compact dry_run failed: %s", raw)
+	}
+
+	data := decodeWriteData(t, res)
+	if _, ok := data["content"]; ok {
+		t.Fatalf("delete_page compact dry_run content = %#v, want omitted", data["content"])
+	}
+	if _, ok := data["backlinks"]; ok {
+		t.Fatalf("delete_page compact dry_run backlinks = %#v, want omitted", data["backlinks"])
+	}
+	if got := data["backlinks_count"]; got != float64(0) {
+		t.Fatalf("delete_page compact dry_run backlinks_count = %v, want 0", got)
+	}
+	if got := data["resolved_source_path"]; got != "content/posts/dry-run-compact/index.md" {
+		t.Fatalf("delete_page compact dry_run resolved_source_path = %v, want content/posts/dry-run-compact/index.md", got)
+	}
+}
+
 // TestDeletePageDryRunNotFound verifies that dry_run on a non-existent slug
 // returns not_found (#267).
 func TestDeletePageDryRunNotFound(t *testing.T) {
