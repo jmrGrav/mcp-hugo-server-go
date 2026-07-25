@@ -3636,3 +3636,54 @@ func assertReadPaginationMetadata(t *testing.T, m map[string]any, total, limit, 
 		t.Fatalf("next_offset = %v, want omitted", gotNext)
 	}
 }
+
+// TestNegativeLimitRejectedAcrossReadTools mirrors
+// internal/tools/anonymous.TestNegativeLimitRejectedAcrossTools for the
+// read package's own limit-accepting tools (#641): a negative limit must
+// be rejected with invalid_params, while limit: 0 must keep meaning "use
+// the default" (clampLimit's existing, documented behavior) rather than
+// becoming an error too.
+func TestNegativeLimitRejectedAcrossReadTools(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	cases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"get_related_content", map[string]any{"slug": "/posts/hello", "limit": -1}},
+		{"export_agent_context", map[string]any{"limit": -1}},
+		{"search_content", map[string]any{"query": "hello", "limit": -1}},
+		{"get_broken_links", map[string]any{"limit": -1}},
+		{"suggest_links", map[string]any{"tags": []any{"hugo"}, "limit": -1}},
+	}
+	for _, tc := range cases {
+		res := callTool(t, session, tc.tool, tc.args)
+		if !res.IsError {
+			t.Errorf("%s limit=-1: expected invalid_params error, got success", tc.tool)
+			continue
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "invalid_params") {
+			t.Errorf("%s limit=-1 error = %s, want invalid_params", tc.tool, raw)
+		}
+	}
+
+	zeroCases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"get_related_content", map[string]any{"slug": "/posts/hello", "limit": 0}},
+		{"export_agent_context", map[string]any{"limit": 0}},
+		{"search_content", map[string]any{"query": "hello", "limit": 0}},
+		{"get_broken_links", map[string]any{"limit": 0}},
+		{"suggest_links", map[string]any{"tags": []any{"hugo"}, "limit": 0}},
+	}
+	for _, tc := range zeroCases {
+		res := callTool(t, session, tc.tool, tc.args)
+		if res.IsError {
+			t.Errorf("%s limit=0: expected success (0 means use default), got error: %v", tc.tool, res.Content)
+		}
+	}
+}

@@ -417,6 +417,9 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
 				return nil, searchContentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
 			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, searchContentEnvelope{}, err
+			}
 
 			// FTS5 path: use SQLite full-text search for ranked, snippet-annotated results.
 			q := strings.TrimSpace(in.Query)
@@ -545,6 +548,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Notes: []string{
 					"Top-level sections are derived from page slugs.",
 					"Posts are detected from the /posts/ path prefix.",
+					"A single root-level page (e.g. content/some-slug.md) is listed as its own one-off section named after its own slug (#642) — by design, not a bug, but a single stray or throwaway root-level page will appear as a distinct section.",
 				},
 			}, time.Now().UTC()), nil
 		})
@@ -606,6 +610,9 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		func(_ context.Context, _ *mcp.CallToolRequest, in brokenLinkInput) (*mcp.CallToolResult, brokenLinkOutput, error) {
 			if idx == nil {
 				return nil, brokenLinkOutput{}, fmt.Errorf("index not initialized")
+			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, brokenLinkOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 25, 100)
 			offset := in.Offset
@@ -690,6 +697,9 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		func(ctx context.Context, _ *mcp.CallToolRequest, in suggestInternalLinksInput) (*mcp.CallToolResult, suggestInternalLinksOutput, error) {
 			if idx == nil {
 				return nil, suggestInternalLinksOutput{}, fmt.Errorf("index not initialized")
+			}
+			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, suggestInternalLinksOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 10, 20)
 
