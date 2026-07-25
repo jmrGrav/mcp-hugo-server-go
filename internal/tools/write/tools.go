@@ -240,6 +240,7 @@ type deletePageInput struct {
 	ExpectedRevision string `json:"expected_revision,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	DryRun           bool   `json:"dry_run,omitempty"`
+	ResponseMode     string `json:"response_mode,omitempty"`
 }
 
 type deletePageBacklinkDTO struct {
@@ -266,8 +267,14 @@ type deletePageData struct {
 	DryRun             bool                     `json:"dry_run,omitempty"`
 	Content            string                   `json:"content,omitempty"`
 	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
-	Warning            string                   `json:"warning,omitempty"`
-	State              *site.LifecycleState     `json:"state,omitempty"`
+	// BacklinksCount is only ever populated on a dry_run response (compact
+	// or not) — it's a pointer with omitempty so it stays entirely absent
+	// from a real (non-dry-run) delete's response, where no backlink scan
+	// ever ran and a bare 0 would misleadingly read as "verified zero
+	// backlinks" rather than "not computed" (#687).
+	BacklinksCount *int                 `json:"backlinks_count,omitempty"`
+	Warning        string               `json:"warning,omitempty"`
+	State          *site.LifecycleState `json:"state,omitempty"`
 	// BundleFullyRemoved (#682) is true when the entire page bundle
 	// directory (every language file, plus any shared assets) was removed —
 	// either because no lang was in play (no source file at all) or because
@@ -1155,6 +1162,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			return toolcontract.WithDataFields(toolcontract.WithRootFields(wrapErr(err), fields), fields)
 		}
+		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+		if err != nil {
+			return nil, deletePageOutput{}, wrapErr(err)
+		}
 
 		// dry_run: return page content + backlinks that would break, without touching disk (#267).
 		if in.DryRun {
@@ -1170,6 +1181,17 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 					bls = append(bls, deletePageBacklinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL})
 				}
 			}
+			includeContent := mode != toolcontract.ResponseModeCompact
+			includeBacklinks := mode != toolcontract.ResponseModeCompact
+			var contentValue string
+			var backlinksValue *[]deletePageBacklinkDTO
+			if includeContent {
+				contentValue = content
+			}
+			if includeBacklinks {
+				backlinksValue = &bls
+			}
+			backlinksCount := len(bls)
 			return nil, newDeletePageOutput(deletePageData{
 				Status:             "ok",
 				Slug:               canonicalPublicSlug(in.Slug),
@@ -1177,8 +1199,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				ResolvedLang:       strPtr(resolvedSource.Lang),
 				ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
 				DryRun:             true,
-				Content:            content,
-				Backlinks:          &bls,
+				Content:            contentValue,
+				Backlinks:          backlinksValue,
+				BacklinksCount:     &backlinksCount,
 			}, rateLimitRemaining(limiter)), nil
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {

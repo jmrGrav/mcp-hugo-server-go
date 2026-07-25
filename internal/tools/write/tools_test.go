@@ -2494,6 +2494,85 @@ func TestDeletePageDryRun(t *testing.T) {
 	}
 }
 
+// TestDeletePageDryRunCompactOmitsFullSourceBody is a regression test for
+// #687: a preview-oriented compact dry-run must not return the entire source
+// body by default. It should still expose deletion scope and backlink count.
+func TestDeletePageDryRunCompactOmitsFullSourceBody(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/dry-run-compact", "title": "Dry Run Compact", "body": strings.Repeat("body ", 200),
+		"tags": []any{"go"}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":          "posts/dry-run-compact",
+		"dry_run":       true,
+		"response_mode": "compact",
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page compact dry_run failed: %s", raw)
+	}
+
+	data := decodeWriteData(t, res)
+	if _, ok := data["content"]; ok {
+		t.Fatalf("delete_page compact dry_run content = %#v, want omitted", data["content"])
+	}
+	if _, ok := data["backlinks"]; ok {
+		t.Fatalf("delete_page compact dry_run backlinks = %#v, want omitted", data["backlinks"])
+	}
+	if got := data["backlinks_count"]; got != float64(0) {
+		t.Fatalf("delete_page compact dry_run backlinks_count = %v, want 0", got)
+	}
+	if got := data["resolved_source_path"]; got != "content/posts/dry-run-compact/index.md" {
+		t.Fatalf("delete_page compact dry_run resolved_source_path = %v, want content/posts/dry-run-compact/index.md", got)
+	}
+}
+
+// TestDeletePageRealDeleteOmitsBacklinksCount is a regression test for a
+// contract-drift bug introduced alongside #687's dry-run backlinks_count
+// field: it was declared as a plain int with no omitempty, so a real
+// (non-dry-run) delete — which never runs a backlink scan at all — still
+// unconditionally emitted "backlinks_count": 0 in its response, reading as
+// "verified zero backlinks" when in fact no such check ever happened.
+// backlinks_count must only appear when it was actually computed, i.e. on
+// a dry_run response.
+func TestDeletePageRealDeleteOmitsBacklinksCount(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/real-delete-no-backlinks-count", "title": "Real Delete", "body": "hello",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/real-delete-no-backlinks-count",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "real-delete-no-backlinks-count", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page failed: %s", raw)
+	}
+
+	data := decodeWriteData(t, res)
+	if _, ok := data["backlinks_count"]; ok {
+		t.Fatalf("real delete_page response has backlinks_count = %#v, want omitted (never computed for a real delete)", data["backlinks_count"])
+	}
+}
+
 // TestDeletePageDryRunNotFound verifies that dry_run on a non-existent slug
 // returns not_found (#267).
 func TestDeletePageDryRunNotFound(t *testing.T) {
