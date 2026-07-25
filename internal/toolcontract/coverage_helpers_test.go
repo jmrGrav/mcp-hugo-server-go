@@ -230,8 +230,8 @@ func TestErrorParsingHelpers(t *testing.T) {
 	if got := inferField("style must be one of: tech, geo"); got != "style" {
 		t.Fatalf("inferField(style) = %q, want style", got)
 	}
-	if got := inferField("uploaded content does not match declared extension \".png\""); got != "" {
-		t.Fatalf("inferField(non-prefixed raw helper) = %q, want empty here; special mapping is tested via ParseToolError", got)
+	if got := inferField("uploaded content does not match declared extension \".png\""); got != "filename" {
+		t.Fatalf("inferField(mime mismatch) = %q, want filename (#688's inferField fix, already merged)", got)
 	}
 	if got := parseAllowedValues(`type must be one of: "post", "page" (case-insensitive)`); len(got) != 2 || got[0] != "post" || got[1] != "page" {
 		t.Fatalf("parseAllowedValues(one-of) = %#v, want [post page]", got)
