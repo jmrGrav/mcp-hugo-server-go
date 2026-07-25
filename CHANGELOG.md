@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## [Unreleased]
+## [v1.6.3] - 2026-07-25
 
 ### Added
 - **`create_page` gains an opt-in `test_content` marker** (#661): a live audit noted that a disposable test page it created was accepted with no creation-time signal that it was test/throwaway content — `validate_frontmatter`/`validate_site`'s `test_content_slugs` (#584) and the post-build advisory (#608) both only ever act after the fact. `test_content: {ttl_hours?, owner?}` (default `ttl_hours`: 24) is a deliberate, explicit opt-in — never inferred from `slug`/`title`, so a real published page that happens to start with e.g. `codex-` is never wrongly constrained. When set, it forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) now honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting — the caller explicitly asked for TTL tracking on that specific page, so it keeps working even when the server-wide sweep stays disabled. Still report-only: it never auto-deletes, only surfaces a warning recommending `delete_page`.
