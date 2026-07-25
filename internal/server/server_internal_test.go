@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -148,6 +150,37 @@ func TestKnownToolsSet(t *testing.T) {
 		if !known[d.Name] {
 			t.Fatalf("knownToolsSet() missing %q", d.Name)
 		}
+	}
+}
+
+func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
+	want := []string{
+		"index_reload",
+		"db_reindex",
+		"cloudflare_purge",
+		"search_index_submit",
+		"stale_test_content_check",
+	}
+	cfg := config.Default()
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex(default) error = %v", err)
+	}
+
+	for _, action := range []string{"build_site", "publish_changes"} {
+		t.Run(action, func(t *testing.T) {
+			callbacks := postBuildCallbacks(action, slog.Default(), cfg, idx, nil, nil)
+			got := make([]string, 0, len(callbacks))
+			for _, cb := range callbacks {
+				got = append(got, cb.Name)
+				if cb.Fn == nil {
+					t.Fatalf("postBuildCallbacks(%q) returned nil Fn for %q", action, cb.Name)
+				}
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("postBuildCallbacks(%q) names = %v, want %v", action, got, want)
+			}
+		})
 	}
 }
 
