@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/aireadiness"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
@@ -317,6 +318,24 @@ type pageForEditDTO struct {
 	// the same published page. Source-only pages omit it and surface a
 	// warning instead of failing the whole edit-prep bundle.
 	Preview *previewDTO `json:"preview,omitempty"`
+	// Readiness is opt-in only via include=["readiness"] (#621). It carries
+	// the same source-structure audit check_ai_readiness returns for the
+	// same slug. A page with no matching source (public-only legacy
+	// content) omits it and surfaces a warning instead of failing the whole
+	// edit-prep bundle, matching preview's existing fallback behavior.
+	Readiness *pageReadinessDTO `json:"readiness,omitempty"`
+}
+
+// pageReadinessDTO mirrors check_ai_readiness's own response fields, minus
+// slug/resolved_lang/resolved_source_path/revision/state — those already
+// exist at the page level in this bundle, so this is not a byte-identical
+// copy of that tool's whole payload the way backlinks/impact/preview are,
+// just the audit result itself.
+type pageReadinessDTO struct {
+	Status      string             `json:"status"`
+	Checks      aireadiness.Checks `json:"checks"`
+	Warnings    []string           `json:"warnings"`
+	Suggestions []string           `json:"suggestions"`
 }
 
 type getPageForEditData struct {
@@ -350,6 +369,7 @@ var getPageForEditAllSections = map[string]bool{
 	"backlinks":   true,
 	"impact":      true,
 	"preview":     true,
+	"readiness":   true,
 }
 
 func resolveEditInclude(raw []string) (map[string]bool, error) {
@@ -366,7 +386,7 @@ func resolveEditInclude(raw []string) (map[string]bool, error) {
 	out := make(map[string]bool, len(raw))
 	for _, r := range raw {
 		if !getPageForEditAllSections[r] {
-			return nil, fmt.Errorf("invalid_params: include must be a subset of frontmatter, markdown, state, quality, backlinks, impact, preview (got %q)", r)
+			return nil, fmt.Errorf("invalid_params: include must be a subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness (got %q)", r)
 		}
 		out[r] = true
 	}
@@ -645,7 +665,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
-		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), and `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists. All three are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageForEditInput) (*mcp.CallToolResult, getPageForEditOutput, error) {
 			if idx == nil {
 				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
@@ -716,6 +736,27 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 					warnings = append(warnings, err.Error())
 				} else {
 					page.Preview = &preview
+				}
+			}
+			if include["readiness"] {
+				if resolved.Source == nil {
+					warnings = append(warnings, fmt.Sprintf("readiness unavailable: no source content found for slug %q", in.Slug))
+				} else {
+					report := aireadiness.Analyze(aireadiness.Document{
+						Title:       resolved.Source.Title,
+						Date:        resolved.Source.Date,
+						Summary:     frontmatterStringValue(resolved.Source.FrontmatterRaw["summary"]),
+						Description: frontmatterStringValue(resolved.Source.FrontmatterRaw["description"]),
+						Tags:        append([]string(nil), resolved.Source.Tags...),
+						Categories:  append([]string(nil), resolved.Source.Categories...),
+						Markdown:    resolved.Source.Body,
+					})
+					page.Readiness = &pageReadinessDTO{
+						Status:      report.Status,
+						Checks:      report.Checks,
+						Warnings:    report.Warnings,
+						Suggestions: report.Suggestions,
+					}
 				}
 			}
 			return nil, newGetPageForEditOutput(getPageForEditData{Page: page}, warnings, time.Now().UTC()), nil

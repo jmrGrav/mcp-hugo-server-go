@@ -1230,6 +1230,101 @@ Body.
 	}
 }
 
+// TestGetPageForEditReadinessIncludeMatchesStandaloneCheckAIReadiness is the
+// regression test for #621: get_page_for_edit's opt-in `readiness` facet
+// must return byte-identical output to a standalone check_ai_readiness
+// call for the same slug (minus the fields already present at the page
+// level: slug/resolved_lang/resolved_source_path/revision/state), so the
+// bundled call is a real composition, not a re-derived approximation.
+func TestGetPageForEditReadinessIncludeMatchesStandaloneCheckAIReadiness(t *testing.T) {
+	session, done := newPremutationBundleSession(t)
+	defer done()
+
+	standalone := callTool(t, session, "check_ai_readiness", map[string]any{"slug": "/posts/hello/"})
+	if standalone.IsError {
+		t.Fatalf("check_ai_readiness returned error: %v", standalone.Content)
+	}
+	standaloneData := decodeContent(t, standalone)
+
+	bundled := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello/", "include": []string{"readiness"}})
+	if bundled.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", bundled.Content)
+	}
+	page, ok := decodeContent(t, bundled)["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit page is %T, want map", decodeContent(t, bundled)["page"])
+	}
+	readiness, ok := page["readiness"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit readiness is %T, want map", page["readiness"])
+	}
+
+	for _, field := range []string{"status", "checks", "warnings", "suggestions"} {
+		standaloneJSON, _ := json.Marshal(standaloneData[field])
+		bundledJSON, _ := json.Marshal(readiness[field])
+		if string(bundledJSON) != string(standaloneJSON) {
+			t.Errorf("get_page_for_edit readiness.%s = %s, want identical to check_ai_readiness %s = %s", field, bundledJSON, field, standaloneJSON)
+		}
+	}
+	for _, field := range []string{"frontmatter", "markdown", "state", "quality", "backlinks", "impact", "preview"} {
+		if _, present := page[field]; present {
+			t.Errorf("get_page_for_edit include=[readiness]: unexpected field %q present", field)
+		}
+	}
+}
+
+// TestGetPageForEditReadinessIncludeWarnsWhenSourceIsUnavailable mirrors
+// TestGetPageForEditPreviewIncludeWarnsWhenRenderedPageIsUnavailable: a page
+// with no matching source (public-only legacy content) must omit
+// `readiness` with a warning instead of failing the whole edit-prep bundle.
+func TestGetPageForEditReadinessIncludeWarnsWhenSourceIsUnavailable(t *testing.T) {
+	siteRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	idx.UpsertPage(site.Page{
+		Slug:  "/posts/public-only/",
+		Title: "Public Only",
+		URL:   "https://example.test/posts/public-only/",
+		Lang:  "en",
+	})
+
+	contentRoot := t.TempDir()
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/public-only/", "include": []string{"readiness"}})
+	if res.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+	}
+	envelope := decodeEnvelope(t, res)
+	page, ok := decodeContent(t, res)["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit page is %T, want map", decodeContent(t, res)["page"])
+	}
+	if _, present := page["readiness"]; present {
+		t.Fatalf("get_page_for_edit include=[readiness]: unexpected readiness present for source-less page: %#v", page["readiness"])
+	}
+	warnings, ok := envelope["warnings"].([]any)
+	if !ok || len(warnings) == 0 {
+		t.Fatal("get_page_for_edit include=[readiness]: expected warning when source is unavailable")
+	}
+}
+
 func TestGetPageForEditNotFound(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
