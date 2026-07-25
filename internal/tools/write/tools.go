@@ -1161,6 +1161,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	registerUploadPageAsset(s, pg, idx, cfg, idem, &mutationMu, mutationLimiters)
 	registerDeletePageAsset(s, pg, idx, cfg, idem, &deleteMu, deleteLimiters)
 	registerGetMutationStatus(s, idem)
+	registerGetRateLimits(s, cfg, &mutationMu, mutationLimiters, &deleteMu, deleteLimiters)
 }
 
 func createPageState() site.LifecycleState {
