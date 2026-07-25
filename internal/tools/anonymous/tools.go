@@ -312,6 +312,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	}
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
+	RegisterGetChangelog(s)
 	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published content pages (articles and pages, not taxonomy list pages) with pagination. Returns slug, title, summary, tags, categories, date, URL. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. For the full URL inventory including taxonomy pages use get_sitemap.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
@@ -974,5 +975,6 @@ func Defs() []tools.ToolDef {
 		{Name: "get_sitemap", RequiredScope: ""},
 		{Name: "get_feed", RequiredScope: ""},
 		{Name: "get_site_information", RequiredScope: ""},
+		{Name: "get_changelog", RequiredScope: ""},
 	}
 }

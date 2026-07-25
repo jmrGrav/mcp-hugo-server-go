@@ -13,14 +13,15 @@ import (
 // Update this constant whenever a tool is added or removed.
 // Current breakdown:
 //
-//	anonymous (no auth):  9  — list_pages, get_page, search_pages, get_recent_posts,
-//	                            list_tags, list_categories, get_sitemap, get_feed, get_site_information
-//	content.read:        19  — get_page_markdown, get_page_frontmatter, get_related_content,
+//	anonymous (no auth): 10  — list_pages, get_page, search_pages, get_recent_posts,
+//	                            list_tags, list_categories, get_sitemap, get_feed, get_site_information,
+//	                            get_changelog
+//	content.read:        21  — get_page_markdown, get_page_frontmatter, get_related_content,
 //	                            build_agent_context, export_agent_context, get_page_for_edit,
 //	                            list_content_types, list_page_assets, search_content, check_ai_readiness,
 //	                            explain_structure, get_site_health, get_broken_links, get_backlinks,
 //	                            suggest_links, diff_page, inspect_rendered, validate_frontmatter,
-//	                            validate_site
+//	                            validate_site, plan_page, list_page_revisions
 //	content.write:        9  — create_page, update_page, delete_page, upload_page_asset,
 //	                            delete_page_asset, get_mutation_status, plan_content_change (no scope
 //	                            gate — see #450), apply_content_plan, rollback_change
@@ -28,7 +29,7 @@ import (
 //	                            generate_hero_image, check_sri_versions, get_runtime_status,
 //	                            get_theme_status, verify_publication, create_preview,
 //	                            publish_changes
-const expectedToolCount = 47
+const expectedToolCount = 50
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())

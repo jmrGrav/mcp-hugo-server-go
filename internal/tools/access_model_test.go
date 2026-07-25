@@ -40,6 +40,9 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"inspect_rendered":     "",
 		"validate_frontmatter": "",
 		"validate_site":        "",
+		"plan_page":            "",
+		"list_page_revisions":  "",
+		"get_changelog":        "",
 		"create_page":          "write",
 		"update_page":          "write",
 		"delete_page":          "write",
@@ -80,11 +83,11 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 }
 
 func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
-	if got := len(anonpkg.Defs()); got != 9 {
-		t.Fatalf("anonymous tool count = %d, want 9", got)
+	if got := len(anonpkg.Defs()); got != 10 {
+		t.Fatalf("anonymous tool count = %d, want 10", got)
 	}
-	if got := len(readpkg.Defs()); got != 19 {
-		t.Fatalf("read tool count = %d, want 19", got)
+	if got := len(readpkg.Defs()); got != 21 {
+		t.Fatalf("read tool count = %d, want 21", got)
 	}
 	if got := len(writepkg.Defs()); got != 9 {
 		t.Fatalf("write tool count = %d, want 9", got)
