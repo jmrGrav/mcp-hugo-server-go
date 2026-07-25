@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
@@ -751,6 +752,69 @@ func TestListPageAssetsEmptyBundleIncludesHint(t *testing.T) {
 	hint, _ := m["hint"].(string)
 	if hint == "" {
 		t.Fatal("list_page_assets data.hint must be present when assets is empty")
+	}
+}
+
+func TestListPageAssetsIncludesGeneratedHeroImagesSeparately(t *testing.T) {
+	root := t.TempDir()
+	contentPath := filepath.Join(root, "content", "posts", "article", "index.md")
+	if err := os.MkdirAll(filepath.Dir(contentPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(contentPath, []byte("---\ntitle: Article\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	heroPath := filepath.Join(root, "static", "images", "posts", "article-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heroBytes := []byte("hero-bytes")
+	if err := os.WriteFile(heroPath, heroBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	src, err := hugosite.NewSourceIndex(filepath.Join(root, "content"))
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join(root, "content")
+	cfg.HugoRoot = root
+	session, done := newTestClientWithCfg(t, idx, cfg, src)
+	defer done()
+
+	res := callTool(t, session, "list_page_assets", map[string]any{"slug": "/posts/article"})
+	if res.IsError {
+		t.Fatalf("list_page_assets returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	if _, ok := m["hint"]; ok {
+		t.Fatalf("list_page_assets data.hint = %v, want omitted when generated assets exist", m["hint"])
+	}
+	assets, _ := m["assets"].([]any)
+	if len(assets) != 0 {
+		t.Fatalf("list_page_assets assets = %v, want empty bundle assets for this fixture", assets)
+	}
+	generated, ok := m["generated_assets"].([]any)
+	if !ok || len(generated) != 1 {
+		t.Fatalf("list_page_assets generated_assets = %#v, want one generated asset", m["generated_assets"])
+	}
+	ga, ok := generated[0].(map[string]any)
+	if !ok {
+		t.Fatalf("generated_assets[0] type = %T, want map[string]any", generated[0])
+	}
+	if got := ga["name"]; got != "article-featured.jpg" {
+		t.Fatalf("generated_assets[0].name = %v, want article-featured.jpg", got)
+	}
+	if got := ga["kind"]; got != "global_static" {
+		t.Fatalf("generated_assets[0].kind = %v, want global_static", got)
+	}
+	if got := ga["path"]; got != "static/images/posts/article-featured.jpg" {
+		t.Fatalf("generated_assets[0].path = %v, want static/images/posts/article-featured.jpg", got)
+	}
+	if got := ga["sha256"]; got != contentmodel.SourceRevisionBytes(heroBytes) {
+		t.Fatalf("generated_assets[0].sha256 = %v, want hash of hero-bytes", got)
 	}
 }
 

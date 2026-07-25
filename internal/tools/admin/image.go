@@ -68,6 +68,14 @@ type imageWriteErrorPayload struct {
 	Docs            string `json:"docs"`
 }
 
+// HeroImageLocation is the canonical generated-hero-image location for one
+// source slug under HugoRoot's static/images tree.
+type HeroImageLocation struct {
+	AbsPath     string
+	LogicalPath string
+	Name        string
+}
+
 func imageSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
@@ -90,6 +98,27 @@ func logicalHugoRootPath(hugoRoot, absPath string) string {
 		return ""
 	}
 	return filepath.ToSlash(absPath)
+}
+
+// ResolveHeroImageLocation derives the exact generated hero-image path for a
+// slug using the same static/images root and suffix generate_hero_image
+// itself writes to. Exported so read/write tools can report or explicitly
+// operate on the generated file without re-deriving a second path contract.
+func ResolveHeroImageLocation(hugoRoot, slug string) (HeroImageLocation, error) {
+	imagesRoot := filepath.Join(hugoRoot, "static", "images")
+	guard, err := security.New(imagesRoot, true)
+	if err != nil {
+		return HeroImageLocation{}, err
+	}
+	target, err := guard.SafeJoin(slug + HeroImageSuffix)
+	if err != nil {
+		return HeroImageLocation{}, err
+	}
+	return HeroImageLocation{
+		AbsPath:     target,
+		LogicalPath: logicalHugoRootPath(hugoRoot, target),
+		Name:        filepath.Base(target),
+	}, nil
 }
 
 func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeaturedImageOutput {

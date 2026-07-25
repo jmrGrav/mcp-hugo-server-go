@@ -22,6 +22,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
 )
@@ -401,10 +402,17 @@ func validateDeleteAssetFilename(name string) (string, error) {
 // narrow, mostly-unique token like "hero.png") rather than a full Markdown
 // link parser, since a false positive only makes the guard slightly more
 // conservative, never lets a referenced asset through silently.
-func findAssetReferences(dir, filename string) ([]string, error) {
+func findAssetReferences(dir string, needles ...string) ([]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
+	}
+	filtered := make([]string, 0, len(needles))
+	for _, needle := range needles {
+		needle = strings.TrimSpace(needle)
+		if needle != "" {
+			filtered = append(filtered, needle)
+		}
 	}
 	var referencedIn []string
 	for _, e := range entries {
@@ -419,8 +427,12 @@ func findAssetReferences(dir, filename string) ([]string, error) {
 		if err != nil {
 			continue
 		}
-		if strings.Contains(string(raw), filename) {
-			referencedIn = append(referencedIn, name)
+		text := string(raw)
+		for _, needle := range filtered {
+			if strings.Contains(text, needle) {
+				referencedIn = append(referencedIn, name)
+				break
+			}
 		}
 	}
 	return referencedIn, nil
@@ -429,6 +441,7 @@ func findAssetReferences(dir, filename string) ([]string, error) {
 type deletePageAssetInput struct {
 	Slug             string `json:"slug"`
 	Filename         string `json:"filename"`
+	Scope            string `json:"scope,omitempty"`
 	ExpectedSha256   string `json:"expected_sha256,omitempty"`
 	ExpectedRevision string `json:"expected_revision,omitempty"`
 	Force            bool   `json:"force,omitempty"`
@@ -448,6 +461,9 @@ type deletePageAssetData struct {
 	Status       string   `json:"status,omitempty"`
 	Slug         string   `json:"slug,omitempty"`
 	SourceKey    string   `json:"source_key,omitempty"`
+	Scope        string   `json:"scope,omitempty"`
+	Path         string   `json:"path,omitempty"`
+	Kind         string   `json:"kind,omitempty"`
 	Filename     string   `json:"filename,omitempty"`
 	Sha256       string   `json:"sha256,omitempty"`
 	DryRun       bool     `json:"dry_run,omitempty"`
@@ -476,6 +492,79 @@ func newDeletePageAssetOutput(data deletePageAssetData, rateLimitRemaining int) 
 	}
 }
 
+const (
+	deleteAssetScopeBundle    = "bundle"
+	deleteAssetScopeGenerated = "generated"
+)
+
+type deleteAssetTarget struct {
+	scope       string
+	kind        string
+	filePath    string
+	logicalPath string
+	filename    string
+	referenceID string
+}
+
+func validateDeleteAssetScope(scope string) (string, error) {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		return deleteAssetScopeBundle, nil
+	}
+	switch scope {
+	case deleteAssetScopeBundle, deleteAssetScopeGenerated:
+		return scope, nil
+	default:
+		return "", fmt.Errorf("invalid_params: scope must be one of bundle, generated")
+	}
+}
+
+func resolveDeleteAssetTarget(pg *security.PathGuard, cfg config.Config, slug, filename, scope string) (deleteAssetTarget, error) {
+	switch scope {
+	case deleteAssetScopeBundle:
+		dir, err := pg.SafeJoin(slug)
+		if err != nil {
+			return deleteAssetTarget{}, err
+		}
+		return deleteAssetTarget{
+			scope:       deleteAssetScopeBundle,
+			kind:        "page_bundle",
+			filePath:    filepath.Join(dir, filename),
+			filename:    filename,
+			referenceID: filename,
+		}, nil
+	case deleteAssetScopeGenerated:
+		if strings.TrimSpace(cfg.HugoRoot) == "" {
+			return deleteAssetTarget{}, fmt.Errorf("not_found: generated assets are unavailable because hugo_root is not configured")
+		}
+		loc, err := admin.ResolveHeroImageLocation(cfg.HugoRoot, slug)
+		if err != nil {
+			return deleteAssetTarget{}, fmt.Errorf("invalid_params: path validation failed")
+		}
+		if filename != loc.Name {
+			return deleteAssetTarget{}, fmt.Errorf("not_found: generated asset %q not found for slug %q", filename, slug)
+		}
+		return deleteAssetTarget{
+			scope:       deleteAssetScopeGenerated,
+			kind:        "global_static",
+			filePath:    loc.AbsPath,
+			logicalPath: loc.LogicalPath,
+			filename:    filename,
+			referenceID: generatedHeroReferenceID(slug),
+		}, nil
+	default:
+		return deleteAssetTarget{}, fmt.Errorf("invalid_params: unsupported asset scope")
+	}
+}
+
+func generatedHeroReferenceID(slug string) string {
+	slug = strings.Trim(slug, "/")
+	if slug == "" {
+		return ""
+	}
+	return "/images/" + slug + admin.HeroImageSuffix
+}
+
 // registerDeletePageAsset registers delete_page_asset (#460). Shares
 // delete_page's own destructive per-caller budget (deleteMu/deleteLimiters),
 // not upload_page_asset's create/update quota — deleting is the destructive
@@ -485,8 +574,9 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		Name:  "delete_page_asset",
 		Title: "Delete page asset",
 		Description: "Delete a file previously written into a Hugo page bundle directory by upload_page_asset. " +
+			"By default this targets bundle-local files only; set `scope:\"generated\"` to explicitly target the generated hero image at {HugoRoot}/static/images/{slug}-featured.jpg instead of the bundle directory. " +
 			"Non-dry-run calls require expected_sha256 (from upload_page_asset/list_page_assets) or expected_revision (the page bundle's own revision) as a concurrency guard; a mismatch fails with revision_conflict, telling the agent to re-check the current hash/revision via list_page_assets and retry. " +
-			"Before deleting, the asset filename is checked against every index.<lang>.md file in the bundle: if referenced, the call fails with asset_referenced unless force=true is passed, so a still-linked image isn't silently broken. " +
+			"Before deleting, the asset reference is checked against every index.<lang>.md file in the bundle: if referenced, the call fails with asset_referenced unless force=true is passed, so a still-linked image isn't silently broken. " +
 			"dry_run previews the asset's sha256 and whether it's referenced, without requiring expected_sha256/expected_revision and without deleting anything. " +
 			"Callers may provide idempotency_key to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. " +
 			"This only removes the source asset, not any built public copy or CDN cache — unlike delete_page, it does not purge; the asset stays reachable at its old URL until the next build. " +
@@ -514,6 +604,10 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if err != nil {
 			return nil, deletePageAssetOutput{}, wrapErr(err)
 		}
+		scope, err := validateDeleteAssetScope(in.Scope)
+		if err != nil {
+			return nil, deletePageAssetOutput{}, wrapErr(err)
+		}
 		if err := validateBundleSlug(idx, slug); err != nil {
 			return nil, deletePageAssetOutput{}, wrapErr(err)
 		}
@@ -522,7 +616,11 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			slog.Warn("delete_page_asset: path validation failed", "slug", slug, "error", err)
 			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
 		}
-		filePath := filepath.Join(dir, filename)
+		target, err := resolveDeleteAssetTarget(pg, cfg, slug, filename, scope)
+		if err != nil {
+			return nil, deletePageAssetOutput{}, wrapErr(err)
+		}
+		filePath := target.filePath
 
 		// Fetching the limiter doesn't consume budget (#466's dry-run fix
 		// applies equally here).
@@ -544,7 +642,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				slog.Error("delete_page_asset: dry-run read failed", "slug", slug, "filename", filename, "error", readErr)
 				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("read_error: failed to read asset"))
 			}
-			referencedIn, refErr := findAssetReferences(dir, filename)
+			referencedIn, refErr := findAssetReferences(dir, filename, target.referenceID)
 			if refErr != nil {
 				slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
 			}
@@ -552,6 +650,9 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				Status:       "ok",
 				Slug:         canonicalPublicSlug(slug),
 				SourceKey:    slug,
+				Scope:        target.scope,
+				Path:         target.logicalPath,
+				Kind:         target.kind,
 				Filename:     filename,
 				Sha256:       contentmodel.SourceRevisionBytes(data),
 				DryRun:       true,
@@ -598,8 +699,9 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				Filename         string `json:"filename"`
 				ExpectedSha256   string `json:"expected_sha256,omitempty"`
 				ExpectedRevision string `json:"expected_revision,omitempty"`
+				Scope            string `json:"scope,omitempty"`
 				Force            bool   `json:"force,omitempty"`
-			}{Slug: slug, Filename: filename, ExpectedSha256: in.ExpectedSha256, ExpectedRevision: in.ExpectedRevision, Force: in.Force})
+			}{Slug: slug, Filename: filename, ExpectedSha256: in.ExpectedSha256, ExpectedRevision: in.ExpectedRevision, Scope: target.scope, Force: in.Force})
 			if hashErr != nil {
 				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
 			}
@@ -629,7 +731,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				actualBundleRevision = rev
 			}
 		}
-		referencedIn, refErr := findAssetReferences(dir, filename)
+		referencedIn, refErr := findAssetReferences(dir, filename, target.referenceID)
 		if refErr != nil {
 			slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
 		}
@@ -661,6 +763,9 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			Status:       "ok",
 			Slug:         canonicalPublicSlug(slug),
 			SourceKey:    slug,
+			Scope:        target.scope,
+			Path:         target.logicalPath,
+			Kind:         target.kind,
 			Filename:     filename,
 			Sha256:       actualHash,
 			Referenced:   fileutil.BoolPtr(len(referencedIn) > 0),

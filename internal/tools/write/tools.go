@@ -249,6 +249,15 @@ type deletePageBacklinkDTO struct {
 	URL   string `json:"url"`
 }
 
+type deletePageGeneratedAssetDTO struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Kind       string `json:"kind"`
+	SizeBytes  int64  `json:"size_bytes"`
+	ModifiedAt string `json:"modified_at"`
+	Sha256     string `json:"sha256"`
+}
+
 type deletePageOutput struct {
 	toolcontract.ToolResponse[deletePageData]
 	// RequestContext echoes the caller's normalized slug on failure (#455)
@@ -259,14 +268,15 @@ type deletePageOutput struct {
 }
 
 type deletePageData struct {
-	Status             string                   `json:"status,omitempty"`
-	Slug               string                   `json:"slug,omitempty"`
-	SourceKey          string                   `json:"source_key,omitempty"`
-	ResolvedLang       *string                  `json:"resolved_lang,omitempty"`
-	ResolvedSourcePath *string                  `json:"resolved_source_path,omitempty"`
-	DryRun             bool                     `json:"dry_run,omitempty"`
-	Content            string                   `json:"content,omitempty"`
-	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
+	Status             string                         `json:"status,omitempty"`
+	Slug               string                         `json:"slug,omitempty"`
+	SourceKey          string                         `json:"source_key,omitempty"`
+	ResolvedLang       *string                        `json:"resolved_lang,omitempty"`
+	ResolvedSourcePath *string                        `json:"resolved_source_path,omitempty"`
+	DryRun             bool                           `json:"dry_run,omitempty"`
+	Content            string                         `json:"content,omitempty"`
+	Backlinks          *[]deletePageBacklinkDTO       `json:"backlinks,omitempty"`
+	GeneratedAssets    *[]deletePageGeneratedAssetDTO `json:"generated_assets,omitempty"`
 	// BacklinksCount is only ever populated on a dry_run response (compact
 	// or not) — it's a pointer with omitempty so it stays entirely absent
 	// from a real (non-dry-run) delete's response, where no backlink scan
@@ -1091,7 +1101,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. `data.bundle_fully_removed` reports which of those happened. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. `data.bundle_fully_removed` reports which of those happened. `dry_run:true` previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -1209,6 +1219,11 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			if includeBacklinks {
 				backlinksValue = &bls
 			}
+			generatedAssets := previewGeneratedHeroAssets(cfg.HugoRoot, in.Slug, bundleWouldBeFullyRemovedAfterDelete(dir, resolvedSource.SourcePath))
+			var generatedAssetsValue *[]deletePageGeneratedAssetDTO
+			if len(generatedAssets) > 0 {
+				generatedAssetsValue = &generatedAssets
+			}
 			backlinksCount := len(bls)
 			return nil, newDeletePageOutput(deletePageData{
 				Status:             "ok",
@@ -1219,6 +1234,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				DryRun:             true,
 				Content:            contentValue,
 				Backlinks:          backlinksValue,
+				GeneratedAssets:    generatedAssetsValue,
 				BacklinksCount:     &backlinksCount,
 			}, rateLimitRemaining(limiter)), nil
 		}
@@ -1385,6 +1401,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		// cleanup steps above, which all surface failures as a non-blocking
 		// warning rather than failing the delete outright, since the source
 		// is already gone by this point and there's nothing to roll back to.
+		generatedAssets := previewGeneratedHeroAssets(cfg.HugoRoot, in.Slug, bundleFullyRemoved)
 		if bundleFullyRemoved && cfg.HugoRoot != "" {
 			if removed, rmErr := removeHeroImage(cfg.HugoRoot, in.Slug); rmErr != nil {
 				msg := fmt.Sprintf("hero image cleanup failed: %v", rmErr)
@@ -1425,6 +1442,10 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		if deleteWarning != "" {
 			status = "partial_success"
 		}
+		var generatedAssetsValue *[]deletePageGeneratedAssetDTO
+		if len(generatedAssets) > 0 {
+			generatedAssetsValue = &generatedAssets
+		}
 		out := newDeletePageOutput(deletePageData{
 			Status:             status,
 			Slug:               canonicalPublicSlug(in.Slug),
@@ -1433,6 +1454,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
 			Warning:            deleteWarning,
 			State:              &state,
+			GeneratedAssets:    generatedAssetsValue,
 			BundleFullyRemoved: bundleFullyRemoved,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
@@ -1516,22 +1538,67 @@ func deletePageState(hasSiteRoot, publicCleanupFailed, dbDeleteFailed bool) site
 // deleted; a hero image that was never generated for this slug is not an
 // error — most deleted pages won't have one.
 func removeHeroImage(hugoRoot, slug string) (bool, error) {
-	imagesRoot := filepath.Join(hugoRoot, "static", "images")
-	guard, err := security.New(imagesRoot, true)
+	loc, err := admin.ResolveHeroImageLocation(hugoRoot, slug)
 	if err != nil {
 		return false, err
 	}
-	target, err := guard.SafeJoin(slug + admin.HeroImageSuffix)
-	if err != nil {
-		return false, err
-	}
-	if err := os.Remove(target); err != nil {
+	if err := os.Remove(loc.AbsPath); err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
 		}
 		return false, err
 	}
 	return true, nil
+}
+
+func previewGeneratedHeroAssets(hugoRoot, slug string, include bool) []deletePageGeneratedAssetDTO {
+	if !include || strings.TrimSpace(hugoRoot) == "" {
+		return nil
+	}
+	loc, err := admin.ResolveHeroImageLocation(hugoRoot, slug)
+	if err != nil {
+		return nil
+	}
+	info, err := os.Stat(loc.AbsPath)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+	raw, err := os.ReadFile(loc.AbsPath)
+	if err != nil {
+		return nil
+	}
+	return []deletePageGeneratedAssetDTO{{
+		Name:       loc.Name,
+		Path:       loc.LogicalPath,
+		Kind:       "global_static",
+		SizeBytes:  info.Size(),
+		ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
+		Sha256:     contentmodel.SourceRevisionBytes(raw),
+	}}
+}
+
+func bundleWouldBeFullyRemovedAfterDelete(dir, resolvedSourcePath string) bool {
+	if strings.TrimSpace(resolvedSourcePath) == "" {
+		return true
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	targetBase := filepath.Base(resolvedSourcePath)
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if name == targetBase {
+			continue
+		}
+		if strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md") {
+			return false
+		}
+	}
+	return true
 }
 
 type frontmatterDoc struct {

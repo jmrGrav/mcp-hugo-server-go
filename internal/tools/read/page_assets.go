@@ -15,6 +15,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -38,8 +39,18 @@ type pageAssetDTO struct {
 	Sha256 string `json:"sha256"`
 }
 
+type generatedPageAssetDTO struct {
+	Name       string `json:"name"`
+	Path       string `json:"path"`
+	Kind       string `json:"kind"`
+	SizeBytes  int64  `json:"size_bytes"`
+	ModifiedAt string `json:"modified_at"`
+	Sha256     string `json:"sha256"`
+}
+
 type listPageAssetsData struct {
-	Assets []pageAssetDTO `json:"assets"`
+	Assets          []pageAssetDTO          `json:"assets"`
+	GeneratedAssets []generatedPageAssetDTO `json:"generated_assets,omitempty"`
 	// Hint is populated only when Assets is empty, clarifying that this
 	// tool only lists page-bundle sibling files — a page can still
 	// reference images under the site's global static directory that
@@ -70,7 +81,7 @@ func RegisterListPageAssets(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 		return
 	}
 	addReadOnlyTool(s, "list_page_assets", "List page assets",
-		"List the sibling files (images, etc.) stored alongside a Hugo page bundle's index.md, e.g. cover.webp next to content/posts/article/index.md. Only leaf page bundles have an asset directory; single-file pages (slug.md, no per-page directory) fail with not_a_bundle. Use before upload_page_asset to check what already exists, or before delete_page_asset to get the current sha256/revision for its expected_sha256/expected_revision concurrency guard. The on-disk bundle directory is a source-derived signal unavailable to the reader profile even when the page itself is public; readers receive an empty assets list instead of an error. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		"List the sibling files (images, etc.) stored alongside a Hugo page bundle's index.md, e.g. cover.webp next to content/posts/article/index.md. Only leaf page bundles have an asset directory; single-file pages (slug.md, no per-page directory) fail with not_a_bundle. Responses also surface generated hero images separately under data.generated_assets when {HugoRoot}/static/images/{slug}-featured.jpg exists, so agents can distinguish bundle-local files from globally generated static assets. Use before upload_page_asset to check what already exists, or before delete_page_asset to get the current sha256/revision for its expected_sha256/expected_revision concurrency guard. The on-disk bundle directory is a source-derived signal unavailable to the reader profile even when the page itself is public; readers receive an empty assets list instead of an error. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listPageAssetsInput) (*mcp.CallToolResult, listPageAssetsOutput, error) {
 			slug := strings.Trim(strings.TrimSpace(in.Slug), "/")
 			if slug == "" {
@@ -134,11 +145,39 @@ func RegisterListPageAssets(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 				})
 			}
 			sort.Slice(assets, func(i, j int) bool { return assets[i].Name < assets[j].Name })
+			generatedAssets := listGeneratedHeroAssets(cfg.HugoRoot, slug)
 
-			data := listPageAssetsData{Assets: assets}
-			if len(assets) == 0 {
+			data := listPageAssetsData{Assets: assets, GeneratedAssets: generatedAssets}
+			if len(assets) == 0 && len(generatedAssets) == 0 {
 				data.Hint = emptyPageAssetsHint
 			}
 			return nil, newListPageAssetsOutput(data, time.Now().UTC()), nil
 		})
+}
+
+func listGeneratedHeroAssets(hugoRoot, slug string) []generatedPageAssetDTO {
+	if strings.TrimSpace(hugoRoot) == "" {
+		return nil
+	}
+	loc, err := admin.ResolveHeroImageLocation(hugoRoot, slug)
+	if err != nil {
+		return nil
+	}
+	info, err := os.Stat(loc.AbsPath)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+	raw, err := os.ReadFile(loc.AbsPath)
+	if err != nil {
+		slog.Warn("list_page_assets: read generated asset for sha256 failed", "slug", slug, "path", loc.LogicalPath, "error", err)
+		return nil
+	}
+	return []generatedPageAssetDTO{{
+		Name:       loc.Name,
+		Path:       loc.LogicalPath,
+		Kind:       "global_static",
+		SizeBytes:  info.Size(),
+		ModifiedAt: info.ModTime().UTC().Format(time.RFC3339),
+		Sha256:     contentmodel.SourceRevisionBytes(raw),
+	}}
 }
