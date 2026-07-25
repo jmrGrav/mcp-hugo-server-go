@@ -67,6 +67,11 @@ func firstErrorCode(t *testing.T, envelope map[string]any) string {
 	return code
 }
 
+type namedCallResult struct {
+	op  string
+	res *mcp.CallToolResult
+}
+
 // TestConcurrentUpdatePageSamePageDeterministicOutcome proves the same-page
 // race the mutation-coordination model must resolve deterministically:
 // two concurrent update_page calls against the same slug, both captured with
@@ -123,6 +128,252 @@ func TestConcurrentUpdatePageSamePageDeterministicOutcome(t *testing.T) {
 	}
 	if successes != 1 || conflicts != 1 {
 		t.Fatalf("same-page race must resolve to exactly one success and one revision_conflict, got successes=%d conflicts=%d", successes, conflicts)
+	}
+}
+
+// TestConcurrentUpdateAndDeleteSamePageDeterministicOutcome extends the
+// same-target race matrix from #692 to update_page vs delete_page on a
+// single-language bundle. Because the runtime intentionally serializes
+// mutations behind hugosite.ContentMu, the correct contract is not "both run
+// concurrently to disk"; it is "both start together, one wins the lock, and
+// the loser observes the winner's committed state cleanly". Valid outcomes:
+// - update wins -> delete sees revision_conflict
+// - delete wins -> update sees not_found
+// Anything else risks silent lost writes or partial deletion.
+func TestConcurrentUpdateAndDeleteSamePageDeterministicOutcome(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	const slug = "coord-update-delete"
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug": slug, "title": "Original", "body": "Body v0",
+		"tags": []any{}, "categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page failed: %s", marshalContent(t, create))
+	}
+	pagePath := filepath.Join(contentRoot, slug, "index.md")
+	rev := currentRevision(t, pagePath)
+
+	hugosite.ContentMu.Lock()
+	results := make(chan namedCallResult, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		results <- namedCallResult{op: "update", res: callTool(t, session, "update_page", map[string]any{
+			"slug": slug, "body": "Body update wins", "expected_revision": rev,
+		})}
+	}()
+	go func() {
+		defer wg.Done()
+		results <- namedCallResult{op: "delete", res: callTool(t, session, "delete_page", map[string]any{
+			"slug": slug, "expected_revision": rev,
+		})}
+	}()
+	time.Sleep(150 * time.Millisecond)
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	close(results)
+
+	seen := map[string]*mcp.CallToolResult{}
+	for r := range results {
+		seen[r.op] = r.res
+	}
+	updateRes, deleteRes := seen["update"], seen["delete"]
+	if updateRes == nil || deleteRes == nil {
+		t.Fatalf("missing race results: %#v", seen)
+	}
+
+	switch {
+	case !updateRes.IsError && deleteRes.IsError:
+		if code := firstErrorCode(t, decodeWriteErrorEnvelope(t, deleteRes)); code != "revision_conflict" {
+			t.Fatalf("delete loser code = %q, want revision_conflict", code)
+		}
+		raw, err := os.ReadFile(pagePath)
+		if err != nil {
+			t.Fatalf("winner page should remain readable: %v", err)
+		}
+		if !strings.Contains(string(raw), "Body update wins") {
+			t.Fatalf("winner content = %q, want update body", string(raw))
+		}
+	case updateRes.IsError && !deleteRes.IsError:
+		if code := firstErrorCode(t, decodeWriteErrorEnvelope(t, updateRes)); code != "not_found" {
+			t.Fatalf("update loser code = %q, want not_found", code)
+		}
+		if _, err := os.Stat(filepath.Join(contentRoot, slug)); !os.IsNotExist(err) {
+			t.Fatalf("bundle must be gone after delete winner, stat err = %v", err)
+		}
+	default:
+		t.Fatalf("want exactly one winner, got update_error=%v delete_error=%v", updateRes.IsError, deleteRes.IsError)
+	}
+}
+
+// TestConcurrentUpdateAndDeleteBilingualVariantDeterministicOutcome extends
+// #692 to a multilingual bundle where both operations explicitly target the
+// same non-default language. Valid outcomes:
+//   - update(lang=fr) wins -> delete(lang=fr) sees revision_conflict and both
+//     translations survive
+//   - delete(lang=fr) wins -> update(lang=fr) sees not_found and only the
+//     default-language file survives
+//
+// This guards against the more subtle bundle-level partial-delete failures
+// the live audit warned about.
+func TestConcurrentUpdateAndDeleteBilingualVariantDeterministicOutcome(t *testing.T) {
+	contentRoot := t.TempDir()
+	slug := "posts/coord-bilingual-race"
+	pageDir := filepath.Join(contentRoot, slug)
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.md"), []byte("---\ntitle: EN\n---\nHello\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile index.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: FR\n---\nBonjour\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile index.fr.md: %v", err)
+	}
+
+	session, idx, done := newTestServer(t, contentRoot)
+	defer done()
+	frPath := filepath.Join(pageDir, "index.fr.md")
+	rev := currentRevision(t, frPath)
+
+	hugosite.ContentMu.Lock()
+	results := make(chan namedCallResult, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		results <- namedCallResult{op: "update", res: callTool(t, session, "update_page", map[string]any{
+			"slug": slug, "lang": "fr", "body": "Bonjour mis a jour", "expected_revision": rev,
+		})}
+	}()
+	go func() {
+		defer wg.Done()
+		results <- namedCallResult{op: "delete", res: callTool(t, session, "delete_page", map[string]any{
+			"slug": slug, "lang": "fr", "expected_revision": rev,
+		})}
+	}()
+	time.Sleep(150 * time.Millisecond)
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	close(results)
+
+	seen := map[string]*mcp.CallToolResult{}
+	for r := range results {
+		seen[r.op] = r.res
+	}
+	updateRes, deleteRes := seen["update"], seen["delete"]
+	if updateRes == nil || deleteRes == nil {
+		t.Fatalf("missing race results: %#v", seen)
+	}
+
+	switch {
+	case !updateRes.IsError && deleteRes.IsError:
+		if code := firstErrorCode(t, decodeWriteErrorEnvelope(t, deleteRes)); code != "revision_conflict" {
+			t.Fatalf("delete loser code = %q, want revision_conflict", code)
+		}
+		if _, err := os.Stat(filepath.Join(pageDir, "index.md")); err != nil {
+			t.Fatalf("default language must survive updated-fr winner: %v", err)
+		}
+		raw, err := os.ReadFile(frPath)
+		if err != nil {
+			t.Fatalf("fr file should survive update winner: %v", err)
+		}
+		if !strings.Contains(string(raw), "Bonjour mis a jour") {
+			t.Fatalf("fr winner content = %q, want updated body", string(raw))
+		}
+		if _, ok := idx.GetBySlugLang(slug, "fr"); !ok {
+			t.Fatal("fr translation must still be indexed after update winner")
+		}
+	case updateRes.IsError && !deleteRes.IsError:
+		if code := firstErrorCode(t, decodeWriteErrorEnvelope(t, updateRes)); code != "not_found" {
+			t.Fatalf("update loser code = %q, want not_found", code)
+		}
+		if _, err := os.Stat(filepath.Join(pageDir, "index.md")); err != nil {
+			t.Fatalf("default language must survive fr delete winner: %v", err)
+		}
+		if _, err := os.Stat(frPath); !os.IsNotExist(err) {
+			t.Fatalf("fr source must be gone after delete winner, stat err = %v", err)
+		}
+		if _, ok := idx.GetBySlugLang(slug, "fr"); ok {
+			t.Fatal("fr translation must be removed from SourceIndex after delete winner")
+		}
+		if _, ok := idx.GetDefaultBySlug(slug); !ok {
+			t.Fatal("default-language translation must remain resolvable via GetDefaultBySlug after fr delete winner")
+		}
+	default:
+		t.Fatalf("want exactly one winner, got update_error=%v delete_error=%v", updateRes.IsError, deleteRes.IsError)
+	}
+}
+
+// TestConcurrentUploadAssetAndDeleteSameBundleDeterministicOutcome covers the
+// third audited race class from #692. Because upload_page_asset does not
+// change the page revision, two serialized outcomes are both valid:
+//   - delete wins first -> upload sees not_found and the bundle is gone
+//   - upload wins first -> upload succeeds, then delete still succeeds and
+//     removes the newly written asset with the bundle
+//
+// The invariant is no orphaned asset and no partially deleted bundle.
+func TestConcurrentUploadAssetAndDeleteSameBundleDeterministicOutcome(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	const slug = "posts/coord-upload-delete"
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug": slug, "title": "Original", "body": "Body v0",
+		"tags": []any{}, "categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page failed: %s", marshalContent(t, create))
+	}
+	rev := currentRevision(t, filepath.Join(contentRoot, slug, "index.md"))
+
+	hugosite.ContentMu.Lock()
+	results := make(chan namedCallResult, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		results <- namedCallResult{op: "upload", res: callTool(t, session, "upload_page_asset", map[string]any{
+			"slug": slug, "filename": "cover.png", "content_base64": b64(minimalPNG),
+		})}
+	}()
+	go func() {
+		defer wg.Done()
+		results <- namedCallResult{op: "delete", res: callTool(t, session, "delete_page", map[string]any{
+			"slug": slug, "expected_revision": rev,
+		})}
+	}()
+	time.Sleep(150 * time.Millisecond)
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	close(results)
+
+	seen := map[string]*mcp.CallToolResult{}
+	for r := range results {
+		seen[r.op] = r.res
+	}
+	uploadRes, deleteRes := seen["upload"], seen["delete"]
+	if uploadRes == nil || deleteRes == nil {
+		t.Fatalf("missing race results: %#v", seen)
+	}
+
+	if deleteRes.IsError {
+		t.Fatalf("delete_page must be the final winner in upload/delete bundle race, got error: %s", marshalContent(t, deleteRes))
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, slug)); !os.IsNotExist(err) {
+		t.Fatalf("bundle must be gone after delete winner, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, slug, "cover.png")); !os.IsNotExist(err) {
+		t.Fatalf("asset must not survive delete winner, stat err = %v", err)
+	}
+	if uploadRes.IsError {
+		if code := firstErrorCode(t, decodeWriteErrorEnvelope(t, uploadRes)); code != "not_found" {
+			t.Fatalf("upload loser code = %q, want not_found", code)
+		}
 	}
 }
 
