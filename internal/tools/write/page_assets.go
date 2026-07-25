@@ -228,6 +228,9 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in uploadPageAssetInput) (*mcp.CallToolResult, uploadPageAssetOutput, error) {
+		if cfg.ForceDryRunAll {
+			in.DryRun = true
+		}
 		slug := normalizeInputSlug(in.Slug)
 		if slug == "" {
 			return nil, uploadPageAssetOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
@@ -497,6 +500,9 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageAssetInput) (*mcp.CallToolResult, deletePageAssetOutput, error) {
+		if cfg.ForceDryRunAll {
+			in.DryRun = true
+		}
 		slug := normalizeInputSlug(in.Slug)
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: slug})

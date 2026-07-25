@@ -615,6 +615,9 @@ func registerContentPlanTools(
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in applyContentPlanInput) (*mcp.CallToolResult, applyContentPlanOutput, error) {
+		if cfg.ForceDryRunAll {
+			in.DryRun = true
+		}
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{})
 		}

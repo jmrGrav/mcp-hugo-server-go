@@ -186,6 +186,9 @@ func registerRollbackChange(
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in rollbackChangeInput) (*mcp.CallToolResult, rollbackChangeOutput, error) {
+		if cfg.ForceDryRunAll {
+			in.DryRun = true
+		}
 		in.Slug = normalizeInputSlug(in.Slug)
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
