@@ -450,7 +450,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
-		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Pass `include: [\"impact\"]` for a pre-mutation impact summary (`impact.taxonomy_orphans`, `impact.sitemap_present`, `impact.feed_present`, `impact.aliases`) answering \"what does changing this page affect?\" before a risky edit/delete — advisory only, never blocks a mutation, same posture as get_broken_links (#434). `index_staleness` is present only when the underlying index (backing related_pages/backlinks) is behind on-disk content — its absence means it's current (#583). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Pass `include: [\"impact\"]` for a pre-mutation impact summary (`impact.taxonomy_orphans`, `impact.sitemap_present`, `impact.feed_present`, `impact.aliases`) answering \"what does changing this page affect?\" before a risky edit/delete — advisory only, never blocks a mutation, same posture as get_broken_links (#434). `index_staleness` is present only when the underlying index (backing related_pages/backlinks) is behind on-disk content — its absence means it's current (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRelatedContentInput) (*mcp.CallToolResult, getRelatedContentOutput, error) {
 			if idx == nil {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("index not initialized")
@@ -484,7 +484,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				RelatedPages:   related,
 				Backlinks:      backlinks,
 				SuggestedLinks: suggestedLinks,
-				IndexInfo:      staleness(idx, cfg),
+				IndexInfo:      staleness(idx, srcIdx, cfg),
 			}
 			if len(related) == 0 {
 				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)

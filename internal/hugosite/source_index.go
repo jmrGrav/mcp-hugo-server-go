@@ -230,6 +230,28 @@ func (idx *SourceIndex) ClearAllBuildPending() {
 	}
 }
 
+// HasPendingBuild reports whether any source page is currently marked
+// BuildPending — i.e. an MCP mutation tool (create_page/update_page/
+// apply_content_plan/rollback_change) wrote it since the last build_site/
+// publish_changes cleared the flag (#617). Used to distinguish "the site
+// index is stale because of this server's own known, expected pending
+// write" from "the index is stale for some other, unrecorded reason" (most
+// likely an out-of-band edit outside this server, e.g. direct SSH/git) —
+// the coarse binary #617 asks for, reusing the BuildPending bookkeeping
+// create_page/update_page already maintain rather than adding new
+// per-caller identity tracking.
+func (idx *SourceIndex) HasPendingBuild() bool {
+	if idx == nil {
+		return false
+	}
+	for _, p := range idx.pages {
+		if p.BuildPending {
+			return true
+		}
+	}
+	return false
+}
+
 func SlugFromRel(rel string) string {
 	rel = filepath.ToSlash(rel)
 	// Standard branch bundle: posts/slug/index.md → posts/slug
