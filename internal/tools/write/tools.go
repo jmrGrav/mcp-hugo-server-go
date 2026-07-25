@@ -267,9 +267,14 @@ type deletePageData struct {
 	DryRun             bool                     `json:"dry_run,omitempty"`
 	Content            string                   `json:"content,omitempty"`
 	Backlinks          *[]deletePageBacklinkDTO `json:"backlinks,omitempty"`
-	BacklinksCount     int                      `json:"backlinks_count"`
-	Warning            string                   `json:"warning,omitempty"`
-	State              *site.LifecycleState     `json:"state,omitempty"`
+	// BacklinksCount is only ever populated on a dry_run response (compact
+	// or not) — it's a pointer with omitempty so it stays entirely absent
+	// from a real (non-dry-run) delete's response, where no backlink scan
+	// ever ran and a bare 0 would misleadingly read as "verified zero
+	// backlinks" rather than "not computed" (#687).
+	BacklinksCount *int                 `json:"backlinks_count,omitempty"`
+	Warning        string               `json:"warning,omitempty"`
+	State          *site.LifecycleState `json:"state,omitempty"`
 	// BundleFullyRemoved (#682) is true when the entire page bundle
 	// directory (every language file, plus any shared assets) was removed —
 	// either because no lang was in play (no source file at all) or because
@@ -1186,6 +1191,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			if includeBacklinks {
 				backlinksValue = &bls
 			}
+			backlinksCount := len(bls)
 			return nil, newDeletePageOutput(deletePageData{
 				Status:             "ok",
 				Slug:               canonicalPublicSlug(in.Slug),
@@ -1195,7 +1201,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				DryRun:             true,
 				Content:            contentValue,
 				Backlinks:          backlinksValue,
-				BacklinksCount:     len(bls),
+				BacklinksCount:     &backlinksCount,
 			}, rateLimitRemaining(limiter)), nil
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
