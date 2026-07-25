@@ -112,6 +112,326 @@ func openStore(cfg config.OAuthConfig) (storage.Store, error) {
 //	srv, _ := server.New(cfg, idx, ext)
 type ScopeExtension func(scopeName string, s *mcp.Server)
 
+func initWriteBootstrap(cfg config.Config) (*security.PathGuard, *hugosite.SourceIndex, bool, error) {
+	writeEnabled := cfg.ContentRoot != ""
+	if !writeEnabled {
+		return nil, nil, false, nil
+	}
+	pg, err := security.New(cfg.ContentRoot, cfg.RejectSymlinks)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("server: pathguard: %w", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(cfg.ContentRoot)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("server: source index: %w", err)
+	}
+	return pg, srcIdx, true, nil
+}
+
+func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex) (*db.DB, error) {
+	if cfg.DBPath == "" {
+		return nil, nil
+	}
+	siteDB, err := db.Open(cfg.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("server: sqlite index: %w", err)
+	}
+	if err := siteDB.StartupSync(idx, srcIdx); err != nil {
+		slog.Warn("server: startup db sync incomplete", "error", err)
+	}
+	return siteDB, nil
+}
+
+func knownToolsSet(reg *tools.Registry) map[string]bool {
+	knownTools := make(map[string]bool, len(reg.All()))
+	for _, d := range reg.All() {
+		knownTools[d.Name] = true
+	}
+	return knownTools
+}
+
+func newScopedServer(
+	scopeName string,
+	impl *mcp.Implementation,
+	serverOpts *mcp.ServerOptions,
+	logger *slog.Logger,
+	metrics *observability.Metrics,
+	knownTools map[string]bool,
+	idx *site.Index,
+	cfg config.Config,
+	srcIdx *hugosite.SourceIndex,
+	siteDB *db.DB,
+	pg *security.PathGuard,
+	writeEnabled bool,
+	extensions []ScopeExtension,
+) *mcp.Server {
+	s := mcp.NewServer(impl, serverOpts)
+	s.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, scopeName, knownTools))
+	registerSharedResources(s)
+	anonymous.Register(s, idx, cfg, srcIdx)
+	read.Register(s, idx, cfg, srcIdx)
+	if srcIdx != nil {
+		read.RegisterWithSourceIndex(s, idx, srcIdx, cfg, siteDB)
+	}
+	if scopeName == "write" && writeEnabled {
+		toolswrite.Register(s, pg, srcIdx, cfg, siteDB, idx)
+	}
+	for _, ext := range extensions {
+		ext(scopeName, s)
+	}
+	return s
+}
+
+func initOAuthService(cfg config.Config) (*oauth.Service, storage.Store, error) {
+	if !cfg.OAuth.Enabled {
+		return nil, nil, nil
+	}
+	tokenStore, err := openStore(cfg.OAuth)
+	if err != nil {
+		return nil, nil, err
+	}
+	oauthSvc := oauth.NewService(cfg.OAuth, tokenStore)
+	if err := oauthSvc.LoadClientRegistry(cfg.OAuth.ClientRegistryPath); err != nil {
+		return nil, nil, fmt.Errorf("server: oauth client registry: %w", err)
+	}
+	return oauthSvc, tokenStore, nil
+}
+
+func configuredMaxRequestBytes(cfg config.Config) int64 {
+	maxBody := cfg.MaxRequestBytes
+	if maxBody <= 0 {
+		return 1 << 20
+	}
+	return maxBody
+}
+
+func newMCPToolHandler(
+	cfg config.Config,
+	oauthSvc *oauth.Service,
+	scopePolicy *oauth.ScopePolicy,
+	metrics *observability.Metrics,
+	logger *slog.Logger,
+	rateLimitedStreaming http.Handler,
+	maxBody int64,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callerScope := ""
+		if oauthSvc != nil {
+			bearerResult, ok := bearerResultFromContext(r.Context())
+			if !ok {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			callerScope = bearerResult.scope
+			if bearerResult.legacy {
+				metrics.RecordLegacyScope(callerScope)
+				logger.Warn("accepted deprecated legacy scope alias", "scope", oauth.LegacyScopeAlias, "canonical_scope", callerScope, "issuer", strings.TrimRight(cfg.OAuth.Issuer, "/"), "path", r.URL.Path)
+			}
+			callerIP, _, _ := strings.Cut(r.RemoteAddr, ":")
+			ctx := context.WithValue(r.Context(), oauth.CtxScope, callerScope)
+			ctx = context.WithValue(ctx, oauth.CtxCallerIP, callerIP)
+			ctx = context.WithValue(ctx, oauth.CtxTokenID, bearerResult.tokenHash)
+			if callerScope == site.AccessProfileReader {
+				ctx = site.WithAccessProfile(ctx, site.AccessProfileReader)
+			}
+			r = r.WithContext(ctx)
+
+			// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
+			if r.Method == http.MethodPost {
+				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+				if err != nil {
+					http.Error(w, "bad request", http.StatusBadRequest)
+					return
+				}
+				if !scopePolicy.AllowRequest(body, callerScope) {
+					reason := scopePolicy.DenyReason(body, callerScope)
+					audit.Warn(audit.EventScopeDenied, "denied",
+						"scope", callerScope,
+						"reason", reason,
+						"path", r.URL.Path,
+						"remote_addr", r.RemoteAddr,
+					)
+					w.Header().Set("Content-Type", "application/json; charset=utf-8")
+					w.WriteHeader(http.StatusForbidden)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      nil,
+						"error":   map[string]any{"code": -32001, "message": reason},
+					})
+					return
+				}
+				r.Body = io.NopCloser(bytes.NewReader(body))
+			}
+		}
+
+		// Prevent clients from caching scoped tool lists. Without these headers,
+		// a client that calls tools/list before OAuth (receiving the anonymous
+		// set) may cache and reuse that response after acquiring a token.
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Vary", "Authorization")
+		rateLimitedStreaming.ServeHTTP(w, r)
+	})
+}
+
+func newProtectedMCPHandler(cfg config.Config, oauthSvc *oauth.Service, mcpToolHandler http.Handler) http.Handler {
+	if oauthSvc == nil {
+		return mcpToolHandler
+	}
+	issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	return newMCPBearerAuthMiddleware(
+		oauthTokenVerifier(oauthSvc),
+		issuer,
+		issuer+"/.well-known/oauth-protected-resource",
+	)(mcpToolHandler)
+}
+
+func newOAuthAllocationLimiter(maxBody int64) (func(http.HandlerFunc) http.HandlerFunc, func()) {
+	// rateLimitedOAuth applies a simple per-IP call counter to allocation
+	// endpoints (/register, /agent/identity) to mitigate unbounded map growth
+	// (issue #30). The limit is coarse — 100 calls per unique remote addr.
+	var oauthIPMu sync.Mutex
+	oauthIPCounts := make(map[string]int)
+	const oauthIPMax = 100
+	rateLimitOAuth := func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			host, _, _ := strings.Cut(r.RemoteAddr, ":")
+			oauthIPMu.Lock()
+			n := oauthIPCounts[host] + 1
+			oauthIPCounts[host] = n
+			oauthIPMu.Unlock()
+			if n > oauthIPMax {
+				http.Error(w, "too many requests", http.StatusTooManyRequests)
+				return
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+			next(w, r)
+		}
+	}
+	resetIP := func() {
+		oauthIPMu.Lock()
+		oauthIPCounts = make(map[string]int)
+		oauthIPMu.Unlock()
+	}
+	return rateLimitOAuth, resetIP
+}
+
+func newRootHandler(
+	cfg config.Config,
+	oauthSvc *oauth.Service,
+	rateLimitOAuth func(http.HandlerFunc) http.HandlerFunc,
+	protectedMCPHandler http.Handler,
+	previewHandler http.Handler,
+	metrics *observability.Metrics,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			handleLandingPage(w, r, cfg)
+		case "/.well-known/oauth-authorization-server":
+			handleOAuthAuthServer(w, r, cfg)
+		case "/.well-known/oauth-protected-resource":
+			handleOAuthProtectedResource(w, r, cfg)
+		case "/.well-known/oauth-protected-resource/mcp":
+			handleOAuthProtectedResource(w, r, cfg)
+		case "/.well-known/mcp/server-card.json":
+			handleMCPServerCard(w, r, cfg)
+		case "/.well-known/mcp/server-card/mcp":
+			handleMCPServerCard(w, r, cfg)
+		case "/.well-known/mcp.json":
+			handleMCPJSON(w, r, cfg)
+		case "/.well-known/agent.json":
+			handleAgentJSON(w, r, cfg)
+		case "/metrics":
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			if r.Method == http.MethodHead {
+				return
+			}
+			_, _ = io.WriteString(w, metrics.RenderPrometheus())
+		case "/.well-known/security.txt":
+			handleSecurityTxt(w, r, cfg)
+		case "/robots.txt":
+			handleRobotsTxt(w, r, cfg)
+		case "/llms.txt":
+			handleLLMsTxt(w, r, cfg)
+		case "/auth.md":
+			handleAuthMd(w, r, cfg)
+		case "/register":
+			if applyOAuthCORS(w, r, http.MethodPost) {
+				return
+			}
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			rateLimitOAuth(oauthSvc.HandleRegister)(w, r)
+		case "/authorize":
+			if applyOAuthCORS(w, r, http.MethodGet+", "+http.MethodPost) {
+				return
+			}
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAuthorize(w, r)
+		case "/token":
+			if applyOAuthCORS(w, r, http.MethodPost) {
+				return
+			}
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleToken(w, r)
+		case "/agent/identity":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			rateLimitOAuth(oauthSvc.HandleAgentIdentity)(w, r)
+		case "/agent/identity/verify":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAgentVerify(w, r)
+		case "/agent/identity/claim":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAgentClaim(w, r)
+		case "/agent/event/notify":
+			if oauthSvc == nil {
+				http.NotFound(w, r)
+				return
+			}
+			oauthSvc.HandleAgentEvent(w, r)
+		case "/mcp":
+			switch r.Method {
+			case http.MethodPost, http.MethodGet, http.MethodDelete:
+			default:
+				w.Header().Set("Allow", "GET, POST, DELETE")
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			protectedMCPHandler.ServeHTTP(w, r)
+		default:
+			if strings.HasPrefix(r.URL.Path, "/preview/") {
+				previewHandler.ServeHTTP(w, r)
+				return
+			}
+			http.NotFound(w, r)
+		}
+	})
+}
+
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
 	impl := &mcp.Implementation{Name: Name, Version: buildinfo.Version}
 	serverCaps := defaultServerCapabilities()
@@ -133,69 +453,25 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	reg := buildRegistry()
 	scopePolicy := oauth.NewScopePolicy(reg)
 
-	var pg *security.PathGuard
-	var srcIdx *hugosite.SourceIndex
-	writeEnabled := cfg.ContentRoot != ""
-	if writeEnabled {
-		var err error
-		pg, err = security.New(cfg.ContentRoot, cfg.RejectSymlinks)
-		if err != nil {
-			return nil, fmt.Errorf("server: pathguard: %w", err)
-		}
-		srcIdx, err = hugosite.NewSourceIndex(cfg.ContentRoot)
-		if err != nil {
-			return nil, fmt.Errorf("server: source index: %w", err)
-		}
+	pg, srcIdx, writeEnabled, err := initWriteBootstrap(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// Open the SQLite derived index when db_path is configured.
 	// When nil (db_path unset) all tools fall back to existing in-memory behaviour.
-	var siteDB *db.DB
-	if cfg.DBPath != "" {
-		var err error
-		siteDB, err = db.Open(cfg.DBPath)
-		if err != nil {
-			return nil, fmt.Errorf("server: sqlite index: %w", err)
-		}
-		// Hash-gated startup reindex — skips unchanged pages.
-		if err := siteDB.StartupSync(idx, srcIdx); err != nil {
-			slog.Warn("server: startup db sync incomplete", "error", err)
-		}
+	siteDB, err := openSiteDB(cfg, idx, srcIdx)
+	if err != nil {
+		return nil, err
 	}
 
 	// Build the known-tools set from the registry so the middleware can bucket
 	// any unrecognised client-supplied name as "unknown" (caps Prometheus cardinality).
-	knownTools := make(map[string]bool, len(reg.All()))
-	for _, d := range reg.All() {
-		knownTools[d.Name] = true
-	}
+	knownTools := knownToolsSet(reg)
 
-	publicServer := mcp.NewServer(impl, serverOpts)
-	publicServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "", knownTools))
-	registerSharedResources(publicServer)
-	anonymous.Register(publicServer, idx, cfg, srcIdx)
-	read.Register(publicServer, idx, cfg, srcIdx)
-	if srcIdx != nil {
-		read.RegisterWithSourceIndex(publicServer, idx, srcIdx, cfg, siteDB)
-	}
-	for _, ext := range extensions {
-		ext("", publicServer)
-	}
+	publicServer := newScopedServer("", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
 
-	writeServer := mcp.NewServer(impl, serverOpts)
-	writeServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "write", knownTools))
-	registerSharedResources(writeServer)
-	anonymous.Register(writeServer, idx, cfg, srcIdx)
-	read.Register(writeServer, idx, cfg, srcIdx)
-	if srcIdx != nil {
-		read.RegisterWithSourceIndex(writeServer, idx, srcIdx, cfg, siteDB)
-	}
-	if writeEnabled {
-		toolswrite.Register(writeServer, pg, srcIdx, cfg, siteDB, idx)
-	}
-	for _, ext := range extensions {
-		ext("write", writeServer)
-	}
+	writeServer := newScopedServer("write", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
 	admin.Register(writeServer, cfg,
 		admin.PostBuildCallback{Name: "index_reload", Fn: func() error {
 			if err := idx.Reload(cfg); err != nil {
@@ -307,238 +583,18 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		return publicServer
 	}, opts)
 
-	var oauthSvc *oauth.Service
-	var tokenStore storage.Store
-	if cfg.OAuth.Enabled {
-		var err error
-		tokenStore, err = openStore(cfg.OAuth)
-		if err != nil {
-			return nil, err
-		}
-		oauthSvc = oauth.NewService(cfg.OAuth, tokenStore)
-		if err := oauthSvc.LoadClientRegistry(cfg.OAuth.ClientRegistryPath); err != nil {
-			return nil, fmt.Errorf("server: oauth client registry: %w", err)
-		}
+	oauthSvc, tokenStore, err := initOAuthService(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	rateLimitedStreaming := oauth.NewRateLimiter(cfg.RateLimit).Middleware(streaming)
 
-	maxBody := cfg.MaxRequestBytes
-	if maxBody <= 0 {
-		maxBody = 1 << 20
-	}
-
-	mcpToolHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callerScope := ""
-		if oauthSvc != nil {
-			bearerResult, ok := bearerResultFromContext(r.Context())
-			if !ok {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			callerScope = bearerResult.scope
-			if bearerResult.legacy {
-				metrics.RecordLegacyScope(callerScope)
-				logger.Warn("accepted deprecated legacy scope alias", "scope", oauth.LegacyScopeAlias, "canonical_scope", callerScope, "issuer", strings.TrimRight(cfg.OAuth.Issuer, "/"), "path", r.URL.Path)
-			}
-			callerIP, _, _ := strings.Cut(r.RemoteAddr, ":")
-			ctx := context.WithValue(r.Context(), oauth.CtxScope, callerScope)
-			ctx = context.WithValue(ctx, oauth.CtxCallerIP, callerIP)
-			ctx = context.WithValue(ctx, oauth.CtxTokenID, bearerResult.tokenHash)
-			if callerScope == site.AccessProfileReader {
-				ctx = site.WithAccessProfile(ctx, site.AccessProfileReader)
-			}
-			r = r.WithContext(ctx)
-
-			// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
-			if r.Method == http.MethodPost {
-				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
-				if err != nil {
-					http.Error(w, "bad request", http.StatusBadRequest)
-					return
-				}
-				if !scopePolicy.AllowRequest(body, callerScope) {
-					reason := scopePolicy.DenyReason(body, callerScope)
-					audit.Warn(audit.EventScopeDenied, "denied",
-						"scope", callerScope,
-						"reason", reason,
-						"path", r.URL.Path,
-						"remote_addr", r.RemoteAddr,
-					)
-					w.Header().Set("Content-Type", "application/json; charset=utf-8")
-					w.WriteHeader(http.StatusForbidden)
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"jsonrpc": "2.0",
-						"id":      nil,
-						"error":   map[string]any{"code": -32001, "message": reason},
-					})
-					return
-				}
-				r.Body = io.NopCloser(bytes.NewReader(body))
-			}
-		}
-
-		// Prevent clients from caching scoped tool lists. Without these headers,
-		// a client that calls tools/list before OAuth (receiving the anonymous
-		// set) may cache and reuse that response after acquiring a token.
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Vary", "Authorization")
-		rateLimitedStreaming.ServeHTTP(w, r)
-	})
-
-	var protectedMCPHandler http.Handler = mcpToolHandler
-	if oauthSvc != nil {
-		issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
-		protectedMCPHandler = newMCPBearerAuthMiddleware(
-			oauthTokenVerifier(oauthSvc),
-			issuer,
-			issuer+"/.well-known/oauth-protected-resource",
-		)(mcpToolHandler)
-	}
-
-	// rateLimitedOAuth applies a simple per-IP call counter to allocation
-	// endpoints (/register, /agent/identity) to mitigate unbounded map growth
-	// (issue #30). The limit is coarse — 100 calls per unique remote addr.
-	var oauthIPMu sync.Mutex
-	oauthIPCounts := make(map[string]int)
-	const oauthIPMax = 100
-	rateLimitOAuth := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			host, _, _ := strings.Cut(r.RemoteAddr, ":")
-			oauthIPMu.Lock()
-			n := oauthIPCounts[host] + 1
-			oauthIPCounts[host] = n
-			oauthIPMu.Unlock()
-			if n > oauthIPMax {
-				http.Error(w, "too many requests", http.StatusTooManyRequests)
-				return
-			}
-			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
-			next(w, r)
-		}
-	}
-
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/":
-			handleLandingPage(w, r, cfg)
-		case "/.well-known/oauth-authorization-server":
-			handleOAuthAuthServer(w, r, cfg)
-		case "/.well-known/oauth-protected-resource":
-			handleOAuthProtectedResource(w, r, cfg)
-		case "/.well-known/oauth-protected-resource/mcp":
-			handleOAuthProtectedResource(w, r, cfg)
-		case "/.well-known/mcp/server-card.json":
-			handleMCPServerCard(w, r, cfg)
-		case "/.well-known/mcp/server-card/mcp":
-			// Alias for clients (observed: Mistral Le Chat, #424) that request
-			// the server card under a per-resource sub-path (mirroring the
-			// /mcp endpoint path) instead of the canonical
-			// /.well-known/mcp/server-card.json. Same content either way —
-			// this server only ever hosts one MCP resource at /mcp.
-			handleMCPServerCard(w, r, cfg)
-		case "/.well-known/mcp.json":
-			handleMCPJSON(w, r, cfg)
-		case "/.well-known/agent.json":
-			handleAgentJSON(w, r, cfg)
-		case "/metrics":
-			if r.Method != http.MethodGet && r.Method != http.MethodHead {
-				w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-store")
-			w.WriteHeader(http.StatusOK)
-			if r.Method == http.MethodHead {
-				return
-			}
-			_, _ = io.WriteString(w, metrics.RenderPrometheus())
-		case "/.well-known/security.txt":
-			handleSecurityTxt(w, r, cfg)
-		case "/robots.txt":
-			handleRobotsTxt(w, r, cfg)
-		case "/llms.txt":
-			handleLLMsTxt(w, r, cfg)
-		case "/auth.md":
-			handleAuthMd(w, r, cfg)
-		case "/register":
-			if applyOAuthCORS(w, r, http.MethodPost) {
-				return
-			}
-			if oauthSvc == nil {
-				http.NotFound(w, r)
-				return
-			}
-			rateLimitOAuth(oauthSvc.HandleRegister)(w, r)
-		case "/authorize":
-			if applyOAuthCORS(w, r, http.MethodGet+", "+http.MethodPost) {
-				return
-			}
-			if oauthSvc == nil {
-				http.NotFound(w, r)
-				return
-			}
-			oauthSvc.HandleAuthorize(w, r)
-		case "/token":
-			if applyOAuthCORS(w, r, http.MethodPost) {
-				return
-			}
-			if oauthSvc == nil {
-				http.NotFound(w, r)
-				return
-			}
-			oauthSvc.HandleToken(w, r)
-		case "/agent/identity":
-			if oauthSvc == nil {
-				http.NotFound(w, r)
-				return
-			}
-			rateLimitOAuth(oauthSvc.HandleAgentIdentity)(w, r)
-		case "/agent/identity/verify":
-			if oauthSvc == nil {
-				http.NotFound(w, r)
-				return
-			}
-			oauthSvc.HandleAgentVerify(w, r)
-		case "/agent/identity/claim":
-			if oauthSvc == nil {
-				http.NotFound(w, r)
-				return
-			}
-			oauthSvc.HandleAgentClaim(w, r)
-		case "/agent/event/notify":
-			if oauthSvc == nil {
-				http.NotFound(w, r)
-				return
-			}
-			oauthSvc.HandleAgentEvent(w, r)
-		case "/mcp":
-			switch r.Method {
-			case http.MethodPost, http.MethodGet, http.MethodDelete:
-				// all three are valid per MCP Streamable HTTP spec
-			default:
-				w.Header().Set("Allow", "GET, POST, DELETE")
-				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			protectedMCPHandler.ServeHTTP(w, r)
-		default:
-			// /preview/{id}/{token}/... (#345) isn't a fixed path, so it can't
-			// be a switch case above — the store itself enforces the token
-			// and TTL gate on every request.
-			if strings.HasPrefix(r.URL.Path, "/preview/") {
-				previewHandler.ServeHTTP(w, r)
-				return
-			}
-			http.NotFound(w, r)
-		}
-	})
-	resetIP := func() {
-		oauthIPMu.Lock()
-		oauthIPCounts = make(map[string]int)
-		oauthIPMu.Unlock()
-	}
+	maxBody := configuredMaxRequestBytes(cfg)
+	mcpToolHandler := newMCPToolHandler(cfg, oauthSvc, scopePolicy, metrics, logger, rateLimitedStreaming, maxBody)
+	protectedMCPHandler := newProtectedMCPHandler(cfg, oauthSvc, mcpToolHandler)
+	rateLimitOAuth, resetIP := newOAuthAllocationLimiter(maxBody)
+	handler := newRootHandler(cfg, oauthSvc, rateLimitOAuth, protectedMCPHandler, previewHandler, metrics)
 	return &Server{
 		cfg:           cfg,
 		handler:       observability.RequestMiddleware(handler, logger),
