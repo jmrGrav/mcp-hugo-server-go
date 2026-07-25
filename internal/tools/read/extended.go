@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -1250,28 +1251,12 @@ func effectiveSort(in searchContentInput) string {
 	return canonicalSort(in.Sort)
 }
 
-// reservedTestSlugPrefixes are slug-segment prefixes observed in this
-// project's own audit history (content/.mcp-audit.log) for throwaway
-// content created during live testing (#584) — narrow and specific on
-// purpose. Deliberately excludes bare "test-"/"audit-": this site publishes
-// real articles about security audits (e.g. "audit-securite-..."), and a
-// generic prefix would misclassify legitimate content as leftover test
-// cruft. This is advisory only (see testContentSlugs) — it never flags a
-// page as frontmatter-invalid.
-var reservedTestSlugPrefixes = []string{"mcp-audit-", "test-audit-", "codex-"}
-
+// hasReservedTestSlugPrefix now delegates to contentmodel.IsReservedTestSlug
+// (#608), the single shared definition of "test content" used by both this
+// package's test_content_slugs advisory and the post-build stale-content
+// check.
 func hasReservedTestSlugPrefix(slug string) bool {
-	last := slug
-	if i := strings.LastIndex(slug, "/"); i >= 0 {
-		last = slug[i+1:]
-	}
-	last = strings.ToLower(last)
-	for _, prefix := range reservedTestSlugPrefixes {
-		if strings.HasPrefix(last, prefix) {
-			return true
-		}
-	}
-	return false
+	return contentmodel.IsReservedTestSlug(slug)
 }
 
 func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) []string {

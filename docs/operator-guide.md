@@ -101,6 +101,7 @@ tool returns `write_error`, verify:
 |-------|------|---------|---------|
 | `idempotency_ttl_seconds` | int | `900` (15 minutes) | Retention window for the idempotency-key store backing `create_page`/`update_page`/`delete_page`/`upload_page_asset`/`delete_page_asset` and the `get_mutation_status` lookup (#586). A longer window gives an agent more time to positively confirm via `get_mutation_status` whether a mutation landed after a connector-level outage, instead of falling back to a blind (if always-safe) retry (#616). Deliberately a deployment-level setting only — never a per-call tool parameter, since a caller-supplied TTL could otherwise be used to shorten the window and evade duplicate-submission protection. A non-positive value (`0` or negative) is treated as a misconfiguration and clamped back to the 900-second default rather than silently disabling replay protection. |
 | `force_dry_run_all` | bool | `false` | When `true`, overrides every mutation tool's per-call `dry_run` argument to `true` server-wide — `create_page`, `update_page`, `delete_page`, `upload_page_asset`, `delete_page_asset`, `apply_content_plan`, and `rollback_change` all become read-only previews regardless of what a caller passes (#611). Intended for safely exercising the full write-tool surface during a live audit or CI smoke run, without touching rate-limit quota (dry-run calls already don't consume it). Deliberately a single server-wide flag, not a per-caller/per-session mechanism — set it before a planned audit/CI run and unset it afterward. Each affected tool's response still reports `data.dry_run: true` as normal, so the override is directly visible to the caller. |
+| `stale_test_content_threshold_hours` | int | `0` (disabled) | Age (in hours) past which a still-published page whose slug matches the reserved test-content prefix convention (`mcp-audit-`/`test-audit-`/`codex-`, #584) triggers a post-build advisory on every `build_site`/`publish_changes` (#608) — surfaced both in server logs and in that call's own `data.warning`, so a forgotten test page doesn't require an operator to think to call `validate_frontmatter`/`validate_site` themselves. Report-only: it never deletes or modifies anything. Off by default; set a positive value (e.g. `24`) to opt in. |
 
 ### Git Baseline Configuration
 
@@ -396,6 +397,7 @@ post_build_hooks:
   - https://example.com/webhook/post-build
 idempotency_ttl_seconds: 900 # 15 minutes; raise for longer outage-recovery windows (#616)
 force_dry_run_all: false # set true before a live audit/CI smoke run to make every mutation tool read-only (#611)
+stale_test_content_threshold_hours: 0 # set e.g. 24 to opt into a post-build advisory for forgotten test/audit pages (#608)
 # Taxonomy alias map: maps non-canonical slugs to canonical ones.
 # Keys and values are slugified on load (casing/whitespace-insensitive).
 # Effect: list_tags, list_categories, and page DTOs return the canonical form.
