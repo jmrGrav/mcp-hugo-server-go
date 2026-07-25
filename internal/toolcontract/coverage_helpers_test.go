@@ -198,6 +198,61 @@ func TestWithRootFieldsAndWithDataFieldsCloneValues(t *testing.T) {
 	}
 }
 
+func TestWrappedErrorUnwrapsToOriginal(t *testing.T) {
+	baseErr := errors.New("boom")
+	withCtx := WithRequestContext(baseErr, RequestContext{Slug: "posts/demo"})
+	withRoot := WithRootFields(baseErr, map[string]any{"rate_limit_remaining": 3})
+	withData := WithDataFields(baseErr, map[string]any{"rate_limit_remaining": 3})
+
+	for _, wrapped := range []error{withCtx, withRoot, withData} {
+		if !errors.Is(wrapped, baseErr) {
+			t.Fatalf("errors.Is(%T, baseErr) = false, want true", wrapped)
+		}
+	}
+}
+
+func TestErrorParsingHelpers(t *testing.T) {
+	if code, msg := splitErrorPrefix("invalid_params: slug must not be empty"); code != "invalid_params" || msg != "slug must not be empty" {
+		t.Fatalf("splitErrorPrefix(machine) = (%q, %q)", code, msg)
+	}
+	if code, msg := splitErrorPrefix("Unexpected runtime explosion"); code != "tool_error" || msg != "Unexpected runtime explosion" {
+		t.Fatalf("splitErrorPrefix(non-machine) = (%q, %q)", code, msg)
+	}
+	if !isMachineCode("revision_conflict") || isMachineCode("revision-conflict") {
+		t.Fatal("isMachineCode() did not distinguish allowed machine code format")
+	}
+	if got := missingRequiredField("body must not be empty"); got != "body" {
+		t.Fatalf("missingRequiredField(body) = %q, want body", got)
+	}
+	if got := missingRequiredField("accent must not be empty"); got != "" {
+		t.Fatalf("missingRequiredField(unsupported) = %q, want empty", got)
+	}
+	if got := inferField("style must be one of: tech, geo"); got != "style" {
+		t.Fatalf("inferField(style) = %q, want style", got)
+	}
+	if got := inferField("uploaded content does not match declared extension \".png\""); got != "" {
+		t.Fatalf("inferField(non-prefixed raw helper) = %q, want empty here; special mapping is tested via ParseToolError", got)
+	}
+	if got := parseAllowedValues(`type must be one of: "post", "page" (case-insensitive)`); len(got) != 2 || got[0] != "post" || got[1] != "page" {
+		t.Fatalf("parseAllowedValues(one-of) = %#v, want [post page]", got)
+	}
+	if got := parseAllowedValues(`page "posts/x" has multiple language files; specify lang (available: "en", "fr")`); len(got) != 2 || got[0] != "en" || got[1] != "fr" {
+		t.Fatalf("parseAllowedValues(available) = %#v, want [en fr]", got)
+	}
+	if got := parseAllowedValues("no enum here"); got != nil {
+		t.Fatalf("parseAllowedValues(no match) = %#v, want nil", got)
+	}
+	if got := parseRetryAfterSeconds("rate_limit_exceeded: create_page is limited to 5 per minute (retry_after_seconds=1.5)"); got == nil || *got != 1.5 {
+		t.Fatalf("parseRetryAfterSeconds(valid) = %#v, want 1.5", got)
+	}
+	if got := parseRetryAfterSeconds("rate_limit_exceeded: retry_after_seconds=oops"); got != nil {
+		t.Fatalf("parseRetryAfterSeconds(invalid) = %#v, want nil", got)
+	}
+	if got := splitValues(` "en" , 'fr' , de `); len(got) != 3 || got[0] != "en" || got[1] != "fr" || got[2] != "de" {
+		t.Fatalf("splitValues() = %#v, want [en fr de]", got)
+	}
+}
+
 func TestFailureInitializesCanonicalEnvelope(t *testing.T) {
 	meta := NewMeta("v1.6.3", time.Date(2026, 7, 25, 21, 0, 0, 0, time.UTC))
 	got := Failure(meta, NewError("invalid_params", "bad slug"))

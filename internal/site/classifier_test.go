@@ -1,6 +1,9 @@
 package site
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestContentClassifierClassifiesHugoGeneratedPages(t *testing.T) {
 	idx := &Index{
@@ -167,5 +170,17 @@ func TestClassifierAccessorAndNormalizeSlugExport(t *testing.T) {
 	}
 	if got := NormalizeSlug(""); got != "/" {
 		t.Fatalf("NormalizeSlug(\"\") = %q, want /", got)
+	}
+}
+
+func TestSetStaleCheckIntervalForTestingRestoresPreviousValue(t *testing.T) {
+	original := staleCheckInterval
+	restore := SetStaleCheckIntervalForTesting(5 * time.Millisecond)
+	if staleCheckInterval != 5*time.Millisecond {
+		t.Fatalf("staleCheckInterval = %v, want 5ms", staleCheckInterval)
+	}
+	restore()
+	if staleCheckInterval != original {
+		t.Fatalf("staleCheckInterval after restore = %v, want %v", staleCheckInterval, original)
 	}
 }

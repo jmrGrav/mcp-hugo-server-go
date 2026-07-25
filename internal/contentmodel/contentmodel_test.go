@@ -181,3 +181,22 @@ func TestIsReservedTestSlug(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractLang(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/tmp/posts/hello/index.fr.md", want: "fr"},
+		{path: "/tmp/posts/hello/index.en-US.md", want: "en-US"},
+		{path: "/tmp/posts/hello.md", want: ""},
+		{path: "/tmp/posts/hello.fr.md", want: "fr"},
+		{path: "/tmp/posts/hello", want: ""},
+	}
+
+	for _, tt := range tests {
+		if got := extractLang(tt.path); got != tt.want {
+			t.Fatalf("extractLang(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}

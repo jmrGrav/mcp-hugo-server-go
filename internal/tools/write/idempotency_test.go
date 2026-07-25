@@ -140,3 +140,56 @@ func TestIdempotencyStoreIsolatesByCallerKey(t *testing.T) {
 		t.Fatalf("caller-a's own entry was overwritten by caller-b's remember: got %+v", cachedA)
 	}
 }
+
+func TestFormatTTLDescription(t *testing.T) {
+	cases := []struct {
+		name string
+		in   time.Duration
+		want string
+	}{
+		{name: "zero", in: 0, want: "0s"},
+		{name: "single minute", in: time.Minute, want: "1 minute"},
+		{name: "whole minutes plural", in: 15 * time.Minute, want: "15 minutes"},
+		{name: "non whole minute falls back to duration string", in: 90 * time.Second, want: "1m30s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatTTLDescription(tc.in); got != tc.want {
+				t.Fatalf("formatTTLDescription(%v) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIdempotencyStorePruneAndTrimLocked(t *testing.T) {
+	now := time.Date(2026, 7, 25, 23, 30, 0, 0, time.UTC)
+	store := &idempotencyStore{
+		ttl:        time.Minute,
+		maxEntries: 2,
+		entries: map[string]idempotencyEntry{
+			"expired": {CreatedAt: now.Add(-2 * time.Minute)},
+			"oldest":  {CreatedAt: now.Add(-30 * time.Second)},
+			"middle":  {CreatedAt: now.Add(-20 * time.Second)},
+			"newest":  {CreatedAt: now.Add(-10 * time.Second)},
+		},
+	}
+
+	store.pruneLocked(now)
+	if _, ok := store.entries["expired"]; ok {
+		t.Fatal("pruneLocked() kept expired entry")
+	}
+
+	store.trimLocked()
+	if len(store.entries) != 2 {
+		t.Fatalf("trimLocked() kept %d entries, want 2", len(store.entries))
+	}
+	if _, ok := store.entries["oldest"]; ok {
+		t.Fatal("trimLocked() kept the oldest entry beyond maxEntries")
+	}
+	if _, ok := store.entries["middle"]; !ok {
+		t.Fatal("trimLocked() dropped middle entry, want it retained")
+	}
+	if _, ok := store.entries["newest"]; !ok {
+		t.Fatal("trimLocked() dropped newest entry, want it retained")
+	}
+}
