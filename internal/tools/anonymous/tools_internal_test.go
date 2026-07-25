@@ -67,7 +67,7 @@ func TestToPageDTOsForProfileReaderSafeVsEnriched(t *testing.T) {
 		Categories: []string{"source-category"},
 	})
 	aliases := taxonomy.NormalizeAliasMap(map[string]string{
-		"Infrastructure": "infrastructure",
+		"Infrastructure":  "infrastructure",
 		"source-category": "normalized-category",
 	})
 
