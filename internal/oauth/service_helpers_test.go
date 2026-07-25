@@ -2,7 +2,6 @@ package oauth
 
 import (
 	"errors"
-	"io"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -19,13 +18,6 @@ func withCryptoRandFailure(t *testing.T) {
 	t.Helper()
 	prev := cryptoRandReader
 	cryptoRandReader = errReader{}
-	t.Cleanup(func() { cryptoRandReader = prev })
-}
-
-func withCryptoRandReader(t *testing.T, r io.Reader) {
-	t.Helper()
-	prev := cryptoRandReader
-	cryptoRandReader = r
 	t.Cleanup(func() { cryptoRandReader = prev })
 }
 
