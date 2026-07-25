@@ -330,7 +330,22 @@ func ownershipDriftSuggestion(summary string) (string, bool) {
 	return "A file in the build output is likely owned by a different local user than the MCP service account. Inspect the reported path under public/ or resources/, fix ownership, then rerun build_site.", true
 }
 
-func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
+// PostBuildCallback pairs a post-build side-effect function with a stable,
+// human-readable name (#644). A failure/timeout warning previously
+// identified the responsible callback only by its positional index in the
+// server.go wiring order ("post-build callback 2 timed out") — meaningless
+// to a caller or operator without reading that source file. Naming each
+// callback lets publish_changes's data.build.warning point directly at
+// which post-build step (index reload, DB reindex, CDN purge, search
+// engine submission, ...) is broken, closing the observability gap #644
+// reported: publish_changes already knows *that* something failed, but
+// nothing downstream could say *what*.
+type PostBuildCallback struct {
+	Name string
+	Fn   func() error
+}
+
+func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...PostBuildCallback) {
 	if s == nil {
 		return
 	}
@@ -361,7 +376,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...func() error)
 // (#340, #438) can drive a build without going through the MCP tool
 // dispatch layer a second time. Takes and releases hugosite.ContentMu itself,
 // so callers must not already hold it.
-func runBuild(ctx context.Context, cfg config.Config, siteReload ...func() error) (buildSiteData, error) {
+func runBuild(ctx context.Context, cfg config.Config, siteReload ...PostBuildCallback) (buildSiteData, error) {
 	if cfg.HugoRoot == "" {
 		return buildSiteData{}, fmt.Errorf("config_error: hugo_root is not configured")
 	}
@@ -474,21 +489,25 @@ func runBuild(ctx context.Context, cfg config.Config, siteReload ...func() error
 	defer cbCancel()
 	var cbWarning string
 cbLoop:
-	for i, fn := range siteReload {
-		if fn == nil {
+	for i, cb := range siteReload {
+		if cb.Fn == nil {
 			continue
 		}
+		name := cb.Name
+		if name == "" {
+			name = fmt.Sprintf("callback %d", i)
+		}
 		done := make(chan error, 1)
-		go func(f func() error) { done <- f() }(fn)
+		go func(f func() error) { done <- f() }(cb.Fn)
 		select {
 		case cbErr := <-done:
 			if cbErr != nil {
-				cbWarning = fmt.Sprintf("post-build callback %d failed: %v", i, cbErr)
-				slog.Warn("build_site: post-build callback failed", "callback_index", i, "error", cbErr)
+				cbWarning = fmt.Sprintf("post-build callback %q failed: %v", name, cbErr)
+				slog.Warn("build_site: post-build callback failed", "callback", name, "error", cbErr)
 			}
 		case <-cbCtx.Done():
-			cbWarning = fmt.Sprintf("post-build callback %d timed out after %s", i, callbackTimeout)
-			slog.Warn("build_site: post-build callback timed out", "callback_index", i, "timeout", callbackTimeout)
+			cbWarning = fmt.Sprintf("post-build callback %q timed out after %s", name, callbackTimeout)
+			slog.Warn("build_site: post-build callback timed out", "callback", name, "timeout", callbackTimeout)
 			break cbLoop
 		}
 	}

@@ -70,7 +70,7 @@ func newPublishChangesOutput(data publishChangesData) publishChangesOutput {
 // verify_publication, it needs the public site index and (optionally) the
 // source index to resolve a page's lifecycle state, so it's registered
 // separately from admin.Register, alongside RegisterVerifyPublication.
-func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, siteReload ...func() error) {
+func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, siteReload ...PostBuildCallback) {
 	if s == nil {
 		return
 	}

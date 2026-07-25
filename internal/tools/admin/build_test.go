@@ -610,7 +610,10 @@ func TestBuildSiteCallbackTimeout(t *testing.T) {
 	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, slowCallback, sentinelCallback)
+	admin.RegisterBuild(s, cfg,
+		admin.PostBuildCallback{Name: "slow", Fn: slowCallback},
+		admin.PostBuildCallback{Name: "sentinel", Fn: sentinelCallback},
+	)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -666,10 +669,11 @@ func TestBuildSiteCallbackTimeout(t *testing.T) {
 	if warning == "" {
 		t.Error("expected non-empty warning when callback times out")
 	}
-	// Warning must identify callback 0, not a later index (which would indicate
-	// the loop continued past the timeout and overwrote the first warning).
-	if !strings.Contains(warning, "callback 0") {
-		t.Errorf("warning %q must identify callback 0 (first to time out)", warning)
+	// Warning must identify the "slow" callback by name (#644), not the
+	// "sentinel" one (which would indicate the loop continued past the
+	// timeout and overwrote the first warning).
+	if !strings.Contains(warning, `"slow"`) {
+		t.Errorf("warning %q must identify the \"slow\" callback by name (first to time out, #644)", warning)
 	}
 	if secondCalled {
 		t.Error("sentinel callback must not be invoked after the deadline fires — loop must break on cbCtx.Done()")
@@ -689,7 +693,7 @@ func TestBuildSiteCallbackFailurePartialSuccess(t *testing.T) {
 	errCallback := func() error { return fmt.Errorf("index reload: connection refused") }
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, errCallback)
+	admin.RegisterBuild(s, cfg, admin.PostBuildCallback{Name: "index_reload", Fn: errCallback})
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
