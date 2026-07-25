@@ -182,6 +182,26 @@ func TestUploadPageAssetRejectsMimeMismatch(t *testing.T) {
 	}
 }
 
+func TestUploadPageAssetRejectsJPEGMimeMismatch(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug":           "posts/article",
+		"filename":       "cover.jpg",
+		"content_base64": b64([]byte("this is plain text, not a jpeg")),
+	})
+	if !res.IsError {
+		t.Fatal("upload_page_asset: want error for jpeg mime mismatch, got success")
+	}
+	assertSingleStructuredWriteErrorField(t, res, "invalid_params", "filename")
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.jpg")); !os.IsNotExist(err) {
+		t.Fatal("upload_page_asset must not write a file when jpeg sniffing rejects the content")
+	}
+}
+
 func TestUploadPageAssetRejectsHostileFilenameCorpus(t *testing.T) {
 	cases := []struct {
 		name     string

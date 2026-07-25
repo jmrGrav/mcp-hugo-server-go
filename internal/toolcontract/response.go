@@ -575,6 +575,9 @@ func inferField(message string) string {
 			return field
 		}
 	}
+	if strings.HasPrefix(message, "uploaded content does not match declared extension") {
+		return "filename"
+	}
 	return ""
 }
 
