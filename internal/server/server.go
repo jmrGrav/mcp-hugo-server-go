@@ -432,6 +432,57 @@ func newRootHandler(
 	})
 }
 
+func postBuildCallbacks(
+	action string,
+	logger *slog.Logger,
+	cfg config.Config,
+	idx *site.Index,
+	srcIdx *hugosite.SourceIndex,
+	siteDB *db.DB,
+) []admin.PostBuildCallback {
+	return []admin.PostBuildCallback{
+		{Name: "index_reload", Fn: func() error {
+			if err := idx.Reload(cfg); err != nil {
+				return err
+			}
+			if srcIdx != nil {
+				srcIdx.ClearAllBuildPending()
+			}
+			return nil
+		}},
+		{Name: "db_reindex", Fn: func() error {
+			if siteDB != nil {
+				if err := siteDB.PostBuildSync(idx); err != nil {
+					logger.Warn(action+": db reindex failed", "error", err)
+				}
+				if err := siteDB.SnapshotSiteHealth(); err != nil {
+					logger.Warn(action+": db health snapshot failed", "error", err)
+				}
+			}
+			return nil
+		}},
+		{Name: "cloudflare_purge", Fn: func() error {
+			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
+				logger.Warn(action+": cloudflare purge failed", "error", err)
+			}
+			return nil
+		}},
+		{Name: "search_index_submit", Fn: func() error {
+			urls := sitemapPageURLs(idx)
+			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
+				logger.Warn(action+": indexnow submit failed", "error", err)
+			}
+			if err := googleindex.Submit(cfg.GoogleIndex, urls, googleindex.TypeUpdated); err != nil {
+				logger.Warn(action+": google index submit failed", "error", err)
+			}
+			return nil
+		}},
+		{Name: "stale_test_content_check", Fn: func() error {
+			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
+		}},
+	}
+}
+
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
 	impl := &mcp.Implementation{Name: Name, Version: buildinfo.Version}
 	serverCaps := defaultServerCapabilities()
@@ -472,90 +523,9 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	publicServer := newScopedServer("", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
 
 	writeServer := newScopedServer("write", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
-	admin.Register(writeServer, cfg,
-		admin.PostBuildCallback{Name: "index_reload", Fn: func() error {
-			if err := idx.Reload(cfg); err != nil {
-				return err
-			}
-			if srcIdx != nil {
-				srcIdx.ClearAllBuildPending()
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "db_reindex", Fn: func() error {
-			// Reindex the SQLite derived index after a successful build.
-			if siteDB != nil {
-				if err := siteDB.PostBuildSync(idx); err != nil {
-					slog.Warn("build_site: db reindex failed", "error", err)
-				}
-				if err := siteDB.SnapshotSiteHealth(); err != nil {
-					slog.Warn("build_site: db health snapshot failed", "error", err)
-				}
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "cloudflare_purge", Fn: func() error {
-			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
-				slog.Warn("build_site: cloudflare purge failed", "error", err)
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "search_index_submit", Fn: func() error {
-			urls := sitemapPageURLs(idx)
-			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
-				slog.Warn("build_site: indexnow submit failed", "error", err)
-			}
-			if err := googleindex.Submit(cfg.GoogleIndex, urls, googleindex.TypeUpdated); err != nil {
-				slog.Warn("build_site: google index submit failed", "error", err)
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "stale_test_content_check", Fn: func() error {
-			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
-		}},
-	)
+	admin.Register(writeServer, cfg, postBuildCallbacks("build_site", logger, cfg, idx, srcIdx, siteDB)...)
 	admin.RegisterVerifyPublication(writeServer, idx, srcIdx, cfg)
-	admin.RegisterPublishChanges(writeServer, idx, srcIdx, cfg,
-		admin.PostBuildCallback{Name: "index_reload", Fn: func() error {
-			if err := idx.Reload(cfg); err != nil {
-				return err
-			}
-			if srcIdx != nil {
-				srcIdx.ClearAllBuildPending()
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "db_reindex", Fn: func() error {
-			if siteDB != nil {
-				if err := siteDB.PostBuildSync(idx); err != nil {
-					slog.Warn("publish_changes: db reindex failed", "error", err)
-				}
-				if err := siteDB.SnapshotSiteHealth(); err != nil {
-					slog.Warn("publish_changes: db health snapshot failed", "error", err)
-				}
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "cloudflare_purge", Fn: func() error {
-			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
-				slog.Warn("publish_changes: cloudflare purge failed", "error", err)
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "search_index_submit", Fn: func() error {
-			urls := sitemapPageURLs(idx)
-			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
-				slog.Warn("publish_changes: indexnow submit failed", "error", err)
-			}
-			if err := googleindex.Submit(cfg.GoogleIndex, urls, googleindex.TypeUpdated); err != nil {
-				slog.Warn("publish_changes: google index submit failed", "error", err)
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "stale_test_content_check", Fn: func() error {
-			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
-		}},
-	)
+	admin.RegisterPublishChanges(writeServer, idx, srcIdx, cfg, postBuildCallbacks("publish_changes", logger, cfg, idx, srcIdx, siteDB)...)
 	previews := previewstore.New()
 	previewHandler := previews.HTTPHandler()
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
