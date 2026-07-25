@@ -146,7 +146,7 @@ func newSoakHarness(t *testing.T, withDB bool) *soakHarness {
 	anonymous.Register(server, siteIdx, cfg, srcIdx)
 	readtools.Register(server, siteIdx, cfg, srcIdx)
 	writetools.Register(server, pg, srcIdx, cfg, siteDB, siteIdx)
-	admin.Register(server, cfg, func() error {
+	admin.Register(server, cfg, admin.PostBuildCallback{Name: "index_reload", Fn: func() error {
 		if err := siteIdx.Reload(cfg); err != nil {
 			return err
 		}
@@ -159,7 +159,7 @@ func newSoakHarness(t *testing.T, withDB bool) *soakHarness {
 			}
 		}
 		return nil
-	})
+	}})
 
 	return &soakHarness{
 		cfg:         cfg,

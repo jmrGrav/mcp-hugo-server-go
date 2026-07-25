@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -16,7 +17,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func newPublishChangesServer(t *testing.T, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...func() error) (*mcp.ClientSession, func()) {
+func newPublishChangesServer(t *testing.T, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...admin.PostBuildCallback) (*mcp.ClientSession, func()) {
 	t.Helper()
 	idx, err := site.NewIndex(cfg)
 	if err != nil {
@@ -128,7 +129,7 @@ func TestPublishChangesPartialSuccessBuildIsNeverPublished(t *testing.T) {
 	cfg.MaxIndexEntries = 1000
 
 	failingCallback := func() error { return fmt.Errorf("cdn purge failed") }
-	session, done := newPublishChangesServer(t, cfg, nil, failingCallback)
+	session, done := newPublishChangesServer(t, cfg, nil, admin.PostBuildCallback{Name: "cloudflare_purge", Fn: failingCallback})
 	defer done()
 
 	res, err := callTool(t, session, "publish_changes", map[string]any{"slug": "/posts/hello/"})
@@ -149,6 +150,13 @@ func TestPublishChangesPartialSuccessBuildIsNeverPublished(t *testing.T) {
 	build, ok := data["build"].(map[string]any)
 	if !ok || build["warning"] == "" || build["warning"] == nil {
 		t.Fatalf("data.build.warning should surface the callback failure: %v", data["build"])
+	}
+	// #644 regression: the warning must identify *which* post-build callback
+	// failed, not just that "some" callback did — this is exactly the
+	// diagnostic trail #644's audit found missing.
+	warning, _ := build["warning"].(string)
+	if !strings.Contains(warning, `"cloudflare_purge"`) {
+		t.Fatalf("data.build.warning = %q, want it to name the failing callback (#644)", warning)
 	}
 }
 

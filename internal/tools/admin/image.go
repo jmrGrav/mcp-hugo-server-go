@@ -101,7 +101,7 @@ func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeat
 // Register wires all admin tools (site.admin scope).
 // siteReload is an optional callback called after a successful build_site to
 // refresh the in-memory site index (resolves #212).
-func Register(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
+func Register(s *mcp.Server, cfg config.Config, siteReload ...PostBuildCallback) {
 	if s == nil {
 		return
 	}
@@ -115,7 +115,7 @@ func Register(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
 }
 
 // RegisterSiteAdmin is an alias for Register kept for compatibility.
-func RegisterSiteAdmin(s *mcp.Server, cfg config.Config, siteReload ...func() error) {
+func RegisterSiteAdmin(s *mcp.Server, cfg config.Config, siteReload ...PostBuildCallback) {
 	Register(s, cfg, siteReload...)
 }
 
