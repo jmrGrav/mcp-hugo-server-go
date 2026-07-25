@@ -2186,6 +2186,98 @@ func TestSuggestLinksEmptyResultIncludesExplanation(t *testing.T) {
 	}
 }
 
+// TestSuggestLinksFallsBackToLexicalSignalsWhenTaxonomyIsEmpty covers #680:
+// when a draft body clearly names an existing topic but submitted
+// tags/categories have no overlap with any published page, suggest_links
+// should still surface a deterministic lexical fallback instead of only
+// returning an empty taxonomy-affinity explanation.
+func TestSuggestLinksFallsBackToLexicalSignalsWhenTaxonomyIsEmpty(t *testing.T) {
+	htmlDir := t.TempDir()
+	writeHTML := func(rel, html string) {
+		t.Helper()
+		full := filepath.Join(htmlDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeHTML(filepath.Join("posts", "release-gate", "index.html"), `<!DOCTYPE html><html lang="fr"><head>
+<link rel="canonical" href="https://example.test/posts/release-gate/">
+<meta property="og:title" content="Hugo Release Gate">
+<meta name="description" content="Guide de publication Hugo et validation MCP">
+<meta property="article:tag" content="release-engineering">
+<meta property="article:section" content="Operations">
+</head><body><article>Guide de publication Hugo et validation MCP.</article></body></html>`)
+	writeHTML(filepath.Join("posts", "observability", "index.html"), `<!DOCTYPE html><html lang="fr"><head>
+<link rel="canonical" href="https://example.test/posts/observability/">
+<meta property="og:title" content="Observability Notes">
+<meta name="description" content="Metrics and logs">
+<meta property="article:tag" content="observability">
+<meta property="article:section" content="Operations">
+</head><body><article>Metrics and logs.</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "suggest_links", map[string]any{
+		"tags": []string{"no-such-tag"},
+		"body": "Ce brouillon parle de Hugo, de publication MCP et de release gate.",
+	})
+	if res.IsError {
+		t.Fatalf("suggest_links returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	suggestedLinks, ok := data["suggested_links"].([]any)
+	if !ok || len(suggestedLinks) == 0 {
+		t.Fatalf("suggested_links = %#v, want lexical fallback candidate", data["suggested_links"])
+	}
+	if _, ok := data["empty_reason"]; ok {
+		t.Fatalf("empty_reason = %#v, want omitted when lexical fallback produced results", data["empty_reason"])
+	}
+	top := suggestedLinks[0].(map[string]any)
+	if got := top["slug"]; got != "/posts/release-gate/" {
+		t.Fatalf("top lexical fallback slug = %v, want /posts/release-gate/", got)
+	}
+}
+
+// TestSuggestLinksKeepsTaxonomyCandidatesWhenTheyExist locks the intended
+// sequencing for #680: lexical scoring is a fallback only, not a replacement
+// for the established taxonomy-based ranking.
+func TestSuggestLinksKeepsTaxonomyCandidatesWhenTheyExist(t *testing.T) {
+	session, done := newEditorialGraphSession(t)
+	defer done()
+
+	res := callTool(t, session, "suggest_links", map[string]any{
+		"slug": "/posts/hello/",
+		"body": "Texte hors sujet mentionnant release gate et MCP.",
+	})
+	if res.IsError {
+		t.Fatalf("suggest_links returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	suggestedLinks, ok := data["suggested_links"].([]any)
+	if !ok || len(suggestedLinks) == 0 {
+		t.Fatalf("suggested_links = %#v, want taxonomy-based suggestion", data["suggested_links"])
+	}
+	if got := suggestedLinks[0].(map[string]any)["slug"]; got != "/posts/guide/" {
+		t.Fatalf("top suggestion slug = %v, want taxonomy-based /posts/guide/", got)
+	}
+}
+
 // TestGetRelatedContentEmptyResultIncludesExplanationForSoleContentPage is a
 // regression test for #458's "no other content to compare" branch: with only
 // one published page in the whole site, related_pages must come back empty
