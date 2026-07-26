@@ -3568,6 +3568,27 @@ func TestExplainSiteStructureRecentPagesUseSourceCategories(t *testing.T) {
 	t.Fatal("recent_pages does not include /posts/hello/ test fixture")
 }
 
+func TestExplainSiteStructureCompactOmitsRecentPagesExamples(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "explain_structure", map[string]any{"response_mode": "compact"})
+	if res.IsError {
+		t.Fatalf("explain_structure compact returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if _, present := data["recent_pages"]; present {
+		t.Fatalf("explain_structure compact unexpectedly includes recent_pages: %#v", data["recent_pages"])
+	}
+	if _, present := data["notes"]; present {
+		t.Fatalf("explain_structure compact unexpectedly includes notes: %#v", data["notes"])
+	}
+	if _, ok := data["summary"].(string); !ok {
+		t.Fatalf("explain_structure compact summary missing: %#v", data["summary"])
+	}
+}
+
 func TestExplainSiteStructureRecentPagesUseSourceCategoriesForLanguagePrefixedSlug(t *testing.T) {
 	contentRoot := t.TempDir()
 	pageDir := filepath.Join(contentRoot, "posts", "hello")
