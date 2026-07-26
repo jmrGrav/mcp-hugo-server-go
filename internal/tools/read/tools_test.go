@@ -3954,6 +3954,33 @@ func TestValidateFrontMatterDTOHasLangField(t *testing.T) {
 	}
 }
 
+func TestValidateFrontMatterValidPageReturnsEmptyIssuesArray(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "validate_frontmatter", map[string]any{"limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	pages, ok := data["pages"].([]any)
+	if !ok || len(pages) == 0 {
+		t.Fatal("validate_frontmatter missing page rows")
+	}
+	firstDTO, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_frontmatter pages[0] type = %T", pages[0])
+	}
+	issues, ok := firstDTO["issues"].([]any)
+	if !ok {
+		t.Fatalf("validate_frontmatter pages[0].issues type = %T, want []any", firstDTO["issues"])
+	}
+	if len(issues) != 0 {
+		t.Fatalf("validate_frontmatter pages[0].issues = %#v, want empty array", issues)
+	}
+}
+
 func assertReadPaginationMetadata(t *testing.T, m map[string]any, total, limit, offset, returned int, hasMore bool, nextOffset int, hasNextOffset bool) {
 	t.Helper()
 

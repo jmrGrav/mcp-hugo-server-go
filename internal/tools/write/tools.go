@@ -294,7 +294,7 @@ type deletePageData struct {
 	// the deleted language was the last one remaining. false means only the
 	// single resolved language's source file was removed and the bundle
 	// (other language(s), assets) still exists on disk.
-	BundleFullyRemoved bool `json:"bundle_fully_removed,omitempty"`
+	BundleFullyRemoved bool `json:"bundle_fully_removed"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -1372,6 +1372,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			idx.DeleteLang(in.Slug, resolvedSource.Lang)
 		}
 		var deleteWarning string
+		degradedDelete := false
 		dbDeleteFailed := false
 		if bundleFullyRemoved && siteIdx != nil {
 			siteIdx.RemoveBySlug(in.Slug)
@@ -1383,6 +1384,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				// stale until the next build (#242).
 				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", err)
 				dbDeleteFailed = true
+				degradedDelete = true
 				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", err)
 			}
 		}
@@ -1408,6 +1410,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 					deleteWarning = msg
 				}
 				publicCleanupFailed = true
+				degradedDelete = true
 				slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
 			}
 		}
@@ -1433,6 +1436,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				} else {
 					deleteWarning = msg
 				}
+				degradedDelete = true
 				slog.Warn("delete_page: hero image cleanup failed", "slug", in.Slug, "error", rmErr)
 			} else if removed {
 				slog.Debug("delete_page: removed orphaned hero image", "slug", in.Slug)
@@ -1451,6 +1455,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			} else {
 				deleteWarning = auditMsg
 			}
+			degradedDelete = true
 		}
 
 		if cfg.Cloudflare.Enabled() {
@@ -1462,7 +1467,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
 		status := "ok"
-		if deleteWarning != "" {
+		if degradedDelete {
 			status = "partial_success"
 		}
 		var generatedAssetsValue *[]deletePageGeneratedAssetDTO
