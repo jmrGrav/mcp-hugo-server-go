@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -138,6 +139,159 @@ func TestDiscoveryBuildersFallbacks(t *testing.T) {
 	}
 	if got := buildAgentCard(cfg); got.Name != "MCP Hugo Server" || got.URL != "https://mcp.test" {
 		t.Fatalf("buildAgentCard() = %#v", got)
+	}
+}
+
+func TestReaderAcquisitionProfileMatrix(t *testing.T) {
+	tests := []struct {
+		name            string
+		cfg             config.Config
+		wantMode        string
+		wantDescription string
+	}{
+		{
+			name:            "oauth disabled",
+			cfg:             config.Default(),
+			wantMode:        "anonymous_mcp_access",
+			wantDescription: "anonymous MCP access",
+		},
+		{
+			name: "dynamic and self-registration",
+			cfg: func() config.Config {
+				cfg := config.Default()
+				cfg.OAuth.Enabled = true
+				cfg.OAuth.DynamicClientEnabled = true
+				cfg.OAuth.AllowReaderSelfRegistration = true
+				return cfg
+			}(),
+			wantMode:        "self_serve_oauth_or_agent_identity_registration",
+			wantDescription: "self-serve OAuth registration or anonymous agent identity registration",
+		},
+		{
+			name: "dynamic only",
+			cfg: func() config.Config {
+				cfg := config.Default()
+				cfg.OAuth.Enabled = true
+				cfg.OAuth.DynamicClientEnabled = true
+				return cfg
+			}(),
+			wantMode:        "self_serve_oauth_registration",
+			wantDescription: "self-serve OAuth registration",
+		},
+		{
+			name: "self-registration only",
+			cfg: func() config.Config {
+				cfg := config.Default()
+				cfg.OAuth.Enabled = true
+				cfg.OAuth.AllowReaderSelfRegistration = true
+				return cfg
+			}(),
+			wantMode:        "self_serve_agent_identity_registration",
+			wantDescription: "anonymous agent identity registration",
+		},
+		{
+			name: "operator approved",
+			cfg: func() config.Config {
+				cfg := config.Default()
+				cfg.OAuth.Enabled = true
+				return cfg
+			}(),
+			wantMode:        "operator_approved_claim_or_pre_registered_oauth_client",
+			wantDescription: "operator-approved anonymous claim or pre-registered OAuth client",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMode, gotDescription := readerAcquisitionProfile(tt.cfg)
+			if gotMode != tt.wantMode || gotDescription != tt.wantDescription {
+				t.Fatalf("readerAcquisitionProfile() = (%q, %q), want (%q, %q)", gotMode, gotDescription, tt.wantMode, tt.wantDescription)
+			}
+		})
+	}
+}
+
+func TestServeDiscoveryTextSupportsGetAndHeadOnly(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/llms.txt", nil)
+	serveDiscoveryText(rec, req, "text/plain; charset=utf-8", "hello")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("GET Content-Type = %q", got)
+	}
+	if got := rec.Body.String(); got != "hello" {
+		t.Fatalf("GET body = %q, want hello", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodHead, "/llms.txt", nil)
+	serveDiscoveryText(rec, req, "text/plain; charset=utf-8", "hello")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("HEAD status = %d, want 200", rec.Code)
+	}
+	if got := rec.Body.String(); got != "" {
+		t.Fatalf("HEAD body = %q, want empty", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/llms.txt", nil)
+	serveDiscoveryText(rec, req, "text/plain; charset=utf-8", "hello")
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("POST Allow = %q, want GET, HEAD", got)
+	}
+}
+
+func TestHandleSecurityTxtMethodAndMissingConfig(t *testing.T) {
+	cfg := config.Default()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/security.txt", nil)
+	handleSecurityTxt(rec, req, cfg)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET without SecurityContactURL status = %d, want 404", rec.Code)
+	}
+
+	cfg.SecurityContact = "mailto:security@example.test"
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/.well-known/security.txt", nil)
+	handleSecurityTxt(rec, req, cfg)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST with SecurityContact status = %d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("POST Allow = %q, want GET, HEAD", got)
+	}
+}
+
+func TestHandleAuthMdMethodAndMissingFile(t *testing.T) {
+	cfg := config.Default()
+	cfg.OAuth.Issuer = "https://mcp.test"
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth.md", nil)
+	handleAuthMd(rec, req, cfg)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET missing auth.md status = %d, want 404", rec.Code)
+	}
+
+	root := t.TempDir()
+	cfg.SiteRoot = root
+	if err := os.WriteFile(filepath.Join(root, "auth.md"), []byte("# auth\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(auth.md): %v", err)
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/auth.md", nil)
+	handleAuthMd(rec, req, cfg)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST auth.md status = %d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("POST Allow = %q, want GET, HEAD", got)
 	}
 }
 
