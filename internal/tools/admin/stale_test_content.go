@@ -11,6 +11,14 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 )
 
+type StaleTestContentEntry struct {
+	Slug           string `json:"slug"`
+	Owner          string `json:"owner,omitempty"`
+	ExpiresAt      string `json:"expires_at"`
+	OverdueSeconds int64  `json:"overdue_seconds"`
+	Reason         string `json:"reason"`
+}
+
 // CheckStaleTestContent scans srcIdx for two independent categories of
 // stale test/audit content and never deletes or modifies anything — this
 // is strictly an advisory signal, surfaced via the returned error (which
@@ -30,12 +38,27 @@ import (
 //     that specific page, so it must keep working even when the
 //     server-wide sweep is disabled.
 func CheckStaleTestContent(srcIdx *hugosite.SourceIndex, thresholdHours int) error {
+	stale := CollectStaleTestContent(srcIdx, thresholdHours, time.Now())
+	if len(stale) == 0 {
+		return nil
+	}
+	slugs := make([]string, 0, len(stale))
+	for _, entry := range stale {
+		slugs = append(slugs, entry.Slug)
+	}
+	return fmt.Errorf("%d stale test/audit content slug(s) past their expiry or the %dh threshold: %s — confirm these are safe to remove with delete_page", len(slugs), thresholdHours, strings.Join(slugs, ", "))
+}
+
+// CollectStaleTestContent returns structured, machine-readable stale
+// test-content entries for operator-facing tools such as get_runtime_status.
+// It is read-only and never mutates the site. now is injected for stable
+// tests.
+func CollectStaleTestContent(srcIdx *hugosite.SourceIndex, thresholdHours int, now time.Time) []StaleTestContentEntry {
 	if srcIdx == nil {
 		return nil
 	}
-	now := time.Now()
 	seen := make(map[string]bool)
-	var stale []string
+	var stale []StaleTestContentEntry
 
 	for _, p := range srcIdx.ListPages(0, 0) {
 		if seen[p.Slug] {
@@ -44,7 +67,13 @@ func CheckStaleTestContent(srcIdx *hugosite.SourceIndex, thresholdHours int) err
 		if expiresAt, ok := testContentExpiry(p.FrontmatterRaw); ok {
 			if now.After(expiresAt) {
 				seen[p.Slug] = true
-				stale = append(stale, p.Slug)
+				stale = append(stale, StaleTestContentEntry{
+					Slug:           canonicalSourceSlug(p.Slug),
+					Owner:          testContentOwner(p.FrontmatterRaw),
+					ExpiresAt:      expiresAt.UTC().Format(time.RFC3339),
+					OverdueSeconds: int64(now.Sub(expiresAt).Seconds()),
+					Reason:         "test_content_expired",
+				})
 			}
 			continue
 		}
@@ -55,16 +84,19 @@ func CheckStaleTestContent(srcIdx *hugosite.SourceIndex, thresholdHours int) err
 		if err != nil {
 			continue
 		}
-		if now.Sub(info.ModTime()) >= time.Duration(thresholdHours)*time.Hour {
+		effectiveExpiry := info.ModTime().Add(time.Duration(thresholdHours) * time.Hour)
+		if !now.Before(effectiveExpiry) {
 			seen[p.Slug] = true
-			stale = append(stale, p.Slug)
+			stale = append(stale, StaleTestContentEntry{
+				Slug:           canonicalSourceSlug(p.Slug),
+				ExpiresAt:      effectiveExpiry.UTC().Format(time.RFC3339),
+				OverdueSeconds: int64(now.Sub(effectiveExpiry).Seconds()),
+				Reason:         "reserved_test_slug_threshold",
+			})
 		}
 	}
-	if len(stale) == 0 {
-		return nil
-	}
-	sort.Strings(stale)
-	return fmt.Errorf("%d stale test/audit content slug(s) past their expiry or the %dh threshold: %s — confirm these are safe to remove with delete_page", len(stale), thresholdHours, strings.Join(stale, ", "))
+	sort.SliceStable(stale, func(i, j int) bool { return stale[i].Slug < stale[j].Slug })
+	return stale
 }
 
 // testContentExpiry extracts test_content_expires_at from a page's raw
@@ -92,4 +124,24 @@ func testContentExpiry(frontmatterRaw map[string]any) (time.Time, bool) {
 	default:
 		return time.Time{}, false
 	}
+}
+
+func testContentOwner(frontmatterRaw map[string]any) string {
+	if frontmatterRaw == nil {
+		return ""
+	}
+	if raw, ok := frontmatterRaw["test_content_owner"]; ok {
+		if owner, ok := raw.(string); ok {
+			return strings.TrimSpace(owner)
+		}
+	}
+	return ""
+}
+
+func canonicalSourceSlug(slug string) string {
+	slug = strings.Trim(strings.TrimSpace(slug), "/")
+	if slug == "" {
+		return "/"
+	}
+	return "/" + slug + "/"
 }

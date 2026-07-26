@@ -16,11 +16,13 @@ import (
 // idempotencyStore instance passed into Register, not every write tool
 // (create_preview/generate_hero_image/etc. don't take idempotency_key).
 var mutationStatusLookupTools = map[string]bool{
-	"create_page":       true,
-	"update_page":       true,
-	"delete_page":       true,
-	"upload_page_asset": true,
-	"delete_page_asset": true,
+	"create_page":        true,
+	"update_page":        true,
+	"delete_page":        true,
+	"upload_page_asset":  true,
+	"delete_page_asset":  true,
+	"apply_content_plan": true,
+	"rollback_change":    true,
 }
 
 type getMutationStatusInput struct {
@@ -71,7 +73,7 @@ func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "get_mutation_status",
 		Title: "Get mutation status",
-		Description: "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset call " +
+		Description: "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change call " +
 			"that used idempotency_key actually succeeded — for recovering from a timeout or otherwise ambiguous response " +
 			"without resending the original mutation payload. `status: \"succeeded\"` means that exact call completed and " +
 			"`result` is its entire original response envelope (success/data/errors/warnings/meta, not just data), byte-identical " +
@@ -91,7 +93,7 @@ func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in getMutationStatusInput) (*mcp.CallToolResult, getMutationStatusOutput, error) {
 		if !mutationStatusLookupTools[in.Tool] {
-			return nil, getMutationStatusOutput{}, fmt.Errorf("invalid_params: tool must be one of create_page, update_page, delete_page, upload_page_asset, delete_page_asset")
+			return nil, getMutationStatusOutput{}, fmt.Errorf("invalid_params: tool must be one of create_page, update_page, delete_page, upload_page_asset, delete_page_asset, apply_content_plan, rollback_change")
 		}
 		if in.IdempotencyKey == "" {
 			return nil, getMutationStatusOutput{}, fmt.Errorf("invalid_params: idempotency_key must not be empty")
