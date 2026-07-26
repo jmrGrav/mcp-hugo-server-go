@@ -30,7 +30,9 @@ func newHookHTTPClient(timeout time.Duration) *http.Client {
 
 var hookClient = newHookHTTPClient(10 * time.Second)
 
-type runPostBuildHooksInput struct{}
+type runPostBuildHooksInput struct {
+	DryRun bool `json:"dry_run,omitempty"`
+}
 
 type hookResult struct {
 	URL    string `json:"url"`
@@ -40,7 +42,9 @@ type hookResult struct {
 
 // runPostBuildHooksData is the canonical data.* payload (#552).
 type runPostBuildHooksData struct {
-	Results []hookResult `json:"results"`
+	Results         []hookResult `json:"results"`
+	DryRun          bool         `json:"dry_run,omitempty"`
+	ConfiguredCount int          `json:"configured_count"`
 }
 
 // runPostBuildHooksOutput carries the same fields at the root as
@@ -49,7 +53,9 @@ type runPostBuildHooksData struct {
 // breaking change.
 type runPostBuildHooksOutput struct {
 	toolcontract.ToolResponse[runPostBuildHooksData]
-	Results []hookResult `json:"results"`
+	Results         []hookResult `json:"results"`
+	DryRun          bool         `json:"dry_run,omitempty"`
+	ConfiguredCount int          `json:"configured_count"`
 }
 
 func hooksSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
@@ -58,8 +64,10 @@ func hooksSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 
 func newRunPostBuildHooksOutput(data runPostBuildHooksData) runPostBuildHooksOutput {
 	return runPostBuildHooksOutput{
-		ToolResponse: hooksSuccessEnvelope(data),
-		Results:      data.Results,
+		ToolResponse:    hooksSuccessEnvelope(data),
+		Results:         data.Results,
+		DryRun:          data.DryRun,
+		ConfiguredCount: data.ConfiguredCount,
 	}
 }
 
@@ -71,7 +79,7 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "run_post_build_hooks",
 		Title:        "Run post-build hooks",
-		Description:  "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Only configured URLs are contacted.",
+		Description:  "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Set `dry_run:true` to inspect the configured hook targets without contacting them; this returns the same `results[]` URL list plus `configured_count`, making `no hooks configured` distinguishable from `hooks configured but intentionally not executed`. Only configured URLs are ever reported or contacted.",
 		InputSchema:  tools.MustSchema[runPostBuildHooksInput](),
 		OutputSchema: tools.MustSchema[runPostBuildHooksOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -80,10 +88,29 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ runPostBuildHooksInput) (*mcp.CallToolResult, runPostBuildHooksOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in runPostBuildHooksInput) (*mcp.CallToolResult, runPostBuildHooksOutput, error) {
+		if in.DryRun {
+			results := previewHooks(cfg)
+			return nil, newRunPostBuildHooksOutput(runPostBuildHooksData{
+				Results:         results,
+				DryRun:          true,
+				ConfiguredCount: len(results),
+			}), nil
+		}
 		results := fireHooks(ctx, cfg, hookClient)
-		return nil, newRunPostBuildHooksOutput(runPostBuildHooksData{Results: results}), nil
+		return nil, newRunPostBuildHooksOutput(runPostBuildHooksData{
+			Results:         results,
+			ConfiguredCount: len(cfg.PostBuildHooks),
+		}), nil
 	}))
+}
+
+func previewHooks(cfg config.Config) []hookResult {
+	results := make([]hookResult, 0, len(cfg.PostBuildHooks))
+	for _, url := range cfg.PostBuildHooks {
+		results = append(results, hookResult{URL: url})
+	}
+	return results
 }
 
 func fireHooks(ctx context.Context, cfg config.Config, client *http.Client) []hookResult {
