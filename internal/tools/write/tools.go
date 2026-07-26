@@ -795,6 +795,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. " +
+			"If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). " +
 			"IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). " +
 			"Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. " +
 			"`body` is rejected with `invalid_params` (including on `dry_run`) if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). " +
@@ -1908,9 +1909,17 @@ func validateFrontmatterRoundTrip(content string) error {
 	if end < 0 {
 		return fmt.Errorf("unterminated YAML frontmatter")
 	}
+	yamlBytes := []byte(rest[:end])
 	var fm any
-	if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
+	if err := yaml.Unmarshal(yamlBytes, &fm); err != nil {
 		return fmt.Errorf("frontmatter YAML invalid after update: %w", err)
+	}
+	var doc frontmatterDoc
+	if err := yaml.Unmarshal(yamlBytes, &doc); err != nil {
+		return fmt.Errorf("frontmatter YAML invalid after update: %w", err)
+	}
+	if doc.TestContent && !doc.Draft {
+		return fmt.Errorf("test_content pages must remain draft:true until the test_content marker is removed")
 	}
 	body := strings.TrimSpace(rest[end+4:])
 	// Detect duplicated frontmatter: body starts with "---\n" and contains a
