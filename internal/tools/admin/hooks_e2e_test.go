@@ -123,8 +123,8 @@ func TestRunPostBuildHooksMultipleHooksWithRequestIntrospection(t *testing.T) {
 // shell subprocesses, so there is no stdout/stderr/exit status/duration to capture.
 // Response bodies are discarded after a size limit check, HTTP status codes are
 // captured in hookResult.Status, and transport errors are in hookResult.Error.
-// There is no dry_run mode for this tool; the tool unconditionally fires all
-// configured hooks on every invocation.
+// This test exercises the real (non-dry_run) execution path; dry_run:true
+// coverage already exists in hooks_envelope_test.go (#766).
 func TestRunPostBuildHooksNonSuccessResponseCaptured(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
