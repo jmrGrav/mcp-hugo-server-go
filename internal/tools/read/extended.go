@@ -33,6 +33,7 @@ type searchContentInput struct {
 	Sort         string `json:"sort,omitempty"`
 	Order        string `json:"order,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
+	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
 
 // taxonomyInconsistencyDTO is the structured, actionable form of a
@@ -428,7 +429,12 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		siteDB = dbs[0]
 	}
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
+	registerReadExtendedFoundationTools(s, idx, srcIdx, cfg)
+	registerReadExtendedSearchAndHealthTools(s, idx, srcIdx, cfg, siteDB, aliases)
+	registerReadExtendedLinkAndSuggestionTools(s, idx, srcIdx, cfg, aliases)
+}
 
+func registerReadExtendedFoundationTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
 	RegisterDiffPage(s, idx, srcIdx, cfg)
 	RegisterInspectRenderedPage(s, idx, srcIdx, cfg)
 	RegisterListContentTypes(s, srcIdx, cfg)
@@ -436,12 +442,19 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	RegisterAIReadiness(s, idx, srcIdx, cfg)
 	RegisterPlanPage(s, idx, srcIdx, cfg)
 	RegisterListPageRevisions(s, idx, srcIdx, cfg)
+}
 
-	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Also matches body text, unlike search_pages. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Prefer this tool over search_pages whenever you already have a reader token.",
+func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, aliases map[string]string) {
+	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Also matches body text, unlike search_pages. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Prefer this tool over search_pages whenever you already have a reader token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {
 			if idx == nil {
 				return nil, searchContentEnvelope{}, fmt.Errorf("index not initialized")
 			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, searchContentEnvelope{}, err
+			}
+			terms := includeTerms(mode, in.IncludeTerms)
 			readerSafe := site.IsReaderProfile(ctx)
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
 				return nil, searchContentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
@@ -483,7 +496,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					if readerSafe {
 						lookup = nil
 					}
-					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, lookup, cfg.ContentRoot, cfg.SiteRoot)
+					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, lookup, cfg.ContentRoot, cfg.SiteRoot, terms)
 					return nil, newSearchContentEnvelope(searchContentData{
 						Pages:         dtos,
 						Total:         meta.Total,
@@ -527,7 +540,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			pages := sliceContentPages(filtered, offset, limit)
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			return nil, newSearchContentEnvelope(searchContentData{
-				Pages:         toPageDTOs(pages, aliases, sourceIndexForProfile(srcIdx, readerSafe), cfg.ContentRoot, cfg.SiteRoot),
+				Pages:         toPageDTOs(pages, aliases, sourceIndexForProfile(srcIdx, readerSafe), cfg.ContentRoot, cfg.SiteRoot, terms),
 				Total:         meta.Total,
 				Limit:         meta.Limit,
 				Offset:        meta.Offset,
@@ -544,10 +557,14 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
-	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
+	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. `response_mode:\"compact\"` keeps only the structural summary (summary, section counts, languages, taxonomy counts) and omits the heavier `recent_pages` examples and long `notes` list used for deeper onboarding. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		func(ctx context.Context, _ *mcp.CallToolRequest, in responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
+			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, contentEnvelope{}, err
 			}
 			readerSafe := site.IsReaderProfile(ctx)
 			contentPages := idx.ContentPages()
@@ -567,22 +584,27 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			catCount := len(taxonomy.ApplyAliases(rawCats, aliases))
 			summary := fmt.Sprintf("%d published pages across %d sections, %d tags, and %d categories.",
 				len(contentPages), len(sections), tagCount, catCount)
-			return nil, newContentEnvelope(contentEnvelopeData{
+			data := contentEnvelopeData{
 				Summary:     summary,
 				Sections:    sections,
 				Languages:   languages,
 				Tags:        tagCount,
 				Categories:  catCount,
-				RecentPages: toPageDTOsEnriched(recent, sourceIndexForProfile(srcIdx, readerSafe), aliases, cfg.ContentRoot, cfg.SiteRoot),
+				RecentPages: toPageDTOsEnriched(recent, sourceIndexForProfile(srcIdx, readerSafe), aliases, cfg.ContentRoot, cfg.SiteRoot, includeTerms(mode, nil)),
 				Notes: []string{
 					"Top-level sections are derived from page slugs.",
 					"Posts are detected from the /posts/ path prefix.",
 					"A single root-level page (e.g. content/some-slug.md) is listed as its own one-off section named after its own slug (#642) — by design, not a bug, but a single stray or throwaway root-level page will appear as a distinct section.",
 				},
-			}, time.Now().UTC()), nil
+			}
+			if mode == toolcontract.ResponseModeCompact {
+				data.RecentPages = nil
+				data.Notes = nil
+			}
+			return nil, newContentEnvelope(data, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`) — neither moves the top-level `score`, but a `warning` finding does show a local penalty in `score_breakdown.taxonomy.score`. `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `status` on an otherwise healthy site, while a `warning`-severity taxonomy finding still promotes `status` to `healthy_with_advisories` without moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning). `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never contributed to `score`), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `status` on an otherwise healthy site, while a `warning`-severity taxonomy finding still promotes `status` to `healthy_with_advisories` without moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -683,7 +705,9 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				IndexInfo:   staleness(idx, srcIdx, cfg),
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
+}
 
+func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, aliases map[string]string) {
 	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). This is the same backlinks data get_related_content returns alongside related_pages/suggested_links/translations in one call — use this standalone version when you only need backlinks and want to avoid the cost of the other three facets. `index_staleness` is present only when the in-memory index is behind on-disk content (e.g. a manual Hugo build outside this server) — its absence means the index reflects current source; when present, treat the backlinks list as possibly outdated until the next build_site (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
 			if idx == nil {
@@ -1367,6 +1391,9 @@ func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) [
 			}
 		}
 	}
+	if issues == nil {
+		return []string{}
+	}
 	return issues
 }
 
@@ -1483,6 +1510,13 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[
 	health.AdvisoriesCount = len(health.TaxonomyInconsistencyDetails)
 
 	score := frontmatterScore
+	// #719: a perfect 100 alongside actionable warning-severity taxonomy
+	// drift is semantically misleading. Keep info-only translation pairs
+	// non-penalizing, but cap the exposed top-level score just below
+	// perfection when a real warning is still present.
+	if score == 100 && taxonomyWarnings > 0 {
+		score = 99
+	}
 	health.Score = score
 	switch {
 	case score >= 90:
@@ -1810,30 +1844,33 @@ func uniqueLanguages(pages []site.Page) []string {
 	return out
 }
 
-func toPageDTO(p site.Page, aliases map[string]string, siteRoot string) pageDTO {
+func toPageDTO(p site.Page, aliases map[string]string, siteRoot string, includeTerms bool) pageDTO {
 	tags := taxonomy.ApplyAliases(nullsafeStrings(p.Tags), aliases)
 	cats := taxonomy.ApplyAliases(nullsafeStrings(p.Categories), aliases)
-	return pageDTO{
-		Slug:          p.Slug,
-		Title:         p.Title,
-		Summary:       p.Summary,
-		Tags:          tags,
-		Categories:    cats,
-		TagTerms:      site.NormalizeTaxonomyTerms(tags),
-		CategoryTerms: site.NormalizeTaxonomyTerms(cats),
-		Date:          p.Date,
-		URL:           p.URL,
-		Lang:          p.Lang,
-		State:         site.StateForResolvedPage(site.ResolvedPage{Public: &p}, siteRoot),
+	dto := pageDTO{
+		Slug:       p.Slug,
+		Title:      p.Title,
+		Summary:    p.Summary,
+		Tags:       tags,
+		Categories: cats,
+		Date:       p.Date,
+		URL:        p.URL,
+		Lang:       p.Lang,
+		State:      site.StateForResolvedPage(site.ResolvedPage{Public: &p}, siteRoot),
 	}
+	if includeTerms {
+		dto.TagTerms = site.NormalizeTaxonomyTerms(tags)
+		dto.CategoryTerms = site.NormalizeTaxonomyTerms(cats)
+	}
+	return dto
 }
 
-func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.SourceIndex, contentRoot, siteRoot string) []pageDTO {
+func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.SourceIndex, contentRoot, siteRoot string, includeTerms bool) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases, siteRoot)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot)
+		dto := toPageDTO(p, aliases, siteRoot, includeTerms)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot, includeTerms)
 		out[i] = dto
 	}
 	return out
@@ -1846,23 +1883,23 @@ func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.S
 // Language-prefixed slugs (e.g. /en/posts/foo/) are handled via
 // site.SourceSlugCandidates, which tries the bare slug then strips the lang
 // prefix to match the source-index key (posts/foo).
-func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string, contentRoot, siteRoot string) []pageDTO {
+func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string, contentRoot, siteRoot string, includeTerms bool) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases, siteRoot)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot)
+		dto := toPageDTO(p, aliases, siteRoot, includeTerms)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot, includeTerms)
 		out[i] = dto
 	}
 	return out
 }
 
-func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string, srcIdx *hugosite.SourceIndex, contentRoot, siteRoot string) []pageDTO {
+func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string, srcIdx *hugosite.SourceIndex, contentRoot, siteRoot string, includeTerms bool) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases, siteRoot)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot)
+		dto := toPageDTO(p, aliases, siteRoot, includeTerms)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot, includeTerms)
 		dto.Snippet = snippets[p.Slug]
 		out[i] = dto
 	}
@@ -1980,14 +2017,18 @@ func resolveSourceForPage(p site.Page, lookup *sourceLookup) (resolvedSourceMatc
 	return resolvedSourceMatch{}, false
 }
 
-func enrichPageDTOFromSource(dto *pageDTO, p site.Page, lookup *sourceLookup, aliases map[string]string, contentRoot, siteRoot string) {
+func enrichPageDTOFromSource(dto *pageDTO, p site.Page, lookup *sourceLookup, aliases map[string]string, contentRoot, siteRoot string, includeTerms bool) {
 	if dto == nil || lookup == nil {
 		return
 	}
 	if match, ok := resolveSourceForPage(p, lookup); ok {
 		src := match.Page
 		dto.Categories = taxonomy.ApplyAliases(nullsafeStrings(src.Categories), aliases)
-		dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
+		if includeTerms {
+			dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
+		} else {
+			dto.CategoryTerms = nil
+		}
 		dto.ResolvedLang = match.ResolvedLang
 		dto.ResolvedSourcePath = fileutil.LogicalContentPath(contentRoot, src.FilePath)
 		dto.State = site.StateForResolvedPage(site.ResolvedPage{

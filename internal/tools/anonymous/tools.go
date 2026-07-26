@@ -205,7 +205,7 @@ type listPagesData struct {
 }
 
 type getPageData struct {
-	Page pageDetailDTO `json:"page"`
+	Page *pageDetailDTO `json:"page"`
 }
 
 type searchPagesData struct {
@@ -313,6 +313,12 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 	RegisterGetChangelog(s)
+	registerAnonymousBrowseTools(s, idx, srcIdx, resolver, cfg, aliases)
+	registerAnonymousTaxonomyAndFeedTools(s, idx, srcIdx, aliases)
+	registerAnonymousSiteMetadataTools(s, idx)
+}
+
+func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config, aliases map[string]string) {
 	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published content pages (articles and pages, not taxonomy list pages) with pagination. Returns slug, title, summary, tags, categories, date, URL. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. For the full URL inventory including taxonomy pages use get_sitemap.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
@@ -406,7 +412,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				dto.TagTerms = nil
 				dto.CategoryTerms = nil
 			}
-			return nil, newGetPageOutput(getPageData{Page: dto}), nil
+			return nil, newGetPageOutput(getPageData{Page: &dto}), nil
 		})
 
 	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Published-content alternative to search_content — if you already have a reader token, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Matching is intentionally broad: any page containing at least one query term in any indexed field is returned, ranked by `score` (count of matching terms, highest first) — it is not an exact-match search. Each result's `score` field indicates match strength; a low score means a loose/partial match. Use `match: \"title_exact\"` for a strict case-insensitive full-title match instead (e.g. to verify whether a specific page still exists after deleting it), which returns zero results rather than loosely related hits when there's no exact title match. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
@@ -476,7 +482,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		},
 		func(s any) any { return tools.WithMaxLimit(s, "limit", 50) },
 	)
+}
 
+func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) {
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
 			if idx == nil {
@@ -609,7 +617,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			meta := toolcontract.ComputePagination(total, limit, offset, len(items))
 			return nil, newGetFeedOutput(getFeedData{Items: items, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
+}
 
+func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index) {
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ getSiteInformationInput) (*mcp.CallToolResult, getSiteInformationOutput, error) {
 			if idx == nil {
