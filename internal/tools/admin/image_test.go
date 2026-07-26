@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -20,7 +21,15 @@ import (
 func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.Register(s, cfg)
+	var srcIdx *hugosite.SourceIndex
+	if strings.TrimSpace(cfg.ContentRoot) != "" {
+		var err error
+		srcIdx, err = hugosite.NewSourceIndex(cfg.ContentRoot)
+		if err != nil {
+			t.Fatalf("NewSourceIndex(%q): %v", cfg.ContentRoot, err)
+		}
+	}
+	admin.Register(s, cfg, srcIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -257,6 +266,61 @@ func TestGenerateFeaturedImageLocalRender(t *testing.T) {
 	}
 	if got, want := data["path"], "static/images/my-post-featured.jpg"; got != want {
 		t.Fatalf("generate_hero_image (local render) data.path = %v, want %q (#551)", got, want)
+	}
+}
+
+func TestGenerateFeaturedImageAcceptsCanonicalPublicSlugForms(t *testing.T) {
+	tests := []struct {
+		name     string
+		slug     string
+		wantPath string
+	}{
+		{
+			name:     "default-language public slug",
+			slug:     "/posts/my-post/",
+			wantPath: "static/images/posts/my-post-featured.jpg",
+		},
+		{
+			name:     "language-prefixed public slug normalizes to source key",
+			slug:     "/en/posts/my-post-en/",
+			wantPath: "static/images/posts/my-post-en-featured.jpg",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hugoRoot := t.TempDir()
+			cfg := config.Default()
+			cfg.SiteRoot = t.TempDir()
+			cfg.HugoRoot = hugoRoot
+
+			session, done := newTestServer(t, cfg)
+			defer done()
+
+			res, err := callTool(t, session, "generate_hero_image", map[string]any{
+				"slug":  tc.slug,
+				"title": "Hello World from Canonical Public Slug",
+				"style": "tech",
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.IsError {
+				t.Fatalf("tool returned error for slug %q: %s", tc.slug, resultText(res))
+			}
+
+			out := decodeStructuredResult(t, res)
+			data, ok := out["data"].(map[string]any)
+			if !ok {
+				t.Fatalf("data type = %T, want map[string]any", out["data"])
+			}
+			if got := data["path"]; got != tc.wantPath {
+				t.Fatalf("generate_hero_image(%q) data.path = %v, want %q", tc.slug, got, tc.wantPath)
+			}
+			if _, err := os.Stat(filepath.Join(hugoRoot, filepath.FromSlash(tc.wantPath))); err != nil {
+				t.Fatalf("expected generated file at %q: %v", tc.wantPath, err)
+			}
+		})
 	}
 }
 

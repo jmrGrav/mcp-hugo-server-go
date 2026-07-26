@@ -324,3 +324,40 @@ func TestPlanContentChangeDoesNotWrite(t *testing.T) {
 		t.Fatalf("plan_content_change wrote to disk: before=%q after=%q", before, after)
 	}
 }
+
+// TestPlanContentChangeRejectsDedraftingTestContent is a regression test
+// for #728: a test_content page must not be able to transition to
+// draft:false through the plan/apply workflow.
+func TestPlanContentChangeRejectsDedraftingTestContent(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	createRes := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/audit-plan-guarded", "title": "Audit Plan Guarded", "body": "Body.",
+		"tags": []any{}, "categories": []any{},
+		"test_content": map[string]any{"ttl_hours": 2, "owner": "audit-session-42"},
+	})
+	if createRes.IsError {
+		t.Fatalf("create_page failed: %s", marshalContent(t, createRes))
+	}
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/audit-plan-guarded",
+		"operations": []any{
+			map[string]any{"op": "set_draft", "draft_value": false},
+		},
+	})
+	if !planRes.IsError {
+		t.Fatal("plan_content_change should reject set_draft:false on a test_content page")
+	}
+	raw := marshalContent(t, planRes)
+	if !strings.Contains(raw, "test_content") || !strings.Contains(raw, "draft") {
+		t.Fatalf("plan_content_change error should explain the test_content/draft invariant, got: %s", raw)
+	}
+
+	content := readFileString(t, contentRoot, "posts/audit-plan-guarded/index.md")
+	if !strings.Contains(content, "draft: true") {
+		t.Fatalf("plan_content_change must not change the file on disk, got: %s", content)
+	}
+}

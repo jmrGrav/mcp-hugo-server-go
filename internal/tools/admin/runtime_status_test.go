@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -332,5 +333,105 @@ func TestGetRuntimeStatusReportsLastBuildFailure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("degraded = %v, want an entry about the failed last build attempt", degraded)
+	}
+}
+
+func writeRuntimeStatusTestContentPage(t *testing.T, contentRoot, slug string, expiresAt time.Time, owner string) {
+	t.Helper()
+	full := filepath.Join(contentRoot, slug, "index.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", full, err)
+	}
+	fm := strings.Join([]string{
+		"---",
+		"title: Test content",
+		"date: 2026-07-26",
+		"draft: true",
+		"test_content: true",
+		"test_content_owner: " + owner,
+		"test_content_expires_at: " + expiresAt.UTC().Format(time.RFC3339),
+		"---",
+		"Body.",
+		"",
+	}, "\n")
+	if err := os.WriteFile(full, []byte(fm), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", full, err)
+	}
+}
+
+func TestGetRuntimeStatusOmitsOverdueTestContentWhenNoneExpired(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
+	contentRoot := t.TempDir()
+	writeRuntimeStatusTestContentPage(t, contentRoot, "posts/audit-run-fresh", time.Now().Add(2*time.Hour), "audit-session-42")
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.GitBaseline.Mode = "disabled"
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	site := data["site"].(map[string]any)
+	if _, present := site["overdue_test_content"]; present {
+		t.Fatalf("site.overdue_test_content = %v, want omitted when no test content is overdue", site["overdue_test_content"])
+	}
+}
+
+func TestGetRuntimeStatusReportsOverdueTestContent(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
+	contentRoot := t.TempDir()
+	expiresAt := time.Now().Add(-2 * time.Hour)
+	writeRuntimeStatusTestContentPage(t, contentRoot, "posts/audit-run-expired", expiresAt, "audit-session-42")
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.GitBaseline.Mode = "disabled"
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	site := data["site"].(map[string]any)
+	overdue, ok := site["overdue_test_content"].([]any)
+	if !ok || len(overdue) != 1 {
+		t.Fatalf("site.overdue_test_content = %#v, want exactly 1 overdue entry", site["overdue_test_content"])
+	}
+	entry, ok := overdue[0].(map[string]any)
+	if !ok {
+		t.Fatalf("overdue entry type = %T", overdue[0])
+	}
+	if entry["slug"] != "/posts/audit-run-expired/" {
+		t.Fatalf("overdue slug = %v, want /posts/audit-run-expired/", entry["slug"])
+	}
+	if entry["owner"] != "audit-session-42" {
+		t.Fatalf("overdue owner = %v, want audit-session-42", entry["owner"])
+	}
+	if got, _ := entry["expires_at"].(string); got == "" {
+		t.Fatalf("overdue expires_at = %v, want non-empty RFC3339 string", entry["expires_at"])
+	}
+	if got, ok := entry["overdue_seconds"].(float64); !ok || got < 3600 {
+		t.Fatalf("overdue_seconds = %v, want >= 3600", entry["overdue_seconds"])
+	}
+	if entry["reason"] != "test_content_expired" {
+		t.Fatalf("overdue reason = %v, want test_content_expired", entry["reason"])
 	}
 }

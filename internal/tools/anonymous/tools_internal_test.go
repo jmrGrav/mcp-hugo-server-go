@@ -1,11 +1,16 @@
 package anonymous
 
 import (
+	"context"
+	"path/filepath"
+	"slices"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func TestDefs(t *testing.T) {
@@ -16,6 +21,88 @@ func TestDefs(t *testing.T) {
 	if defs[0].RequiredScope != "" {
 		t.Fatalf("Defs() first scope = %q, want empty", defs[0].RequiredScope)
 	}
+}
+
+func TestRegisterPublishesExpectedToolCatalog(t *testing.T) {
+	idx := mustAnonymousIndex(t)
+	srcIdx := mustAnonymousSourceIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
+
+	session, done := newAnonymousSession(t, idx, cfg, srcIdx)
+	defer done()
+
+	res, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	got := make([]string, 0, len(res.Tools))
+	for _, tool := range res.Tools {
+		got = append(got, tool.Name)
+	}
+	want := []string{
+		"get_changelog",
+		"list_pages",
+		"get_page",
+		"search_pages",
+		"get_recent_posts",
+		"list_tags",
+		"list_categories",
+		"get_sitemap",
+		"get_feed",
+		"get_site_information",
+	}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("anonymous tools/list = %v, want %v", got, want)
+	}
+}
+
+func mustAnonymousIndex(t *testing.T) *site.Index {
+	t.Helper()
+	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg := config.Default()
+	cfg.SiteRoot = root
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	return idx
+}
+
+func mustAnonymousSourceIndex(t *testing.T) *hugosite.SourceIndex {
+	t.Helper()
+	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
+	idx, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	return idx
+}
+
+func newAnonymousSession(t *testing.T, idx *site.Index, cfg config.Config, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
+	t.Helper()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	Register(s, idx, cfg, srcIdx)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, func() { _ = session.Close() }
 }
 
 func TestIsTaxonomyURL(t *testing.T) {
