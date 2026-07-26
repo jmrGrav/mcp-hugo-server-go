@@ -196,7 +196,14 @@ func TestUploadPageAssetRejectsJPEGMimeMismatch(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("upload_page_asset: want error for jpeg mime mismatch, got success")
 	}
-	assertSingleStructuredWriteErrorField(t, res, "invalid_params", "filename")
+	assertSingleStructuredWriteErrorField(t, res, "invalid_params", "filename/content_base64")
+	errData := decodeWriteErrorData(t, res)
+	if got := errData["slug"]; got != "posts/article" {
+		t.Fatalf("data.slug = %v, want posts/article", got)
+	}
+	if got := errData["filename"]; got != "cover.jpg" {
+		t.Fatalf("data.filename = %v, want cover.jpg", got)
+	}
 	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "cover.jpg")); !os.IsNotExist(err) {
 		t.Fatal("upload_page_asset must not write a file when jpeg sniffing rejects the content")
 	}

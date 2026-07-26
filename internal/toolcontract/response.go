@@ -195,6 +195,7 @@ func ShapeSuccessOutput[Out any](out Out, mode ResponseMode) Out {
 // handler's own typed Out struct gets discarded on the error path below.
 type RequestContext struct {
 	Slug          string `json:"slug"`
+	Filename      string `json:"filename,omitempty"`
 	RequestedLang string `json:"requested_lang,omitempty"`
 }
 
@@ -254,15 +255,22 @@ func WithRootFields(err error, fields map[string]any) error {
 }
 
 func rootFieldsFrom(err error) map[string]any {
-	var wrapped *errWithRootFields
-	if !errors.As(err, &wrapped) || len(wrapped.fields) == 0 {
-		return nil
+	var merged map[string]any
+	for cur := err; cur != nil; cur = errors.Unwrap(cur) {
+		wrapped, ok := cur.(*errWithRootFields)
+		if !ok || len(wrapped.fields) == 0 {
+			continue
+		}
+		if merged == nil {
+			merged = make(map[string]any, len(wrapped.fields))
+		}
+		for k, v := range wrapped.fields {
+			if _, exists := merged[k]; !exists {
+				merged[k] = v
+			}
+		}
 	}
-	cloned := make(map[string]any, len(wrapped.fields))
-	for k, v := range wrapped.fields {
-		cloned[k] = v
-	}
-	return cloned
+	return merged
 }
 
 // errWithDataFields carries additive fields that must also be injected into
@@ -293,15 +301,22 @@ func WithDataFields(err error, fields map[string]any) error {
 }
 
 func dataFieldsFrom(err error) map[string]any {
-	var wrapped *errWithDataFields
-	if !errors.As(err, &wrapped) || len(wrapped.fields) == 0 {
-		return nil
+	var merged map[string]any
+	for cur := err; cur != nil; cur = errors.Unwrap(cur) {
+		wrapped, ok := cur.(*errWithDataFields)
+		if !ok || len(wrapped.fields) == 0 {
+			continue
+		}
+		if merged == nil {
+			merged = make(map[string]any, len(wrapped.fields))
+		}
+		for k, v := range wrapped.fields {
+			if _, exists := merged[k]; !exists {
+				merged[k] = v
+			}
+		}
 	}
-	cloned := make(map[string]any, len(wrapped.fields))
-	for k, v := range wrapped.fields {
-		cloned[k] = v
-	}
-	return cloned
+	return merged
 }
 
 func Failure(meta ResponseMeta, errs ...ToolError) ToolResponse[map[string]any] {
@@ -569,7 +584,7 @@ func missingRequiredField(message string) string {
 }
 
 func inferField(message string) string {
-	prefixes := []string{"slug", "title", "query", "lang", "type", "style", "accent", "filename"}
+	prefixes := []string{"slug", "title", "query", "lang", "type", "style", "accent", "filename", "filename/content_base64"}
 	for _, field := range prefixes {
 		if strings.HasPrefix(message, field+" ") {
 			return field

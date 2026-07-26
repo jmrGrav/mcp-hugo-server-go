@@ -3439,8 +3439,8 @@ func TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly(t *testin
 		t.Fatalf("status = %q, want healthy_with_advisories", status)
 	}
 	score, _ := data["score"].(float64)
-	if score != 100 {
-		t.Fatalf("score = %v, want 100 — a taxonomy warning must not move the top-level score (#419 is presentation-only)", score)
+	if score != 99 {
+		t.Fatalf("score = %v, want 99 — actionable taxonomy warnings must no longer coexist with a perfect score (#719)", score)
 	}
 	breakdown := data["score_breakdown"].(map[string]any)
 	taxonomy := breakdown["taxonomy"].(map[string]any)
@@ -4200,6 +4200,33 @@ func TestValidateFrontMatterDTOHasLangField(t *testing.T) {
 	}
 	if _, ok := firstDTO["lang"]; !ok {
 		t.Fatal("validate_frontmatter page DTO: 'lang' field missing")
+	}
+}
+
+func TestValidateFrontMatterValidPageReturnsEmptyIssuesArray(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "validate_frontmatter", map[string]any{"limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	pages, ok := data["pages"].([]any)
+	if !ok || len(pages) == 0 {
+		t.Fatal("validate_frontmatter missing page rows")
+	}
+	firstDTO, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("validate_frontmatter pages[0] type = %T", pages[0])
+	}
+	issues, ok := firstDTO["issues"].([]any)
+	if !ok {
+		t.Fatalf("validate_frontmatter pages[0].issues type = %T, want []any", firstDTO["issues"])
+	}
+	if len(issues) != 0 {
+		t.Fatalf("validate_frontmatter pages[0].issues = %#v, want empty array", issues)
 	}
 }
 

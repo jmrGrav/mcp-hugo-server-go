@@ -472,6 +472,7 @@ func registerContentPlanTools(
 		Description: "Preview a set of discrete edits to an existing page — update_body, set_title, add_tag/remove_tag, add_category/remove_category, set_draft, set_field (field: \"description\" only) — without writing anything. " +
 			"add_tag/remove_tag/add_category/remove_category compute a delta against the page's current tags/categories, so you only send what's changing, not the full list. " +
 			"Operations that don't apply cleanly (e.g. remove_tag for a tag the page doesn't have) are reported in `data.operations_rejected` without failing the whole plan. " +
+			"If the page still carries `test_content: true`, any planned `set_draft:false` is rejected during validation — test content must remain non-publishable while that marker is present (#728). " +
 			"Returns `data.plan_id`, a server-held, single-use preview that expires after 5 minutes (`data.plan_expires_at`); pass it to apply_content_plan to write exactly what was previewed, nothing re-derived. " +
 			"`data.diff`/`data.estimated_diff` show exactly what would change, computed the same way update_page's dry_run does. " +
 			"Requires no scope — planning never writes (#450).",
@@ -602,6 +603,7 @@ func registerContentPlanTools(
 		Title: "Apply content plan",
 		Description: "Write exactly what a prior plan_content_change call previewed — no body/tags/title are resent, apply executes the plan's frozen content verbatim. " +
 			"Fails with `plan_not_found` if `plan_id` is unknown, already applied, or its 5-minute TTL expired (call plan_content_change again); fails with `revision_conflict` if the page changed since the plan was created. " +
+			"`test_content` remains an ongoing safety invariant here too: content whose frontmatter still carries `test_content: true` cannot be applied in a `draft:false` state, even if an older or externally-crafted plan attempts it (#728). " +
 			"A plan is single-use: this call consumes it whether the write succeeds or fails. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run apply after a timeout or uncertain delivery. " +
 			"`dry_run` re-verifies the plan without writing or consuming it. " +

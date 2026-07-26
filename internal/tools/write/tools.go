@@ -294,7 +294,7 @@ type deletePageData struct {
 	// the deleted language was the last one remaining. false means only the
 	// single resolved language's source file was removed and the bundle
 	// (other language(s), assets) still exists on disk.
-	BundleFullyRemoved bool `json:"bundle_fully_removed,omitempty"`
+	BundleFullyRemoved bool `json:"bundle_fully_removed"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -795,6 +795,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. " +
+			"If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). " +
 			"IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). " +
 			"Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. " +
 			"`body` is rejected with `invalid_params` (including on `dry_run`) if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). " +
@@ -1125,21 +1126,18 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug})
 		}
+		callerKey := mutationCallerKey(ctx)
+		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
+		wrapErrWithLimiter := func(err error) error {
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
+			)
+		}
 		if in.Slug == "" {
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
 
-		dir, err := pg.SafeJoin(in.Slug)
-		if err != nil {
-			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
-		}
-
-		// Return not_found when the source directory does not exist (#266).
-		// Check this before the rate limiter to avoid burning the budget on client errors.
-		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
-		}
 		// Validate lang the same way create_page/update_page already do
 		// (validateLangParam) before it ever reaches path resolution —
 		// contentmodel.ResolvePageSource builds candidate paths with
@@ -1150,7 +1148,99 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		// first version of this fix).
 		validatedLang, langErr := validateLangParam(in.Lang)
 		if langErr != nil {
-			return nil, deletePageOutput{}, wrapErr(langErr)
+			return nil, deletePageOutput{}, wrapErrWithLimiter(langErr)
+		}
+		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+		if err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+		}
+
+		lockHeld := false
+		acquireDeleteLock := func() error {
+			if lockHeld {
+				return nil
+			}
+			const lockWait = 10 * time.Second
+			deadline := time.Now().Add(lockWait)
+			for {
+				if hugosite.ContentMu.TryLock() {
+					slog.Debug("delete_page: lock_acquired")
+					lockHeld = true
+					return nil
+				}
+				if time.Now().After(deadline) {
+					slog.Error("delete_page: lock_timeout", "timeout_s", lockWait.Seconds())
+					return fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+			if err := acquireDeleteLock(); err != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+			}
+		}
+		defer func() {
+			if lockHeld {
+				hugosite.ContentMu.Unlock()
+				slog.Debug("delete_page: lock_released")
+			}
+		}()
+
+		// Idempotency replay must run before any current-state existence checks:
+		// a successful first delete removes the slug, so checking os.Stat(dir)
+		// first would turn the exact same retry into not_found instead of the
+		// promised replay of the original success (#724). It also stays under
+		// the content lock so same-key concurrent retries serialize correctly.
+		//
+		// For a keyed request, ContentMu is held continuously from this point
+		// through SafeJoin/os.Stat/ResolvePageSource/Allow() below, all the way
+		// to the actual delete + idempotency-cache write — not just around this
+		// replay check. That's deliberate, not scope creep: releasing the lock
+		// between the replay-miss and the delete would reopen the exact race
+		// #724 closed (two concurrent identical-key retries both missing the
+		// cache, then both racing to delete). The extra section the lock now
+		// spans is bounded to local stat/candidate-file lookups and in-memory
+		// rate-limiter bookkeeping — no network I/O, no Hugo build — so the
+		// added contention on other concurrent writers is a handful of
+		// filesystem stats' worth of hold time, not an unbounded one.
+		idemHash := ""
+		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+			hash, hashErr := requestHash(struct {
+				Slug             string `json:"slug"`
+				Lang             string `json:"lang,omitempty"`
+				ExpectedRevision string `json:"expected_revision,omitempty"`
+			}{
+				Slug:             in.Slug,
+				Lang:             validatedLang,
+				ExpectedRevision: in.ExpectedRevision,
+			})
+			if hashErr != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
+			}
+			idemHash = hash
+			var cached deletePageOutput
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, &cached)
+			if replayErr != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(replayErr)
+			}
+			if hit {
+				return nil, cached, nil
+			}
+		}
+
+		dir, err := pg.SafeJoin(in.Slug)
+		if err != nil {
+			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+		}
+
+		// Return not_found when the source directory does not exist (#266).
+		// This still avoids burning the destructive quota because Allow() has
+		// not run yet, while now preserving the full rate_limit envelope (#725)
+		// and letting successful idempotent replays short-circuit before it.
+		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
 		}
 
 		// Resolve to a single language file via the same
@@ -1174,32 +1264,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		case resolveErr == nil:
 			resolvedSource = resolved
 		case strings.HasPrefix(resolveErr.Error(), "ambiguous_language:"):
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("%s", resolveErr.Error()))
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("%s", resolveErr.Error()))
 		case strings.HasPrefix(resolveErr.Error(), "source_file_not_found:"):
 			if validatedLang != "" {
-				return nil, deletePageOutput{}, wrapErr(resolveErr)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(resolveErr)
 			}
 			resolvedSource = contentmodel.ResolvedSource{}
 		default:
-			return nil, deletePageOutput{}, wrapErr(resolveErr)
-		}
-
-		// Fetching the limiter is not itself a budget-consuming operation —
-		// only Allow() below is — so hoisting it above the dry-run block
-		// lets dry-run report an accurate rate_limit_remaining without
-		// violating the "don't burn budget on dry-run/not_found" invariant
-		// the not_found check above already established (#466).
-		callerKey := mutationCallerKey(ctx)
-		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
-		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithDataFields(
-				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
-				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
-			)
-		}
-		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
-		if err != nil {
-			return nil, deletePageOutput{}, wrapErr(err)
+			return nil, deletePageOutput{}, wrapErrWithLimiter(resolveErr)
 		}
 
 		// dry_run: return page content + backlinks that would break, without touching disk (#267).
@@ -1254,53 +1326,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
 		}
 
-		const lockWait = 10 * time.Second
-		deadline := time.Now().Add(lockWait)
-		for {
-			if hugosite.ContentMu.TryLock() {
-				slog.Debug("delete_page: lock_acquired")
-				break
-			}
-			if time.Now().After(deadline) {
-				slog.Error("delete_page: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		defer func() {
-			hugosite.ContentMu.Unlock()
-			slog.Debug("delete_page: lock_released")
-		}()
-
-		// Idempotency replay check must happen under the content lock: two
-		// genuinely concurrent retries with the same key (the exact
-		// uncertain-delivery scenario this feature protects against) would
-		// otherwise both miss the cache before either has a chance to
-		// remember its result, and the loser would see an unwanted second
-		// delete attempt instead of the intended idempotent replay.
-		idemHash := ""
-		if strings.TrimSpace(in.IdempotencyKey) != "" {
-			hash, hashErr := requestHash(struct {
-				Slug             string `json:"slug"`
-				Lang             string `json:"lang,omitempty"`
-				ExpectedRevision string `json:"expected_revision,omitempty"`
-			}{
-				Slug:             in.Slug,
-				Lang:             validatedLang,
-				ExpectedRevision: in.ExpectedRevision,
-			})
-			if hashErr != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
-			}
-			idemHash = hash
-			var cached deletePageOutput
-			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, &cached)
-			if replayErr != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(replayErr)
-			}
-			if hit {
-				return nil, cached, nil
-			}
+		if err := acquireDeleteLock(); err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
 
 		currentRevision := ""
@@ -1357,6 +1384,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			idx.DeleteLang(in.Slug, resolvedSource.Lang)
 		}
 		var deleteWarning string
+		degradedDelete := false
 		dbDeleteFailed := false
 		if bundleFullyRemoved && siteIdx != nil {
 			siteIdx.RemoveBySlug(in.Slug)
@@ -1368,6 +1396,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				// stale until the next build (#242).
 				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", err)
 				dbDeleteFailed = true
+				degradedDelete = true
 				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", err)
 			}
 		}
@@ -1393,6 +1422,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 					deleteWarning = msg
 				}
 				publicCleanupFailed = true
+				degradedDelete = true
 				slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
 			}
 		}
@@ -1418,6 +1448,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				} else {
 					deleteWarning = msg
 				}
+				degradedDelete = true
 				slog.Warn("delete_page: hero image cleanup failed", "slug", in.Slug, "error", rmErr)
 			} else if removed {
 				slog.Debug("delete_page: removed orphaned hero image", "slug", in.Slug)
@@ -1436,6 +1467,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			} else {
 				deleteWarning = auditMsg
 			}
+			degradedDelete = true
 		}
 
 		if cfg.Cloudflare.Enabled() {
@@ -1447,7 +1479,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 
 		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
 		status := "ok"
-		if deleteWarning != "" {
+		if degradedDelete {
 			status = "partial_success"
 		}
 		var generatedAssetsValue *[]deletePageGeneratedAssetDTO
@@ -1908,9 +1940,17 @@ func validateFrontmatterRoundTrip(content string) error {
 	if end < 0 {
 		return fmt.Errorf("unterminated YAML frontmatter")
 	}
+	yamlBytes := []byte(rest[:end])
 	var fm any
-	if err := yaml.Unmarshal([]byte(rest[:end]), &fm); err != nil {
+	if err := yaml.Unmarshal(yamlBytes, &fm); err != nil {
 		return fmt.Errorf("frontmatter YAML invalid after update: %w", err)
+	}
+	var doc frontmatterDoc
+	if err := yaml.Unmarshal(yamlBytes, &doc); err != nil {
+		return fmt.Errorf("frontmatter YAML invalid after update: %w", err)
+	}
+	if doc.TestContent && !doc.Draft {
+		return fmt.Errorf("test_content pages must remain draft:true until the test_content marker is removed")
 	}
 	body := strings.TrimSpace(rest[end+4:])
 	// Detect duplicated frontmatter: body starts with "---\n" and contains a
