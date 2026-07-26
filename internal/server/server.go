@@ -446,6 +446,9 @@ func postBuildCallbacks(
 				return err
 			}
 			if srcIdx != nil {
+				if err := srcIdx.Reload(cfg.ContentRoot); err != nil {
+					return err
+				}
 				srcIdx.ClearAllBuildPending()
 			}
 			return nil
