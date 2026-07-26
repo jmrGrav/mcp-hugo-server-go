@@ -9,7 +9,25 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func waitForReadToolIndexStaleness(t *testing.T, session *mcp.ClientSession, tool string, args map[string]any) map[string]any {
+	t.Helper()
+
+	deadline := time.Now().Add(250 * time.Millisecond)
+	var last map[string]any
+	for time.Now().Before(deadline) {
+		res := callTool(t, session, tool, args)
+		last = decodeContent(t, res)
+		if _, present := last["index_staleness"]; present {
+			return last
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("%s: index_staleness did not appear before deadline; last payload=%#v", tool, last)
+	return nil
+}
 
 // TestIndexStalenessWiring is a regression test for #583: get_backlinks,
 // get_related_content, and get_broken_links must surface data.index_staleness
@@ -96,16 +114,15 @@ func TestIndexStalenessWiring(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(siteRoot, "posts", "target", "index.html"), future, future); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond) // let the shrunk staleCheckInterval elapse
 
-	backlinks = callTool(t, session, "get_backlinks", map[string]any{"slug": "/posts/target/"})
-	assertStaleness(t, decodeContent(t, backlinks), "get_backlinks")
+	backlinksData := waitForReadToolIndexStaleness(t, session, "get_backlinks", map[string]any{"slug": "/posts/target/"})
+	assertStaleness(t, backlinksData, "get_backlinks")
 
-	related = callTool(t, session, "get_related_content", map[string]any{"slug": "/posts/target/"})
-	assertStaleness(t, decodeContent(t, related), "get_related_content")
+	relatedData := waitForReadToolIndexStaleness(t, session, "get_related_content", map[string]any{"slug": "/posts/target/"})
+	assertStaleness(t, relatedData, "get_related_content")
 
-	broken = callTool(t, session, "get_broken_links", map[string]any{})
-	assertStaleness(t, decodeContent(t, broken), "get_broken_links")
+	brokenData := waitForReadToolIndexStaleness(t, session, "get_broken_links", map[string]any{})
+	assertStaleness(t, brokenData, "get_broken_links")
 }
 
 // TestIndexStalenessLikelySourceReportsMCPPendingBuild is the counterpart
@@ -163,10 +180,8 @@ func TestIndexStalenessLikelySourceReportsMCPPendingBuild(t *testing.T) {
 	if err := os.Chtimes(filepath.Join(siteRoot, "posts", "target", "index.html"), future, future); err != nil {
 		t.Fatalf("chtimes: %v", err)
 	}
-	time.Sleep(5 * time.Millisecond)
 
-	res := callTool(t, session, "get_broken_links", map[string]any{})
-	data := decodeContent(t, res)
+	data := waitForReadToolIndexStaleness(t, session, "get_broken_links", map[string]any{})
 	v, present := data["index_staleness"]
 	if !present {
 		t.Fatal("expected index_staleness to be present on a stale index")
