@@ -582,7 +582,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`) — neither moves the top-level `score`, but a `warning` finding does show a local penalty in `score_breakdown.taxonomy.score`. `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; `status` is `healthy_with_advisories` rather than `healthy` whenever `advisories_count > 0` and the site would otherwise be healthy, so a taxonomy finding is now visible without drilling into `score_breakdown` — `score` itself still never moves for one (#681). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` (`warning`-severity, still zero-weight) finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never contributed to `score`), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`) — neither moves the top-level `score`, but a `warning` finding does show a local penalty in `score_breakdown.taxonomy.score`. `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `status` on an otherwise healthy site, while a `warning`-severity taxonomy finding still promotes `status` to `healthy_with_advisories` without moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning). `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never contributed to `score`), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -1475,11 +1475,11 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[
 	// NOT just score_breakdown.taxonomy.advisories (info-severity only,
 	// #419/#577's established meaning for that sub-field). Both info
 	// (translation_pair) and warning (casing_variant/alias_mismatch/
-	// possible_duplicate) findings are equally invisible to a caller who
-	// only reads status/score — status stays "healthy" and score stays 100
-	// either way, since taxonomy carries zero score weight — so both need
-	// to surface here. Using the narrower info-only definition would have
-	// reported 0 for the exact casing_variant case #591 was filed to catch.
+	// possible_duplicate) findings remain visible here for operators who
+	// want the full picture, even though only warning-severity findings now
+	// degrade the top-level healthy/healthy_with_advisories status (#761).
+	// Using the narrower info-only definition would have reported 0 for the
+	// exact casing_variant case #591 was filed to catch.
 	health.AdvisoriesCount = len(health.TaxonomyInconsistencyDetails)
 
 	score := frontmatterScore
@@ -1492,7 +1492,7 @@ func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[
 	default:
 		health.Status = "critical"
 	}
-	if health.Status == "healthy" && health.AdvisoriesCount > 0 {
+	if health.Status == "healthy" && taxonomyWarnings > 0 {
 		health.Status = "healthy_with_advisories"
 	}
 	return health
