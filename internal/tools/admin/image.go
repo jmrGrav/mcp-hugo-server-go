@@ -17,6 +17,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -169,9 +170,17 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		Name:  "generate_hero_image",
 		Title: "Generate hero image",
 		Description: "Generate a hero/featured image for a page and save it to {HugoRoot}/static/images/{slug}-featured.jpg. " +
+			"`slug` accepts either the canonical public form (`/posts/example/`) or the source-key form (`posts/example`); " +
+			"language-prefixed public slugs are normalized to the same source key before writing. " +
 			"Uses local Go rendering (1200×675 JPEG, Unsplash photo background selected by title hash, dark gradient overlay, title, tags). " +
 			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo).",
-		InputSchema:  tools.MustSchema[generateFeaturedImageInput](),
+		InputSchema: tools.WithEnum(
+			tools.MustSchema[generateFeaturedImageInput](),
+			"style",
+			"",
+			"tech",
+			"geo",
+		),
 		OutputSchema: tools.MustSchema[generateFeaturedImageOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
@@ -180,12 +189,17 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
-		if in.Slug == "" {
+		slug, err := normalizeHeroImageSlug(in.Slug)
+		if err != nil {
+			return nil, generateFeaturedImageOutput{}, err
+		}
+		if slug == "" {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
-		if !validSlug.MatchString(in.Slug) {
+		if !validSlug.MatchString(slug) {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: slug contains invalid characters")
 		}
+		in.Slug = slug
 
 		// External API mode: when image_gen_url is configured and prompt is provided.
 		if cfg.ImageGenURL != "" && in.Prompt != "" {
@@ -269,6 +283,24 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 
 		return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: logicalHugoRootPath(cfg.HugoRoot, destPath)}), nil
 	}))
+}
+
+func normalizeHeroImageSlug(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	if strings.HasPrefix(raw, "/") {
+		if !strings.HasSuffix(raw, "/") {
+			return "", fmt.Errorf("invalid_params: slug must be either a source key like %q or a canonical public slug like %q", "posts/example", "/posts/example/")
+		}
+		raw = strings.Trim(raw, "/")
+	}
+	candidates := site.SourceSlugCandidates(raw)
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("invalid_params: slug must not be empty")
+	}
+	return candidates[len(candidates)-1], nil
 }
 
 func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
