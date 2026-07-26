@@ -187,6 +187,44 @@ func TestPlanPageLanguageFiltersSuggestions(t *testing.T) {
 	}
 }
 
+// TestPlanPageLanguageFilterSurvivesLowSuggestionLimit is a regression test:
+// scoreLinkSuggestions truncates to its limit argument before plan_page ever
+// applies the language filter. With suggestion_limit=1, the EN go-basics
+// candidate ranks ahead of its FR sibling (same score, earlier in scan
+// order) and would be the only one left once truncated — so a naive
+// "score with limit, then filter by language" pipeline would return zero FR
+// suggestions even though the FR sibling exists. plan_page must fetch the
+// full candidate pool before filtering by language, then apply the caller's
+// limit last.
+func TestPlanPageLanguageFilterSurvivesLowSuggestionLimit(t *testing.T) {
+	idx := mustPlanPageIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{
+		"tags":             []any{"go"},
+		"language":         "fr",
+		"suggestion_limit": 1,
+	})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	links, ok := decodeContent(t, res)["suggested_links"].([]any)
+	if !ok || len(links) == 0 {
+		t.Fatalf("plan_page suggested_links = %#v, want the FR go-basics candidate despite suggestion_limit=1", decodeContent(t, res)["suggested_links"])
+	}
+	first, ok := links[0].(map[string]any)
+	if !ok {
+		t.Fatalf("plan_page first suggestion type = %T", links[0])
+	}
+	if got := first["slug"]; got != "/fr/posts/go-basics/" {
+		t.Fatalf("plan_page language=fr, suggestion_limit=1 slug = %v, want /fr/posts/go-basics/", got)
+	}
+	if len(links) != 1 {
+		t.Fatalf("plan_page suggestion_limit=1 returned %d links, want 1", len(links))
+	}
+}
+
 func TestPlanPageOnePerSourceKeyCollapsesTranslations(t *testing.T) {
 	idx := mustPlanPageIndex(t)
 	session, done := newTestClient(t, idx)

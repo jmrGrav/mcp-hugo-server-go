@@ -14,7 +14,7 @@ import (
 )
 
 type planPageInput struct {
-	Topic           string `json:"topic,omitempty"`
+	Topic           string   `json:"topic,omitempty"`
 	Tags            []string `json:"tags,omitempty"`
 	Categories      []string `json:"categories,omitempty"`
 	Language        string   `json:"language,omitempty"`
@@ -24,13 +24,13 @@ type planPageInput struct {
 }
 
 type planPageData struct {
-	ContentTypes       []contentTypeDTO           `json:"content_types"`
-	SpecialFiles       []specialFileDTO           `json:"special_files,omitempty"`
-	RelevantTags       []string                   `json:"relevant_tags,omitempty"`
-	RelevantCategories []string                   `json:"relevant_categories,omitempty"`
-	EmptyCategoriesReason string                  `json:"empty_categories_reason,omitempty"`
-	SuggestedLinks     []linkSuggestionDTO        `json:"suggested_links,omitempty"`
-	EmptyLinksReason   *emptyResultExplanationDTO `json:"empty_links_reason,omitempty"`
+	ContentTypes          []contentTypeDTO           `json:"content_types"`
+	SpecialFiles          []specialFileDTO           `json:"special_files,omitempty"`
+	RelevantTags          []string                   `json:"relevant_tags,omitempty"`
+	RelevantCategories    []string                   `json:"relevant_categories,omitempty"`
+	EmptyCategoriesReason string                     `json:"empty_categories_reason,omitempty"`
+	SuggestedLinks        []linkSuggestionDTO        `json:"suggested_links,omitempty"`
+	EmptyLinksReason      *emptyResultExplanationDTO `json:"empty_links_reason,omitempty"`
 }
 
 type planPageOutput struct {
@@ -54,7 +54,7 @@ func RegisterPlanPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 		return
 	}
 	addReadOnlyTool(s, "plan_page", "Plan a new page",
-		"Pre-writing scaffold bundling three calls into one, before you write the first line of a new article: `content_types`/`special_files` (identical to list_content_types — the expected archetype and front matter fields for the site's content types), `relevant_tags`/`relevant_categories` (the subset of the site's existing tag/category vocabulary matching `topic` or any of the submitted `tags`/`categories`, via a case-insensitive substring match in either direction — this also surfaces an existing differently-cased spelling for a tag/category you're about to introduce, e.g. submitting `tags: [\"Debug\"]` when the index already has \"debug\" returns \"debug\" in `relevant_tags\"`), and `suggested_links` (identical to suggest_links — internal-linking candidates scored by shared tags/categories, using `topic` as the body-mention text) when at least one of `tags`/`categories` is provided (omitted with `empty_links_reason` when neither is set, since suggest_links itself requires at least one to score anything). `language` filters suggestions to one language, `suggestion_limit` narrows just the suggestion list, and `one_per_source_key=true` collapses translation siblings to one conceptual recommendation while preserving the default backward-compatible ungrouped behavior. `response_mode:\"compact\"` keeps planning guidance but trims heavyweight content-type detail. All three facets are read-only and reuse the exact same underlying logic as their standalone tools — nothing here is a new heuristic beyond the tag/category substring match and optional translation grouping. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		"Pre-writing scaffold bundling three calls into one, before you write the first line of a new article: `content_types`/`special_files` (identical to list_content_types — the expected archetype and front matter fields for the site's content types), `relevant_tags`/`relevant_categories` (the subset of the site's existing tag/category vocabulary matching `topic` or any of the submitted `tags`/`categories`, via a case-insensitive substring match in either direction — this also surfaces an existing differently-cased spelling for a tag/category you're about to introduce, e.g. submitting `tags: [\"Debug\"]` when the index already has \"debug\" returns \"debug\" in `relevant_tags\"`), and `suggested_links` (identical to suggest_links — internal-linking candidates scored by shared tags/categories, using `topic` as the body-mention text) when at least one of `tags`/`categories` is provided (omitted with `empty_links_reason` when neither is set, since suggest_links itself requires at least one to score anything). `language` filters suggestions to one language and `one_per_source_key=true` collapses translation siblings to one conceptual recommendation while preserving the default backward-compatible ungrouped behavior — both are applied against the full scored candidate pool, not a pre-truncated one, so a matching lower-ranked candidate is never lost to `suggestion_limit` before the filter runs; `suggestion_limit` narrows only the final suggestion list. `response_mode:\"compact\"` keeps planning guidance but trims heavyweight content-type detail. All three facets are read-only and reuse the exact same underlying logic as their standalone tools — nothing here is a new heuristic beyond the tag/category substring match and optional translation grouping. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in planPageInput) (*mcp.CallToolResult, planPageOutput, error) {
 			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 			if err != nil {
@@ -85,10 +85,28 @@ func RegisterPlanPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 
 				if len(in.Tags) > 0 || len(in.Categories) > 0 {
 					limit := clampLimit(in.SuggestionLimit, 10, 20)
-					suggestions, evaluated := scoreLinkSuggestions(idx, "", in.Tags, in.Categories, in.Topic, limit)
+					// scoreLinkSuggestions truncates to its limit argument
+					// *before* language filtering/collapsing ever runs. If we
+					// asked it for exactly `limit` and then filtered by
+					// language or collapsed translation siblings, a
+					// lower-ranked matching candidate that exists just past
+					// the truncation boundary would never be seen — the
+					// caller could get an empty or short result even though
+					// enough real candidates existed further down the ranked
+					// list. When either filter is requested, fetch the full
+					// scored candidate pool instead so filtering/collapsing
+					// sees everything before the final limit is applied.
+					fetchLimit := limit
+					if in.Language != "" || in.OnePerSourceKey {
+						fetchLimit = len(idx.Sitemap())
+					}
+					suggestions, evaluated := scoreLinkSuggestions(idx, "", in.Tags, in.Categories, in.Topic, fetchLimit)
 					suggestions = filterSuggestionsByLanguage(idx, suggestions, in.Language)
 					if in.OnePerSourceKey {
 						suggestions = collapseSuggestionsBySourceKey(suggestions)
+					}
+					if len(suggestions) > limit {
+						suggestions = suggestions[:limit]
 					}
 					suggestedLinks = suggestions
 					if len(suggestions) == 0 {
@@ -98,13 +116,13 @@ func RegisterPlanPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			}
 
 			return nil, newPlanPageOutput(planPageData{
-				ContentTypes:       contentTypes,
-				SpecialFiles:       specialFiles,
-				RelevantTags:       relevantTags,
-				RelevantCategories: relevantCategories,
+				ContentTypes:          contentTypes,
+				SpecialFiles:          specialFiles,
+				RelevantTags:          relevantTags,
+				RelevantCategories:    relevantCategories,
 				EmptyCategoriesReason: emptyCategoriesReason,
-				SuggestedLinks:     suggestedLinks,
-				EmptyLinksReason:   emptyLinksReason,
+				SuggestedLinks:        suggestedLinks,
+				EmptyLinksReason:      emptyLinksReason,
 			}, time.Now().UTC()), nil
 		})
 }
