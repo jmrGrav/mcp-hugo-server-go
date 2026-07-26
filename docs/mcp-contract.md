@@ -381,7 +381,7 @@ content, including drafts, for every tool in this table.
 | `check_ai_readiness` | structured  | `data.status`, `data.checks`, `data.warnings`, `data.suggestions`; deterministic Markdown/frontmatter-only audit for heading hierarchy, section lengths, paragraph lengths, metadata presence, internal-link density, and citation structure. Explicitly does **not** cover rendered HTML, SEO, build freshness, or broken-link correctness (#437); does not yet support `response_mode` compact shaping (#526) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo; supports `response_mode` compact envelope shaping (§5.2, #526); top-level duplication removed (#495) |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state`; supports `response_mode` compact envelope shaping (§5.2, #526); a non-default-language page's route prefix (e.g. `en` in `/en/posts/foo/`) is stripped before section counting and only ever surfaced via `data.languages`, never as a `data.sections[*].name` (#459); top-level duplication removed (#495) |
-| `get_site_health`       | structured  | `data.score`, `data.status`, counts; supports `response_mode` compact envelope shaping (§5.2, #526); `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); `data.advisories_count` is the total count of `data.taxonomy_inconsistency_details` findings across *both* `info` and `warning` severity, at the top level next to `score`/`status` — never moves `score`; deliberately broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings (#591); `data.status` is `"healthy_with_advisories"` rather than `"healthy"` whenever `advisories_count > 0` on an otherwise-healthy site — `score` itself still never moves for a taxonomy finding, so `status` alone no longer masks one (#681); top-level duplication removed (#495) |
+| `get_site_health`       | structured  | `data.score`, `data.status`, counts; supports `response_mode` compact envelope shaping (§5.2, #526); `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); `data.advisories_count` is the total count of `data.taxonomy_inconsistency_details` findings across *both* `info` and `warning` severity, at the top level next to `score`/`status`; deliberately broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings (#591); `data.status` is `"healthy_with_advisories"` rather than `"healthy"` whenever `advisories_count > 0` on an otherwise-healthy site (#681); info-only taxonomy findings still leave `data.score` untouched, but warning-level taxonomy findings now cap an otherwise-perfect top-level score at `99` so the payload no longer advertises a perfect `100` while surfacing actionable drift (#719); top-level duplication removed (#495) |
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`; supports `response_mode` compact envelope shaping (§5.2, #526); `data.index_staleness` (`newest_edit`, `likely_source`) is present only on the in-memory fallback path (not the `db_path` pre-computed-graph path) when the index is behind on-disk content — absent means current (#583); `likely_source` is `"mcp_pending_build"` or `"external_or_unknown"`, a coarse best-effort hint (#617); top-level duplication removed (#495) |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`; supports `response_mode` compact envelope shaping (§5.2, #526); `data.index_staleness` (`newest_edit`, `likely_source`) is present only when the index is behind on-disk content — absent means current (#583); `likely_source` is `"mcp_pending_build"` or `"external_or_unknown"`, a coarse best-effort hint (#617); top-level duplication removed (#495) |
 | `suggest_links`         | structured  | `data.suggested_links` is canonical; supports `response_mode` compact envelope shaping (§5.2, #526); the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); top-level duplication removed (#495); when tag/category taxonomy overlap yields zero candidates but `body` is provided, falls back to lexical term matching against the same indexed page fields `search_pages`/`search_content` already score against (via the existing `scoreContentPage` matcher) — reused rather than a new search subsystem, so it works on reader-only deployments without a `db_path`/FTS dependency; taxonomy-based candidates always take precedence and suppress the lexical fallback entirely whenever any exist (#680) |
@@ -677,15 +677,20 @@ still listed a finding — an agent had no way to tell *why* a listed finding
 didn't move the score short of re-deriving the server's internal scoring
 logic.
 
-Two additive fields. `score`/`status` are byte-for-byte the same formula as
-before #419 for every input — this is presentation only, not a scoring
-algorithm change (per the issue's own scope note):
+Two additive fields. #419 itself was presentation-only: it exposed
+`taxonomy_inconsistency_details[*].severity` and `score_breakdown` without
+changing the underlying score formula. Later follow-up issues refined only
+the *meaning* of the exposed top-level score/status when taxonomy drift is
+present:
 
 - Each entry in `taxonomy_inconsistency_details[*]` now carries a
   `severity`: `"info"` (`translation_pair` — the site's own localization,
   never counted as an issue) or `"warning"` (`alias_mismatch`/
-  `possible_duplicate`/`casing_variant` — counted as an issue, but still
-  never penalizes the top-level `score`, exactly as before #419).
+  `possible_duplicate`/`casing_variant` — counted as an issue). Info-only
+  findings still never penalize the top-level `score`; warning findings are
+  still zero-weight in `score_breakdown.taxonomy.weight`, but #719 caps an
+  otherwise-perfect top-level score at `99` so the payload no longer says
+  "100/healthy enough" while also surfacing actionable drift.
   `casing_variant` (#577) is a same-language, same-word, different-casing
   finding (e.g. `Infrastructure`/`infrastructure` both used on English
   pages) — a blind spot `possible_duplicate`/`translation_pair` never
@@ -700,7 +705,9 @@ algorithm change (per the issue's own scope note):
   the only category the formula has ever penalized — `frontmatter.score`
   always equals the top-level `score`) and `taxonomy` carries weight 0
   (`taxonomy.score` is informational, a local per-finding penalty shown for
-  reference, and never feeds into the top-level `score`).
+  reference, and never directly feeds weighted points into the top-level
+  `score`; the only top-level taxonomy effect is the #719 perfect-score cap
+  described above).
 
 `score_breakdown` deliberately covers only `frontmatter` and `taxonomy` —
 the two categories this server computes a real signal for today. It omits
@@ -708,10 +715,14 @@ the two categories this server computes a real signal for today. It omits
 publishing a fabricated 100 for a category with no underlying check would
 be more misleading than omitting it.
 
-No behavior change vs. pre-#419: `score` is identical for every input,
-including sites with `alias_mismatch`/`possible_duplicate` findings.
-`status`, however, changed under #681 below — it is no longer identical to
-pre-#419 whenever a taxonomy finding is present.
+Behavior summary today:
+
+- `translation_pair` / `info` findings: `score` unchanged, `status` may
+  still become `healthy_with_advisories`
+- warning-severity taxonomy drift: `score_breakdown.taxonomy` shows the
+  local issue, `status` becomes `healthy_with_advisories`, and a would-be
+  perfect top-level `score: 100` is capped to `99`
+- frontmatter issues still drive the underlying weighted score as before
 
 ### `status: "healthy_with_advisories"` (#681)
 

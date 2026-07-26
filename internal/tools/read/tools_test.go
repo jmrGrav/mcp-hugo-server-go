@@ -3190,8 +3190,8 @@ func TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly(t *testin
 		t.Fatalf("status = %q, want healthy_with_advisories", status)
 	}
 	score, _ := data["score"].(float64)
-	if score != 100 {
-		t.Fatalf("score = %v, want 100 — a taxonomy warning must not move the top-level score (#419 is presentation-only)", score)
+	if score != 99 {
+		t.Fatalf("score = %v, want 99 — actionable taxonomy warnings must no longer coexist with a perfect score (#719)", score)
 	}
 	breakdown := data["score_breakdown"].(map[string]any)
 	taxonomy := breakdown["taxonomy"].(map[string]any)
