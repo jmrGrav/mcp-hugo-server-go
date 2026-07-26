@@ -68,9 +68,51 @@ func TestRunPostBuildHooksSchemaPublishesDryRunBooleanContract(t *testing.T) {
 	if strings.Contains(strings.ToLower(tool.Description), "no arguments") {
 		t.Fatalf("run_post_build_hooks description still implies no-arg contract: %q", tool.Description)
 	}
-	for _, needle := range []string{"dry_run:true", "configured_count", "never performs network calls"} {
+	for _, needle := range []string{"dry_run:true", "configured_count", "without contacting them"} {
 		if !strings.Contains(tool.Description, needle) {
 			t.Fatalf("run_post_build_hooks description = %q, want substring %q", tool.Description, needle)
+		}
+	}
+}
+
+func TestGenerateHeroImagePublishesStyleEnum(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	result, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var tool *mcp.Tool
+	for i := range result.Tools {
+		if result.Tools[i].Name == "generate_hero_image" {
+			tool = result.Tools[i]
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("generate_hero_image not found in tools list")
+	}
+	style := schemaAt(t, tool, "inputSchema.style")
+	enumRaw, ok := style["enum"].([]any)
+	if !ok {
+		t.Fatalf("generate_hero_image inputSchema.style enum type = %T, want []any", style["enum"])
+	}
+	got := make([]string, 0, len(enumRaw))
+	for _, v := range enumRaw {
+		got = append(got, v.(string))
+	}
+	want := []string{"", "tech", "geo"}
+	if len(got) != len(want) {
+		t.Fatalf("generate_hero_image style enum = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("generate_hero_image style enum = %v, want %v", got, want)
 		}
 	}
 }

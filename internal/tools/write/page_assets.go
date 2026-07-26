@@ -146,7 +146,7 @@ func decodeAndValidateAssetContent(b64, ext, wantMIME string) ([]byte, error) {
 	sniffed := http.DetectContentType(data[:sniffLen])
 	base, _, _ := strings.Cut(sniffed, ";")
 	if strings.TrimSpace(base) != wantMIME {
-		return nil, fmt.Errorf("invalid_params: uploaded content does not match declared extension %q (sniffed %q)", ext, sniffed)
+		return nil, fmt.Errorf("invalid_params: filename/content_base64 mismatch: uploaded content does not match declared extension %q (sniffed %q)", ext, sniffed)
 	}
 	return data, nil
 }
@@ -234,12 +234,18 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			in.DryRun = true
 		}
 		slug := normalizeInputSlug(in.Slug)
+		wrapErr := func(err error, filename string) error {
+			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{
+				Slug:     slug,
+				Filename: filename,
+			})
+		}
 		if slug == "" {
-			return nil, uploadPageAssetOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
+			return nil, uploadPageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"), strings.TrimSpace(in.Filename))
 		}
 		filename, ext, wantMIME, err := validateAssetFilename(in.Filename)
 		if err != nil {
-			return nil, uploadPageAssetOutput{}, err
+			return nil, uploadPageAssetOutput{}, wrapErr(err, strings.TrimSpace(in.Filename))
 		}
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
@@ -249,6 +255,15 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
 			)
 		}
+		wrapErrWithLimiterAndInput := func(err error, filename string) error {
+			return toolcontract.WithDataFields(
+				wrapErrWithLimiter(err),
+				map[string]any{
+					"slug":     slug,
+					"filename": filename,
+				},
+			)
+		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
 		// original position, so every non-dry-run failure path below
 		// (invalid content, already_exists, build_in_progress, etc.) keeps
@@ -256,11 +271,11 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		// expensive) base64 decode below still happens behind the limiter —
 		// only the dry-run path changes here.
 		if !in.DryRun && !limiter.Allow() {
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("upload_page_asset", cfg.RateLimit.CreateUpdatePerMin, limiter))
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(rateLimitExceededErr("upload_page_asset", cfg.RateLimit.CreateUpdatePerMin, limiter), filename), filename)
 		}
 		data, err := decodeAndValidateAssetContent(in.ContentBase64, ext, wantMIME)
 		if err != nil {
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(err)
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, filename), filename)
 		}
 
 		const lockWait = 10 * time.Second
@@ -272,7 +287,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			}
 			if time.Now().After(deadline) {
 				slog.Error("upload_page_asset: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+				return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"), filename), filename)
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -282,12 +297,12 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}()
 
 		if err := validateBundleSlug(idx, slug); err != nil {
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(err)
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, filename), filename)
 		}
 		dir, err := pg.SafeJoin(slug)
 		if err != nil {
 			slog.Warn("upload_page_asset: path validation failed", "slug", slug, "error", err)
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("invalid_params: path validation failed"), filename), filename)
 		}
 		filePath := filepath.Join(dir, filename)
 
@@ -305,13 +320,13 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				Sha256   string `json:"sha256"`
 			}{Slug: slug, Filename: filename, Sha256: hash})
 			if hashErr != nil {
-				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
+				return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("internal_error: failed to hash idempotency request"), filename), filename)
 			}
 			idemHash = h
 			var cached uploadPageAssetOutput
 			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "upload_page_asset", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
-				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(replayErr)
+				return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(replayErr, filename), filename)
 			}
 			if hit {
 				return nil, cached, nil
@@ -319,10 +334,10 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		if _, statErr := os.Stat(filePath); statErr == nil {
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: asset already exists at %q", filename))
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("already_exists: asset already exists at %q", filename), filename), filename)
 		} else if !os.IsNotExist(statErr) {
 			slog.Error("upload_page_asset: stat failed", "slug", slug, "filename", filename, "error", statErr)
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to inspect destination path"))
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("read_error: failed to inspect destination path"), filename), filename)
 		}
 
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
@@ -344,14 +359,14 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("upload_page_asset: symlink-swap detected before write", "slug", slug, "error", err)
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("security_error: symlink detected in write path"), filename), filename)
 		}
 		if err := fileutil.AtomicCreateCheckedBytes(filePath, data, pg); err != nil {
 			if errors.Is(err, fs.ErrExist) {
-				return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: asset already exists at %q", filename))
+				return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("already_exists: asset already exists at %q", filename), filename), filename)
 			}
 			slog.Error("upload_page_asset: write failed", "slug", slug, "filename", filename, "error", err)
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write asset"))
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("write_error: failed to write asset"), filename), filename)
 		}
 
 		out := newUploadPageAssetOutput(uploadPageAssetData{

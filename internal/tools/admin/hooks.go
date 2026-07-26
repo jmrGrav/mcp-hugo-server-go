@@ -79,7 +79,7 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "run_post_build_hooks",
 		Title:        "Run post-build hooks",
-		Description:  "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Set `dry_run:true` to validate the configured hook list without contacting any external destination; in that mode the response reports `configured_count` and the URL list that would be visited, but never performs network calls. Omitting `dry_run` (or passing false) executes the hooks normally. Only configured URLs are ever reported or contacted.",
+		Description:  "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Set `dry_run:true` to inspect the configured hook targets without contacting them; this returns the same `results[]` URL list plus `configured_count`, making `no hooks configured` distinguishable from `hooks configured but intentionally not executed`. Only configured URLs are ever reported or contacted.",
 		InputSchema:  tools.MustSchema[runPostBuildHooksInput](),
 		OutputSchema: tools.MustSchema[runPostBuildHooksOutput](),
 		Annotations: &mcp.ToolAnnotations{

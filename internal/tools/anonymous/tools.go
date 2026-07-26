@@ -313,6 +313,12 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	resolver := site.NewPageResolver(idx, srcIdx, cfg)
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 	RegisterGetChangelog(s)
+	registerAnonymousBrowseTools(s, idx, srcIdx, resolver, cfg, aliases)
+	registerAnonymousTaxonomyAndFeedTools(s, idx, srcIdx, aliases)
+	registerAnonymousSiteMetadataTools(s, idx)
+}
+
+func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config, aliases map[string]string) {
 	addReadOnlyTool(s, "list_pages", "Browse pages", "Browse published content pages (articles and pages, not taxonomy list pages) with pagination. Returns slug, title, summary, tags, categories, date, URL. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. For the full URL inventory including taxonomy pages use get_sitemap.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listPagesInput) (*mcp.CallToolResult, listPagesOutput, error) {
 			if idx == nil {
@@ -476,7 +482,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		},
 		func(s any) any { return tools.WithMaxLimit(s, "limit", 50) },
 	)
+}
 
+func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) {
 	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
 			if idx == nil {
@@ -609,7 +617,9 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			meta := toolcontract.ComputePagination(total, limit, offset, len(items))
 			return nil, newGetFeedOutput(getFeedData{Items: items, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
+}
 
+func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index) {
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ getSiteInformationInput) (*mcp.CallToolResult, getSiteInformationOutput, error) {
 			if idx == nil {

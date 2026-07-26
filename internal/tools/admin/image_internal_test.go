@@ -57,8 +57,8 @@ func TestLogicalHugoRootPath(t *testing.T) {
 }
 
 func TestRegisterNilServer(t *testing.T) {
-	Register(nil, config.Default())
-	RegisterSiteAdmin(nil, config.Default())
+	Register(nil, config.Default(), nil)
+	RegisterSiteAdmin(nil, config.Default(), nil)
 	RegisterBuild(nil, config.Default())
 	RegisterPreviewBuild(nil, config.Default())
 	RegisterHooks(nil, config.Default())

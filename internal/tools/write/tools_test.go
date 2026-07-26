@@ -82,6 +82,17 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 	return session, idx, func() { _ = session.Close() }
 }
 
+func waitForStartSignals(t *testing.T, started <-chan struct{}, want int) {
+	t.Helper()
+	for i := 0; i < want; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for goroutine start signal %d/%d", i+1, want)
+		}
+	}
+}
+
 func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
 	t.Helper()
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
@@ -468,6 +479,109 @@ func TestCreatePageRejectsHostileSlugCorpus(t *testing.T) {
 			}
 			if len(entries) != 0 {
 				t.Fatalf("create_page(%q) wrote unexpected entries under content root: %v", tc.slug, entries)
+			}
+		})
+	}
+}
+
+func TestUpdatePageRejectsHostileSlugCorpus(t *testing.T) {
+	cases := []struct {
+		name string
+		slug string
+	}{
+		{name: "raw traversal", slug: "../escape"},
+		{name: "encoded traversal", slug: "%2e%2e/escape"},
+		{name: "double encoded traversal", slug: "%252e%252e/escape"},
+		{name: "backslash traversal", slug: `..\\escape`},
+		{name: "absolute path", slug: "/tmp/escape"},
+		{name: "unicode confusable slash", slug: "posts∕escape"},
+		{name: "control character", slug: "posts/\x07escape"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contentRoot := t.TempDir()
+			victimDir := filepath.Join(contentRoot, "posts", "victim")
+			if err := os.MkdirAll(victimDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll victim: %v", err)
+			}
+			victimPath := filepath.Join(victimDir, "index.md")
+			original := []byte("---\ntitle: Victim\n---\nDo not touch me.\n")
+			if err := os.WriteFile(victimPath, original, 0o644); err != nil {
+				t.Fatalf("WriteFile victim: %v", err)
+			}
+
+			session, _, done := newTestServer(t, contentRoot)
+			defer done()
+
+			res := callTool(t, session, "update_page", map[string]any{
+				"slug":  tc.slug,
+				"title": "Hostile update",
+			})
+			if !res.IsError {
+				t.Fatalf("update_page(%q): want rejection, got success", tc.slug)
+			}
+			if raw := marshalContent(t, res); !strings.Contains(raw, "invalid_params") && !strings.Contains(raw, "not_found") {
+				t.Fatalf("update_page(%q) raw error = %s, want invalid_params or not_found", tc.slug, raw)
+			}
+
+			got, err := os.ReadFile(victimPath)
+			if err != nil {
+				t.Fatalf("ReadFile victim: %v", err)
+			}
+			if string(got) != string(original) {
+				t.Fatalf("update_page(%q) mutated victim page:\n%s", tc.slug, string(got))
+			}
+		})
+	}
+}
+
+func TestDeletePageRejectsHostileSlugCorpus(t *testing.T) {
+	cases := []struct {
+		name string
+		slug string
+	}{
+		{name: "raw traversal", slug: "../escape"},
+		{name: "encoded traversal", slug: "%2e%2e/escape"},
+		{name: "double encoded traversal", slug: "%252e%252e/escape"},
+		{name: "backslash traversal", slug: `..\\escape`},
+		{name: "absolute path", slug: "/tmp/escape"},
+		{name: "unicode confusable slash", slug: "posts∕escape"},
+		{name: "control character", slug: "posts/\x07escape"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contentRoot := t.TempDir()
+			victimDir := filepath.Join(contentRoot, "posts", "victim")
+			if err := os.MkdirAll(victimDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll victim: %v", err)
+			}
+			victimPath := filepath.Join(victimDir, "index.md")
+			original := []byte("---\ntitle: Victim\n---\nDo not delete me.\n")
+			if err := os.WriteFile(victimPath, original, 0o644); err != nil {
+				t.Fatalf("WriteFile victim: %v", err)
+			}
+
+			session, _, done := newTestServer(t, contentRoot)
+			defer done()
+
+			res := callTool(t, session, "delete_page", map[string]any{
+				"slug": tc.slug,
+			})
+			if !res.IsError {
+				t.Fatalf("delete_page(%q): want rejection, got success", tc.slug)
+			}
+			if raw := marshalContent(t, res); !strings.Contains(raw, "invalid_params") && !strings.Contains(raw, "not_found") {
+				t.Fatalf("delete_page(%q) raw error = %s, want invalid_params or not_found", tc.slug, raw)
+			}
+
+			got, err := os.ReadFile(victimPath)
+			if err != nil {
+				t.Fatalf("ReadFile victim: %v", err)
+			}
+			if string(got) != string(original) {
+				t.Fatalf("delete_page(%q) mutated victim page:\n%s", tc.slug, string(got))
 			}
 		})
 	}
@@ -871,16 +985,18 @@ func TestCreatePageIdempotencyKeyRaceOnConcurrentRetries(t *testing.T) {
 	hugosite.ContentMu.Lock()
 
 	results := make(chan *mcp.CallToolResult, 2)
+	started := make(chan struct{}, 2)
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			started <- struct{}{}
 			results <- callTool(t, session, "create_page", args)
 		}()
 	}
 
-	time.Sleep(150 * time.Millisecond)
+	waitForStartSignals(t, started, 2)
 	hugosite.ContentMu.Unlock()
 	wg.Wait()
 	close(results)
@@ -977,6 +1093,53 @@ func TestDeletePageIdempotencyKeyReturnsOriginalResultWithoutReapplying(t *testi
 	}
 	if _, err := os.Stat(filepath.Join(dir, "index.md")); err != nil {
 		t.Fatalf("replayed delete_page should not re-delete recreated file: %v", err)
+	}
+}
+
+// TestDeletePageIdempotencyKeyReplaysAfterSuccessfulDeletionWithoutRequiring
+// The Resource To Still Exist is the exact live-audit failure from v1.6.4:
+// after a successful delete, retrying the same delete with the same
+// idempotency_key must replay the stored success result, not re-resolve the
+// slug and fail with not_found merely because the first delete already
+// removed it.
+func TestDeletePageIdempotencyKeyReplaysAfterSuccessfulDeletionWhenSlugIsGone(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/idem-delete-gone",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	args := map[string]any{
+		"slug":              "posts/idem-delete-gone",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "idem-delete-gone", "index.md")),
+		"idempotency_key":   "idem-delete-gone-1",
+	}
+	first := callTool(t, session, "delete_page", args)
+	if first.IsError {
+		t.Fatalf("first delete_page failed: %s", marshalContent(t, first))
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "idem-delete-gone")); !os.IsNotExist(err) {
+		t.Fatalf("slug directory still exists after first delete: stat err = %v, want IsNotExist", err)
+	}
+
+	second := callTool(t, session, "delete_page", args)
+	if second.IsError {
+		t.Fatalf("second delete_page replay failed: %s", marshalContent(t, second))
+	}
+
+	firstOut := decodeWriteContent(t, first)
+	secondOut := decodeWriteContent(t, second)
+	if !reflect.DeepEqual(firstOut, secondOut) {
+		t.Fatalf("delete_page replay envelope changed after resource was gone\nfirst:  %#v\nsecond: %#v", firstOut, secondOut)
 	}
 }
 
@@ -1232,14 +1395,16 @@ func TestDeletePageDetectsRevisionChangeWhileWaitingForLock(t *testing.T) {
 	defer hugosite.ContentMu.Unlock()
 
 	resultCh := make(chan *mcp.CallToolResult, 1)
+	started := make(chan struct{}, 1)
 	go func() {
+		started <- struct{}{}
 		resultCh <- callTool(t, session, "delete_page", map[string]any{
 			"slug":              slug,
 			"expected_revision": expected,
 		})
 	}()
 
-	time.Sleep(150 * time.Millisecond)
+	waitForStartSignals(t, started, 1)
 	if err := os.WriteFile(filePath, []byte("---\ntitle: Race Target\n---\nchanged while waiting"), 0o644); err != nil {
 		t.Fatalf("WriteFile while lock held: %v", err)
 	}
@@ -1438,6 +1603,20 @@ func TestDeletePageNotFoundPreservesRequestContext(t *testing.T) {
 	}
 	if got := reqCtx["slug"]; got != "posts/does-not-exist" {
 		t.Fatalf("request_context.slug = %v, want posts/does-not-exist", got)
+	}
+	if got := m["rate_limit_remaining"]; got == nil {
+		t.Fatal("rate_limit_remaining missing on delete_page not_found error")
+	}
+	data := decodeWriteErrorData(t, res)
+	bucket, ok := data["rate_limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("delete_page not_found data.rate_limit = %#v, want object", data["rate_limit"])
+	}
+	if got := bucket["scope"]; got != "destructive" {
+		t.Fatalf("delete_page not_found data.rate_limit.scope = %v, want %q", got, "destructive")
+	}
+	if got := data["rate_limit_remaining"]; got == nil {
+		t.Fatal("delete_page not_found data.rate_limit_remaining missing")
 	}
 	if _, present := m["resolved_source_path"]; present {
 		t.Fatalf("resolved_source_path = %v, want omitted on error", m["resolved_source_path"])
@@ -2055,8 +2234,14 @@ func TestDeletePageOneLanguageSurvivesTheOther(t *testing.T) {
 		t.Fatalf("delete_page(lang=en) failed: %s", raw)
 	}
 	data := decodeWriteData(t, res)
+	if got := data["status"]; got != "ok" {
+		t.Fatalf("status = %v, want ok for a successful scoped multilingual delete", got)
+	}
 	if got, _ := data["bundle_fully_removed"].(bool); got {
 		t.Error("bundle_fully_removed = true, want false — the fr translation still exists")
+	}
+	if _, present := data["bundle_fully_removed"]; !present {
+		t.Fatal("bundle_fully_removed missing, want explicit false on partial multilingual delete")
 	}
 
 	if _, err := os.Stat(filepath.Join(pageDir, "index.en.md")); !os.IsNotExist(err) {
@@ -2700,7 +2885,8 @@ func TestDeletePageDryRunPredictsBundleRemovalScope(t *testing.T) {
 		"dry_run": true,
 	})
 	if res.IsError {
-		t.Fatalf("delete_page dry_run(lang=en) failed: %s", marshalContent(t, res))
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page dry_run(lang=en) failed: %s", raw)
 	}
 	data := decodeWriteData(t, res)
 	if _, present := data["bundle_fully_removed"]; present {
@@ -2719,7 +2905,8 @@ func TestDeletePageDryRunPredictsBundleRemovalScope(t *testing.T) {
 		"dry_run": true,
 	})
 	if res.IsError {
-		t.Fatalf("delete_page dry_run(lang=fr,last) failed: %s", marshalContent(t, res))
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page dry_run(lang=fr,last) failed: %s", raw)
 	}
 	data = decodeWriteData(t, res)
 	if got := data["bundle_will_be_fully_removed"]; got != true {

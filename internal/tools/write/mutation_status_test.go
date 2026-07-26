@@ -218,9 +218,10 @@ func TestGetMutationStatusSucceededAfterApplyContentPlan(t *testing.T) {
 	if planRes.IsError {
 		t.Fatalf("plan_content_change failed: %s", marshalContent(t, planRes))
 	}
-	planID, _ := decodeWriteData(t, planRes)["plan_id"].(string)
+	planData := decodeWriteData(t, planRes)
+	planID, _ := planData["plan_id"].(string)
 	if planID == "" {
-		t.Fatal("plan_content_change returned empty plan_id")
+		t.Fatalf("plan_content_change did not return plan_id: %#v", planData)
 	}
 
 	applyRes := callTool(t, session, "apply_content_plan", map[string]any{
@@ -242,6 +243,9 @@ func TestGetMutationStatusSucceededAfterApplyContentPlan(t *testing.T) {
 	statusData := decodeWriteData(t, status)
 	if statusData["status"] != "succeeded" {
 		t.Fatalf("get_mutation_status data.status = %v, want succeeded", statusData["status"])
+	}
+	if statusData["tool"] != "apply_content_plan" {
+		t.Fatalf("get_mutation_status data.tool = %v, want apply_content_plan", statusData["tool"])
 	}
 	result, ok := statusData["result"].(map[string]any)
 	if !ok {
@@ -284,9 +288,10 @@ func TestGetMutationStatusSucceededAfterRollbackChange(t *testing.T) {
 	if planRes.IsError {
 		t.Fatalf("plan_content_change failed: %s", marshalContent(t, planRes))
 	}
-	planID, _ := decodeWriteData(t, planRes)["plan_id"].(string)
+	planData := decodeWriteData(t, planRes)
+	planID, _ := planData["plan_id"].(string)
 	if planID == "" {
-		t.Fatal("plan_content_change returned empty plan_id")
+		t.Fatalf("plan_content_change did not return plan_id: %#v", planData)
 	}
 
 	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
@@ -315,6 +320,9 @@ func TestGetMutationStatusSucceededAfterRollbackChange(t *testing.T) {
 	statusData := decodeWriteData(t, status)
 	if statusData["status"] != "succeeded" {
 		t.Fatalf("get_mutation_status data.status = %v, want succeeded", statusData["status"])
+	}
+	if statusData["tool"] != "rollback_change" {
+		t.Fatalf("get_mutation_status data.tool = %v, want rollback_change", statusData["tool"])
 	}
 	result, ok := statusData["result"].(map[string]any)
 	if !ok {

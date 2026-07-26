@@ -40,6 +40,18 @@ func TestGetPageFrontmatterLifecycleStateTracksOutOfBandSourceEdits(t *testing.T
 	sourcePath := filepath.Join(contentRoot, "posts", "hello.md")
 	write(sourcePath, "---\ntitle: Hello\ndate: 2026-07-25T10:00:00Z\ncategories:\n  - Tutorials\n---\nHello source body.\n")
 
+	// Make the initial baseline deterministic: this test is about out-of-band
+	// transitions after the first read, not about whichever file write landed
+	// last on a filesystem with coarse mtimes.
+	baseline := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(sourcePath, baseline, baseline); err != nil {
+		t.Fatalf("chtimes source baseline: %v", err)
+	}
+	publicBaseline := baseline.Add(1 * time.Minute)
+	if err := os.Chtimes(publicPath, publicBaseline, publicBaseline); err != nil {
+		t.Fatalf("chtimes public baseline: %v", err)
+	}
+
 	cfg := config.Default()
 	cfg.SiteRoot = siteRoot
 	cfg.ContentRoot = contentRoot

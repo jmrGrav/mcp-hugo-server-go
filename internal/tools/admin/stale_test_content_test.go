@@ -153,3 +153,71 @@ func TestCheckStaleTestContentIgnoresUnexpiredExplicitTestContent(t *testing.T) 
 		t.Errorf("CheckStaleTestContent = %v, want nil for a test_content page whose TTL hasn't elapsed", err)
 	}
 }
+
+// TestCheckStaleTestContentDedupsBilingualExpiredBundle confirms an expired
+// bilingual test bundle is reported once by slug, not once per language
+// file. This keeps the operator-facing warning actionable instead of
+// duplicative.
+func TestCheckStaleTestContentDedupsBilingualExpiredBundle(t *testing.T) {
+	contentRoot := t.TempDir()
+	expiresAt := time.Now().Add(-2 * time.Hour)
+	writeExplicitTestContentFixture(t, contentRoot, "posts/test-audit-bilingual", expiresAt)
+	full := filepath.Join(contentRoot, "posts", "test-audit-bilingual", "index.md")
+	enPath := filepath.Join(filepath.Dir(full), "index.en.md")
+	frPath := filepath.Join(filepath.Dir(full), "index.fr.md")
+	if err := os.Remove(full); err != nil {
+		t.Fatalf("Remove(%q): %v", full, err)
+	}
+	fm := "---\ntitle: Test\ndraft: true\ntest_content: true\ntest_content_expires_at: " + expiresAt.UTC().Format(time.RFC3339) + "\n---\nBody.\n"
+	if err := os.WriteFile(enPath, []byte(fm), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", enPath, err)
+	}
+	if err := os.WriteFile(frPath, []byte(fm), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", frPath, err)
+	}
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	err = admin.CheckStaleTestContent(srcIdx, 0)
+	if err == nil {
+		t.Fatal("expected an error reporting the expired bilingual test bundle, got nil")
+	}
+	if got := strings.Count(err.Error(), "posts/test-audit-bilingual"); got != 1 {
+		t.Fatalf("error = %q, want slug to appear exactly once, got %d", err.Error(), got)
+	}
+}
+
+// TestCheckStaleTestContentMalformedExpiryStillFallsBackToReservedSlugAge
+// confirms a malformed explicit expiry does not silently exempt a reserved
+// test slug from the older age-threshold sweep.
+func TestCheckStaleTestContentMalformedExpiryStillFallsBackToReservedSlugAge(t *testing.T) {
+	contentRoot := t.TempDir()
+	full := filepath.Join(contentRoot, "posts", "mcp-audit-malformed-expiry", "index.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", full, err)
+	}
+	fm := "---\ntitle: Test\ndraft: true\ntest_content: true\ntest_content_expires_at: definitely-not-rfc3339\n---\nBody.\n"
+	if err := os.WriteFile(full, []byte(fm), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", full, err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(full, old, old); err != nil {
+		t.Fatalf("Chtimes(%q): %v", full, err)
+	}
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	err = admin.CheckStaleTestContent(srcIdx, 24)
+	if err == nil {
+		t.Fatal("expected malformed expiry page to still be caught by reserved-slug age fallback, got nil")
+	}
+	if !strings.Contains(err.Error(), "posts/mcp-audit-malformed-expiry") {
+		t.Fatalf("error = %q, want it to mention the stale reserved slug", err.Error())
+	}
+}

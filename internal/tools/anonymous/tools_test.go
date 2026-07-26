@@ -530,7 +530,7 @@ func TestGetPageNotFound(t *testing.T) {
 		t.Fatalf("get_page not-found data = %#v, want object", env["data"])
 	}
 	if page, present := data["page"]; present && page != nil {
-		t.Fatalf("get_page not-found data.page = %#v, want absent or null", page)
+		t.Fatalf("get_page not-found data.page = %#v, want absent or null placeholder-free payload", page)
 	}
 }
 
