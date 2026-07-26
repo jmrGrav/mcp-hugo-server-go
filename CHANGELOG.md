@@ -2,6 +2,25 @@
 
 All notable changes to this project are documented here.
 
+## [v1.6.6] - 2026-07-26
+
+### Fixed
+- **`get_site_health` no longer degrades `status` to `healthy_with_advisories` for a pure `translation_pair`/`info` finding** (#761): a deliberate bilingual pair (e.g. `security`/`sécurité`) is expected localization, not an actionable defect, so it stays visible via `advisories_count`/`taxonomy_inconsistency_details` but no longer drags an otherwise-healthy site's `status` down on its own. A `warning`-severity finding (`casing_variant`/`alias_mismatch`/`possible_duplicate`) still promotes `status` to `healthy_with_advisories` as before, and `score`'s existing `#719` cap-at-99 behavior for warning findings is unchanged.
+- **`get_page` returned an empty placeholder page object instead of `null` on a not-found error** (#759): `data.page` is now a nullable pointer, so a `content_not_found` error response serializes `data.page: null` rather than an empty struct a caller could mistake for a real (if blank) page.
+
+### Changed
+- **`delete_page`'s `bundle_fully_removed` field converted to a nullable pointer** (#762): a dry-run response now omits `bundle_fully_removed` entirely (it was never computed) in favor of the dry-run-only `bundle_will_be_fully_removed` prediction field, instead of misleadingly reporting a real-looking `false`. A real (non-dry-run) delete's `bundle_fully_removed` is unaffected and still reports its true value, including an explicit `false` on a partial multilingual delete.
+
+### Added
+- **`run_post_build_hooks` supports `dry_run: true`** (#760): previews which hook URLs would be called (`data.results`, `data.configured_count`) without making any HTTP calls, for auditability before firing real webhooks.
+- **`get_runtime_status` surfaces overdue test/scratch content** (#757): `data.site.overdue_test_content[*]` (`slug`, `owner`, `expires_at`, `overdue_seconds`, `reason`) lists reserved test slugs or explicit `test_content` pages past their threshold, reusing the same detection `create_page`'s stale-test-content guard already runs, now visible without triggering the guard's own error path.
+- **`get_mutation_status` covers `apply_content_plan` and `rollback_change`** (#758): these two mutation tools already recorded idempotency results under their own tool-name keys; they were simply missing from the lookup allowlist.
+
+### Internal
+- Removed two stray tracked local tooling artifacts (`.brooks-lint-history.json`, `.superpowers/sdd/gemini-audit-report.md`) that had no code references (#753).
+- Replaced fixed-delay `time.Sleep` calls with goroutine-start/condition-polling handshakes in `internal/server`, `internal/tools/admin`, `internal/tools/write`, and `internal/tools/read` concurrency/timing tests, removing a source of CI flakiness under load without weakening any test's actual assertion (#751, #752).
+- Widened unit coverage for `internal/tools/admin`'s stale-test-content sentinel (bilingual-bundle dedup, malformed-expiry fallback), `internal/observability` (legacy-scope/byte-estimation/degraded-result helpers), and `internal/server` (bearer-middleware pass-through, discovery/security.txt/auth.md handlers) — no runtime behavior changes, coverage-only hardening on security- and operator-facing helper paths.
+
 ## [v1.6.5] - 2026-07-26
 
 ### Fixed
