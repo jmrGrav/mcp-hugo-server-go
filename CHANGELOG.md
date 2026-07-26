@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here.
 
+## [v1.6.7] - 2026-07-27
+
+### Added
+- **`get_runtime_status` exposes `data.git.changed_files_count`** (#775): a safe, reliable count of `git status --porcelain` lines when the baseline is dirty, never exposing paths or content. A `dirty_reason` mcp-vs-external provenance classifier was evaluated and deliberately not added — the closest existing signal, `index_staleness.likely_source` (#583/#617), documents itself as a coarse best-effort hint rather than reliable per-caller attribution, and reusing that same guarantee here risked shipping a field that looks more precise than it actually is.
+
+### Internal
+- Added MCP contract-drift sentinel tests that fail when a tool's runtime, exported `tools/list` schema, and embedded description drift apart — covering `run_post_build_hooks.dry_run`, `get_page`'s null payload on not-found, `delete_page`'s `bundle_will_be_fully_removed`, `get_mutation_status`'s `apply_content_plan`/`rollback_change` coverage, and `get_site_health`'s translation-pair status wording (#773, #776, #777).
+- Added deterministic end-to-end integration coverage for `run_post_build_hooks`: multiple concurrent hooks with request introspection (method/headers/body), non-2xx response handling (captured in `status`, not treated as a transport error), partial-failure behavior (one hook failing doesn't block others), and confirmation that hook failures are advisory, never blocking the tool's own response (#774).
+
 ## [v1.6.6] - 2026-07-26
 
 ### Fixed
