@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -20,7 +21,15 @@ import (
 func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.Register(s, cfg)
+	var srcIdx *hugosite.SourceIndex
+	if strings.TrimSpace(cfg.ContentRoot) != "" {
+		var err error
+		srcIdx, err = hugosite.NewSourceIndex(cfg.ContentRoot)
+		if err != nil {
+			t.Fatalf("NewSourceIndex(%q): %v", cfg.ContentRoot, err)
+		}
+	}
+	admin.Register(s, cfg, srcIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

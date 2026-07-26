@@ -12,6 +12,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -47,10 +48,11 @@ type gitRuntimeStatus struct {
 }
 
 type siteRuntimeStatus struct {
-	ContentRootConfigured bool   `json:"content_root_configured"`
-	HugoRootConfigured    bool   `json:"hugo_root_configured"`
-	SourceRevision        string `json:"source_revision,omitempty"`
-	PublicRevision        string `json:"public_revision,omitempty"`
+	ContentRootConfigured bool                    `json:"content_root_configured"`
+	HugoRootConfigured    bool                    `json:"hugo_root_configured"`
+	SourceRevision        string                  `json:"source_revision,omitempty"`
+	PublicRevision        string                  `json:"public_revision,omitempty"`
+	OverdueTestContent    []StaleTestContentEntry `json:"overdue_test_content,omitempty"`
 }
 
 // lastBuildRuntimeStatus reports the outcome of the most recent build_site
@@ -88,7 +90,7 @@ type getRuntimeStatusOutput struct {
 var hugoVersionPattern = regexp.MustCompile(`v(\d+\.\d+\.\d+(?:-\S+)?)`)
 
 // RegisterRuntimeStatus wires get_runtime_status (site.admin scope).
-func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
+func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex) {
 	if s == nil {
 		return
 	}
@@ -99,8 +101,10 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
 			"server version and build commit, whether the hugo and git binaries are usable, the outcome of the most " +
 			"recent build_site attempt (last_build, omitted until build_site has been called at least once), and " +
 			"(opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public " +
-			"revision hashes. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of " +
-			"inferring environment health from error messages on other tools.",
+			"revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` " +
+			"surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) " +
+			"so cleanup does not depend on remembering to run a build first. Read-only; does not expose secrets or arbitrary " +
+			"host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -156,6 +160,7 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config) {
 				}
 			}
 		}
+		data.Site.OverdueTestContent = CollectStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours, time.Now())
 
 		meta := toolcontract.NewMeta(buildinfo.Version, time.Now())
 		return nil, getRuntimeStatusOutput{ToolResponse: toolcontract.Success(data, meta)}, nil
