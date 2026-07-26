@@ -168,6 +168,43 @@ func TestWriteHelperBranches(t *testing.T) {
 	if err := validateFrontmatterRoundTrip("---\ntitle: T\n---\nBody\n"); err != nil {
 		t.Fatalf("validateFrontmatterRoundTrip(valid) = %v", err)
 	}
+
+	if got := inferLangFromIndexFile("/tmp/index.md"); got != "" {
+		t.Fatalf("inferLangFromIndexFile(index.md) = %q, want empty", got)
+	}
+	if got := inferLangFromIndexFile("/tmp/index.fr.md"); got != "fr" {
+		t.Fatalf("inferLangFromIndexFile(index.fr.md) = %q, want fr", got)
+	}
+
+	if raw, err := marshalWithIndent(map[string]any{"title": "T"}, 4); err != nil {
+		t.Fatalf("marshalWithIndent() error = %v", err)
+	} else if !strings.Contains(string(raw), "title: T") {
+		t.Fatalf("marshalWithIndent() = %q, want title field", string(raw))
+	}
+}
+
+func TestBundleWouldBeFullyRemovedAfterDelete(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.fr.md"), []byte("fr"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "diagram.svg"), []byte("<svg/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := bundleWouldBeFullyRemovedAfterDelete(dir, filepath.Join(dir, "index.fr.md")); !got {
+		t.Fatalf("bundleWouldBeFullyRemovedAfterDelete(single translation + asset) = %v, want true", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "index.en.md"), []byte("en"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := bundleWouldBeFullyRemovedAfterDelete(dir, filepath.Join(dir, "index.fr.md")); got {
+		t.Fatalf("bundleWouldBeFullyRemovedAfterDelete(multilingual bundle) = %v, want false", got)
+	}
+
+	if got := bundleWouldBeFullyRemovedAfterDelete(filepath.Join(dir, "missing"), ""); !got {
+		t.Fatalf("bundleWouldBeFullyRemovedAfterDelete(blank source path) = %v, want true", got)
+	}
 }
 
 func TestRegisterNilServer(t *testing.T) {

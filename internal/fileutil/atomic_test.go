@@ -140,6 +140,30 @@ func TestAtomicCreateCheckedRejectsExistingFile(t *testing.T) {
 	}
 }
 
+func TestAtomicCreateCheckedRejectsSymlinkedParent(t *testing.T) {
+	base := t.TempDir()
+	target := t.TempDir()
+
+	symlinkDir := filepath.Join(base, "subdir")
+	if err := os.Symlink(target, symlinkDir); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	pg, err := security.New(base, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+
+	filePath := filepath.Join(symlinkDir, "file.txt")
+	if err := fileutil.AtomicCreateChecked(filePath, "should not write", pg); err == nil {
+		t.Fatal("expected AtomicCreateChecked to fail when parent dir is a symlink")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(target, "file.txt")); !os.IsNotExist(statErr) {
+		t.Error("file was created under symlink target — escape not prevented")
+	}
+}
+
 func TestAtomicCreateCheckedBytesSucceedsAndRejectsExistingFile(t *testing.T) {
 	base := t.TempDir()
 	pg, err := security.New(base, true)
@@ -162,6 +186,30 @@ func TestAtomicCreateCheckedBytesSucceedsAndRejectsExistingFile(t *testing.T) {
 	}
 	if string(data) != string(first) {
 		t.Fatalf("content = %q, want %q", string(data), string(first))
+	}
+}
+
+func TestAtomicCreateCheckedBytesRejectsSymlinkedParent(t *testing.T) {
+	base := t.TempDir()
+	target := t.TempDir()
+
+	symlinkDir := filepath.Join(base, "bundle")
+	if err := os.Symlink(target, symlinkDir); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	pg, err := security.New(base, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+
+	filePath := filepath.Join(symlinkDir, "cover.png")
+	if err := fileutil.AtomicCreateCheckedBytes(filePath, []byte{0x89, 'P', 'N', 'G'}, pg); err == nil {
+		t.Fatal("expected AtomicCreateCheckedBytes to fail when parent dir is a symlink")
+	}
+
+	if _, statErr := os.Stat(filepath.Join(target, "cover.png")); !os.IsNotExist(statErr) {
+		t.Error("binary payload was created under symlink target — escape not prevented")
 	}
 }
 

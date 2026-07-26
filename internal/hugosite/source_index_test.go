@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -374,5 +375,67 @@ func TestHasPendingBuildNilSafe(t *testing.T) {
 	var idx *hugosite.SourceIndex
 	if idx.HasPendingBuild() {
 		t.Error("HasPendingBuild() on nil index = true, want false")
+	}
+}
+
+func TestSourceIndexReloadRefreshesExistingReceiverFromDisk(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("posts/reload/index.md", "---\ntitle: Before\ntags: [Debug]\n---\nBefore\n")
+	idx, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	before, ok := idx.GetBySlug("posts/reload")
+	if !ok || before.Title != "Before" || len(before.Tags) != 1 || before.Tags[0] != "Debug" {
+		t.Fatalf("initial GetBySlug() = %#v, %v", before, ok)
+	}
+
+	write("posts/reload/index.md", "---\ntitle: After\ntags: [debug]\n---\nAfter\n")
+	if err := idx.Reload(root); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+
+	after, ok := idx.GetBySlug("posts/reload")
+	if !ok {
+		t.Fatal("GetBySlug() missing page after Reload()")
+	}
+	if after.Title != "After" {
+		t.Fatalf("title after Reload() = %q, want After", after.Title)
+	}
+	if after.Body != "After" {
+		t.Fatalf("body after Reload() = %q, want %q", after.Body, "After")
+	}
+	if got := idx.AllTags(); len(got) != 1 || got[0] != "debug" {
+		t.Fatalf("AllTags() after Reload() = %#v, want [debug]", got)
+	}
+}
+
+func TestSourceIndexReloadNilSafeAndMissingRoot(t *testing.T) {
+	var nilIdx *hugosite.SourceIndex
+	if err := nilIdx.Reload(t.TempDir()); err != nil {
+		t.Fatalf("nil Reload() error = %v, want nil", err)
+	}
+
+	idx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = idx.Reload(filepath.Join(t.TempDir(), "missing"))
+	if err == nil {
+		t.Fatal("Reload(missing) error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "no such file or directory") {
+		t.Fatalf("Reload(missing) error = %v, want missing-path error", err)
 	}
 }
