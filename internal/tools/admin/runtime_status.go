@@ -39,12 +39,13 @@ type hugoRuntimeStatus struct {
 }
 
 type gitRuntimeStatus struct {
-	BaselineMode string `json:"baseline_mode"`
-	Available    bool   `json:"available"`
-	Branch       string `json:"branch,omitempty"`
-	HeadCommit   string `json:"head_commit,omitempty"`
-	Dirty        bool   `json:"dirty"`
-	Error        string `json:"error,omitempty"`
+	BaselineMode      string `json:"baseline_mode"`
+	Available         bool   `json:"available"`
+	Branch            string `json:"branch,omitempty"`
+	HeadCommit        string `json:"head_commit,omitempty"`
+	Dirty             bool   `json:"dirty"`
+	ChangedFilesCount int    `json:"changed_files_count,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 type siteRuntimeStatus struct {
@@ -239,7 +240,19 @@ func probeGitBaseline(ctx context.Context, cfg config.Config) gitRuntimeStatus {
 
 	porcelain, err := gitStatusOutput(tctx, gitRoot, "status", "--porcelain")
 	if err == nil {
-		status.Dirty = strings.TrimSpace(porcelain) != ""
+		porcelainTrimmed := strings.TrimSpace(porcelain)
+		status.Dirty = porcelainTrimmed != ""
+		// Count non-empty lines in porcelain output; each line represents one changed file.
+		// changed_files_count is a safe, reliable aggregate that never exposes paths or content.
+		// A dirty_reason (mcp-vs-external) classifier was considered per #775, but the closest
+		// existing signal — index_staleness.likely_source's mcp_pending_build/external_or_unknown
+		// (#583/#617) — documents itself as a coarse, best-effort hint, not per-caller
+		// attribution. Reusing that same best-effort standard here risked exactly the "looks
+		// precise but isn't trustworthy" outcome #775 warns against, so dirty_reason was
+		// deliberately deferred rather than shipped on a shakier guarantee.
+		if status.Dirty {
+			status.ChangedFilesCount = len(strings.Split(porcelainTrimmed, "\n"))
+		}
 	}
 
 	status.Available = true
