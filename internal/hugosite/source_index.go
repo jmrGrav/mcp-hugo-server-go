@@ -105,6 +105,24 @@ func NewSourceIndex(contentRoot string) (*SourceIndex, error) {
 	return idx, nil
 }
 
+// Reload replaces the index contents from disk under the same content root
+// semantics as NewSourceIndex. Used after builds to reconcile out-of-band
+// source edits that happened outside the in-process write paths.
+func (idx *SourceIndex) Reload(contentRoot string) error {
+	if idx == nil {
+		return nil
+	}
+	reloaded, err := NewSourceIndex(contentRoot)
+	if err != nil {
+		return err
+	}
+	idx.pages = reloaded.pages
+	idx.bySlug = reloaded.bySlug
+	idx.bySlugLang = reloaded.bySlugLang
+	idx.byDefault = reloaded.byDefault
+	return nil
+}
+
 func (idx *SourceIndex) GetBySlug(slug string) (*SourcePage, bool) {
 	i, ok := idx.bySlug[slug]
 	if !ok {
