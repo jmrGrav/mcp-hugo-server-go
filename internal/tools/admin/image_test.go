@@ -260,6 +260,61 @@ func TestGenerateFeaturedImageLocalRender(t *testing.T) {
 	}
 }
 
+func TestGenerateFeaturedImageAcceptsCanonicalPublicSlugForms(t *testing.T) {
+	tests := []struct {
+		name     string
+		slug     string
+		wantPath string
+	}{
+		{
+			name:     "default-language public slug",
+			slug:     "/posts/my-post/",
+			wantPath: "static/images/posts/my-post-featured.jpg",
+		},
+		{
+			name:     "language-prefixed public slug normalizes to source key",
+			slug:     "/en/posts/my-post-en/",
+			wantPath: "static/images/posts/my-post-en-featured.jpg",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hugoRoot := t.TempDir()
+			cfg := config.Default()
+			cfg.SiteRoot = t.TempDir()
+			cfg.HugoRoot = hugoRoot
+
+			session, done := newTestServer(t, cfg)
+			defer done()
+
+			res, err := callTool(t, session, "generate_hero_image", map[string]any{
+				"slug":  tc.slug,
+				"title": "Hello World from Canonical Public Slug",
+				"style": "tech",
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if res.IsError {
+				t.Fatalf("tool returned error for slug %q: %s", tc.slug, resultText(res))
+			}
+
+			out := decodeStructuredResult(t, res)
+			data, ok := out["data"].(map[string]any)
+			if !ok {
+				t.Fatalf("data type = %T, want map[string]any", out["data"])
+			}
+			if got := data["path"]; got != tc.wantPath {
+				t.Fatalf("generate_hero_image(%q) data.path = %v, want %q", tc.slug, got, tc.wantPath)
+			}
+			if _, err := os.Stat(filepath.Join(hugoRoot, filepath.FromSlash(tc.wantPath))); err != nil {
+				t.Fatalf("expected generated file at %q: %v", tc.wantPath, err)
+			}
+		})
+	}
+}
+
 func TestGenerateFeaturedImageWriteErrorIsActionable(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/jpeg")

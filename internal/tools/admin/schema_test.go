@@ -36,6 +36,48 @@ func TestAdminToolSchemasPresent(t *testing.T) {
 	assertSchemaHasProperties(t, got["generate_hero_image"], "outputSchema.data", "path")
 }
 
+func TestGenerateHeroImagePublishesStyleEnum(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	result, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var tool *mcp.Tool
+	for i := range result.Tools {
+		if result.Tools[i].Name == "generate_hero_image" {
+			tool = result.Tools[i]
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("generate_hero_image not found in tools list")
+	}
+	style := schemaAt(t, tool, "inputSchema.style")
+	enumRaw, ok := style["enum"].([]any)
+	if !ok {
+		t.Fatalf("generate_hero_image inputSchema.style enum type = %T, want []any", style["enum"])
+	}
+	got := make([]string, 0, len(enumRaw))
+	for _, v := range enumRaw {
+		got = append(got, v.(string))
+	}
+	want := []string{"", "tech", "geo"}
+	if len(got) != len(want) {
+		t.Fatalf("generate_hero_image style enum = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("generate_hero_image style enum = %v, want %v", got, want)
+		}
+	}
+}
+
 func assertObjectSchema(t *testing.T, tool *mcp.Tool, field string) {
 	t.Helper()
 	var schema any

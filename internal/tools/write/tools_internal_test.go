@@ -6,9 +6,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"golang.org/x/time/rate"
 )
 
@@ -166,10 +168,79 @@ func TestWriteHelperBranches(t *testing.T) {
 	if err := validateFrontmatterRoundTrip("---\ntitle: T\n---\nBody\n"); err != nil {
 		t.Fatalf("validateFrontmatterRoundTrip(valid) = %v", err)
 	}
+
+	if got := inferLangFromIndexFile("/tmp/index.md"); got != "" {
+		t.Fatalf("inferLangFromIndexFile(index.md) = %q, want empty", got)
+	}
+	if got := inferLangFromIndexFile("/tmp/index.fr.md"); got != "fr" {
+		t.Fatalf("inferLangFromIndexFile(index.fr.md) = %q, want fr", got)
+	}
+
+	if raw, err := marshalWithIndent(map[string]any{"title": "T"}, 4); err != nil {
+		t.Fatalf("marshalWithIndent() error = %v", err)
+	} else if !strings.Contains(string(raw), "title: T") {
+		t.Fatalf("marshalWithIndent() = %q, want title field", string(raw))
+	}
+}
+
+func TestBundleWouldBeFullyRemovedAfterDelete(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "index.fr.md"), []byte("fr"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "diagram.svg"), []byte("<svg/>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := bundleWouldBeFullyRemovedAfterDelete(dir, filepath.Join(dir, "index.fr.md")); !got {
+		t.Fatalf("bundleWouldBeFullyRemovedAfterDelete(single translation + asset) = %v, want true", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "index.en.md"), []byte("en"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := bundleWouldBeFullyRemovedAfterDelete(dir, filepath.Join(dir, "index.fr.md")); got {
+		t.Fatalf("bundleWouldBeFullyRemovedAfterDelete(multilingual bundle) = %v, want false", got)
+	}
+
+	if got := bundleWouldBeFullyRemovedAfterDelete(filepath.Join(dir, "missing"), ""); !got {
+		t.Fatalf("bundleWouldBeFullyRemovedAfterDelete(blank source path) = %v, want true", got)
+	}
 }
 
 func TestRegisterNilServer(t *testing.T) {
 	Register(nil, nil, nil, config.Default(), nil)
+}
+
+func TestNewWriteRegisterRuntimeUsesFirstSiteIndexAndConfiguresStores(t *testing.T) {
+	cfg := config.Config{}
+	cfg.IdempotencyTTLSeconds = 42
+
+	primary := &site.Index{}
+	secondary := &site.Index{}
+
+	rt := newWriteRegisterRuntime(cfg, primary, secondary)
+
+	if rt.siteIdx != primary {
+		t.Fatalf("siteIdx = %p, want first site index %p", rt.siteIdx, primary)
+	}
+	if rt.deleteLimiters == nil || rt.mutationLimiters == nil {
+		t.Fatalf("limiters not initialized: %#v", rt)
+	}
+	if got := rt.idem.ttl; got != 42*time.Second {
+		t.Fatalf("idempotency TTL = %v, want 42s", got)
+	}
+	if got := rt.plans.ttl; got != planTTL {
+		t.Fatalf("plan TTL = %v, want %v", got, planTTL)
+	}
+	if got := rt.snapshots.ttl; got != snapshotTTL {
+		t.Fatalf("snapshot TTL = %v, want %v", got, snapshotTTL)
+	}
+	if got := rt.plans.maxEntries; got != planMaxEntries {
+		t.Fatalf("plan maxEntries = %d, want %d", got, planMaxEntries)
+	}
+	if got := rt.snapshots.maxEntries; got != snapshotMaxEntries {
+		t.Fatalf("snapshot maxEntries = %d, want %d", got, snapshotMaxEntries)
+	}
 }
 
 func TestApplyPageUpdatesPreservesOrder(t *testing.T) {
