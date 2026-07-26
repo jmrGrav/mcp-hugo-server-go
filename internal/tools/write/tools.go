@@ -1126,21 +1126,18 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug})
 		}
+		callerKey := mutationCallerKey(ctx)
+		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
+		wrapErrWithLimiter := func(err error) error {
+			return toolcontract.WithDataFields(
+				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
+			)
+		}
 		if in.Slug == "" {
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
 
-		dir, err := pg.SafeJoin(in.Slug)
-		if err != nil {
-			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
-		}
-
-		// Return not_found when the source directory does not exist (#266).
-		// Check this before the rate limiter to avoid burning the budget on client errors.
-		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
-		}
 		// Validate lang the same way create_page/update_page already do
 		// (validateLangParam) before it ever reaches path resolution —
 		// contentmodel.ResolvePageSource builds candidate paths with
@@ -1151,7 +1148,87 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		// first version of this fix).
 		validatedLang, langErr := validateLangParam(in.Lang)
 		if langErr != nil {
-			return nil, deletePageOutput{}, wrapErr(langErr)
+			return nil, deletePageOutput{}, wrapErrWithLimiter(langErr)
+		}
+		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+		if err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+		}
+
+		lockHeld := false
+		acquireDeleteLock := func() error {
+			if lockHeld {
+				return nil
+			}
+			const lockWait = 10 * time.Second
+			deadline := time.Now().Add(lockWait)
+			for {
+				if hugosite.ContentMu.TryLock() {
+					slog.Debug("delete_page: lock_acquired")
+					lockHeld = true
+					return nil
+				}
+				if time.Now().After(deadline) {
+					slog.Error("delete_page: lock_timeout", "timeout_s", lockWait.Seconds())
+					return fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+			if err := acquireDeleteLock(); err != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+			}
+		}
+		defer func() {
+			if lockHeld {
+				hugosite.ContentMu.Unlock()
+				slog.Debug("delete_page: lock_released")
+			}
+		}()
+
+		// Idempotency replay must run before any current-state existence checks:
+		// a successful first delete removes the slug, so checking os.Stat(dir)
+		// first would turn the exact same retry into not_found instead of the
+		// promised replay of the original success (#724). It also stays under
+		// the content lock so same-key concurrent retries serialize correctly.
+		idemHash := ""
+		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+			hash, hashErr := requestHash(struct {
+				Slug             string `json:"slug"`
+				Lang             string `json:"lang,omitempty"`
+				ExpectedRevision string `json:"expected_revision,omitempty"`
+			}{
+				Slug:             in.Slug,
+				Lang:             validatedLang,
+				ExpectedRevision: in.ExpectedRevision,
+			})
+			if hashErr != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
+			}
+			idemHash = hash
+			var cached deletePageOutput
+			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, &cached)
+			if replayErr != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(replayErr)
+			}
+			if hit {
+				return nil, cached, nil
+			}
+		}
+
+		dir, err := pg.SafeJoin(in.Slug)
+		if err != nil {
+			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+		}
+
+		// Return not_found when the source directory does not exist (#266).
+		// This still avoids burning the destructive quota because Allow() has
+		// not run yet, while now preserving the full rate_limit envelope (#725)
+		// and letting successful idempotent replays short-circuit before it.
+		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
 		}
 
 		// Resolve to a single language file via the same
@@ -1175,32 +1252,14 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		case resolveErr == nil:
 			resolvedSource = resolved
 		case strings.HasPrefix(resolveErr.Error(), "ambiguous_language:"):
-			return nil, deletePageOutput{}, wrapErr(fmt.Errorf("%s", resolveErr.Error()))
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("%s", resolveErr.Error()))
 		case strings.HasPrefix(resolveErr.Error(), "source_file_not_found:"):
 			if validatedLang != "" {
-				return nil, deletePageOutput{}, wrapErr(resolveErr)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(resolveErr)
 			}
 			resolvedSource = contentmodel.ResolvedSource{}
 		default:
-			return nil, deletePageOutput{}, wrapErr(resolveErr)
-		}
-
-		// Fetching the limiter is not itself a budget-consuming operation —
-		// only Allow() below is — so hoisting it above the dry-run block
-		// lets dry-run report an accurate rate_limit_remaining without
-		// violating the "don't burn budget on dry-run/not_found" invariant
-		// the not_found check above already established (#466).
-		callerKey := mutationCallerKey(ctx)
-		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
-		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithDataFields(
-				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
-				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
-			)
-		}
-		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
-		if err != nil {
-			return nil, deletePageOutput{}, wrapErr(err)
+			return nil, deletePageOutput{}, wrapErrWithLimiter(resolveErr)
 		}
 
 		// dry_run: return page content + backlinks that would break, without touching disk (#267).
@@ -1255,53 +1314,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
 		}
 
-		const lockWait = 10 * time.Second
-		deadline := time.Now().Add(lockWait)
-		for {
-			if hugosite.ContentMu.TryLock() {
-				slog.Debug("delete_page: lock_acquired")
-				break
-			}
-			if time.Now().After(deadline) {
-				slog.Error("delete_page: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		defer func() {
-			hugosite.ContentMu.Unlock()
-			slog.Debug("delete_page: lock_released")
-		}()
-
-		// Idempotency replay check must happen under the content lock: two
-		// genuinely concurrent retries with the same key (the exact
-		// uncertain-delivery scenario this feature protects against) would
-		// otherwise both miss the cache before either has a chance to
-		// remember its result, and the loser would see an unwanted second
-		// delete attempt instead of the intended idempotent replay.
-		idemHash := ""
-		if strings.TrimSpace(in.IdempotencyKey) != "" {
-			hash, hashErr := requestHash(struct {
-				Slug             string `json:"slug"`
-				Lang             string `json:"lang,omitempty"`
-				ExpectedRevision string `json:"expected_revision,omitempty"`
-			}{
-				Slug:             in.Slug,
-				Lang:             validatedLang,
-				ExpectedRevision: in.ExpectedRevision,
-			})
-			if hashErr != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
-			}
-			idemHash = hash
-			var cached deletePageOutput
-			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, &cached)
-			if replayErr != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(replayErr)
-			}
-			if hit {
-				return nil, cached, nil
-			}
+		if err := acquireDeleteLock(); err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
 
 		currentRevision := ""
