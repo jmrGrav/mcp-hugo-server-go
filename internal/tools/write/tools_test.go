@@ -1083,6 +1083,53 @@ func TestDeletePageIdempotencyKeyReturnsOriginalResultWithoutReapplying(t *testi
 	}
 }
 
+// TestDeletePageIdempotencyKeyReplaysAfterSuccessfulDeletionWithoutRequiring
+// The Resource To Still Exist is the exact live-audit failure from v1.6.4:
+// after a successful delete, retrying the same delete with the same
+// idempotency_key must replay the stored success result, not re-resolve the
+// slug and fail with not_found merely because the first delete already
+// removed it.
+func TestDeletePageIdempotencyKeyReplaysAfterSuccessfulDeletionWhenSlugIsGone(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/idem-delete-gone",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page setup failed: %s", marshalContent(t, create))
+	}
+
+	args := map[string]any{
+		"slug":              "posts/idem-delete-gone",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "idem-delete-gone", "index.md")),
+		"idempotency_key":   "idem-delete-gone-1",
+	}
+	first := callTool(t, session, "delete_page", args)
+	if first.IsError {
+		t.Fatalf("first delete_page failed: %s", marshalContent(t, first))
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "idem-delete-gone")); !os.IsNotExist(err) {
+		t.Fatalf("slug directory still exists after first delete: stat err = %v, want IsNotExist", err)
+	}
+
+	second := callTool(t, session, "delete_page", args)
+	if second.IsError {
+		t.Fatalf("second delete_page replay failed: %s", marshalContent(t, second))
+	}
+
+	firstOut := decodeWriteContent(t, first)
+	secondOut := decodeWriteContent(t, second)
+	if !reflect.DeepEqual(firstOut, secondOut) {
+		t.Fatalf("delete_page replay envelope changed after resource was gone\nfirst:  %#v\nsecond: %#v", firstOut, secondOut)
+	}
+}
+
 func TestUpdatePageIdempotencyKeyRejectsDivergentReuse(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
@@ -1541,6 +1588,20 @@ func TestDeletePageNotFoundPreservesRequestContext(t *testing.T) {
 	}
 	if got := reqCtx["slug"]; got != "posts/does-not-exist" {
 		t.Fatalf("request_context.slug = %v, want posts/does-not-exist", got)
+	}
+	if got := m["rate_limit_remaining"]; got == nil {
+		t.Fatal("rate_limit_remaining missing on delete_page not_found error")
+	}
+	data := decodeWriteErrorData(t, res)
+	bucket, ok := data["rate_limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("delete_page not_found data.rate_limit = %#v, want object", data["rate_limit"])
+	}
+	if got := bucket["scope"]; got != "destructive" {
+		t.Fatalf("delete_page not_found data.rate_limit.scope = %v, want %q", got, "destructive")
+	}
+	if got := data["rate_limit_remaining"]; got == nil {
+		t.Fatal("delete_page not_found data.rate_limit_remaining missing")
 	}
 	if _, present := m["resolved_source_path"]; present {
 		t.Fatalf("resolved_source_path = %v, want omitted on error", m["resolved_source_path"])
@@ -2158,8 +2219,14 @@ func TestDeletePageOneLanguageSurvivesTheOther(t *testing.T) {
 		t.Fatalf("delete_page(lang=en) failed: %s", raw)
 	}
 	data := decodeWriteData(t, res)
+	if got := data["status"]; got != "ok" {
+		t.Fatalf("status = %v, want ok for a successful scoped multilingual delete", got)
+	}
 	if got, _ := data["bundle_fully_removed"].(bool); got {
 		t.Error("bundle_fully_removed = true, want false — the fr translation still exists")
+	}
+	if _, present := data["bundle_fully_removed"]; !present {
+		t.Fatal("bundle_fully_removed missing, want explicit false on partial multilingual delete")
 	}
 
 	if _, err := os.Stat(filepath.Join(pageDir, "index.en.md")); !os.IsNotExist(err) {

@@ -112,223 +112,109 @@ func openStore(cfg config.OAuthConfig) (storage.Store, error) {
 //	srv, _ := server.New(cfg, idx, ext)
 type ScopeExtension func(scopeName string, s *mcp.Server)
 
-func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
-	impl := &mcp.Implementation{Name: Name, Version: buildinfo.Version}
-	serverCaps := defaultServerCapabilities()
-	// Explicitly declare capabilities so static scanners (mcpscan.dev) can
-	// inspect them. The SDK merges these with auto-detected tool/resource caps.
-	serverOpts := &mcp.ServerOptions{
-		Capabilities: serverCaps,
-	}
-	logger := observability.NewLogger()
-	// Unify every package-level slog.Info/Warn/Error call (agent_auth.go,
-	// build.go, hooks.go, the audit package, ...) onto the same structured
-	// JSON handler as the request/tool-call logs above, instead of Go's
-	// plain-text default. This is what makes the security audit trail
-	// (#371) durable and uniformly parseable without touching every
-	// individual call site.
-	slog.SetDefault(logger)
-	metrics := observability.NewMetrics()
-
-	reg := buildRegistry()
-	scopePolicy := oauth.NewScopePolicy(reg)
-
-	var pg *security.PathGuard
-	var srcIdx *hugosite.SourceIndex
+func initWriteBootstrap(cfg config.Config) (*security.PathGuard, *hugosite.SourceIndex, bool, error) {
 	writeEnabled := cfg.ContentRoot != ""
-	if writeEnabled {
-		var err error
-		pg, err = security.New(cfg.ContentRoot, cfg.RejectSymlinks)
-		if err != nil {
-			return nil, fmt.Errorf("server: pathguard: %w", err)
-		}
-		srcIdx, err = hugosite.NewSourceIndex(cfg.ContentRoot)
-		if err != nil {
-			return nil, fmt.Errorf("server: source index: %w", err)
-		}
+	if !writeEnabled {
+		return nil, nil, false, nil
 	}
-
-	// Open the SQLite derived index when db_path is configured.
-	// When nil (db_path unset) all tools fall back to existing in-memory behaviour.
-	var siteDB *db.DB
-	if cfg.DBPath != "" {
-		var err error
-		siteDB, err = db.Open(cfg.DBPath)
-		if err != nil {
-			return nil, fmt.Errorf("server: sqlite index: %w", err)
-		}
-		// Hash-gated startup reindex — skips unchanged pages.
-		if err := siteDB.StartupSync(idx, srcIdx); err != nil {
-			slog.Warn("server: startup db sync incomplete", "error", err)
-		}
+	pg, err := security.New(cfg.ContentRoot, cfg.RejectSymlinks)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("server: pathguard: %w", err)
 	}
+	srcIdx, err := hugosite.NewSourceIndex(cfg.ContentRoot)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("server: source index: %w", err)
+	}
+	return pg, srcIdx, true, nil
+}
 
-	// Build the known-tools set from the registry so the middleware can bucket
-	// any unrecognised client-supplied name as "unknown" (caps Prometheus cardinality).
+func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex) (*db.DB, error) {
+	if cfg.DBPath == "" {
+		return nil, nil
+	}
+	siteDB, err := db.Open(cfg.DBPath)
+	if err != nil {
+		return nil, fmt.Errorf("server: sqlite index: %w", err)
+	}
+	if err := siteDB.StartupSync(idx, srcIdx); err != nil {
+		slog.Warn("server: startup db sync incomplete", "error", err)
+	}
+	return siteDB, nil
+}
+
+func knownToolsSet(reg *tools.Registry) map[string]bool {
 	knownTools := make(map[string]bool, len(reg.All()))
 	for _, d := range reg.All() {
 		knownTools[d.Name] = true
 	}
+	return knownTools
+}
 
-	publicServer := mcp.NewServer(impl, serverOpts)
-	publicServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "", knownTools))
-	registerSharedResources(publicServer)
-	anonymous.Register(publicServer, idx, cfg, srcIdx)
-	read.Register(publicServer, idx, cfg, srcIdx)
+func newScopedServer(
+	scopeName string,
+	impl *mcp.Implementation,
+	serverOpts *mcp.ServerOptions,
+	logger *slog.Logger,
+	metrics *observability.Metrics,
+	knownTools map[string]bool,
+	idx *site.Index,
+	cfg config.Config,
+	srcIdx *hugosite.SourceIndex,
+	siteDB *db.DB,
+	pg *security.PathGuard,
+	writeEnabled bool,
+	extensions []ScopeExtension,
+) *mcp.Server {
+	s := mcp.NewServer(impl, serverOpts)
+	s.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, scopeName, knownTools))
+	registerSharedResources(s)
+	anonymous.Register(s, idx, cfg, srcIdx)
+	read.Register(s, idx, cfg, srcIdx)
 	if srcIdx != nil {
-		read.RegisterWithSourceIndex(publicServer, idx, srcIdx, cfg, siteDB)
+		read.RegisterWithSourceIndex(s, idx, srcIdx, cfg, siteDB)
+	}
+	if scopeName == "write" && writeEnabled {
+		toolswrite.Register(s, pg, srcIdx, cfg, siteDB, idx)
 	}
 	for _, ext := range extensions {
-		ext("", publicServer)
+		ext(scopeName, s)
 	}
+	return s
+}
 
-	writeServer := mcp.NewServer(impl, serverOpts)
-	writeServer.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, "write", knownTools))
-	registerSharedResources(writeServer)
-	anonymous.Register(writeServer, idx, cfg, srcIdx)
-	read.Register(writeServer, idx, cfg, srcIdx)
-	if srcIdx != nil {
-		read.RegisterWithSourceIndex(writeServer, idx, srcIdx, cfg, siteDB)
+func initOAuthService(cfg config.Config) (*oauth.Service, storage.Store, error) {
+	if !cfg.OAuth.Enabled {
+		return nil, nil, nil
 	}
-	if writeEnabled {
-		toolswrite.Register(writeServer, pg, srcIdx, cfg, siteDB, idx)
+	tokenStore, err := openStore(cfg.OAuth)
+	if err != nil {
+		return nil, nil, err
 	}
-	for _, ext := range extensions {
-		ext("write", writeServer)
+	oauthSvc := oauth.NewService(cfg.OAuth, tokenStore)
+	if err := oauthSvc.LoadClientRegistry(cfg.OAuth.ClientRegistryPath); err != nil {
+		return nil, nil, fmt.Errorf("server: oauth client registry: %w", err)
 	}
-	admin.Register(writeServer, cfg,
-		admin.PostBuildCallback{Name: "index_reload", Fn: func() error {
-			if err := idx.Reload(cfg); err != nil {
-				return err
-			}
-			if srcIdx != nil {
-				srcIdx.ClearAllBuildPending()
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "db_reindex", Fn: func() error {
-			// Reindex the SQLite derived index after a successful build.
-			if siteDB != nil {
-				if err := siteDB.PostBuildSync(idx); err != nil {
-					slog.Warn("build_site: db reindex failed", "error", err)
-				}
-				if err := siteDB.SnapshotSiteHealth(); err != nil {
-					slog.Warn("build_site: db health snapshot failed", "error", err)
-				}
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "cloudflare_purge", Fn: func() error {
-			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
-				slog.Warn("build_site: cloudflare purge failed", "error", err)
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "search_index_submit", Fn: func() error {
-			urls := sitemapPageURLs(idx)
-			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
-				slog.Warn("build_site: indexnow submit failed", "error", err)
-			}
-			if err := googleindex.Submit(cfg.GoogleIndex, urls, googleindex.TypeUpdated); err != nil {
-				slog.Warn("build_site: google index submit failed", "error", err)
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "stale_test_content_check", Fn: func() error {
-			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
-		}},
-	)
-	admin.RegisterVerifyPublication(writeServer, idx, srcIdx, cfg)
-	admin.RegisterPublishChanges(writeServer, idx, srcIdx, cfg,
-		admin.PostBuildCallback{Name: "index_reload", Fn: func() error {
-			if err := idx.Reload(cfg); err != nil {
-				return err
-			}
-			if srcIdx != nil {
-				srcIdx.ClearAllBuildPending()
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "db_reindex", Fn: func() error {
-			if siteDB != nil {
-				if err := siteDB.PostBuildSync(idx); err != nil {
-					slog.Warn("publish_changes: db reindex failed", "error", err)
-				}
-				if err := siteDB.SnapshotSiteHealth(); err != nil {
-					slog.Warn("publish_changes: db health snapshot failed", "error", err)
-				}
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "cloudflare_purge", Fn: func() error {
-			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
-				slog.Warn("publish_changes: cloudflare purge failed", "error", err)
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "search_index_submit", Fn: func() error {
-			urls := sitemapPageURLs(idx)
-			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
-				slog.Warn("publish_changes: indexnow submit failed", "error", err)
-			}
-			if err := googleindex.Submit(cfg.GoogleIndex, urls, googleindex.TypeUpdated); err != nil {
-				slog.Warn("publish_changes: google index submit failed", "error", err)
-			}
-			return nil
-		}},
-		admin.PostBuildCallback{Name: "stale_test_content_check", Fn: func() error {
-			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
-		}},
-	)
-	previews := previewstore.New()
-	previewHandler := previews.HTTPHandler()
-	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
-	admin.RegisterCreatePreview(writeServer, cfg, previews, previewBaseURL)
+	return oauthSvc, tokenStore, nil
+}
 
-	opts := &mcp.StreamableHTTPOptions{
-		DisableLocalhostProtection: true,
-		// Keep sessions alive for 24 h so long-running agent conversations
-		// don't lose tool availability mid-session.
-		SessionTimeout: 24 * time.Hour,
-		// MemoryEventStore lets clients resume an SSE stream with Last-Event-ID
-		// after a transient network drop without creating a new session.
-		EventStore: mcp.NewMemoryEventStore(nil),
-		// Forward SDK warnings (SSE write errors, stream close failures) to the
-		// application logger so session drops are visible in journald.
-		Logger: slog.Default(),
-	}
-	streaming := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		scope, _ := r.Context().Value(oauth.CtxScope).(string)
-		rank := tools.ScopeRank(scope)
-		slog.Info("mcp: session created", "scope", scope, "rank", rank, "remote_addr", r.RemoteAddr)
-		if rank >= 1 {
-			return writeServer
-		}
-		return publicServer
-	}, opts)
-
-	var oauthSvc *oauth.Service
-	var tokenStore storage.Store
-	if cfg.OAuth.Enabled {
-		var err error
-		tokenStore, err = openStore(cfg.OAuth)
-		if err != nil {
-			return nil, err
-		}
-		oauthSvc = oauth.NewService(cfg.OAuth, tokenStore)
-		if err := oauthSvc.LoadClientRegistry(cfg.OAuth.ClientRegistryPath); err != nil {
-			return nil, fmt.Errorf("server: oauth client registry: %w", err)
-		}
-	}
-
-	rateLimitedStreaming := oauth.NewRateLimiter(cfg.RateLimit).Middleware(streaming)
-
+func configuredMaxRequestBytes(cfg config.Config) int64 {
 	maxBody := cfg.MaxRequestBytes
 	if maxBody <= 0 {
-		maxBody = 1 << 20
+		return 1 << 20
 	}
+	return maxBody
+}
 
-	mcpToolHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func newMCPToolHandler(
+	cfg config.Config,
+	oauthSvc *oauth.Service,
+	scopePolicy *oauth.ScopePolicy,
+	metrics *observability.Metrics,
+	logger *slog.Logger,
+	rateLimitedStreaming http.Handler,
+	maxBody int64,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callerScope := ""
 		if oauthSvc != nil {
 			bearerResult, ok := bearerResultFromContext(r.Context())
@@ -385,17 +271,21 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		w.Header().Set("Vary", "Authorization")
 		rateLimitedStreaming.ServeHTTP(w, r)
 	})
+}
 
-	var protectedMCPHandler http.Handler = mcpToolHandler
-	if oauthSvc != nil {
-		issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
-		protectedMCPHandler = newMCPBearerAuthMiddleware(
-			oauthTokenVerifier(oauthSvc),
-			issuer,
-			issuer+"/.well-known/oauth-protected-resource",
-		)(mcpToolHandler)
+func newProtectedMCPHandler(cfg config.Config, oauthSvc *oauth.Service, mcpToolHandler http.Handler) http.Handler {
+	if oauthSvc == nil {
+		return mcpToolHandler
 	}
+	issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	return newMCPBearerAuthMiddleware(
+		oauthTokenVerifier(oauthSvc),
+		issuer,
+		issuer+"/.well-known/oauth-protected-resource",
+	)(mcpToolHandler)
+}
 
+func newOAuthAllocationLimiter(maxBody int64) (func(http.HandlerFunc) http.HandlerFunc, func()) {
 	// rateLimitedOAuth applies a simple per-IP call counter to allocation
 	// endpoints (/register, /agent/identity) to mitigate unbounded map growth
 	// (issue #30). The limit is coarse — 100 calls per unique remote addr.
@@ -417,8 +307,23 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			next(w, r)
 		}
 	}
+	resetIP := func() {
+		oauthIPMu.Lock()
+		oauthIPCounts = make(map[string]int)
+		oauthIPMu.Unlock()
+	}
+	return rateLimitOAuth, resetIP
+}
 
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func newRootHandler(
+	cfg config.Config,
+	oauthSvc *oauth.Service,
+	rateLimitOAuth func(http.HandlerFunc) http.HandlerFunc,
+	protectedMCPHandler http.Handler,
+	previewHandler http.Handler,
+	metrics *observability.Metrics,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/":
 			handleLandingPage(w, r, cfg)
@@ -431,11 +336,6 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		case "/.well-known/mcp/server-card.json":
 			handleMCPServerCard(w, r, cfg)
 		case "/.well-known/mcp/server-card/mcp":
-			// Alias for clients (observed: Mistral Le Chat, #424) that request
-			// the server card under a per-resource sub-path (mirroring the
-			// /mcp endpoint path) instead of the canonical
-			// /.well-known/mcp/server-card.json. Same content either way —
-			// this server only ever hosts one MCP resource at /mcp.
 			handleMCPServerCard(w, r, cfg)
 		case "/.well-known/mcp.json":
 			handleMCPJSON(w, r, cfg)
@@ -516,7 +416,6 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		case "/mcp":
 			switch r.Method {
 			case http.MethodPost, http.MethodGet, http.MethodDelete:
-				// all three are valid per MCP Streamable HTTP spec
 			default:
 				w.Header().Set("Allow", "GET, POST, DELETE")
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -524,9 +423,6 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			}
 			protectedMCPHandler.ServeHTTP(w, r)
 		default:
-			// /preview/{id}/{token}/... (#345) isn't a fixed path, so it can't
-			// be a switch case above — the store itself enforces the token
-			// and TTL gate on every request.
 			if strings.HasPrefix(r.URL.Path, "/preview/") {
 				previewHandler.ServeHTTP(w, r)
 				return
@@ -534,11 +430,141 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 			http.NotFound(w, r)
 		}
 	})
-	resetIP := func() {
-		oauthIPMu.Lock()
-		oauthIPCounts = make(map[string]int)
-		oauthIPMu.Unlock()
+}
+
+func postBuildCallbacks(
+	action string,
+	logger *slog.Logger,
+	cfg config.Config,
+	idx *site.Index,
+	srcIdx *hugosite.SourceIndex,
+	siteDB *db.DB,
+) []admin.PostBuildCallback {
+	return []admin.PostBuildCallback{
+		{Name: "index_reload", Fn: func() error {
+			if err := idx.Reload(cfg); err != nil {
+				return err
+			}
+			if srcIdx != nil {
+				srcIdx.ClearAllBuildPending()
+			}
+			return nil
+		}},
+		{Name: "db_reindex", Fn: func() error {
+			if siteDB != nil {
+				if err := siteDB.PostBuildSync(idx); err != nil {
+					logger.Warn(action+": db reindex failed", "error", err)
+				}
+				if err := siteDB.SnapshotSiteHealth(); err != nil {
+					logger.Warn(action+": db health snapshot failed", "error", err)
+				}
+			}
+			return nil
+		}},
+		{Name: "cloudflare_purge", Fn: func() error {
+			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
+				logger.Warn(action+": cloudflare purge failed", "error", err)
+			}
+			return nil
+		}},
+		{Name: "search_index_submit", Fn: func() error {
+			urls := sitemapPageURLs(idx)
+			if err := indexnow.Submit(cfg.IndexNow, urls); err != nil {
+				logger.Warn(action+": indexnow submit failed", "error", err)
+			}
+			if err := googleindex.Submit(cfg.GoogleIndex, urls, googleindex.TypeUpdated); err != nil {
+				logger.Warn(action+": google index submit failed", "error", err)
+			}
+			return nil
+		}},
+		{Name: "stale_test_content_check", Fn: func() error {
+			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
+		}},
 	}
+}
+
+func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
+	impl := &mcp.Implementation{Name: Name, Version: buildinfo.Version}
+	serverCaps := defaultServerCapabilities()
+	// Explicitly declare capabilities so static scanners (mcpscan.dev) can
+	// inspect them. The SDK merges these with auto-detected tool/resource caps.
+	serverOpts := &mcp.ServerOptions{
+		Capabilities: serverCaps,
+	}
+	logger := observability.NewLogger()
+	// Unify every package-level slog.Info/Warn/Error call (agent_auth.go,
+	// build.go, hooks.go, the audit package, ...) onto the same structured
+	// JSON handler as the request/tool-call logs above, instead of Go's
+	// plain-text default. This is what makes the security audit trail
+	// (#371) durable and uniformly parseable without touching every
+	// individual call site.
+	slog.SetDefault(logger)
+	metrics := observability.NewMetrics()
+
+	reg := buildRegistry()
+	scopePolicy := oauth.NewScopePolicy(reg)
+
+	pg, srcIdx, writeEnabled, err := initWriteBootstrap(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Open the SQLite derived index when db_path is configured.
+	// When nil (db_path unset) all tools fall back to existing in-memory behaviour.
+	siteDB, err := openSiteDB(cfg, idx, srcIdx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build the known-tools set from the registry so the middleware can bucket
+	// any unrecognised client-supplied name as "unknown" (caps Prometheus cardinality).
+	knownTools := knownToolsSet(reg)
+
+	publicServer := newScopedServer("", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
+
+	writeServer := newScopedServer("write", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
+	admin.Register(writeServer, cfg, postBuildCallbacks("build_site", logger, cfg, idx, srcIdx, siteDB)...)
+	admin.RegisterVerifyPublication(writeServer, idx, srcIdx, cfg)
+	admin.RegisterPublishChanges(writeServer, idx, srcIdx, cfg, postBuildCallbacks("publish_changes", logger, cfg, idx, srcIdx, siteDB)...)
+	previews := previewstore.New()
+	previewHandler := previews.HTTPHandler()
+	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	admin.RegisterCreatePreview(writeServer, cfg, previews, previewBaseURL)
+
+	opts := &mcp.StreamableHTTPOptions{
+		DisableLocalhostProtection: true,
+		// Keep sessions alive for 24 h so long-running agent conversations
+		// don't lose tool availability mid-session.
+		SessionTimeout: 24 * time.Hour,
+		// MemoryEventStore lets clients resume an SSE stream with Last-Event-ID
+		// after a transient network drop without creating a new session.
+		EventStore: mcp.NewMemoryEventStore(nil),
+		// Forward SDK warnings (SSE write errors, stream close failures) to the
+		// application logger so session drops are visible in journald.
+		Logger: slog.Default(),
+	}
+	streaming := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
+		scope, _ := r.Context().Value(oauth.CtxScope).(string)
+		rank := tools.ScopeRank(scope)
+		slog.Info("mcp: session created", "scope", scope, "rank", rank, "remote_addr", r.RemoteAddr)
+		if rank >= 1 {
+			return writeServer
+		}
+		return publicServer
+	}, opts)
+
+	oauthSvc, tokenStore, err := initOAuthService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	rateLimitedStreaming := oauth.NewRateLimiter(cfg.RateLimit).Middleware(streaming)
+
+	maxBody := configuredMaxRequestBytes(cfg)
+	mcpToolHandler := newMCPToolHandler(cfg, oauthSvc, scopePolicy, metrics, logger, rateLimitedStreaming, maxBody)
+	protectedMCPHandler := newProtectedMCPHandler(cfg, oauthSvc, mcpToolHandler)
+	rateLimitOAuth, resetIP := newOAuthAllocationLimiter(maxBody)
+	handler := newRootHandler(cfg, oauthSvc, rateLimitOAuth, protectedMCPHandler, previewHandler, metrics)
 	return &Server{
 		cfg:           cfg,
 		handler:       observability.RequestMiddleware(handler, logger),

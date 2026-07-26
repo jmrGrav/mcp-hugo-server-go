@@ -14,12 +14,13 @@ import (
 type getChangelogInput struct {
 	SinceVersion string `json:"since_version,omitempty"`
 	Limit        int    `json:"limit,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 }
 
 type changelogEntryDTO struct {
 	Version string `json:"version"`
 	Date    string `json:"date,omitempty"`
-	Body    string `json:"body"`
+	Body    string `json:"body,omitempty"`
 }
 
 type getChangelogData struct {
@@ -59,12 +60,22 @@ func RegisterGetChangelog(s *mcp.Server) {
 		return
 	}
 	addReadOnlyTool(s, "get_changelog", "Get changelog",
-		"Return CHANGELOG.md entries — the exact content embedded in this running binary at build time, so it always matches the deployed version with zero drift. Without arguments, returns the 5 most recent versioned releases (bounded by default rather than dumping the entire file). Pass `since_version` (e.g. \"v1.5.9\", with or without the leading \"v\") to get every release strictly newer than that version instead — an agent that last audited at v1.5.9 can request exactly what changed since then rather than re-testing the full tool surface. `limit` caps how many entries are returned either way (default 5, max 20). Each entry's `body` is the release section's raw Markdown (its own `###` subsections like Added/Fixed/Security, verbatim) rather than further parsed into structured fields — CHANGELOG.md's own formatting is the source of truth. Fails with `invalid_params` if `since_version` doesn't match any release heading in the file. Usable without authentication.",
+		"Return CHANGELOG.md entries — the exact content embedded in this running binary at build time, so it always matches the deployed version with zero drift. Without arguments, returns the 5 most recent versioned releases (bounded by default rather than dumping the entire file). Pass `since_version` (e.g. \"v1.5.9\", with or without the leading \"v\") to get every release strictly newer than that version instead — an agent that last audited at v1.5.9 can request exactly what changed since then rather than re-testing the full tool surface. `limit` caps how many entries are returned either way (default 5, max 20). `response_mode:\"compact\"` is audit-oriented: when `limit` is omitted it defaults to 1 entry instead of 5, and omits each entry's raw Markdown `body`. Standard mode keeps each entry's `body` as the release section's raw Markdown (its own `###` subsections like Added/Fixed/Security, verbatim) rather than further parsed into structured fields — CHANGELOG.md's own formatting is the source of truth. Fails with `invalid_params` if `since_version` doesn't match any release heading in the file. Usable without authentication.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getChangelogInput) (*mcp.CallToolResult, getChangelogOutput, error) {
 			if err := negativeLimitError(in.Limit); err != nil {
 				return nil, getChangelogOutput{}, err
 			}
-			limit := clampLimit(in.Limit, getChangelogDefaultLimit, getChangelogMaxLimit)
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, getChangelogOutput{}, err
+			}
+			defaultLimit := getChangelogDefaultLimit
+			includeBody := true
+			if mode == toolcontract.ResponseModeCompact {
+				defaultLimit = 1
+				includeBody = false
+			}
+			limit := clampLimit(in.Limit, defaultLimit, getChangelogMaxLimit)
 
 			entries, err := releasecheck.ListReleaseEntriesSince(mcphugoserver.ChangelogMarkdown, in.SinceVersion, limit)
 			if err != nil {
@@ -73,7 +84,11 @@ func RegisterGetChangelog(s *mcp.Server) {
 
 			dtos := make([]changelogEntryDTO, 0, len(entries))
 			for _, e := range entries {
-				dtos = append(dtos, changelogEntryDTO{Version: e.Version, Date: e.Date, Body: e.Body})
+				dto := changelogEntryDTO{Version: e.Version, Date: e.Date}
+				if includeBody {
+					dto.Body = e.Body
+				}
+				dtos = append(dtos, dto)
 			}
 			return nil, newGetChangelogOutput(getChangelogData{Entries: dtos, Total: len(dtos)}), nil
 		}, func(schema any) any { return tools.WithMaxLimit(schema, "limit", getChangelogMaxLimit) })

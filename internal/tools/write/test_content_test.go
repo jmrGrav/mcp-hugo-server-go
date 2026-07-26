@@ -137,3 +137,46 @@ func TestCreatePageWithoutTestContentDefaultsToNonDraft(t *testing.T) {
 		t.Errorf("frontmatter must not mention test_content at all without opting in: %s", content)
 	}
 }
+
+// TestUpdatePageRejectsDedraftingTestContent is a regression test for #728:
+// once a page carries the explicit test_content marker, later write paths
+// must not be allowed to flip draft:false and make disposable audit content
+// publishable again.
+func TestUpdatePageRejectsDedraftingTestContent(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	createRes := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/audit-guarded", "title": "Audit Guarded", "body": "Body.",
+		"tags": []any{}, "categories": []any{},
+		"test_content": map[string]any{"ttl_hours": 2, "owner": "audit-session-42"},
+	})
+	if createRes.IsError {
+		raw, _ := json.Marshal(createRes.Content)
+		t.Fatalf("create_page returned error: %s", raw)
+	}
+	createData := decodeWriteData(t, createRes)
+	revision, _ := createData["new_revision"].(string)
+	if revision == "" {
+		t.Fatal("create_page missing data.new_revision")
+	}
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/audit-guarded",
+		"draft":             false,
+		"expected_revision": revision,
+	})
+	if !res.IsError {
+		t.Fatal("update_page should reject draft:false while test_content is still present")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "test_content") || !strings.Contains(raw, "draft") {
+		t.Fatalf("update_page error should explain the test_content/draft invariant, got: %s", raw)
+	}
+
+	content := readFileString(t, contentRoot, "posts/audit-guarded/index.md")
+	if !strings.Contains(content, "draft: true") {
+		t.Fatalf("update_page must not de-draft a test_content page, got: %s", content)
+	}
+}
