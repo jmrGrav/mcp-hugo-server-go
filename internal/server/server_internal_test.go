@@ -452,6 +452,42 @@ func TestInterceptResponseWriterFlushBufferedToReal(t *testing.T) {
 	}
 }
 
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (f *flushRecorder) Flush() {
+	f.flushed = true
+	f.ResponseRecorder.Flush()
+}
+
+func TestInterceptResponseWriterPassThroughWriteAndFlush(t *testing.T) {
+	rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	iw := newInterceptResponseWriter(rec)
+	iw.passThrough = true
+
+	iw.Header().Set("X-Test", "yes")
+	iw.WriteHeader(http.StatusCreated)
+	if _, err := iw.Write([]byte("ok")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	iw.Flush()
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if got := rec.Header().Get("X-Test"); got != "yes" {
+		t.Fatalf("X-Test = %q, want yes", got)
+	}
+	if got := rec.Body.String(); got != "ok" {
+		t.Fatalf("body = %q, want ok", got)
+	}
+	if !rec.flushed {
+		t.Fatal("Flush() did not reach underlying flusher in pass-through mode")
+	}
+}
+
 func TestMCPBearerAuthMiddlewareInvalidFormatPreservesChallengeShape(t *testing.T) {
 	mw := newMCPBearerAuthMiddleware(func(context.Context, string, *http.Request) (*sdkauth.TokenInfo, error) {
 		t.Fatal("verifier should not run when bearer header format is invalid")
@@ -474,6 +510,24 @@ func TestMCPBearerAuthMiddlewareInvalidFormatPreservesChallengeShape(t *testing.
 	}
 	if strings.Contains(wwwAuth, `error="invalid_token"`) {
 		t.Fatalf("WWW-Authenticate = %q, invalid format must not be marked invalid_token", wwwAuth)
+	}
+}
+
+func TestRejectMCPBearerOmitsResourceMetadataWhenEmpty(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+
+	rejectMCPBearer(rec, req, "missing_bearer", "https://mcp.test", "", false)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(wwwAuth, `realm="https://mcp.test"`) {
+		t.Fatalf("WWW-Authenticate = %q, want realm", wwwAuth)
+	}
+	if strings.Contains(wwwAuth, "resource_metadata=") {
+		t.Fatalf("WWW-Authenticate = %q, did not expect resource_metadata when URL is empty", wwwAuth)
 	}
 }
 
@@ -523,5 +577,38 @@ func TestMCPBearerAuthMiddlewareValidBearerReachesNextWithoutCorruption(t *testi
 	}
 	if got := rec.Body.String(); got != "ok" {
 		t.Fatalf("body = %q, want ok", got)
+	}
+}
+
+func TestBearerResultFromContextMissingOrWrongType(t *testing.T) {
+	if got, ok := bearerResultFromContext(context.Background()); ok || got != (mcpBearerResult{}) {
+		t.Fatalf("bearerResultFromContext(background) = (%#v, %v), want zero/false", got, ok)
+	}
+
+	var (
+		gotResult mcpBearerResult
+		gotOK     bool
+	)
+	mw := newMCPBearerAuthMiddleware(func(context.Context, string, *http.Request) (*sdkauth.TokenInfo, error) {
+		return &sdkauth.TokenInfo{
+			Scopes:     []string{"read"},
+			Expiration: time.Now().Add(time.Hour),
+			Extra:      map[string]any{"mcp_bearer": "wrong-type"},
+		}, nil
+	}, "https://mcp.test", "https://mcp.test/.well-known/oauth-protected-resource")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer token-valid")
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotResult, gotOK = bearerResultFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if gotOK || gotResult != (mcpBearerResult{}) {
+		t.Fatalf("bearerResultFromContext(wrong-type) = (%#v, %v), want zero/false", gotResult, gotOK)
 	}
 }
