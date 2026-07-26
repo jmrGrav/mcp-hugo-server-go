@@ -205,7 +205,7 @@ type listPagesData struct {
 }
 
 type getPageData struct {
-	Page pageDetailDTO `json:"page"`
+	Page *pageDetailDTO `json:"page"`
 }
 
 type searchPagesData struct {
@@ -412,7 +412,7 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 				dto.TagTerms = nil
 				dto.CategoryTerms = nil
 			}
-			return nil, newGetPageOutput(getPageData{Page: dto}), nil
+			return nil, newGetPageOutput(getPageData{Page: &dto}), nil
 		})
 
 	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Published-content alternative to search_content — if you already have a reader token, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Matching is intentionally broad: any page containing at least one query term in any indexed field is returned, ranked by `score` (count of matching terms, highest first) — it is not an exact-match search. Each result's `score` field indicates match strength; a low score means a loose/partial match. Use `match: \"title_exact\"` for a strict case-insensitive full-title match instead (e.g. to verify whether a specific page still exists after deleting it), which returns zero results rather than loosely related hits when there's no exact title match. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
