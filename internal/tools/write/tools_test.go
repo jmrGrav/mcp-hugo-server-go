@@ -473,6 +473,109 @@ func TestCreatePageRejectsHostileSlugCorpus(t *testing.T) {
 	}
 }
 
+func TestUpdatePageRejectsHostileSlugCorpus(t *testing.T) {
+	cases := []struct {
+		name string
+		slug string
+	}{
+		{name: "raw traversal", slug: "../escape"},
+		{name: "encoded traversal", slug: "%2e%2e/escape"},
+		{name: "double encoded traversal", slug: "%252e%252e/escape"},
+		{name: "backslash traversal", slug: `..\\escape`},
+		{name: "absolute path", slug: "/tmp/escape"},
+		{name: "unicode confusable slash", slug: "posts∕escape"},
+		{name: "control character", slug: "posts/\x07escape"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contentRoot := t.TempDir()
+			victimDir := filepath.Join(contentRoot, "posts", "victim")
+			if err := os.MkdirAll(victimDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll victim: %v", err)
+			}
+			victimPath := filepath.Join(victimDir, "index.md")
+			original := []byte("---\ntitle: Victim\n---\nDo not touch me.\n")
+			if err := os.WriteFile(victimPath, original, 0o644); err != nil {
+				t.Fatalf("WriteFile victim: %v", err)
+			}
+
+			session, _, done := newTestServer(t, contentRoot)
+			defer done()
+
+			res := callTool(t, session, "update_page", map[string]any{
+				"slug":  tc.slug,
+				"title": "Hostile update",
+			})
+			if !res.IsError {
+				t.Fatalf("update_page(%q): want rejection, got success", tc.slug)
+			}
+			if raw := marshalContent(t, res); !strings.Contains(raw, "invalid_params") && !strings.Contains(raw, "not_found") {
+				t.Fatalf("update_page(%q) raw error = %s, want invalid_params or not_found", tc.slug, raw)
+			}
+
+			got, err := os.ReadFile(victimPath)
+			if err != nil {
+				t.Fatalf("ReadFile victim: %v", err)
+			}
+			if string(got) != string(original) {
+				t.Fatalf("update_page(%q) mutated victim page:\n%s", tc.slug, string(got))
+			}
+		})
+	}
+}
+
+func TestDeletePageRejectsHostileSlugCorpus(t *testing.T) {
+	cases := []struct {
+		name string
+		slug string
+	}{
+		{name: "raw traversal", slug: "../escape"},
+		{name: "encoded traversal", slug: "%2e%2e/escape"},
+		{name: "double encoded traversal", slug: "%252e%252e/escape"},
+		{name: "backslash traversal", slug: `..\\escape`},
+		{name: "absolute path", slug: "/tmp/escape"},
+		{name: "unicode confusable slash", slug: "posts∕escape"},
+		{name: "control character", slug: "posts/\x07escape"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			contentRoot := t.TempDir()
+			victimDir := filepath.Join(contentRoot, "posts", "victim")
+			if err := os.MkdirAll(victimDir, 0o755); err != nil {
+				t.Fatalf("MkdirAll victim: %v", err)
+			}
+			victimPath := filepath.Join(victimDir, "index.md")
+			original := []byte("---\ntitle: Victim\n---\nDo not delete me.\n")
+			if err := os.WriteFile(victimPath, original, 0o644); err != nil {
+				t.Fatalf("WriteFile victim: %v", err)
+			}
+
+			session, _, done := newTestServer(t, contentRoot)
+			defer done()
+
+			res := callTool(t, session, "delete_page", map[string]any{
+				"slug": tc.slug,
+			})
+			if !res.IsError {
+				t.Fatalf("delete_page(%q): want rejection, got success", tc.slug)
+			}
+			if raw := marshalContent(t, res); !strings.Contains(raw, "invalid_params") && !strings.Contains(raw, "not_found") {
+				t.Fatalf("delete_page(%q) raw error = %s, want invalid_params or not_found", tc.slug, raw)
+			}
+
+			got, err := os.ReadFile(victimPath)
+			if err != nil {
+				t.Fatalf("ReadFile victim: %v", err)
+			}
+			if string(got) != string(original) {
+				t.Fatalf("delete_page(%q) mutated victim page:\n%s", tc.slug, string(got))
+			}
+		})
+	}
+}
+
 func TestCreatePageReservedSlug(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
