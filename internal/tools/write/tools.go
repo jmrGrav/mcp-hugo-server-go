@@ -1213,6 +1213,18 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// first would turn the exact same retry into not_found instead of the
 		// promised replay of the original success (#724). It also stays under
 		// the content lock so same-key concurrent retries serialize correctly.
+		//
+		// For a keyed request, ContentMu is held continuously from this point
+		// through SafeJoin/os.Stat/ResolvePageSource/Allow() below, all the way
+		// to the actual delete + idempotency-cache write — not just around this
+		// replay check. That's deliberate, not scope creep: releasing the lock
+		// between the replay-miss and the delete would reopen the exact race
+		// #724 closed (two concurrent identical-key retries both missing the
+		// cache, then both racing to delete). The extra section the lock now
+		// spans is bounded to local stat/candidate-file lookups and in-memory
+		// rate-limiter bookkeeping — no network I/O, no Hugo build — so the
+		// added contention on other concurrent writers is a handful of
+		// filesystem stats' worth of hold time, not an unbounded one.
 		idemHash := ""
 		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
 			hash, hashErr := requestHash(struct {
