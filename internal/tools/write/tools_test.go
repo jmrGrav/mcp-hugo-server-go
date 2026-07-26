@@ -2055,8 +2055,14 @@ func TestDeletePageOneLanguageSurvivesTheOther(t *testing.T) {
 		t.Fatalf("delete_page(lang=en) failed: %s", raw)
 	}
 	data := decodeWriteData(t, res)
+	if got := data["status"]; got != "ok" {
+		t.Fatalf("status = %v, want ok for a successful scoped multilingual delete", got)
+	}
 	if got, _ := data["bundle_fully_removed"].(bool); got {
 		t.Error("bundle_fully_removed = true, want false — the fr translation still exists")
+	}
+	if _, present := data["bundle_fully_removed"]; !present {
+		t.Fatal("bundle_fully_removed missing, want explicit false on partial multilingual delete")
 	}
 
 	if _, err := os.Stat(filepath.Join(pageDir, "index.en.md")); !os.IsNotExist(err) {

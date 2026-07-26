@@ -1367,6 +1367,9 @@ func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) [
 			}
 		}
 	}
+	if issues == nil {
+		return []string{}
+	}
 	return issues
 }
 
