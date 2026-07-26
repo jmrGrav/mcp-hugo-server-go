@@ -34,6 +34,45 @@ func TestAdminToolSchemasPresent(t *testing.T) {
 		assertObjectSchema(t, tool, "outputSchema")
 	}
 	assertSchemaHasProperties(t, got["generate_hero_image"], "outputSchema.data", "path")
+	assertSchemaHasProperties(t, got["run_post_build_hooks"], "inputSchema", "dry_run")
+	assertSchemaHasProperties(t, got["run_post_build_hooks"], "outputSchema.data", "results", "configured_count")
+}
+
+func TestRunPostBuildHooksSchemaPublishesDryRunBooleanContract(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	result, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var tool *mcp.Tool
+	for i := range result.Tools {
+		if result.Tools[i].Name == "run_post_build_hooks" {
+			tool = result.Tools[i]
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("run_post_build_hooks missing from tools/list")
+	}
+
+	dryRun := schemaAt(t, tool, "inputSchema.dry_run")
+	if got := dryRun["type"]; got != "boolean" {
+		t.Fatalf("run_post_build_hooks inputSchema.dry_run.type = %v, want boolean", got)
+	}
+	if strings.Contains(strings.ToLower(tool.Description), "no arguments") {
+		t.Fatalf("run_post_build_hooks description still implies no-arg contract: %q", tool.Description)
+	}
+	for _, needle := range []string{"dry_run:true", "configured_count", "without contacting them"} {
+		if !strings.Contains(tool.Description, needle) {
+			t.Fatalf("run_post_build_hooks description = %q, want substring %q", tool.Description, needle)
+		}
+	}
 }
 
 func TestGenerateHeroImagePublishesStyleEnum(t *testing.T) {
