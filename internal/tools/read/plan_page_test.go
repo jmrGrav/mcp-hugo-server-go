@@ -30,6 +30,13 @@ func mustPlanPageIndex(t *testing.T) *site.Index {
 <meta property="article:tag" content="tutorial">
 <meta property="article:section" content="programming">
 </head><body><article>Go basics body.</article></body></html>`)
+	writePlanPageFixtureHTML(t, htmlDir, filepath.Join("fr", "posts", "go-basics", "index.html"), `<!DOCTYPE html><html lang="fr"><head>
+<link rel="canonical" href="https://example.test/fr/posts/go-basics/">
+<meta property="og:title" content="Bases de Go">
+<meta property="article:tag" content="go">
+<meta property="article:tag" content="tutorial">
+<meta property="article:section" content="programming">
+</head><body><article>Bases de Go.</article></body></html>`)
 	writePlanPageFixtureHTML(t, htmlDir, filepath.Join("posts", "debug-guide", "index.html"), `<!DOCTYPE html><html lang="en"><head>
 <link rel="canonical" href="https://example.test/posts/debug-guide/">
 <meta property="og:title" content="Debug Guide">
@@ -91,9 +98,19 @@ func TestPlanPageBundlesContentTypesTagsAndLinks(t *testing.T) {
 	if !ok || len(suggestedLinks) == 0 {
 		t.Fatalf("plan_page: suggested_links = %#v, want at least one candidate sharing the \"go\" tag", data["suggested_links"])
 	}
-	first, ok := suggestedLinks[0].(map[string]any)
-	if !ok || first["slug"] != "/posts/go-basics/" {
-		t.Errorf("plan_page: suggested_links[0] = %#v, want the go-basics page", suggestedLinks[0])
+	foundGoBasics := false
+	for _, raw := range suggestedLinks {
+		link, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if slug, _ := link["slug"].(string); slug == "/posts/go-basics/" || slug == "/fr/posts/go-basics/" {
+			foundGoBasics = true
+			break
+		}
+	}
+	if !foundGoBasics {
+		t.Errorf("plan_page: suggested_links = %#v, want one go-basics translation candidate", suggestedLinks)
 	}
 }
 
@@ -142,5 +159,109 @@ func TestPlanPageRelevantTagsMatchesExistingCasingVariant(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("plan_page: relevant_tags = %v, want to surface existing \"debug\" for submitted \"Debug\"", relevantTags)
+	}
+}
+
+func TestPlanPageLanguageFiltersSuggestions(t *testing.T) {
+	idx := mustPlanPageIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{
+		"tags":     []any{"go"},
+		"language": "fr",
+	})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	links, ok := decodeContent(t, res)["suggested_links"].([]any)
+	if !ok || len(links) == 0 {
+		t.Fatalf("plan_page suggested_links = %#v, want non-empty array", decodeContent(t, res)["suggested_links"])
+	}
+	first, ok := links[0].(map[string]any)
+	if !ok {
+		t.Fatalf("plan_page first suggestion type = %T", links[0])
+	}
+	if got := first["slug"]; got != "/fr/posts/go-basics/" {
+		t.Fatalf("plan_page language=fr first slug = %v, want /fr/posts/go-basics/", got)
+	}
+}
+
+func TestPlanPageOnePerSourceKeyCollapsesTranslations(t *testing.T) {
+	idx := mustPlanPageIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{
+		"tags":               []any{"go"},
+		"one_per_source_key": true,
+	})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	links, ok := decodeContent(t, res)["suggested_links"].([]any)
+	if !ok || len(links) == 0 {
+		t.Fatalf("plan_page suggested_links = %#v, want non-empty array", decodeContent(t, res)["suggested_links"])
+	}
+	count := 0
+	for _, raw := range links {
+		link, _ := raw.(map[string]any)
+		if slug, _ := link["slug"].(string); slug == "/posts/go-basics/" || slug == "/fr/posts/go-basics/" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("plan_page one_per_source_key returned %d go-basics translation variants, want 1; links=%v", count, links)
+	}
+}
+
+func TestPlanPageCompactOmitsHeavyContentTypeDetail(t *testing.T) {
+	idx := mustPlanPageIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{
+		"tags":          []any{"go"},
+		"response_mode": "compact",
+	})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	contentTypes, ok := decodeContent(t, res)["content_types"].([]any)
+	if !ok || len(contentTypes) == 0 {
+		t.Fatalf("plan_page content_types = %#v, want non-empty array", decodeContent(t, res)["content_types"])
+	}
+	first, ok := contentTypes[0].(map[string]any)
+	if !ok {
+		t.Fatalf("plan_page first content type = %T", contentTypes[0])
+	}
+	if _, present := first["expected_fields"]; present {
+		t.Fatal("plan_page compact content_types[*].expected_fields present, want omitted")
+	}
+	if _, present := first["page_count"]; present {
+		t.Fatal("plan_page compact content_types[*].page_count present, want omitted")
+	}
+	if _, present := first["archetype_path"]; present {
+		t.Fatal("plan_page compact content_types[*].archetype_path present, want omitted")
+	}
+}
+
+func TestPlanPageExplainsMissingRelevantCategories(t *testing.T) {
+	idx := mustPlanPageIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{
+		"categories": []any{"no-match-anywhere"},
+	})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if _, present := data["relevant_categories"]; present {
+		t.Fatalf("plan_page relevant_categories present = %#v, want omitted when nothing matches", data["relevant_categories"])
+	}
+	if got := data["empty_categories_reason"]; got == nil || got == "" {
+		t.Fatal("plan_page empty_categories_reason missing, want explicit explanation")
 	}
 }
