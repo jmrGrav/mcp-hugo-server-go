@@ -308,7 +308,7 @@ func TestPathLeakDetectionCatchesPlantedLeaks(t *testing.T) {
 func newSiteAdminReadSession(t *testing.T, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	toolsadmin.RegisterRuntimeStatus(s, cfg)
+	toolsadmin.RegisterRuntimeStatus(s, cfg, srcIdx)
 	toolsadmin.RegisterSRI(s, cfg)
 	toolsadmin.RegisterThemeStatus(s, cfg)
 	toolsadmin.RegisterVerifyPublication(s, idx, srcIdx, cfg)

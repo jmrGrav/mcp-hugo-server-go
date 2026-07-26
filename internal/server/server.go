@@ -526,7 +526,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	publicServer := newScopedServer("", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
 
 	writeServer := newScopedServer("write", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
-	admin.Register(writeServer, cfg, postBuildCallbacks("build_site", logger, cfg, idx, srcIdx, siteDB)...)
+	admin.Register(writeServer, cfg, srcIdx, postBuildCallbacks("build_site", logger, cfg, idx, srcIdx, siteDB)...)
 	admin.RegisterVerifyPublication(writeServer, idx, srcIdx, cfg)
 	admin.RegisterPublishChanges(writeServer, idx, srcIdx, cfg, postBuildCallbacks("publish_changes", logger, cfg, idx, srcIdx, siteDB)...)
 	previews := previewstore.New()
