@@ -839,6 +839,7 @@ func TestOAuthEnabledToolsListDescriptionsDoNotClaimBearerlessOrLegacyReadScopes
 		"search_pages":      "read Bearer token",
 		"search_content":    "read Bearer token",
 		"get_page_markdown": "read Bearer token",
+		"get_site_health":   "translation_pair",
 	}
 	for name, needle := range mustContain {
 		found := false

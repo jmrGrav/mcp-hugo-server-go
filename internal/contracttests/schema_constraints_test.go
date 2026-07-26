@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
+	toolsadmin "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -126,6 +127,19 @@ func TestContractPublishedEnumsMatchRuntimeAcceptedValues(t *testing.T) {
 				t.Fatalf("%s.%s: published enum = %v, want %v", tc.tool, tc.field, got, tc.wantEnum)
 			}
 		})
+	}
+}
+
+func TestContractRunPostBuildHooksPublishesDryRunBoolean(t *testing.T) {
+	cfg := fixtureConfig()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	toolsadmin.RegisterHooks(s, cfg)
+	session, done := connectClient(t, s)
+	defer done()
+
+	prop := toolInputSchemaProperty(t, session, "run_post_build_hooks", "dry_run")
+	if got := asString(prop["type"]); got != "boolean" {
+		t.Fatalf("run_post_build_hooks.dry_run schema type = %q, want boolean", got)
 	}
 }
 
