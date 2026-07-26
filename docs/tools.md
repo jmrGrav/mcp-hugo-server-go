@@ -114,7 +114,7 @@ input returns a structured `idempotency_conflict` error.
 
 - `build_site` - Build website
 - `preview_build` - Preview build
-- `run_post_build_hooks` - Run post-build hooks
+- `run_post_build_hooks` - Run post-build hooks (supports `dry_run:true` to inspect configured targets without contacting them)
 - `generate_hero_image` - Generate hero image
 - `check_sri_versions` - Verify SRI integrity
 - `get_runtime_status` - Get runtime status (server version/commit, hugo/git availability, source/public revision hashes, overdue `test_content` advisories)
