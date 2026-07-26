@@ -72,6 +72,17 @@ type namedCallResult struct {
 	res *mcp.CallToolResult
 }
 
+func waitForStarts(t *testing.T, started <-chan struct{}, want int) {
+	t.Helper()
+	for i := 0; i < want; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for goroutine start signal %d/%d", i+1, want)
+		}
+	}
+}
+
 // TestConcurrentUpdatePageSamePageDeterministicOutcome proves the same-page
 // race the mutation-coordination model must resolve deterministically:
 // two concurrent update_page calls against the same slug, both captured with
@@ -101,15 +112,17 @@ func TestConcurrentUpdatePageSamePageDeterministicOutcome(t *testing.T) {
 
 	hugosite.ContentMu.Lock()
 	results := make(chan *mcp.CallToolResult, 2)
+	started := make(chan struct{}, 2)
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			started <- struct{}{}
 			results <- callTool(t, session, "update_page", args)
 		}()
 	}
-	time.Sleep(150 * time.Millisecond)
+	waitForStarts(t, started, 2)
 	hugosite.ContentMu.Unlock()
 	wg.Wait()
 	close(results)
@@ -158,21 +171,24 @@ func TestConcurrentUpdateAndDeleteSamePageDeterministicOutcome(t *testing.T) {
 
 	hugosite.ContentMu.Lock()
 	results := make(chan namedCallResult, 2)
+	started := make(chan struct{}, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		started <- struct{}{}
 		results <- namedCallResult{op: "update", res: callTool(t, session, "update_page", map[string]any{
 			"slug": slug, "body": "Body update wins", "expected_revision": rev,
 		})}
 	}()
 	go func() {
 		defer wg.Done()
+		started <- struct{}{}
 		results <- namedCallResult{op: "delete", res: callTool(t, session, "delete_page", map[string]any{
 			"slug": slug, "expected_revision": rev,
 		})}
 	}()
-	time.Sleep(150 * time.Millisecond)
+	waitForStarts(t, started, 2)
 	hugosite.ContentMu.Unlock()
 	wg.Wait()
 	close(results)
@@ -241,21 +257,24 @@ func TestConcurrentUpdateAndDeleteBilingualVariantDeterministicOutcome(t *testin
 
 	hugosite.ContentMu.Lock()
 	results := make(chan namedCallResult, 2)
+	started := make(chan struct{}, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		started <- struct{}{}
 		results <- namedCallResult{op: "update", res: callTool(t, session, "update_page", map[string]any{
 			"slug": slug, "lang": "fr", "body": "Bonjour mis a jour", "expected_revision": rev,
 		})}
 	}()
 	go func() {
 		defer wg.Done()
+		started <- struct{}{}
 		results <- namedCallResult{op: "delete", res: callTool(t, session, "delete_page", map[string]any{
 			"slug": slug, "lang": "fr", "expected_revision": rev,
 		})}
 	}()
-	time.Sleep(150 * time.Millisecond)
+	waitForStarts(t, started, 2)
 	hugosite.ContentMu.Unlock()
 	wg.Wait()
 	close(results)
@@ -333,21 +352,24 @@ func TestConcurrentUploadAssetAndDeleteSameBundleDeterministicOutcome(t *testing
 
 	hugosite.ContentMu.Lock()
 	results := make(chan namedCallResult, 2)
+	started := make(chan struct{}, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
+		started <- struct{}{}
 		results <- namedCallResult{op: "upload", res: callTool(t, session, "upload_page_asset", map[string]any{
 			"slug": slug, "filename": "cover.png", "content_base64": b64(minimalPNG),
 		})}
 	}()
 	go func() {
 		defer wg.Done()
+		started <- struct{}{}
 		results <- namedCallResult{op: "delete", res: callTool(t, session, "delete_page", map[string]any{
 			"slug": slug, "expected_revision": rev,
 		})}
 	}()
-	time.Sleep(150 * time.Millisecond)
+	waitForStarts(t, started, 2)
 	hugosite.ContentMu.Unlock()
 	wg.Wait()
 	close(results)
@@ -485,12 +507,14 @@ func TestUpdatePageWaitsThenSucceedsWhileBuildInFlight(t *testing.T) {
 	// succeed once the simulated build releases the lock.
 	hugosite.ContentMu.Lock()
 	resultCh := make(chan *mcp.CallToolResult, 1)
+	started := make(chan struct{}, 1)
 	go func() {
+		started <- struct{}{}
 		resultCh <- callTool(t, session, "update_page", map[string]any{
 			"slug": "coord-write-vs-build", "body": "Body v1", "expected_revision": rev,
 		})
 	}()
-	time.Sleep(150 * time.Millisecond)
+	waitForStarts(t, started, 1)
 	hugosite.ContentMu.Unlock()
 
 	select {

@@ -26,6 +26,20 @@ func writeMockHugo(t *testing.T, script string) string {
 	return dir
 }
 
+func waitForFile(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for file %s", path)
+}
+
 func TestBuildSiteSucceeds(t *testing.T) {
 	wantRoot := t.TempDir()
 	dir := writeMockHugo(t, "#!/bin/sh\n[ \"$(pwd)\" = \""+wantRoot+"\" ] || exit 42\nexit 0\n")
@@ -148,7 +162,8 @@ func TestBuildSitePassesCleanDestinationDirFlag(t *testing.T) {
 }
 
 func TestBuildSiteConcurrentReject(t *testing.T) {
-	dir := writeMockHugo(t, "#!/bin/sh\nsleep 5\nexit 0\n")
+	startedFile := filepath.Join(t.TempDir(), "hugo-started")
+	dir := writeMockHugo(t, "#!/bin/sh\ntouch \""+startedFile+"\"\nsleep 5\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 
 	cfg := config.Default()
@@ -189,7 +204,7 @@ func TestBuildSiteConcurrentReject(t *testing.T) {
 		sessionA.CallTool(ctx, &mcp.CallToolParams{Name: "build_site", Arguments: map[string]any{}})
 	}()
 
-	time.Sleep(100 * time.Millisecond)
+	waitForFile(t, startedFile, 2*time.Second)
 
 	res, err := sessionB.CallTool(ctx, &mcp.CallToolParams{Name: "build_site", Arguments: map[string]any{}})
 	if err != nil {

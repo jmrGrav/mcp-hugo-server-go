@@ -101,6 +101,42 @@ func TestDiffPage(t *testing.T) {
 	assertReadPageState(t, data["state"], "present", "built", "available", "fresh")
 }
 
+func TestDiffPageCompactOmitsFullDiffAndReturnsSummary(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	pagePath := filepath.Join(contentRoot, "posts", "hello", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Hello\ndate: 2026-07-03\n---\nHello world.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.email", "test@example.test")
+	runGit(t, root, "config", "user.name", "Test User")
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Hello\ndate: 2026-07-03\n---\nHello brave new world.\n"), 0o644); err != nil {
+		t.Fatalf("rewrite page: %v", err)
+	}
+
+	session, done := newDiffPageClient(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "diff_page", map[string]any{"slug": "/posts/hello/", "response_mode": "compact"})
+	if res.IsError {
+		t.Fatalf("diff_page compact returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if _, present := data["diff"]; present {
+		t.Fatalf("diff_page compact unexpectedly includes full diff: %#v", data["diff"])
+	}
+	summary, _ := data["diff_summary"].(string)
+	if !strings.Contains(summary, "added") {
+		t.Fatalf("diff_page compact diff_summary = %q, want line-count summary", summary)
+	}
+}
+
 func TestDiffPageResolvesMultilingualBundleFromSourceIndex(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")

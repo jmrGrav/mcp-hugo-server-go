@@ -38,7 +38,8 @@ type diffPageData struct {
 	FallbackMode  string              `json:"fallback_mode,omitempty"`
 	BaseCommit    string              `json:"base_commit"`
 	HeadCommit    string              `json:"head_commit"`
-	Diff          string              `json:"diff"`
+	Diff          string              `json:"diff,omitempty"`
+	DiffSummary   string              `json:"diff_summary,omitempty"`
 	SourceContent string              `json:"source_content,omitempty"`
 }
 
@@ -50,8 +51,12 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository and a configured content root. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. Use this before editing or reviewing a page.",
+	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository and a configured content root. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. `response_mode:\"compact\"` omits the full raw diff (and any full source fallback) in favor of a short `diff_summary`, so selection/audit passes can see that changes exist without paying for the unified diff unless they explicitly ask for standard mode. Use this before editing or reviewing a page.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in diffPageInput) (*mcp.CallToolResult, diffPageOutput, error) {
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, diffPageOutput{}, err
+			}
 			if site.IsReaderProfile(ctx) {
 				return nil, diffPageOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source git diagnostics")
 			}
@@ -77,7 +82,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 						relPath = rel
 					}
 				}
-				resp := newDiffPageOutput(diffPageData{
+				data := diffPageData{
 					Slug:          canonicalResolvedSlug(resolved),
 					SourceKey:     contentmodel.SourceKeyFromLogicalPath(resolvedLogicalPath(contentRoot, resolved.SourcePath, relPath)),
 					Path:          relPath,
@@ -89,7 +94,12 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 					FallbackMode:  "source_content",
 					HeadCommit:    "working-tree",
 					SourceContent: resolved.Source.Body,
-				}, time.Now().UTC())
+				}
+				if mode == toolcontract.ResponseModeCompact {
+					data.SourceContent = ""
+					data.DiffSummary = "diff unavailable"
+				}
+				resp := newDiffPageOutput(data, time.Now().UTC())
 				resp.Warnings = []string{fmt.Sprintf("Git repository metadata is unavailable (%s); returning source content without a diff.", reason)}
 				return resp
 			}
@@ -129,7 +139,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			}
 			status := diffStatus(baseExists, currentContent, baseContent)
 			if status == "git_untracked" {
-				resp := newDiffPageOutput(diffPageData{
+				data := diffPageData{
 					Slug:          canonicalResolvedSlug(resolved),
 					SourceKey:     contentmodel.SourceKeyFromLogicalPath(resolvedLogicalPath(contentRoot, absPath, relPath)),
 					Path:          relPath,
@@ -142,7 +152,12 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 					BaseCommit:    strings.TrimSpace(headCommit),
 					HeadCommit:    "working-tree",
 					SourceContent: string(currentContent),
-				}, time.Now().UTC())
+				}
+				if mode == toolcontract.ResponseModeCompact {
+					data.SourceContent = ""
+					data.DiffSummary = "file is new and not yet tracked by git"
+				}
+				resp := newDiffPageOutput(data, time.Now().UTC())
 				resp.Warnings = []string{"File is new and not yet tracked by git — showing full source instead of diff."}
 				return nil, resp, nil
 			}
@@ -150,7 +165,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			if err != nil {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: unable to compute diff")
 			}
-			return nil, newDiffPageOutput(diffPageData{
+			data := diffPageData{
 				Slug:          canonicalResolvedSlug(resolved),
 				SourceKey:     contentmodel.SourceKeyFromLogicalPath(resolvedLogicalPath(contentRoot, absPath, relPath)),
 				Path:          relPath,
@@ -162,7 +177,13 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				BaseCommit:    strings.TrimSpace(headCommit),
 				HeadCommit:    "working-tree",
 				Diff:          diffText,
-			}, time.Now().UTC()), nil
+			}
+			if mode == toolcontract.ResponseModeCompact {
+				data.Diff = ""
+				added, removed := countDiffLines(diffText)
+				data.DiffSummary = fmt.Sprintf("%d line(s) added, %d removed", added, removed)
+			}
+			return nil, newDiffPageOutput(data, time.Now().UTC()), nil
 		})
 }
 
