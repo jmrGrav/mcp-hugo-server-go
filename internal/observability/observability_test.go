@@ -24,6 +24,15 @@ func TestMetricsRenderPrometheus(t *testing.T) {
 	}
 }
 
+func TestRecordLegacyScopeIgnoresEmptyScope(t *testing.T) {
+	m := NewMetrics()
+	m.RecordLegacyScope("")
+	got := m.RenderPrometheus()
+	if !strings.Contains(got, `mcp_legacy_scope_requests_total{scope="mcp"} 0`) {
+		t.Fatalf("RenderPrometheus() after empty scope = %q, want zero legacy counter", got)
+	}
+}
+
 func TestToolCallMetrics(t *testing.T) {
 	m := NewMetrics()
 	m.RecordToolCall("get_page", "content.read", "success", 42)
@@ -140,6 +149,37 @@ func TestClassifyToolResult(t *testing.T) {
 	}
 	if got := classifyToolResult(nil, context.DeadlineExceeded); got != "protocol_error" {
 		t.Fatalf("protocol_error case: %q", got)
+	}
+}
+
+func TestEstimateResultBytesCountsOnlyTextContent(t *testing.T) {
+	result := &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: "abc"},
+			&mcp.ImageContent{MIMEType: "image/png", Data: []byte("ignored")},
+			&mcp.TextContent{Text: "12345"},
+		},
+	}
+	if got := estimateResultBytes(result); got != 8 {
+		t.Fatalf("estimateResultBytes() = %d, want 8", got)
+	}
+	if got := estimateResultBytes(nil); got != 0 {
+		t.Fatalf("estimateResultBytes(nil) = %d, want 0", got)
+	}
+}
+
+func TestIsDegradedResultRecognizesOnlySuccessfulPartialSuccess(t *testing.T) {
+	if !isDegradedResult(&mcp.CallToolResult{StructuredContent: map[string]any{"status": "partial_success"}}) {
+		t.Fatal("partial_success result not recognized as degraded")
+	}
+	if isDegradedResult(&mcp.CallToolResult{StructuredContent: map[string]any{"status": "ok"}}) {
+		t.Fatal("ok result incorrectly marked degraded")
+	}
+	if isDegradedResult(&mcp.CallToolResult{IsError: true, StructuredContent: map[string]any{"status": "partial_success"}}) {
+		t.Fatal("tool_error result incorrectly marked degraded")
+	}
+	if isDegradedResult(&mcp.CallToolResult{}) {
+		t.Fatal("empty result incorrectly marked degraded")
 	}
 }
 

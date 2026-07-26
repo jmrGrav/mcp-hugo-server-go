@@ -278,6 +278,159 @@ func TestDiscoveryBuildersFallbacks(t *testing.T) {
 	}
 }
 
+func TestReaderAcquisitionProfileMatrix(t *testing.T) {
+	tests := []struct {
+		name            string
+		cfg             config.Config
+		wantMode        string
+		wantDescription string
+	}{
+		{
+			name:            "oauth disabled",
+			cfg:             config.Default(),
+			wantMode:        "anonymous_mcp_access",
+			wantDescription: "anonymous MCP access",
+		},
+		{
+			name: "dynamic and self-registration",
+			cfg: func() config.Config {
+				cfg := config.Default()
+				cfg.OAuth.Enabled = true
+				cfg.OAuth.DynamicClientEnabled = true
+				cfg.OAuth.AllowReaderSelfRegistration = true
+				return cfg
+			}(),
+			wantMode:        "self_serve_oauth_or_agent_identity_registration",
+			wantDescription: "self-serve OAuth registration or anonymous agent identity registration",
+		},
+		{
+			name: "dynamic only",
+			cfg: func() config.Config {
+				cfg := config.Default()
+				cfg.OAuth.Enabled = true
+				cfg.OAuth.DynamicClientEnabled = true
+				return cfg
+			}(),
+			wantMode:        "self_serve_oauth_registration",
+			wantDescription: "self-serve OAuth registration",
+		},
+		{
+			name: "self-registration only",
+			cfg: func() config.Config {
+				cfg := config.Default()
+				cfg.OAuth.Enabled = true
+				cfg.OAuth.AllowReaderSelfRegistration = true
+				return cfg
+			}(),
+			wantMode:        "self_serve_agent_identity_registration",
+			wantDescription: "anonymous agent identity registration",
+		},
+		{
+			name: "operator approved",
+			cfg: func() config.Config {
+				cfg := config.Default()
+				cfg.OAuth.Enabled = true
+				return cfg
+			}(),
+			wantMode:        "operator_approved_claim_or_pre_registered_oauth_client",
+			wantDescription: "operator-approved anonymous claim or pre-registered OAuth client",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotMode, gotDescription := readerAcquisitionProfile(tt.cfg)
+			if gotMode != tt.wantMode || gotDescription != tt.wantDescription {
+				t.Fatalf("readerAcquisitionProfile() = (%q, %q), want (%q, %q)", gotMode, gotDescription, tt.wantMode, tt.wantDescription)
+			}
+		})
+	}
+}
+
+func TestServeDiscoveryTextSupportsGetAndHeadOnly(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/llms.txt", nil)
+	serveDiscoveryText(rec, req, "text/plain; charset=utf-8", "hello")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "text/plain; charset=utf-8" {
+		t.Fatalf("GET Content-Type = %q", got)
+	}
+	if got := rec.Body.String(); got != "hello" {
+		t.Fatalf("GET body = %q, want hello", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodHead, "/llms.txt", nil)
+	serveDiscoveryText(rec, req, "text/plain; charset=utf-8", "hello")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("HEAD status = %d, want 200", rec.Code)
+	}
+	if got := rec.Body.String(); got != "" {
+		t.Fatalf("HEAD body = %q, want empty", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/llms.txt", nil)
+	serveDiscoveryText(rec, req, "text/plain; charset=utf-8", "hello")
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("POST Allow = %q, want GET, HEAD", got)
+	}
+}
+
+func TestHandleSecurityTxtMethodAndMissingConfig(t *testing.T) {
+	cfg := config.Default()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/security.txt", nil)
+	handleSecurityTxt(rec, req, cfg)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET without SecurityContactURL status = %d, want 404", rec.Code)
+	}
+
+	cfg.SecurityContact = "mailto:security@example.test"
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/.well-known/security.txt", nil)
+	handleSecurityTxt(rec, req, cfg)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST with SecurityContact status = %d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("POST Allow = %q, want GET, HEAD", got)
+	}
+}
+
+func TestHandleAuthMdMethodAndMissingFile(t *testing.T) {
+	cfg := config.Default()
+	cfg.OAuth.Issuer = "https://mcp.test"
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/auth.md", nil)
+	handleAuthMd(rec, req, cfg)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET missing auth.md status = %d, want 404", rec.Code)
+	}
+
+	root := t.TempDir()
+	cfg.SiteRoot = root
+	if err := os.WriteFile(filepath.Join(root, "auth.md"), []byte("# auth\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(auth.md): %v", err)
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/auth.md", nil)
+	handleAuthMd(rec, req, cfg)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST auth.md status = %d, want 405", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("POST Allow = %q, want GET, HEAD", got)
+	}
+}
+
 // TestRegistryServerConsistency guards against drift between the Defs()
 // declarations in each tool package and the global registry built by
 // buildRegistry() in the server. If a tool is added to a package but
@@ -437,6 +590,42 @@ func TestInterceptResponseWriterFlushBufferedToReal(t *testing.T) {
 	}
 }
 
+type flushRecorder struct {
+	*httptest.ResponseRecorder
+	flushed bool
+}
+
+func (f *flushRecorder) Flush() {
+	f.flushed = true
+	f.ResponseRecorder.Flush()
+}
+
+func TestInterceptResponseWriterPassThroughWriteAndFlush(t *testing.T) {
+	rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	iw := newInterceptResponseWriter(rec)
+	iw.passThrough = true
+
+	iw.Header().Set("X-Test", "yes")
+	iw.WriteHeader(http.StatusCreated)
+	if _, err := iw.Write([]byte("ok")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	iw.Flush()
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)
+	}
+	if got := rec.Header().Get("X-Test"); got != "yes" {
+		t.Fatalf("X-Test = %q, want yes", got)
+	}
+	if got := rec.Body.String(); got != "ok" {
+		t.Fatalf("body = %q, want ok", got)
+	}
+	if !rec.flushed {
+		t.Fatal("Flush() did not reach underlying flusher in pass-through mode")
+	}
+}
+
 func TestMCPBearerAuthMiddlewareInvalidFormatPreservesChallengeShape(t *testing.T) {
 	mw := newMCPBearerAuthMiddleware(func(context.Context, string, *http.Request) (*sdkauth.TokenInfo, error) {
 		t.Fatal("verifier should not run when bearer header format is invalid")
@@ -459,6 +648,24 @@ func TestMCPBearerAuthMiddlewareInvalidFormatPreservesChallengeShape(t *testing.
 	}
 	if strings.Contains(wwwAuth, `error="invalid_token"`) {
 		t.Fatalf("WWW-Authenticate = %q, invalid format must not be marked invalid_token", wwwAuth)
+	}
+}
+
+func TestRejectMCPBearerOmitsResourceMetadataWhenEmpty(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+
+	rejectMCPBearer(rec, req, "missing_bearer", "https://mcp.test", "", false)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	wwwAuth := rec.Header().Get("WWW-Authenticate")
+	if !strings.Contains(wwwAuth, `realm="https://mcp.test"`) {
+		t.Fatalf("WWW-Authenticate = %q, want realm", wwwAuth)
+	}
+	if strings.Contains(wwwAuth, "resource_metadata=") {
+		t.Fatalf("WWW-Authenticate = %q, did not expect resource_metadata when URL is empty", wwwAuth)
 	}
 }
 
@@ -508,5 +715,38 @@ func TestMCPBearerAuthMiddlewareValidBearerReachesNextWithoutCorruption(t *testi
 	}
 	if got := rec.Body.String(); got != "ok" {
 		t.Fatalf("body = %q, want ok", got)
+	}
+}
+
+func TestBearerResultFromContextMissingOrWrongType(t *testing.T) {
+	if got, ok := bearerResultFromContext(context.Background()); ok || got != (mcpBearerResult{}) {
+		t.Fatalf("bearerResultFromContext(background) = (%#v, %v), want zero/false", got, ok)
+	}
+
+	var (
+		gotResult mcpBearerResult
+		gotOK     bool
+	)
+	mw := newMCPBearerAuthMiddleware(func(context.Context, string, *http.Request) (*sdkauth.TokenInfo, error) {
+		return &sdkauth.TokenInfo{
+			Scopes:     []string{"read"},
+			Expiration: time.Now().Add(time.Hour),
+			Extra:      map[string]any{"mcp_bearer": "wrong-type"},
+		}, nil
+	}, "https://mcp.test", "https://mcp.test/.well-known/oauth-protected-resource")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	req.Header.Set("Authorization", "Bearer token-valid")
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotResult, gotOK = bearerResultFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if gotOK || gotResult != (mcpBearerResult{}) {
+		t.Fatalf("bearerResultFromContext(wrong-type) = (%#v, %v), want zero/false", gotResult, gotOK)
 	}
 }
