@@ -1824,15 +1824,15 @@ func toPageDTO(p site.Page, aliases map[string]string, siteRoot string, includeT
 	tags := taxonomy.ApplyAliases(nullsafeStrings(p.Tags), aliases)
 	cats := taxonomy.ApplyAliases(nullsafeStrings(p.Categories), aliases)
 	dto := pageDTO{
-		Slug:          p.Slug,
-		Title:         p.Title,
-		Summary:       p.Summary,
-		Tags:          tags,
-		Categories:    cats,
-		Date:          p.Date,
-		URL:           p.URL,
-		Lang:          p.Lang,
-		State:         site.StateForResolvedPage(site.ResolvedPage{Public: &p}, siteRoot),
+		Slug:       p.Slug,
+		Title:      p.Title,
+		Summary:    p.Summary,
+		Tags:       tags,
+		Categories: cats,
+		Date:       p.Date,
+		URL:        p.URL,
+		Lang:       p.Lang,
+		State:      site.StateForResolvedPage(site.ResolvedPage{Public: &p}, siteRoot),
 	}
 	if includeTerms {
 		dto.TagTerms = site.NormalizeTaxonomyTerms(tags)
