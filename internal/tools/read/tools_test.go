@@ -2837,42 +2837,6 @@ func TestExplainSiteStructure(t *testing.T) {
 	assertReadPageState(t, recentPages[0].(map[string]any)["state"], "present", "built", "available", "fresh")
 }
 
-// TestExplainStructureCompactOmitsRecentPagesTermPayloads is a regression
-// test for #618/#720: explain_structure's compact mode is one of the seven
-// read surfaces this change touches to trim tag_terms/category_terms, but
-// unlike search_content/get_page_for_edit/build_agent_context/
-// export_agent_context/get_page_markdown/get_page_frontmatter it had no
-// direct test proving recent_pages actually drops the nested term objects
-// under response_mode=compact.
-func TestExplainStructureCompactOmitsRecentPagesTermPayloads(t *testing.T) {
-	idx := mustTestIndex(t)
-	session, done := newTestClient(t, idx)
-	defer done()
-
-	res := callTool(t, session, "explain_structure", map[string]any{"response_mode": "compact"})
-	if res.IsError {
-		t.Fatalf("explain_structure returned error: %v", res.Content)
-	}
-	data := decodeContent(t, res)
-	recentPages, ok := data["recent_pages"].([]any)
-	if !ok || len(recentPages) == 0 {
-		t.Fatalf("explain_structure recent_pages = %#v, want at least one page", data["recent_pages"])
-	}
-	first, ok := recentPages[0].(map[string]any)
-	if !ok {
-		t.Fatalf("explain_structure recent_pages[0] type = %T", recentPages[0])
-	}
-	if _, present := first["tag_terms"]; present {
-		t.Fatal("explain_structure compact recent_pages[0].tag_terms present, want omitted")
-	}
-	if _, present := first["category_terms"]; present {
-		t.Fatal("explain_structure compact recent_pages[0].category_terms present, want omitted")
-	}
-	if _, present := first["tags"]; !present {
-		t.Fatal("explain_structure compact recent_pages[0].tags absent, want present")
-	}
-}
-
 func TestValidateFrontMatter(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -3815,6 +3779,27 @@ func TestExplainSiteStructureRecentPagesUseSourceCategories(t *testing.T) {
 		return
 	}
 	t.Fatal("recent_pages does not include /posts/hello/ test fixture")
+}
+
+func TestExplainSiteStructureCompactOmitsRecentPagesExamples(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "explain_structure", map[string]any{"response_mode": "compact"})
+	if res.IsError {
+		t.Fatalf("explain_structure compact returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if _, present := data["recent_pages"]; present {
+		t.Fatalf("explain_structure compact unexpectedly includes recent_pages: %#v", data["recent_pages"])
+	}
+	if _, present := data["notes"]; present {
+		t.Fatalf("explain_structure compact unexpectedly includes notes: %#v", data["notes"])
+	}
+	if _, ok := data["summary"].(string); !ok {
+		t.Fatalf("explain_structure compact summary missing: %#v", data["summary"])
+	}
 }
 
 func TestExplainSiteStructureRecentPagesUseSourceCategoriesForLanguagePrefixedSlug(t *testing.T) {

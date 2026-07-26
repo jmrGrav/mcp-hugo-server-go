@@ -550,7 +550,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
-	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. `response_mode:\"compact\"` now also trims taxonomy-term objects from `recent_pages`, keeping the plainer `tags`/`categories` arrays. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. `response_mode:\"compact\"` keeps only the structural summary (summary, section counts, languages, taxonomy counts) and omits the heavier `recent_pages` examples and long `notes` list used for deeper onboarding. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -577,7 +577,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			catCount := len(taxonomy.ApplyAliases(rawCats, aliases))
 			summary := fmt.Sprintf("%d published pages across %d sections, %d tags, and %d categories.",
 				len(contentPages), len(sections), tagCount, catCount)
-			return nil, newContentEnvelope(contentEnvelopeData{
+			data := contentEnvelopeData{
 				Summary:     summary,
 				Sections:    sections,
 				Languages:   languages,
@@ -589,7 +589,12 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					"Posts are detected from the /posts/ path prefix.",
 					"A single root-level page (e.g. content/some-slug.md) is listed as its own one-off section named after its own slug (#642) — by design, not a bug, but a single stray or throwaway root-level page will appear as a distinct section.",
 				},
-			}, time.Now().UTC()), nil
+			}
+			if mode == toolcontract.ResponseModeCompact {
+				data.RecentPages = nil
+				data.Notes = nil
+			}
+			return nil, newContentEnvelope(data, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; `status` is `healthy_with_advisories` rather than `healthy` whenever `advisories_count > 0` and the site would otherwise be healthy. This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
