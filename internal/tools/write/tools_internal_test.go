@@ -6,9 +6,11 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"golang.org/x/time/rate"
 )
 
@@ -170,6 +172,38 @@ func TestWriteHelperBranches(t *testing.T) {
 
 func TestRegisterNilServer(t *testing.T) {
 	Register(nil, nil, nil, config.Default(), nil)
+}
+
+func TestNewWriteRegisterRuntimeUsesFirstSiteIndexAndConfiguresStores(t *testing.T) {
+	cfg := config.Config{}
+	cfg.IdempotencyTTLSeconds = 42
+
+	primary := &site.Index{}
+	secondary := &site.Index{}
+
+	rt := newWriteRegisterRuntime(cfg, primary, secondary)
+
+	if rt.siteIdx != primary {
+		t.Fatalf("siteIdx = %p, want first site index %p", rt.siteIdx, primary)
+	}
+	if rt.deleteLimiters == nil || rt.mutationLimiters == nil {
+		t.Fatalf("limiters not initialized: %#v", rt)
+	}
+	if got := rt.idem.ttl; got != 42*time.Second {
+		t.Fatalf("idempotency TTL = %v, want 42s", got)
+	}
+	if got := rt.plans.ttl; got != planTTL {
+		t.Fatalf("plan TTL = %v, want %v", got, planTTL)
+	}
+	if got := rt.snapshots.ttl; got != snapshotTTL {
+		t.Fatalf("snapshot TTL = %v, want %v", got, snapshotTTL)
+	}
+	if got := rt.plans.maxEntries; got != planMaxEntries {
+		t.Fatalf("plan maxEntries = %d, want %d", got, planMaxEntries)
+	}
+	if got := rt.snapshots.maxEntries; got != snapshotMaxEntries {
+		t.Fatalf("snapshot maxEntries = %d, want %d", got, snapshotMaxEntries)
+	}
 }
 
 func TestApplyPageUpdatesPreservesOrder(t *testing.T) {
