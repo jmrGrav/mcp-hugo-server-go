@@ -117,7 +117,7 @@ input returns a structured `idempotency_conflict` error.
 - `run_post_build_hooks` - Run post-build hooks (supports `dry_run:true` to inspect configured targets without contacting them)
 - `generate_hero_image` - Generate hero image
 - `check_sri_versions` - Verify SRI integrity
-- `get_runtime_status` - Get runtime status (server version/commit, hugo/git availability, source/public revision hashes, overdue `test_content` advisories)
+- `get_runtime_status` - Get runtime status (server version/commit, hugo/git availability, source/public revision hashes, `changed_files_count` when the git baseline is dirty, overdue `test_content` advisories)
 - `get_theme_status` - Get theme status (active theme/module name, on-disk presence, Git commit/dirty state for classic themes)
 - `verify_publication` - Verify publication (compares source/build/public/index freshness for a page and checks the live public HTTP status; no SSH required)
 - `create_preview` - Create preview (builds source, optionally including drafts, into an isolated directory exposed at a temporary token-gated, non-indexable URL; see `docs/preview-workflow.md`)
