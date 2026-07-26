@@ -244,8 +244,12 @@ func probeGitBaseline(ctx context.Context, cfg config.Config) gitRuntimeStatus {
 		status.Dirty = porcelainTrimmed != ""
 		// Count non-empty lines in porcelain output; each line represents one changed file.
 		// changed_files_count is a safe, reliable aggregate that never exposes paths or content.
-		// dirty_reason/provenance attribution was evaluated per #775 and found not reliably
-		// determinable without cross-cutting write-path tracking infrastructure not present here.
+		// A dirty_reason (mcp-vs-external) classifier was considered per #775, but the closest
+		// existing signal — index_staleness.likely_source's mcp_pending_build/external_or_unknown
+		// (#583/#617) — documents itself as a coarse, best-effort hint, not per-caller
+		// attribution. Reusing that same best-effort standard here risked exactly the "looks
+		// precise but isn't trustworthy" outcome #775 warns against, so dirty_reason was
+		// deliberately deferred rather than shipped on a shakier guarantee.
 		if status.Dirty {
 			status.ChangedFilesCount = len(strings.Split(porcelainTrimmed, "\n"))
 		}
