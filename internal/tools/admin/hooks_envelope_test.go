@@ -3,6 +3,7 @@ package admin_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -51,5 +52,43 @@ func TestRunPostBuildHooksHasEnvelopeMatchingRootFields(t *testing.T) {
 	dataEntry, _ := dataResults[0].(map[string]any)
 	if rootEntry["url"] != dataEntry["url"] || rootEntry["status"] != dataEntry["status"] {
 		t.Fatalf("data.results[0] = %#v, root results[0] = %#v — must match (#552)", dataEntry, rootEntry)
+	}
+}
+
+func TestRunPostBuildHooksDryRunDoesNotContactHookTargets(t *testing.T) {
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := config.Default()
+	cfg.PostBuildHooks = []string{srv.URL}
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "run_post_build_hooks", map[string]any{"dry_run": true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("run_post_build_hooks dry_run returned error: %s", resultText(res))
+	}
+
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	if got := data["dry_run"]; got != true {
+		t.Fatalf("data.dry_run = %v, want true", got)
+	}
+	if got := data["configured_count"]; got != float64(1) {
+		t.Fatalf("data.configured_count = %v, want 1", got)
+	}
+	if got := hits.Load(); got != 0 {
+		t.Fatalf("dry_run contacted hook target %d time(s), want 0", got)
 	}
 }

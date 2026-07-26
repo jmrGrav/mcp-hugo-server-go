@@ -524,6 +524,14 @@ func TestGetPageNotFound(t *testing.T) {
 	if !res.IsError {
 		t.Fatal("get_page for missing slug should return error result")
 	}
+	env := decodeErrorEnvelope(t, res)
+	data, ok := env["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page not-found data = %#v, want object", env["data"])
+	}
+	if page, present := data["page"]; present && page != nil {
+		t.Fatalf("get_page not-found data.page = %#v, want absent or null", page)
+	}
 }
 
 func TestGetPagePublishedExposesLifecycleState(t *testing.T) {

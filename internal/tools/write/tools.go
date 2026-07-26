@@ -295,6 +295,10 @@ type deletePageData struct {
 	// single resolved language's source file was removed and the bundle
 	// (other language(s), assets) still exists on disk.
 	BundleFullyRemoved bool `json:"bundle_fully_removed,omitempty"`
+	// BundleWillBeFullyRemoved is the dry-run prediction counterpart to
+	// BundleFullyRemoved. It is emitted only on dry_run responses so callers
+	// do not have to overload the meaning of the real-execution field.
+	BundleWillBeFullyRemoved *bool `json:"bundle_will_be_fully_removed,omitempty"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -1108,7 +1112,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. `data.bundle_fully_removed` reports which of those happened. `dry_run:true` previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On a real delete, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to reinterpret the real-execution field. `dry_run:true` previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -1226,24 +1230,26 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			if includeBacklinks {
 				backlinksValue = &bls
 			}
-			generatedAssets := previewGeneratedHeroAssets(cfg.HugoRoot, in.Slug, bundleWouldBeFullyRemovedAfterDelete(dir, resolvedSource.SourcePath))
+			bundleWillBeFullyRemoved := bundleWouldBeFullyRemovedAfterDelete(dir, resolvedSource.SourcePath)
+			generatedAssets := previewGeneratedHeroAssets(cfg.HugoRoot, in.Slug, bundleWillBeFullyRemoved)
 			var generatedAssetsValue *[]deletePageGeneratedAssetDTO
 			if len(generatedAssets) > 0 {
 				generatedAssetsValue = &generatedAssets
 			}
 			backlinksCount := len(bls)
 			return nil, newDeletePageOutput(deletePageData{
-				Status:             "ok",
-				Slug:               canonicalPublicSlug(in.Slug),
-				SourceKey:          in.Slug,
-				ResolvedLang:       strPtr(resolvedSource.Lang),
-				ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
-				DryRun:             true,
-				Content:            contentValue,
-				Backlinks:          backlinksValue,
-				GeneratedAssets:    generatedAssetsValue,
-				BacklinksCount:     &backlinksCount,
-				RateLimit:          ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
+				Status:                   "ok",
+				Slug:                     canonicalPublicSlug(in.Slug),
+				SourceKey:                in.Slug,
+				ResolvedLang:             strPtr(resolvedSource.Lang),
+				ResolvedSourcePath:       strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
+				DryRun:                   true,
+				Content:                  contentValue,
+				Backlinks:                backlinksValue,
+				GeneratedAssets:          generatedAssetsValue,
+				BacklinksCount:           &backlinksCount,
+				BundleWillBeFullyRemoved: &bundleWillBeFullyRemoved,
+				RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {

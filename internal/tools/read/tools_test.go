@@ -3139,15 +3139,15 @@ func TestGetSiteHealthTranslationPairInfoFindingDoesNotMoveScore(t *testing.T) {
 	if taxScore, _ := taxonomy["score"].(float64); taxScore != 100 {
 		t.Fatalf("score_breakdown.taxonomy.score = %v, want 100", taxScore)
 	}
-	// #591/#681: the same info-severity finding must also surface at the top
+	// #591/#761: the same info-severity finding must also surface at the top
 	// level via advisories_count, so an agent reading only status/score
 	// doesn't miss it without drilling into score_breakdown. The score stays
-	// 100, but the status string now advertises the advisory presence.
+	// 100, and pure translation-pair localization remains healthy.
 	if advisoriesCount, _ := data["advisories_count"].(float64); advisoriesCount != 1 {
 		t.Fatalf("data.advisories_count = %v, want 1", advisoriesCount)
 	}
-	if data["status"] != "healthy_with_advisories" {
-		t.Fatalf("data.status = %v, want healthy_with_advisories", data["status"])
+	if data["status"] != "healthy" {
+		t.Fatalf("data.status = %v, want healthy", data["status"])
 	}
 }
 

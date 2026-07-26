@@ -2678,6 +2678,55 @@ func TestDeletePageDryRunReportsGeneratedHeroImage(t *testing.T) {
 	}
 }
 
+func TestDeletePageDryRunPredictsBundleRemovalScope(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual-dry-run")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: FR\ndate: 2026-07-26\n---\nBonjour"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN\ndate: 2026-07-26\n---\nHello"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":    "posts/bilingual-dry-run",
+		"lang":    "en",
+		"dry_run": true,
+	})
+	if res.IsError {
+		t.Fatalf("delete_page dry_run(lang=en) failed: %s", marshalContent(t, res))
+	}
+	data := decodeWriteData(t, res)
+	if _, present := data["bundle_fully_removed"]; present {
+		t.Fatalf("dry_run must not emit bundle_fully_removed, got %#v", data["bundle_fully_removed"])
+	}
+	if got := data["bundle_will_be_fully_removed"]; got != false {
+		t.Fatalf("bundle_will_be_fully_removed = %v, want false when another language survives", got)
+	}
+
+	if err := os.Remove(filepath.Join(pageDir, "index.en.md")); err != nil {
+		t.Fatalf("remove en fixture: %v", err)
+	}
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":    "posts/bilingual-dry-run",
+		"lang":    "fr",
+		"dry_run": true,
+	})
+	if res.IsError {
+		t.Fatalf("delete_page dry_run(lang=fr,last) failed: %s", marshalContent(t, res))
+	}
+	data = decodeWriteData(t, res)
+	if got := data["bundle_will_be_fully_removed"]; got != true {
+		t.Fatalf("bundle_will_be_fully_removed = %v, want true when the last language would remove the bundle", got)
+	}
+}
+
 // TestDeletePageRealDeleteOmitsBacklinksCount is a regression test for a
 // contract-drift bug introduced alongside #687's dry-run backlinks_count
 // field: it was declared as a plain int with no omitempty, so a real
