@@ -514,31 +514,48 @@ func validateLangParam(lang string) (string, error) {
 }
 
 func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) {
+	if s == nil {
+		return
+	}
+	rt := newWriteRegisterRuntime(cfg, siteIdxs...)
+	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots)
+	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots)
+	registerCreatePageTool(s, pg, idx, cfg, siteDB, rt)
+	registerUpdatePageTool(s, pg, idx, cfg, siteDB, rt)
+	registerDeletePageTool(s, pg, idx, cfg, siteDB, rt)
+	registerUploadPageAsset(s, pg, idx, cfg, rt.idem, &rt.mutationMu, rt.mutationLimiters)
+	registerDeletePageAsset(s, pg, idx, cfg, rt.idem, &rt.deleteMu, rt.deleteLimiters)
+	registerGetMutationStatus(s, rt.idem)
+	registerGetRateLimits(s, cfg, &rt.mutationMu, rt.mutationLimiters, &rt.deleteMu, rt.deleteLimiters)
+}
+
+type writeRegisterRuntime struct {
+	siteIdx          *site.Index
+	deleteMu         sync.Mutex
+	deleteLimiters   map[string]*rate.Limiter
+	mutationMu       sync.Mutex
+	mutationLimiters map[string]*rate.Limiter
+	idem             *idempotencyStore
+	plans            *planStore
+	snapshots        *snapshotStore
+}
+
+func newWriteRegisterRuntime(cfg config.Config, siteIdxs ...*site.Index) *writeRegisterRuntime {
 	var siteIdx *site.Index
 	if len(siteIdxs) > 0 {
 		siteIdx = siteIdxs[0]
 	}
-	if s == nil {
-		return
+	return &writeRegisterRuntime{
+		siteIdx:          siteIdx,
+		deleteLimiters:   make(map[string]*rate.Limiter),
+		mutationLimiters: make(map[string]*rate.Limiter),
+		idem:             newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256),
+		plans:            newPlanStore(planTTL, planMaxEntries),
+		snapshots:        newSnapshotStore(snapshotTTL, snapshotMaxEntries),
 	}
+}
 
-	var deleteMu sync.Mutex
-	deleteLimiters := make(map[string]*rate.Limiter)
-	// mutationMu/mutationLimiters (#378): a separate per-caller budget for
-	// create_page/update_page/upload_page_asset, layered on top of (not
-	// instead of) the existing per-scope-per-IP content.write limit in
-	// internal/oauth's RateLimiter — that one is a single shared budget
-	// across every content.write tool, this one mirrors delete_page's own
-	// tool-class-scoped defense-in-depth so one operation type can't
-	// silently consume another's headroom.
-	var mutationMu sync.Mutex
-	mutationLimiters := make(map[string]*rate.Limiter)
-	idem := newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256)
-	plans := newPlanStore(planTTL, planMaxEntries)
-	snapshots := newSnapshotStore(snapshotTTL, snapshotMaxEntries)
-	registerContentPlanTools(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, plans, snapshots)
-	registerRollbackChange(s, pg, idx, cfg, siteDB, siteIdx, &mutationMu, mutationLimiters, idem, snapshots)
-
+func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
@@ -585,7 +602,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return nil, createPageOutput{}, wrapErr(fmt.Errorf("invalid_params: test_content.ttl_hours must not be negative"))
 		}
 		callerKey := mutationCallerKey(ctx)
-		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+		limiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
 			return toolcontract.WithDataFields(
 				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
@@ -703,7 +720,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			idemHash = hash
 			var cached createPageOutput
-			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "create_page", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := rt.idem.replay(idempotencyCallerKey(ctx), "create_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, createPageOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -776,13 +793,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			TestContentExpiresAt:     testContentExpiresAt,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember(idempotencyCallerKey(ctx), "create_page", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := rt.idem.remember(idempotencyCallerKey(ctx), "create_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("create_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
 		}
 		return nil, out, nil
 	}))
+}
 
+func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "update_page",
 		Title: "Update page",
@@ -845,7 +864,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 		callerKey := mutationCallerKey(ctx)
-		limiter := callerLimiter(&mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+		limiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
 			return toolcontract.WithDataFields(
 				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
@@ -931,7 +950,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			idemHash = hash
 			var cached updatePageOutput
-			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := rt.idem.replay(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -1032,7 +1051,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		// file, so there's nothing new to roll back from. create_page is
 		// deliberately not snapshotted — there's no meaningful "pre-create"
 		// state to restore to.
-		snapshots.put(filePath, currentRevision, string(raw))
+		rt.snapshots.put(filePath, currentRevision, string(raw))
 		updated := *existing
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang
@@ -1055,8 +1074,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		updated.BuildPending = true
 		idx.Upsert(updated)
 		hadPublic := false
-		if siteIdx != nil {
-			if pub, ok := siteIdx.GetBySlug(in.Slug); ok {
+		if rt.siteIdx != nil {
+			if pub, ok := rt.siteIdx.GetBySlug(in.Slug); ok {
 				hadPublic = true
 				pubUpdated := *pub
 				if in.Title != "" {
@@ -1068,7 +1087,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				if writeCategories != nil {
 					pubUpdated.Categories = writeCategories
 				}
-				siteIdx.UpsertPage(pubUpdated)
+				rt.siteIdx.UpsertPage(pubUpdated)
 			}
 		}
 		status := "ok"
@@ -1081,7 +1100,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 		}
 
-		state := updatePageState(siteIdx != nil, hadPublic)
+		state := updatePageState(rt.siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		out := newUpdatePageOutput(updatePageData{
 			Status:                   status,
@@ -1099,13 +1118,15 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			CategoriesDelta:          categoriesDelta,
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := rt.idem.remember(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("update_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
 		}
 		return nil, out, nil
 	}))
+}
 
+func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
@@ -1127,7 +1148,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug})
 		}
 		callerKey := mutationCallerKey(ctx)
-		limiter := callerLimiter(&deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
+		limiter := callerLimiter(&rt.deleteMu, rt.deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 		wrapErrWithLimiter := func(err error) error {
 			return toolcontract.WithDataFields(
 				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
@@ -1220,7 +1241,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			}
 			idemHash = hash
 			var cached deletePageOutput
-			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, &cached)
+			hit, replayErr := rt.idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, &cached)
 			if replayErr != nil {
 				return nil, deletePageOutput{}, wrapErrWithLimiter(replayErr)
 			}
@@ -1283,8 +1304,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 				}
 			}
 			bls := []deletePageBacklinkDTO{}
-			if siteIdx != nil {
-				for _, e := range siteIdx.GetBacklinks(in.Slug) {
+			if rt.siteIdx != nil {
+				for _, e := range rt.siteIdx.GetBacklinks(in.Slug) {
 					bls = append(bls, deletePageBacklinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL})
 				}
 			}
@@ -1386,8 +1407,8 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		var deleteWarning string
 		degradedDelete := false
 		dbDeleteFailed := false
-		if bundleFullyRemoved && siteIdx != nil {
-			siteIdx.RemoveBySlug(in.Slug)
+		if bundleFullyRemoved && rt.siteIdx != nil {
+			rt.siteIdx.RemoveBySlug(in.Slug)
 		}
 		if bundleFullyRemoved && siteDB != nil {
 			if err := siteDB.DeletePage(in.Slug); err != nil {
@@ -1499,17 +1520,12 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 			RateLimit:          ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
-			if err := idem.remember(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, out); err != nil {
+			if err := rt.idem.remember(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("delete_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
 		}
 		return nil, out, nil
 	}))
-
-	registerUploadPageAsset(s, pg, idx, cfg, idem, &mutationMu, mutationLimiters)
-	registerDeletePageAsset(s, pg, idx, cfg, idem, &deleteMu, deleteLimiters)
-	registerGetMutationStatus(s, idem)
-	registerGetRateLimits(s, cfg, &mutationMu, mutationLimiters, &deleteMu, deleteLimiters)
 }
 
 func createPageState() site.LifecycleState {
