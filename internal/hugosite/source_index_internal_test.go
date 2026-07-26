@@ -94,6 +94,21 @@ func TestSplitFrontmatterFallbacks(t *testing.T) {
 	if got := boolVal("nope"); got {
 		t.Fatal("boolVal(non-bool) should be false")
 	}
+	if got := timeVal("2026-07-05T01:02:03Z"); got.Format(time.RFC3339) != "2026-07-05T01:02:03Z" {
+		t.Fatalf("timeVal(RFC3339) = %v", got)
+	}
+	if got := timeVal("2026-07-05T01:02:03"); got.Format("2006-01-02T15:04:05") != "2026-07-05T01:02:03" {
+		t.Fatalf("timeVal(no zone) = %v", got)
+	}
+	if got := timeVal("2026-07-05"); got.Format("2006-01-02") != "2026-07-05" {
+		t.Fatalf("timeVal(date only) = %v", got)
+	}
+	if got := timeVal(""); !got.IsZero() {
+		t.Fatalf("timeVal(empty) = %v, want zero", got)
+	}
+	if got := timeVal("not-a-date"); !got.IsZero() {
+		t.Fatalf("timeVal(invalid) = %v, want zero", got)
+	}
 	if got := stringSlice([]any{"a", 1, true}); len(got) != 3 || got[1] != "1" {
 		t.Fatalf("stringSlice([]any) = %#v", got)
 	}
