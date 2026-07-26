@@ -220,11 +220,13 @@ func TestServerRunShutsDown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
+	started := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		close(started)
 		cancel()
 		done <- srv.Run(ctx)
 	}()
+	<-started
 	select {
 	case err := <-done:
 		if err != nil {
@@ -341,11 +343,13 @@ func TestServerRunWithOAuthEnabled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
+	started := make(chan struct{})
 	go func() {
-		time.Sleep(50 * time.Millisecond)
+		close(started)
 		cancel()
 		done <- srv.Run(ctx)
 	}()
+	<-started
 	select {
 	case err := <-done:
 		if err != nil {
