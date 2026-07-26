@@ -3,9 +3,12 @@ package server
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +50,138 @@ func TestOpenStoreBranches(t *testing.T) {
 		t.Fatalf("openStore(sqlite path) error = %v", err)
 	}
 	_ = sqliteStore.Close()
+}
+
+func TestInitWriteBootstrapBranches(t *testing.T) {
+	t.Run("disabled without content root", func(t *testing.T) {
+		pg, srcIdx, writeEnabled, err := initWriteBootstrap(config.Config{})
+		if err != nil {
+			t.Fatalf("initWriteBootstrap(disabled) error = %v", err)
+		}
+		if writeEnabled {
+			t.Fatal("initWriteBootstrap(disabled) writeEnabled = true, want false")
+		}
+		if pg != nil || srcIdx != nil {
+			t.Fatalf("initWriteBootstrap(disabled) = %#v, %#v, want nil, nil", pg, srcIdx)
+		}
+	})
+
+	t.Run("enabled with content root", func(t *testing.T) {
+		contentRoot := t.TempDir()
+		pg, srcIdx, writeEnabled, err := initWriteBootstrap(config.Config{
+			ContentRoot:    contentRoot,
+			RejectSymlinks: true,
+		})
+		if err != nil {
+			t.Fatalf("initWriteBootstrap(enabled) error = %v", err)
+		}
+		if !writeEnabled {
+			t.Fatal("initWriteBootstrap(enabled) writeEnabled = false, want true")
+		}
+		if pg == nil || srcIdx == nil {
+			t.Fatalf("initWriteBootstrap(enabled) = %#v, %#v, want non-nil values", pg, srcIdx)
+		}
+	})
+}
+
+func TestOpenSiteDBBranches(t *testing.T) {
+	idx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatalf("site.NewIndex(default) error = %v", err)
+	}
+
+	t.Run("disabled without db path", func(t *testing.T) {
+		siteDB, err := openSiteDB(config.Config{}, idx, nil)
+		if err != nil {
+			t.Fatalf("openSiteDB(disabled) error = %v", err)
+		}
+		if siteDB != nil {
+			t.Fatalf("openSiteDB(disabled) = %#v, want nil", siteDB)
+		}
+	})
+
+	t.Run("invalid db path wraps open failure", func(t *testing.T) {
+		dir := t.TempDir()
+		siteDB, err := openSiteDB(config.Config{DBPath: dir}, idx, nil)
+		if err == nil {
+			if siteDB != nil {
+				_ = siteDB.Close()
+			}
+			t.Fatal("openSiteDB(dir path) error = nil, want wrapped sqlite index error")
+		}
+		if siteDB != nil {
+			t.Fatalf("openSiteDB(dir path) = %#v, want nil on error", siteDB)
+		}
+		if !strings.Contains(err.Error(), "server: sqlite index:") {
+			t.Fatalf("openSiteDB(dir path) error = %q, want sqlite index wrapper", err)
+		}
+	})
+
+	t.Run("startup sync warning path still returns db handle", func(t *testing.T) {
+		contentRoot := t.TempDir()
+		if err := os.WriteFile(filepath.Join(contentRoot, "index.html"), []byte("<html><head><title>x</title></head><body></body></html>"), 0o644); err != nil {
+			t.Fatalf("WriteFile(index.html): %v", err)
+		}
+		cfg := config.Default()
+		cfg.SiteRoot = contentRoot
+		siteIdx, err := site.NewIndex(cfg)
+		if err != nil {
+			t.Fatalf("site.NewIndex(site root) error = %v", err)
+		}
+		dbPath := filepath.Join(t.TempDir(), "site.sqlite")
+		siteDB, err := openSiteDB(config.Config{DBPath: dbPath}, siteIdx, nil)
+		if err != nil {
+			t.Fatalf("openSiteDB(valid path) error = %v", err)
+		}
+		defer func() { _ = siteDB.Close() }()
+		if siteDB == nil {
+			t.Fatal("openSiteDB(valid path) = nil, want non-nil handle")
+		}
+	})
+}
+
+func TestKnownToolsSet(t *testing.T) {
+	reg := buildRegistry()
+	known := knownToolsSet(reg)
+	if len(known) != len(reg.All()) {
+		t.Fatalf("knownToolsSet() len = %d, want %d", len(known), len(reg.All()))
+	}
+	for _, d := range reg.All() {
+		if !known[d.Name] {
+			t.Fatalf("knownToolsSet() missing %q", d.Name)
+		}
+	}
+}
+
+func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
+	want := []string{
+		"index_reload",
+		"db_reindex",
+		"cloudflare_purge",
+		"search_index_submit",
+		"stale_test_content_check",
+	}
+	cfg := config.Default()
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex(default) error = %v", err)
+	}
+
+	for _, action := range []string{"build_site", "publish_changes"} {
+		t.Run(action, func(t *testing.T) {
+			callbacks := postBuildCallbacks(action, slog.Default(), cfg, idx, nil, nil)
+			got := make([]string, 0, len(callbacks))
+			for _, cb := range callbacks {
+				got = append(got, cb.Name)
+				if cb.Fn == nil {
+					t.Fatalf("postBuildCallbacks(%q) returned nil Fn for %q", action, cb.Name)
+				}
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("postBuildCallbacks(%q) names = %v, want %v", action, got, want)
+			}
+		})
+	}
 }
 
 func TestRegistryRequiredScopeFor(t *testing.T) {

@@ -66,6 +66,29 @@ func TestGetChangelogLimit(t *testing.T) {
 	}
 }
 
+func TestGetChangelogCompactDefaultsToOneEntryWithoutBody(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_changelog", map[string]any{"response_mode": "compact"})
+	if res.IsError {
+		t.Fatalf("get_changelog compact returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	entries, ok := data["entries"].([]any)
+	if !ok || len(entries) != 1 {
+		t.Fatalf("get_changelog compact entries = %#v, want exactly 1 default entry", data["entries"])
+	}
+	first, ok := entries[0].(map[string]any)
+	if !ok {
+		t.Fatalf("get_changelog compact entry = %T, want map", entries[0])
+	}
+	if _, present := first["body"]; present {
+		t.Fatalf("get_changelog compact entry unexpectedly includes full body: %#v", first)
+	}
+}
+
 // TestGetChangelogSinceUnknownVersionReturnsError confirms an unrecognized
 // since_version is rejected with invalid_params rather than silently
 // returning everything or nothing.
