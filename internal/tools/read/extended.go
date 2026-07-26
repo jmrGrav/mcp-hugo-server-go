@@ -429,7 +429,12 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 		siteDB = dbs[0]
 	}
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
+	registerReadExtendedFoundationTools(s, idx, srcIdx, cfg)
+	registerReadExtendedSearchAndHealthTools(s, idx, srcIdx, cfg, siteDB, aliases)
+	registerReadExtendedLinkAndSuggestionTools(s, idx, srcIdx, cfg, aliases)
+}
 
+func registerReadExtendedFoundationTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
 	RegisterDiffPage(s, idx, srcIdx, cfg)
 	RegisterInspectRenderedPage(s, idx, srcIdx, cfg)
 	RegisterListContentTypes(s, srcIdx, cfg)
@@ -437,7 +442,9 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	RegisterAIReadiness(s, idx, srcIdx, cfg)
 	RegisterPlanPage(s, idx, srcIdx, cfg)
 	RegisterListPageRevisions(s, idx, srcIdx, cfg)
+}
 
+func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, aliases map[string]string) {
 	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Also matches body text, unlike search_pages. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Prefer this tool over search_pages whenever you already have a reader token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {
 			if idx == nil {
@@ -698,7 +705,9 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				IndexInfo:   staleness(idx, srcIdx, cfg),
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
+}
 
+func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, aliases map[string]string) {
 	addReadOnlyTool(s, "get_backlinks", "Get backlinks", "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). This is the same backlinks data get_related_content returns alongside related_pages/suggested_links/translations in one call — use this standalone version when you only need backlinks and want to avoid the cost of the other three facets. `index_staleness` is present only when the in-memory index is behind on-disk content (e.g. a manual Hugo build outside this server) — its absence means the index reflects current source; when present, treat the backlinks list as possibly outdated until the next build_site (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getBacklinksInput) (*mcp.CallToolResult, getBacklinksOutput, error) {
 			if idx == nil {
