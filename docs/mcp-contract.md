@@ -429,7 +429,7 @@ structured too, with the same root/data convergence.
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready`; `data.X` mirrors all five additively (#572) — this was the last tool with zero envelope at all (not even root-level duplication) before this change |
 | `preview_build`           | flat     | `status`, `duration_ms`; `data.X` mirrors both additively (#552) |
 | `run_post_build_hooks`    | flat     | `results`; `data.results` mirrors it additively (#552) |
-| `generate_hero_image` | structured | `data.path`; `path` is hugo_root-relative, never the host's absolute filesystem path (#551); no root-level duplication as of v1.5.9 (#573) |
+| `generate_hero_image` | structured | `data.path`; `slug` accepts either the canonical public form (`/posts/example/`) or the source-key form (`posts/example`) and normalizes any language-prefixed public slug to the same source key before writing, so generated-asset lifecycle tools keep one stable identity; `style` publishes the real enum `["", "tech", "geo"]` in `tools/list` instead of a generic string (#418, #721); `path` is hugo_root-relative, never the host's absolute filesystem path (#551); no root-level duplication as of v1.5.9 (#573) |
 | `check_sri_versions`      | flat     | `files_scanned`, `files_with_sri_attributes`, `sri_entries_loaded`, `sri_checked`, `status`, `summary`, `findings`; `data.X` mirrors all of the above additively (#552) |
 | `get_runtime_status`      | structured | `data.release_version`, `data.commit`, `data.hugo`, `data.git`, `data.site`, `data.degraded` |
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
