@@ -435,3 +435,129 @@ func TestGetRuntimeStatusReportsOverdueTestContent(t *testing.T) {
 		t.Fatalf("overdue reason = %v, want test_content_expired", entry["reason"])
 	}
 }
+
+func TestGetRuntimeStatusReportsChangedFilesCountWhenClean(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
+	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0 linux/amd64'\n")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	if err := os.MkdirAll(contentRoot, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	runGitCmd(t, root, "init")
+	runGitCmd(t, root, "config", "user.email", "test@example.test")
+	runGitCmd(t, root, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(contentRoot, ".gitkeep"), []byte(""), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	runGitCmd(t, root, "add", ".")
+	runGitCmd(t, root, "commit", "-m", "initial")
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = hugoDir
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+
+	git, ok := data["git"].(map[string]any)
+	if !ok {
+		t.Fatalf("git field type = %T", data["git"])
+	}
+	if git["dirty"] != false {
+		t.Fatalf("git.dirty = %v, want false for clean repo", git["dirty"])
+	}
+	// For a clean repo, changed_files_count should be omitted (via omitempty when 0)
+	if _, present := git["changed_files_count"]; present {
+		t.Fatalf("git.changed_files_count = %v, want omitted for clean repo", git["changed_files_count"])
+	}
+}
+
+func TestGetRuntimeStatusReportsChangedFilesCountWhenDirty(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
+	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0 linux/amd64'\n")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	if err := os.MkdirAll(contentRoot, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	runGitCmd(t, root, "init")
+	runGitCmd(t, root, "config", "user.email", "test@example.test")
+	runGitCmd(t, root, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(contentRoot, ".gitkeep"), []byte(""), 0o644); err != nil {
+		t.Fatalf("write seed: %v", err)
+	}
+	runGitCmd(t, root, "add", ".")
+	runGitCmd(t, root, "commit", "-m", "initial")
+
+	// Create 3 modified files to make repo dirty
+	if err := os.WriteFile(filepath.Join(contentRoot, "file1.md"), []byte("content 1"), 0o644); err != nil {
+		t.Fatalf("write file1: %v", err)
+	}
+	runGitCmd(t, root, "add", "content/file1.md")
+	runGitCmd(t, root, "commit", "-m", "add file1")
+
+	// Now modify it and add two more untracked files
+	if err := os.WriteFile(filepath.Join(contentRoot, "file1.md"), []byte("modified content 1"), 0o644); err != nil {
+		t.Fatalf("modify file1: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "file2.md"), []byte("content 2"), 0o644); err != nil {
+		t.Fatalf("write file2: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "file3.md"), []byte("content 3"), 0o644); err != nil {
+		t.Fatalf("write file3: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = hugoDir
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+
+	git, ok := data["git"].(map[string]any)
+	if !ok {
+		t.Fatalf("git field type = %T", data["git"])
+	}
+	if git["dirty"] != true {
+		t.Fatalf("git.dirty = %v, want true for dirty repo", git["dirty"])
+	}
+	// For a dirty repo with 3 changed files, changed_files_count should be 3
+	count, ok := git["changed_files_count"].(float64)
+	if !ok {
+		t.Fatalf("git.changed_files_count type = %T, want float64", git["changed_files_count"])
+	}
+	if int(count) != 3 {
+		t.Fatalf("git.changed_files_count = %v, want 3", int(count))
+	}
+}

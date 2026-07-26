@@ -39,12 +39,13 @@ type hugoRuntimeStatus struct {
 }
 
 type gitRuntimeStatus struct {
-	BaselineMode string `json:"baseline_mode"`
-	Available    bool   `json:"available"`
-	Branch       string `json:"branch,omitempty"`
-	HeadCommit   string `json:"head_commit,omitempty"`
-	Dirty        bool   `json:"dirty"`
-	Error        string `json:"error,omitempty"`
+	BaselineMode      string `json:"baseline_mode"`
+	Available         bool   `json:"available"`
+	Branch            string `json:"branch,omitempty"`
+	HeadCommit        string `json:"head_commit,omitempty"`
+	Dirty             bool   `json:"dirty"`
+	ChangedFilesCount int    `json:"changed_files_count,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 type siteRuntimeStatus struct {
@@ -239,7 +240,15 @@ func probeGitBaseline(ctx context.Context, cfg config.Config) gitRuntimeStatus {
 
 	porcelain, err := gitStatusOutput(tctx, gitRoot, "status", "--porcelain")
 	if err == nil {
-		status.Dirty = strings.TrimSpace(porcelain) != ""
+		porcelainTrimmed := strings.TrimSpace(porcelain)
+		status.Dirty = porcelainTrimmed != ""
+		// Count non-empty lines in porcelain output; each line represents one changed file.
+		// changed_files_count is a safe, reliable aggregate that never exposes paths or content.
+		// dirty_reason/provenance attribution was evaluated per #775 and found not reliably
+		// determinable without cross-cutting write-path tracking infrastructure not present here.
+		if status.Dirty {
+			status.ChangedFilesCount = len(strings.Split(porcelainTrimmed, "\n"))
+		}
 	}
 
 	status.Available = true
