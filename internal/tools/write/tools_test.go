@@ -82,6 +82,17 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 	return session, idx, func() { _ = session.Close() }
 }
 
+func waitForStartSignals(t *testing.T, started <-chan struct{}, want int) {
+	t.Helper()
+	for i := 0; i < want; i++ {
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for goroutine start signal %d/%d", i+1, want)
+		}
+	}
+}
+
 func callTool(t *testing.T, session *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
 	t.Helper()
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
@@ -974,16 +985,18 @@ func TestCreatePageIdempotencyKeyRaceOnConcurrentRetries(t *testing.T) {
 	hugosite.ContentMu.Lock()
 
 	results := make(chan *mcp.CallToolResult, 2)
+	started := make(chan struct{}, 2)
 	var wg sync.WaitGroup
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			started <- struct{}{}
 			results <- callTool(t, session, "create_page", args)
 		}()
 	}
 
-	time.Sleep(150 * time.Millisecond)
+	waitForStartSignals(t, started, 2)
 	hugosite.ContentMu.Unlock()
 	wg.Wait()
 	close(results)
@@ -1382,14 +1395,16 @@ func TestDeletePageDetectsRevisionChangeWhileWaitingForLock(t *testing.T) {
 	defer hugosite.ContentMu.Unlock()
 
 	resultCh := make(chan *mcp.CallToolResult, 1)
+	started := make(chan struct{}, 1)
 	go func() {
+		started <- struct{}{}
 		resultCh <- callTool(t, session, "delete_page", map[string]any{
 			"slug":              slug,
 			"expected_revision": expected,
 		})
 	}()
 
-	time.Sleep(150 * time.Millisecond)
+	waitForStartSignals(t, started, 1)
 	if err := os.WriteFile(filePath, []byte("---\ntitle: Race Target\n---\nchanged while waiting"), 0o644); err != nil {
 		t.Fatalf("WriteFile while lock held: %v", err)
 	}
