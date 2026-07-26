@@ -33,6 +33,7 @@ type searchContentInput struct {
 	Sort         string `json:"sort,omitempty"`
 	Order        string `json:"order,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
+	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
 
 // taxonomyInconsistencyDTO is the structured, actionable form of a
@@ -437,11 +438,16 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	RegisterPlanPage(s, idx, srcIdx, cfg)
 	RegisterListPageRevisions(s, idx, srcIdx, cfg)
 
-	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Also matches body text, unlike search_pages. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Prefer this tool over search_pages whenever you already have a reader token.",
+	addReadOnlyTool(s, "search_content", "Search content", "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Also matches body text, unlike search_pages. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Prefer this tool over search_pages whenever you already have a reader token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in searchContentInput) (*mcp.CallToolResult, searchContentEnvelope, error) {
 			if idx == nil {
 				return nil, searchContentEnvelope{}, fmt.Errorf("index not initialized")
 			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, searchContentEnvelope{}, err
+			}
+			terms := includeTerms(mode, in.IncludeTerms)
 			readerSafe := site.IsReaderProfile(ctx)
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
 				return nil, searchContentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
@@ -483,7 +489,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					if readerSafe {
 						lookup = nil
 					}
-					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, lookup, cfg.ContentRoot, cfg.SiteRoot)
+					dtos := toPageDTOsWithSnippets(pages, aliases, snippetMap, lookup, cfg.ContentRoot, cfg.SiteRoot, terms)
 					return nil, newSearchContentEnvelope(searchContentData{
 						Pages:         dtos,
 						Total:         meta.Total,
@@ -527,7 +533,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			pages := sliceContentPages(filtered, offset, limit)
 			meta := toolcontract.ComputePagination(total, limit, offset, len(pages))
 			return nil, newSearchContentEnvelope(searchContentData{
-				Pages:         toPageDTOs(pages, aliases, sourceIndexForProfile(srcIdx, readerSafe), cfg.ContentRoot, cfg.SiteRoot),
+				Pages:         toPageDTOs(pages, aliases, sourceIndexForProfile(srcIdx, readerSafe), cfg.ContentRoot, cfg.SiteRoot, terms),
 				Total:         meta.Total,
 				Limit:         meta.Limit,
 				Offset:        meta.Offset,
@@ -544,10 +550,14 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 
-	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
+	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. `response_mode:\"compact\"` now also trims taxonomy-term objects from `recent_pages`, keeping the plainer `tags`/`categories` arrays. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		func(ctx context.Context, _ *mcp.CallToolRequest, in responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
+			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, contentEnvelope{}, err
 			}
 			readerSafe := site.IsReaderProfile(ctx)
 			contentPages := idx.ContentPages()
@@ -573,7 +583,7 @@ func RegisterWithSourceIndex(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				Languages:   languages,
 				Tags:        tagCount,
 				Categories:  catCount,
-				RecentPages: toPageDTOsEnriched(recent, sourceIndexForProfile(srcIdx, readerSafe), aliases, cfg.ContentRoot, cfg.SiteRoot),
+				RecentPages: toPageDTOsEnriched(recent, sourceIndexForProfile(srcIdx, readerSafe), aliases, cfg.ContentRoot, cfg.SiteRoot, includeTerms(mode, nil)),
 				Notes: []string{
 					"Top-level sections are derived from page slugs.",
 					"Posts are detected from the /posts/ path prefix.",
@@ -1820,30 +1830,33 @@ func uniqueLanguages(pages []site.Page) []string {
 	return out
 }
 
-func toPageDTO(p site.Page, aliases map[string]string, siteRoot string) pageDTO {
+func toPageDTO(p site.Page, aliases map[string]string, siteRoot string, includeTerms bool) pageDTO {
 	tags := taxonomy.ApplyAliases(nullsafeStrings(p.Tags), aliases)
 	cats := taxonomy.ApplyAliases(nullsafeStrings(p.Categories), aliases)
-	return pageDTO{
-		Slug:          p.Slug,
-		Title:         p.Title,
-		Summary:       p.Summary,
-		Tags:          tags,
-		Categories:    cats,
-		TagTerms:      site.NormalizeTaxonomyTerms(tags),
-		CategoryTerms: site.NormalizeTaxonomyTerms(cats),
-		Date:          p.Date,
-		URL:           p.URL,
-		Lang:          p.Lang,
-		State:         site.StateForResolvedPage(site.ResolvedPage{Public: &p}, siteRoot),
+	dto := pageDTO{
+		Slug:       p.Slug,
+		Title:      p.Title,
+		Summary:    p.Summary,
+		Tags:       tags,
+		Categories: cats,
+		Date:       p.Date,
+		URL:        p.URL,
+		Lang:       p.Lang,
+		State:      site.StateForResolvedPage(site.ResolvedPage{Public: &p}, siteRoot),
 	}
+	if includeTerms {
+		dto.TagTerms = site.NormalizeTaxonomyTerms(tags)
+		dto.CategoryTerms = site.NormalizeTaxonomyTerms(cats)
+	}
+	return dto
 }
 
-func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.SourceIndex, contentRoot, siteRoot string) []pageDTO {
+func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.SourceIndex, contentRoot, siteRoot string, includeTerms bool) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases, siteRoot)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot)
+		dto := toPageDTO(p, aliases, siteRoot, includeTerms)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot, includeTerms)
 		out[i] = dto
 	}
 	return out
@@ -1856,23 +1869,23 @@ func toPageDTOs(pages []site.Page, aliases map[string]string, srcIdx *hugosite.S
 // Language-prefixed slugs (e.g. /en/posts/foo/) are handled via
 // site.SourceSlugCandidates, which tries the bare slug then strips the lang
 // prefix to match the source-index key (posts/foo).
-func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string, contentRoot, siteRoot string) []pageDTO {
+func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases map[string]string, contentRoot, siteRoot string, includeTerms bool) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases, siteRoot)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot)
+		dto := toPageDTO(p, aliases, siteRoot, includeTerms)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot, includeTerms)
 		out[i] = dto
 	}
 	return out
 }
 
-func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string, srcIdx *hugosite.SourceIndex, contentRoot, siteRoot string) []pageDTO {
+func toPageDTOsWithSnippets(pages []site.Page, aliases map[string]string, snippets map[string]string, srcIdx *hugosite.SourceIndex, contentRoot, siteRoot string, includeTerms bool) []pageDTO {
 	lookup := newSourceLookup(srcIdx)
 	out := make([]pageDTO, len(pages))
 	for i, p := range pages {
-		dto := toPageDTO(p, aliases, siteRoot)
-		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot)
+		dto := toPageDTO(p, aliases, siteRoot, includeTerms)
+		enrichPageDTOFromSource(&dto, p, lookup, aliases, contentRoot, siteRoot, includeTerms)
 		dto.Snippet = snippets[p.Slug]
 		out[i] = dto
 	}
@@ -1990,14 +2003,18 @@ func resolveSourceForPage(p site.Page, lookup *sourceLookup) (resolvedSourceMatc
 	return resolvedSourceMatch{}, false
 }
 
-func enrichPageDTOFromSource(dto *pageDTO, p site.Page, lookup *sourceLookup, aliases map[string]string, contentRoot, siteRoot string) {
+func enrichPageDTOFromSource(dto *pageDTO, p site.Page, lookup *sourceLookup, aliases map[string]string, contentRoot, siteRoot string, includeTerms bool) {
 	if dto == nil || lookup == nil {
 		return
 	}
 	if match, ok := resolveSourceForPage(p, lookup); ok {
 		src := match.Page
 		dto.Categories = taxonomy.ApplyAliases(nullsafeStrings(src.Categories), aliases)
-		dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
+		if includeTerms {
+			dto.CategoryTerms = site.NormalizeTaxonomyTerms(dto.Categories)
+		} else {
+			dto.CategoryTerms = nil
+		}
 		dto.ResolvedLang = match.ResolvedLang
 		dto.ResolvedSourcePath = fileutil.LogicalContentPath(contentRoot, src.FilePath)
 		dto.State = site.StateForResolvedPage(site.ResolvedPage{

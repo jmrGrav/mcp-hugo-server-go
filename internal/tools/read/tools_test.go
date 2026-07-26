@@ -181,6 +181,36 @@ func TestGetFullPageMarkdown(t *testing.T) {
 	assertReadPageState(t, page["state"], "present", "built", "available", "fresh")
 }
 
+func TestGetFullPageMarkdownIncludeTermsFalseOmitsTerms(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_markdown", map[string]any{
+		"slug":          "/posts/hello",
+		"include_terms": false,
+	})
+	if res.IsError {
+		t.Fatalf("get_page_markdown returned error: %v", res.Content)
+	}
+	page, ok := decodeContent(t, res)["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_markdown page type = %T", decodeContent(t, res)["page"])
+	}
+	if _, present := page["tag_terms"]; present {
+		t.Fatal("get_page_markdown tag_terms present with include_terms=false, want omitted")
+	}
+	if _, present := page["category_terms"]; present {
+		t.Fatal("get_page_markdown category_terms present with include_terms=false, want omitted")
+	}
+	if _, present := page["tags"]; !present {
+		t.Fatal("get_page_markdown tags absent with include_terms=false, want present")
+	}
+	if _, present := page["categories"]; !present {
+		t.Fatal("get_page_markdown categories absent with include_terms=false, want present")
+	}
+}
+
 func TestGetFullPageMarkdownUnknown(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -261,6 +291,36 @@ func TestGetPageFrontmatterExposesStableMetadataContract(t *testing.T) {
 	}
 	if got := fm["resolved_source_path"]; got != "content/posts/hello.md" {
 		t.Fatalf("get_page_frontmatter resolved_source_path = %v, want content/posts/hello.md", got)
+	}
+}
+
+func TestGetPageFrontmatterIncludeTermsFalseOmitsTerms(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_frontmatter", map[string]any{
+		"slug":          "/posts/hello",
+		"include_terms": false,
+	})
+	if res.IsError {
+		t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+	}
+	fm, ok := decodeContent(t, res)["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_frontmatter frontmatter type = %T", decodeContent(t, res)["frontmatter"])
+	}
+	if _, present := fm["tag_terms"]; present {
+		t.Fatal("get_page_frontmatter tag_terms present with include_terms=false, want omitted")
+	}
+	if _, present := fm["category_terms"]; present {
+		t.Fatal("get_page_frontmatter category_terms present with include_terms=false, want omitted")
+	}
+	if _, present := fm["tags"]; !present {
+		t.Fatal("get_page_frontmatter tags absent with include_terms=false, want present")
+	}
+	if _, present := fm["categories"]; !present {
+		t.Fatal("get_page_frontmatter categories absent with include_terms=false, want present")
 	}
 }
 
@@ -941,6 +1001,95 @@ func TestGetPageForEditIncludeShapesResponse(t *testing.T) {
 		if _, present := page[field]; present {
 			t.Errorf("get_page_for_edit include=[markdown]: unexpected field %q present", field)
 		}
+	}
+}
+
+func TestGetPageForEditCompactOmitsNestedTermPayloads(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{
+		"slug":          "/posts/hello",
+		"response_mode": "compact",
+	})
+	if res.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+	}
+	page, ok := decodeContent(t, res)["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit page type = %T", decodeContent(t, res)["page"])
+	}
+	fm, ok := page["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit frontmatter type = %T", page["frontmatter"])
+	}
+	if _, present := fm["tag_terms"]; present {
+		t.Fatal("get_page_for_edit compact frontmatter.tag_terms present, want omitted")
+	}
+	if _, present := fm["category_terms"]; present {
+		t.Fatal("get_page_for_edit compact frontmatter.category_terms present, want omitted")
+	}
+}
+
+func TestBuildAgentContextCompactOmitsNestedTermPayloads(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "build_agent_context", map[string]any{
+		"slug":          "/posts/hello",
+		"response_mode": "compact",
+	})
+	if res.IsError {
+		t.Fatalf("build_agent_context returned error: %v", res.Content)
+	}
+	ctxData, ok := decodeContent(t, res)["context"].(map[string]any)
+	if !ok {
+		t.Fatalf("build_agent_context context type = %T", decodeContent(t, res)["context"])
+	}
+	fm, ok := ctxData["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("build_agent_context frontmatter type = %T", ctxData["frontmatter"])
+	}
+	if _, present := fm["tag_terms"]; present {
+		t.Fatal("build_agent_context compact frontmatter.tag_terms present, want omitted")
+	}
+	if _, present := fm["category_terms"]; present {
+		t.Fatal("build_agent_context compact frontmatter.category_terms present, want omitted")
+	}
+}
+
+func TestExportAgentContextIncludeTermsFalseOmitsNestedTermPayloads(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "export_agent_context", map[string]any{
+		"limit":         2,
+		"include_body":  false,
+		"include_terms": false,
+	})
+	if res.IsError {
+		t.Fatalf("export_agent_context returned error: %v", res.Content)
+	}
+	pages, ok := decodeContent(t, res)["pages"].([]any)
+	if !ok || len(pages) == 0 {
+		t.Fatalf("export_agent_context pages = %#v, want non-empty array", decodeContent(t, res)["pages"])
+	}
+	first, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context first page type = %T", pages[0])
+	}
+	fm, ok := first["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("export_agent_context frontmatter type = %T", first["frontmatter"])
+	}
+	if _, present := fm["tag_terms"]; present {
+		t.Fatal("export_agent_context frontmatter.tag_terms present with include_terms=false, want omitted")
+	}
+	if _, present := fm["category_terms"]; present {
+		t.Fatal("export_agent_context frontmatter.category_terms present with include_terms=false, want omitted")
 	}
 }
 
@@ -2401,6 +2550,70 @@ func TestSearchContent(t *testing.T) {
 	assertReadPageState(t, hello["state"], "present", "built", "available", "fresh")
 }
 
+func TestSearchContentCompactOmitsTermPayloads(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_content", map[string]any{
+		"query":         "hello",
+		"limit":         5,
+		"response_mode": "compact",
+	})
+	if res.IsError {
+		t.Fatalf("search_content returned error: %v", res.Content)
+	}
+	pages, ok := decodeContent(t, res)["pages"].([]any)
+	if !ok || len(pages) == 0 {
+		t.Fatalf("search_content pages = %#v, want non-empty array", decodeContent(t, res)["pages"])
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("search_content first page type = %T", pages[0])
+	}
+	if _, present := page["tag_terms"]; present {
+		t.Fatal("search_content compact tag_terms present, want omitted")
+	}
+	if _, present := page["category_terms"]; present {
+		t.Fatal("search_content compact category_terms present, want omitted")
+	}
+	if _, present := page["tags"]; !present {
+		t.Fatal("search_content compact tags absent, want present")
+	}
+	if _, present := page["categories"]; !present {
+		t.Fatal("search_content compact categories absent, want present")
+	}
+}
+
+func TestSearchContentIncludeTermsFalseOmitsTermPayloads(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "search_content", map[string]any{
+		"query":         "hello",
+		"limit":         5,
+		"include_terms": false,
+	})
+	if res.IsError {
+		t.Fatalf("search_content returned error: %v", res.Content)
+	}
+	pages, ok := decodeContent(t, res)["pages"].([]any)
+	if !ok || len(pages) == 0 {
+		t.Fatalf("search_content pages = %#v, want non-empty array", decodeContent(t, res)["pages"])
+	}
+	page, ok := pages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("search_content first page type = %T", pages[0])
+	}
+	if _, present := page["tag_terms"]; present {
+		t.Fatal("search_content tag_terms present with include_terms=false, want omitted")
+	}
+	if _, present := page["category_terms"]; present {
+		t.Fatal("search_content category_terms present with include_terms=false, want omitted")
+	}
+}
+
 func TestSearchContentPaginationMetadata(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -2622,6 +2835,42 @@ func TestExplainSiteStructure(t *testing.T) {
 		t.Fatalf("explain_structure recent_pages = %#v, want at least one page", data["recent_pages"])
 	}
 	assertReadPageState(t, recentPages[0].(map[string]any)["state"], "present", "built", "available", "fresh")
+}
+
+// TestExplainStructureCompactOmitsRecentPagesTermPayloads is a regression
+// test for #618/#720: explain_structure's compact mode is one of the seven
+// read surfaces this change touches to trim tag_terms/category_terms, but
+// unlike search_content/get_page_for_edit/build_agent_context/
+// export_agent_context/get_page_markdown/get_page_frontmatter it had no
+// direct test proving recent_pages actually drops the nested term objects
+// under response_mode=compact.
+func TestExplainStructureCompactOmitsRecentPagesTermPayloads(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "explain_structure", map[string]any{"response_mode": "compact"})
+	if res.IsError {
+		t.Fatalf("explain_structure returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	recentPages, ok := data["recent_pages"].([]any)
+	if !ok || len(recentPages) == 0 {
+		t.Fatalf("explain_structure recent_pages = %#v, want at least one page", data["recent_pages"])
+	}
+	first, ok := recentPages[0].(map[string]any)
+	if !ok {
+		t.Fatalf("explain_structure recent_pages[0] type = %T", recentPages[0])
+	}
+	if _, present := first["tag_terms"]; present {
+		t.Fatal("explain_structure compact recent_pages[0].tag_terms present, want omitted")
+	}
+	if _, present := first["category_terms"]; present {
+		t.Fatal("explain_structure compact recent_pages[0].category_terms present, want omitted")
+	}
+	if _, present := first["tags"]; !present {
+		t.Fatal("explain_structure compact recent_pages[0].tags absent, want present")
+	}
 }
 
 func TestValidateFrontMatter(t *testing.T) {

@@ -65,15 +65,15 @@ func TestContentHelperFunctions(t *testing.T) {
 		t.Fatalf("sliceContentPages(offset overflow) = %#v", got)
 	}
 
-	dto := toPageDTO(pages[0], nil, "")
+	dto := toPageDTO(pages[0], nil, "", true)
 	if dto.Slug != pages[0].Slug || dto.Title != "Alpha" {
 		t.Fatalf("toPageDTO() = %#v", dto)
 	}
-	if got := toPageDTOs(pages, nil, nil, "", ""); len(got) != 3 || got[1].Slug != "/posts/b/" {
+	if got := toPageDTOs(pages, nil, nil, "", "", true); len(got) != 3 || got[1].Slug != "/posts/b/" {
 		t.Fatalf("toPageDTOs() = %#v", got)
 	}
 	snippets := map[string]string{"/posts/a/": "alpha snippet"}
-	if got := toPageDTOsWithSnippets(pages[:1], nil, snippets, nil, "", ""); len(got) != 1 || got[0].Snippet != "alpha snippet" {
+	if got := toPageDTOsWithSnippets(pages[:1], nil, snippets, nil, "", "", true); len(got) != 1 || got[0].Snippet != "alpha snippet" {
 		t.Fatalf("toPageDTOsWithSnippets() = %#v", got)
 	}
 	if got := countSections(pages); len(got) == 0 || got[0].Name == "" {

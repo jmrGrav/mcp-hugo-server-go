@@ -23,6 +23,7 @@ import (
 type getFullPageMarkdownInput struct {
 	Slug         string `json:"slug"`
 	ResponseMode string `json:"response_mode,omitempty"`
+	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
 
 type pageMarkdownDTO struct {
@@ -50,6 +51,7 @@ type getFullPageMarkdownData struct {
 type getPageFrontmatterInput struct {
 	Slug         string `json:"slug"`
 	ResponseMode string `json:"response_mode,omitempty"`
+	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
 
 type frontmatterDTO struct {
@@ -190,6 +192,7 @@ type buildAgentContextInput struct {
 	Slug         string `json:"slug"`
 	ResponseMode string `json:"response_mode,omitempty"`
 	MaxBodyChars int    `json:"max_body_chars,omitempty"`
+	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
 
 type agentContextDTO struct {
@@ -221,6 +224,7 @@ type exportAgentContextInput struct {
 	Limit        int    `json:"limit,omitempty"`
 	Offset       int    `json:"offset,omitempty"`
 	IncludeBody  *bool  `json:"include_body,omitempty"`
+	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
 
 type pageExportDTO struct {
@@ -278,6 +282,7 @@ type getPageForEditInput struct {
 	Include      []string `json:"include,omitempty"`
 	MaxBodyChars int      `json:"max_body_chars,omitempty"`
 	ResponseMode string   `json:"response_mode,omitempty"`
+	IncludeTerms *bool    `json:"include_terms,omitempty"`
 }
 
 // pageQualityDTO surfaces enough signal to decide whether a page is safe to
@@ -413,40 +418,52 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 
 	addReadOnlyTool(s, "get_page_markdown", "Read page Markdown",
-		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. The response includes a `state` object so agents can tell whether they are reading built public content, source-only content, or stale source ahead of the last build. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same Markdown body alongside frontmatter, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. The response includes a `state` object so agents can tell whether they are reading built public content, source-only content, or stale source ahead of the last build. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same Markdown body alongside frontmatter, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getFullPageMarkdownInput) (*mcp.CallToolResult, getFullPageMarkdownOutput, error) {
 			if idx == nil && srcIdx == nil {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("index not initialized")
+			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, getFullPageMarkdownOutput{}, err
 			}
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			resolved, err = readerSafeResolvedPage(ctx, resolved, in.Slug)
 			if err != nil {
 				return nil, getFullPageMarkdownOutput{}, err
 			}
-			return nil, newGetFullPageMarkdownOutput(getFullPageMarkdownData{Page: toResolvedPageMarkdownDTO(resolved, cfg.ContentRoot, cfg.SiteRoot)}, time.Now().UTC()), nil
+			return nil, newGetFullPageMarkdownOutput(getFullPageMarkdownData{
+				Page: toResolvedPageMarkdownDTO(resolved, cfg.ContentRoot, cfg.SiteRoot, includeTerms(mode, in.IncludeTerms)),
+			}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_page_frontmatter", "Read page metadata",
-		"Read structured metadata for a published page, including title, tags, categories, date, URL, estimated reading time, and a `state` object describing source/build/public/index freshness. `lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. right after create_page) — it no longer lags behind `resolved_lang` until the page is built. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same metadata alongside markdown, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Read structured metadata for a published page, including title, tags, categories, date, URL, estimated reading time, and a `state` object describing source/build/public/index freshness. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. `lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. right after create_page) — it no longer lags behind `resolved_lang` until the page is built. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same metadata alongside markdown, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageFrontmatterInput) (*mcp.CallToolResult, getPageFrontmatterOutput, error) {
 			if idx == nil {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("index not initialized")
+			}
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, getPageFrontmatterOutput{}, err
 			}
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
-			resolved, err := readerSafeResolvedPage(ctx, resolved, in.Slug)
+			resolved, err = readerSafeResolvedPage(ctx, resolved, in.Slug)
 			if err != nil {
 				return nil, getPageFrontmatterOutput{}, err
 			}
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			return nil, newGetPageFrontmatterOutput(getPageFrontmatterData{Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)}, time.Now().UTC()), nil
+			return nil, newGetPageFrontmatterOutput(getPageFrontmatterData{
+				Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt, includeTerms(mode, in.IncludeTerms)),
+			}, time.Now().UTC()), nil
 		})
 
 	addReadOnlyTool(s, "get_related_content", "Get related content",
@@ -497,7 +514,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 20) })
 
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
-		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or discussing a page. If you're about to mutate this page instead, prefer get_page_for_edit — it adds `revision` and `quality` (needed for create_page/update_page/delete_page) but omits translations/related_pages. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode). Omitting both preserves the full default shape. `lang` is now populated immediately for a source-only page read back before the next Hugo build — it no longer lags behind `resolved_lang` until the page is built. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or discussing a page. If you're about to mutate this page instead, prefer get_page_for_edit — it adds `revision` and `quality` (needed for create_page/update_page/delete_page) but omits translations/related_pages. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode). `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. Omitting both preserves the full default shape. `lang` is now populated immediately for a source-only page read back before the next Hugo build — it no longer lags behind `resolved_lang` until the page is built. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in buildAgentContextInput) (*mcp.CallToolResult, buildAgentContextOutput, error) {
 			if idx == nil {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("index not initialized")
@@ -517,7 +534,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 			p := resolvedPublicPage(resolved)
 			md := resolvedMarkdown(resolved)
 			rt := readingTimeMinutes(md)
-			fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)
+			fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt, includeTerms(mode, in.IncludeTerms))
 			state := resolvedState(resolved, cfg.SiteRoot)
 			md, truncated := toolcontract.TruncateBody(md, in.MaxBodyChars)
 
@@ -553,7 +570,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "export_agent_context", "Export agent context",
-		"Paginated export of page context bundles filtered by tag or category. Each page includes front matter, reading time, and lifecycle `state`. By default also includes full Markdown content, which caps `limit` at 10 pages to keep the response within MCP message size limits; set `include_body=false` to fetch metadata only (frontmatter + state, no Markdown) at a higher cap of 50 pages. Use this for bulk analysis or migration work across many pages; for a single page use build_agent_context instead, which additionally includes translations and related pages. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		"Paginated export of page context bundles filtered by tag or category. Each page includes front matter, reading time, and lifecycle `state`. By default also includes full Markdown content, which caps `limit` at 10 pages to keep the response within MCP message size limits; set `include_body=false` to fetch metadata only (frontmatter + state, no Markdown) at a higher cap of 50 pages. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. Use this for bulk analysis or migration work across many pages; for a single page use build_agent_context instead, which additionally includes translations and related pages. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in exportAgentContextInput) (*mcp.CallToolResult, exportAgentContextOutput, error) {
 			if idx == nil {
 				return nil, exportAgentContextOutput{}, fmt.Errorf("index not initialized")
@@ -633,7 +650,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				md := resolvedMarkdown(resolved)
 				rt := readingTimeMinutes(md)
 				page := pageExportDTO{
-					Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt),
+					Frontmatter: toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt, includeTerms(toolcontract.ResponseModeStandard, in.IncludeTerms)),
 					State:       resolvedState(resolved, cfg.SiteRoot),
 				}
 				if includeBody {
@@ -665,7 +682,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 		})
 
 	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
-		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageForEditInput) (*mcp.CallToolResult, getPageForEditOutput, error) {
 			if idx == nil {
 				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
@@ -683,6 +700,10 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 				return nil, getPageForEditOutput{}, err
 			}
 			p := resolvedPublicPage(resolved)
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, getPageForEditOutput{}, err
+			}
 			page := pageForEditDTO{
 				Slug:      p.Slug,
 				SourceKey: contentmodel.SourceKeyFromLogicalPath(fileutil.LogicalContentPath(cfg.ContentRoot, resolved.SourcePath)),
@@ -692,7 +713,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 			if include["frontmatter"] {
 				rt := readingTimeMinutes(resolvedMarkdown(resolved))
-				fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt)
+				fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt, includeTerms(mode, in.IncludeTerms))
 				page.Frontmatter = &fm
 			}
 			if include["markdown"] {
@@ -791,16 +812,24 @@ func newExportAgentContextOutput(data exportAgentContextData, warnings []string,
 	return exportAgentContextOutput{ToolResponse: resp}
 }
 
-func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revision string, state site.LifecycleState) pageMarkdownDTO {
-	return pageMarkdownDTO{
+func includeTerms(mode toolcontract.ResponseMode, requested *bool) bool {
+	if mode == toolcontract.ResponseModeCompact {
+		return false
+	}
+	if requested == nil {
+		return true
+	}
+	return *requested
+}
+
+func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revision string, state site.LifecycleState, includeTerms bool) pageMarkdownDTO {
+	dto := pageMarkdownDTO{
 		Slug:               p.Slug,
 		SourceKey:          contentmodel.SourceKeyFromLogicalPath(resolvedSourcePath),
 		Title:              p.Title,
 		Date:               p.Date,
 		Tags:               nullsafeStrings(p.Tags),
 		Categories:         nullsafeStrings(p.Categories),
-		TagTerms:           site.NormalizeTaxonomyTerms(p.Tags),
-		CategoryTerms:      site.NormalizeTaxonomyTerms(p.Categories),
 		URL:                p.URL,
 		Lang:               p.Lang,
 		ResolvedLang:       resolvedLang,
@@ -809,11 +838,16 @@ func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revisi
 		State:              state,
 		Markdown:           md,
 	}
+	if includeTerms {
+		dto.TagTerms = site.NormalizeTaxonomyTerms(p.Tags)
+		dto.CategoryTerms = site.NormalizeTaxonomyTerms(p.Categories)
+	}
+	return dto
 }
 
-func toResolvedPageMarkdownDTO(resolved site.ResolvedPage, contentRoot, siteRoot string) pageMarkdownDTO {
+func toResolvedPageMarkdownDTO(resolved site.ResolvedPage, contentRoot, siteRoot string, includeTerms bool) pageMarkdownDTO {
 	p := resolvedPublicPage(resolved)
-	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), fileutil.LogicalContentPath(contentRoot, resolved.SourcePath), resolvedLang(resolved), resolvedRevision(resolved), resolvedState(resolved, siteRoot))
+	return toPageMarkdownDTO(p, resolvedMarkdown(resolved), fileutil.LogicalContentPath(contentRoot, resolved.SourcePath), resolvedLang(resolved), resolvedRevision(resolved), resolvedState(resolved, siteRoot), includeTerms)
 }
 
 func readerSafeResolvedPage(ctx context.Context, resolved site.ResolvedPage, slug string) (site.ResolvedPage, error) {
@@ -863,17 +897,15 @@ func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
 	}
 }
 
-func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, contentRoot, siteRoot string, readingTimeMin int) frontmatterDTO {
+func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, contentRoot, siteRoot string, readingTimeMin int, includeTerms bool) frontmatterDTO {
 	identity := pageIdentityFromPage(p, fileutil.LogicalContentPath(contentRoot, resolved.SourcePath), resolvedRevision(resolved), readingTimeMin)
-	return frontmatterDTO{
+	dto := frontmatterDTO{
 		Slug:               identity.Slug,
 		SourceKey:          identity.SourceKey,
 		Title:              identity.Title,
 		Date:               p.Date,
 		Tags:               nullsafeStrings(p.Tags),
 		Categories:         nullsafeStrings(p.Categories),
-		TagTerms:           identity.Tags,
-		CategoryTerms:      identity.Categories,
 		URL:                identity.URL,
 		Lang:               identity.Lang,
 		ResolvedLang:       resolvedLang(resolved),
@@ -882,6 +914,11 @@ func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, contentRoot, site
 		State:              resolvedState(resolved, siteRoot),
 		ReadingTimeMin:     identity.ReadingTime,
 	}
+	if includeTerms {
+		dto.TagTerms = identity.Tags
+		dto.CategoryTerms = identity.Categories
+	}
+	return dto
 }
 
 func resolvedState(resolved site.ResolvedPage, siteRoot string) site.LifecycleState {
