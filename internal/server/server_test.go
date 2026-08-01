@@ -2265,3 +2265,61 @@ func TestGetMutationStatusIsolatedByCallerAcrossHTTP(t *testing.T) {
 		t.Fatalf("get_mutation_status (caller A) data.status = %q, want succeeded: %#v", status, aData["data"])
 	}
 }
+
+// mustBearerlessServerWithWriteEnabled builds an HTTP server with OAuth
+// disabled but ContentRoot set (write tools ARE registered on the internal
+// write-scoped *mcp.Server, since that's independent of OAuth). This is the
+// exact shape needed to prove the #782 stdio-transport boundary: stdio
+// grants write access unconditionally (NewStdio), and the only thing that
+// keeps that from leaking into the HTTP transport is the scope-routing
+// callback in server.New() — never modified by NewStdio's addition. If that
+// boundary ever broke, this is the test that would catch it.
+func mustBearerlessServerWithWriteEnabled(t *testing.T) *server.Server {
+	t.Helper()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.HugoRoot = t.TempDir()
+	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
+	cfg.OAuth.Enabled = false
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	return srv
+}
+
+// TestBearerlessHTTPCannotReachWriteTools is the discriminating regression
+// test for #782's stdio transport: NewStdio grants write access
+// unconditionally (stdio's whole premise is a trusted local single-user
+// process, no OAuth), which is only safe because stdio is a completely
+// separate construction path (server.NewStdio) that never touches HTTP's
+// scope-routing callback in server.New(). This proves that boundary holds:
+// an unauthenticated HTTP caller — even with write tools fully registered
+// server-side (ContentRoot set) — must see only the read-scope tool set and
+// must not be able to invoke a write tool by name.
+func TestBearerlessHTTPCannotReachWriteTools(t *testing.T) {
+	srv := mustBearerlessServerWithWriteEnabled(t)
+
+	names := doMCPToolsList(t, srv, "")
+	for _, n := range names {
+		if n == "create_page" || n == "update_page" || n == "delete_page" || n == "build_site" || n == "publish_changes" {
+			t.Fatalf("bearerless tools/list must not include write tool %q: %v", n, names)
+		}
+	}
+	if len(names) == 0 {
+		t.Fatal("bearerless tools/list returned no tools at all — test fixture problem, not a pass")
+	}
+
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{}}}`)
+	rec := doMCPCall(t, srv, "", body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("tools/call transport status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unknown tool") && !strings.Contains(rec.Body.String(), "forbidden_tool") {
+		t.Fatalf("bearerless create_page must be rejected as unknown/forbidden, got: %q", rec.Body.String())
+	}
+}

@@ -486,7 +486,25 @@ func postBuildCallbacks(
 	}
 }
 
-func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
+// buildServerCore assembles the pieces shared by both the HTTP (New) and
+// stdio (NewStdio) entrypoints: the MCP implementation/capabilities, logger,
+// metrics, tool registry, write bootstrap (path guard / source index /
+// writeEnabled), and the derived SQLite index. Kept as a single source of
+// truth so the two entrypoints can never register a different set of tools
+// or wire write access differently by accident.
+type serverCore struct {
+	impl         *mcp.Implementation
+	serverOpts   *mcp.ServerOptions
+	logger       *slog.Logger
+	metrics      *observability.Metrics
+	knownTools   map[string]bool
+	pg           *security.PathGuard
+	srcIdx       *hugosite.SourceIndex
+	writeEnabled bool
+	siteDB       *db.DB
+}
+
+func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 	impl := &mcp.Implementation{Name: Name, Version: buildinfo.Version}
 	serverCaps := defaultServerCapabilities()
 	// Explicitly declare capabilities so static scanners (mcpscan.dev) can
@@ -505,7 +523,6 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	metrics := observability.NewMetrics()
 
 	reg := buildRegistry()
-	scopePolicy := oauth.NewScopePolicy(reg)
 
 	pg, srcIdx, writeEnabled, err := initWriteBootstrap(cfg)
 	if err != nil {
@@ -523,16 +540,77 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	// any unrecognised client-supplied name as "unknown" (caps Prometheus cardinality).
 	knownTools := knownToolsSet(reg)
 
-	publicServer := newScopedServer("", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
+	return &serverCore{
+		impl:         impl,
+		serverOpts:   serverOpts,
+		logger:       logger,
+		metrics:      metrics,
+		knownTools:   knownTools,
+		pg:           pg,
+		srcIdx:       srcIdx,
+		writeEnabled: writeEnabled,
+		siteDB:       siteDB,
+	}, nil
+}
 
-	writeServer := newScopedServer("write", impl, serverOpts, logger, metrics, knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
-	admin.Register(writeServer, cfg, srcIdx, postBuildCallbacks("build_site", logger, cfg, idx, srcIdx, siteDB)...)
-	admin.RegisterVerifyPublication(writeServer, idx, srcIdx, cfg)
-	admin.RegisterPublishChanges(writeServer, idx, srcIdx, cfg, postBuildCallbacks("publish_changes", logger, cfg, idx, srcIdx, siteDB)...)
+// buildWriteScopedServer constructs the "write" scoped *mcp.Server — the one
+// that exposes every read AND write/admin tool — used identically by the
+// HTTP transport (behind OAuth, only reachable at bearer scope rank >= 1)
+// and the stdio transport (granted unconditionally: stdio's whole premise is
+// a trusted local single-user process, per #782 Phase 2's dual-transport
+// design). This is the ONLY place write tools get registered — the HTTP
+// scope-routing callback in New() decides *when* a caller reaches this
+// server, but never re-implements *what's on* it.
+// previews is returned alongside the server so HTTP callers can bind the
+// same store instance to their preview-serving handler — a preview created
+// through the create_preview tool must be readable through that handler,
+// which only works if both sides share one previewstore.Store.
+func buildWriteScopedServer(core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension) (*mcp.Server, *previewstore.Store) {
+	writeServer := newScopedServer("write", core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions)
+	admin.Register(writeServer, cfg, core.srcIdx, postBuildCallbacks("build_site", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
+	admin.RegisterVerifyPublication(writeServer, idx, core.srcIdx, cfg)
+	admin.RegisterPublishChanges(writeServer, idx, core.srcIdx, cfg, postBuildCallbacks("publish_changes", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
 	previews := previewstore.New()
-	previewHandler := previews.HTTPHandler()
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
 	admin.RegisterCreatePreview(writeServer, cfg, previews, previewBaseURL)
+	return writeServer, previews
+}
+
+// NewStdio builds a write-scoped *mcp.Server for the stdio transport
+// (MCPB/local desktop use, #782 Phase 2). Unlike New (HTTP), there is no
+// OAuth, no scope routing, and no publicServer/writeServer split by
+// request — stdio is a single local process talking to a single local
+// caller over its own stdin/stdout, so it gets the full write-scoped tool
+// set unconditionally. Callers run it with:
+//
+//	srv.Run(ctx, &mcp.StdioTransport{})
+func NewStdio(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*mcp.Server, error) {
+	core, err := buildServerCore(cfg, idx)
+	if err != nil {
+		return nil, err
+	}
+	writeServer, _ := buildWriteScopedServer(core, cfg, idx, extensions)
+	return writeServer, nil
+}
+
+func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
+	core, err := buildServerCore(cfg, idx)
+	if err != nil {
+		return nil, err
+	}
+	logger := core.logger
+	metrics := core.metrics
+	pg := core.pg
+	srcIdx := core.srcIdx
+	writeEnabled := core.writeEnabled
+	siteDB := core.siteDB
+
+	reg := buildRegistry()
+	scopePolicy := oauth.NewScopePolicy(reg)
+
+	publicServer := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
+	writeServer, previews := buildWriteScopedServer(core, cfg, idx, extensions)
+	previewHandler := previews.HTTPHandler()
 
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,

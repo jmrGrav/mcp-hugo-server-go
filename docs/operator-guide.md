@@ -31,7 +31,7 @@ Configuration is stored in YAML format. The following table lists all available 
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `transport` | string | `stdio` | Communication protocol: `stdio` (standard input/output) or `http` (HTTP server). |
+| `transport` | string | `http` | Communication protocol: `http` (HTTP server, used for this self-hosted/systemd/nginx deployment model) or `stdio` (standard input/output, used for local single-user desktop installs — see the MCPB packaging docs). |
 | `http_bind_addr` | string | `127.0.0.1` | IP address to bind the HTTP server to (used if `transport: http`). |
 | `http_bind_port` | int | `8088` | TCP port for the HTTP server. |
 | `streaming_enabled` | boolean | `true` | Enable streaming responses for large result sets. |
@@ -382,7 +382,7 @@ content_root: /srv/hugo-site/content
 site_url: https://www.arleo.eu
 site_name: Arleo
 language_default: en
-transport: stdio
+transport: http
 http_bind_addr: 127.0.0.1
 http_bind_port: 8088
 streaming_enabled: true
