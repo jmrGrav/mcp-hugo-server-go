@@ -1,0 +1,32 @@
+name: Stdio cross-platform smoke
+# Additive, non-blocking: proves the stdio transport (#782 Phase 2, MCPB
+# distribution) actually builds and runs a real JSON-RPC round trip on
+# macOS and Windows — the two OSes Claude Desktop runs on, neither of which
+# this project's own dev environment (Linux) can build or run a binary for.
+# This does NOT verify the .mcpb bundle installs in Claude Desktop itself —
+# that's outside what CI can check. It verifies the binary underneath it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  stdio-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+      - name: Build binary
+        run: go build ./...
+      - name: Stdio transport real round trip (initialize -> tools/list -> tools/call)
+        run: go test -run TestStdioTransportRealRoundTrip -v -timeout 60s ./cmd/mcp-hugo-server-go/
