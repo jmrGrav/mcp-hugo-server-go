@@ -764,6 +764,7 @@ func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, 
 			refCats = append(refCats, in.Categories...)
 
 			var resolvedSlug string
+			slugResolved := false
 			warnings := []string{}
 
 			if strings.TrimSpace(in.Slug) != "" {
@@ -776,6 +777,7 @@ func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, 
 					if err != nil {
 						return nil, suggestInternalLinksOutput{}, err
 					}
+					slugResolved = true
 					if resolved.Public != nil {
 						resolvedSlug = resolved.Public.Slug
 						refTags = append(refTags, resolved.Public.Tags...)
@@ -789,7 +791,13 @@ func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, 
 				}
 			}
 
-			if len(refTags) == 0 && len(refCats) == 0 {
+			// A resolved slug is itself a valid, complete input per the tool's own contract
+			// ("Supply slug ... or tags/categories ... or both") even if that page happens to
+			// carry no tags/categories of its own — that's a legitimate "nothing to compare
+			// against" case handled below via empty_reason, not a caller input error. Only
+			// reject when the caller gave us nothing usable at all: no slug that resolved, and
+			// no tags/categories either.
+			if !slugResolved && len(refTags) == 0 && len(refCats) == 0 {
 				return nil, suggestInternalLinksOutput{}, fmt.Errorf("invalid_params: provide at least one of slug, tags, or categories")
 			}
 
