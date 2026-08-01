@@ -33,7 +33,11 @@ var backgroundFiles = []string{
 // renderFeaturedImage generates a 1200×675 JPEG to path using a background photo
 // from bgDir composited with a dark gradient overlay, title, and tags.
 // Falls back to a solid gradient if no background photos are found.
-func renderFeaturedImage(bgDir, path, style, title, subtitle string, tags []string, accent string) error {
+// siteName is drawn as a small brand mark near the top-left logo dot when
+// non-empty; deployments that leave site_name unset simply skip that mark
+// rather than showing another operator's brand (this server is designed to
+// be run for any Hugo site, not just the original arleo.eu deployment).
+func renderFeaturedImage(bgDir, path, style, title, subtitle string, tags []string, accent, siteName string) error {
 	const (
 		width  = 1200
 		height = 675
@@ -53,7 +57,9 @@ func renderFeaturedImage(bgDir, path, style, title, subtitle string, tags []stri
 	drawCircle(canvas, 72, 54, 16, withAlpha(accentRGBA, 45))
 	drawCircle(canvas, 72, 54, 5, accentRGBA)
 
-	drawImgText(canvas, 96, 60, "arleo.eu", accentRGBA)
+	if siteName != "" {
+		drawImgText(canvas, 96, 60, siteName, accentRGBA)
+	}
 	drawTitle(canvas, 60, 438, title, accentRGBA)
 	if subtitle != "" {
 		drawWrappedText(canvas, 60, 500, subtitle, color.RGBA{235, 235, 235, 255}, 980)
