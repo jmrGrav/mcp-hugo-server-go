@@ -246,16 +246,21 @@ const DefaultIdempotencyTTLSeconds = 15 * 60
 
 func Load(path string) (Config, error) {
 	cfg := Default()
-	if strings.TrimSpace(path) == "" {
-		return cfg, nil
+	if strings.TrimSpace(path) != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return Config{}, fmt.Errorf("config: %w", err)
+		}
+		if err := yaml.Unmarshal(raw, &cfg); err != nil {
+			return Config{}, fmt.Errorf("config: %w", err)
+		}
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("config: %w", err)
-	}
-	if err := yaml.Unmarshal(raw, &cfg); err != nil {
-		return Config{}, fmt.Errorf("config: %w", err)
-	}
+	// applyEnvOverlay runs for both the with-file and no-file cases: an MCPB
+	// stdio install has no config.yaml at all and delivers user_config
+	// (site_root/hugo_root/etc) purely via environment variables (the MCPB
+	// manifest spec's ${user_config.*} substitution only injects into
+	// env/args — it cannot write a file). See config_env_overlay.go.
+	applyEnvOverlay(&cfg)
 	if cfg.Transport != "stdio" && cfg.Transport != "http" {
 		return Config{}, fmt.Errorf("config: invalid transport %q", cfg.Transport)
 	}
