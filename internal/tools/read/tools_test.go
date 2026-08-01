@@ -2335,6 +2335,61 @@ func TestSuggestLinksEmptyResultIncludesExplanation(t *testing.T) {
 	}
 }
 
+// TestSuggestLinksAcceptsResolvedSlugWithNoTaxonomy is a regression test: a
+// slug that resolves to a real, valid page satisfies suggest_links' own
+// documented contract ("Supply slug ... or tags/categories ... or both") even
+// when that page happens to carry no tags/categories of its own — a minimal
+// or newly-created site's only post is a realistic example. Previously this
+// hit the same "invalid_params: provide at least one of slug, tags, or
+// categories" error as supplying no input at all, even though a valid slug
+// was given and resolved successfully; it should instead fall through to the
+// normal empty_reason response used for "nothing to compare against".
+func TestSuggestLinksAcceptsResolvedSlugWithNoTaxonomy(t *testing.T) {
+	htmlDir := t.TempDir()
+	writeHTML := func(rel, html string) {
+		t.Helper()
+		full := filepath.Join(htmlDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeHTML(filepath.Join("posts", "untagged", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/untagged/">
+<meta property="og:title" content="Untagged">
+</head><body><article>Untagged body</article></body></html>`)
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "suggest_links", map[string]any{"slug": "/posts/untagged/", "limit": 10})
+	if res.IsError {
+		t.Fatalf("suggest_links returned error for a resolved slug with no taxonomy: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	suggestedLinks, ok := data["suggested_links"].([]any)
+	if !ok || len(suggestedLinks) != 0 {
+		t.Fatalf("suggested_links = %#v, want empty array", data["suggested_links"])
+	}
+	if _, ok := data["empty_reason"].(map[string]any); !ok {
+		t.Fatalf("empty_reason = %#v, want present alongside empty suggested_links", data["empty_reason"])
+	}
+}
+
 // TestSuggestLinksFallsBackToLexicalSignalsWhenTaxonomyIsEmpty covers #680:
 // when a draft body clearly names an existing topic but submitted
 // tags/categories have no overlap with any published page, suggest_links
