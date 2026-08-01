@@ -16,8 +16,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.HTTPBindAddr != "127.0.0.1" {
 		t.Fatalf("want 127.0.0.1, got %s", cfg.HTTPBindAddr)
 	}
-	if cfg.Transport != "stdio" {
-		t.Fatalf("want stdio, got %s", cfg.Transport)
+	if cfg.Transport != "http" {
+		t.Fatalf("want http, got %s", cfg.Transport)
 	}
 	if cfg.GitBaseline.Remote != "origin" {
 		t.Fatalf("want default git baseline remote origin, got %q", cfg.GitBaseline.Remote)

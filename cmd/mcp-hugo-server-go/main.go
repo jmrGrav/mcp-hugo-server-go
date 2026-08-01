@@ -12,6 +12,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/server"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func main() {
@@ -46,6 +47,19 @@ func run() error {
 	idx, err := site.NewIndex(cfg)
 	if err != nil {
 		return err
+	}
+
+	// stdio is the trusted-local-single-user transport (MCPB/desktop use,
+	// #782 Phase 2): no HTTP, no OAuth, no listening socket at all — just
+	// this process's own stdin/stdout talking to whatever spawned it.
+	// http_bind_addr/http_bind_port and the oauth block are ignored in this
+	// mode; they only apply to transport: http.
+	if cfg.Transport == "stdio" {
+		srv, err := server.NewStdio(cfg, idx)
+		if err != nil {
+			return err
+		}
+		return srv.Run(ctx, &mcp.StdioTransport{})
 	}
 
 	srv, err := server.New(cfg, idx)

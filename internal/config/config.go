@@ -197,7 +197,13 @@ type OAuthConfig struct {
 
 func Default() Config {
 	return Config{
-		Transport:        "stdio",
+		// http, not stdio: until #782's stdio transport, this field was
+		// validated but never actually branched on anywhere, so every
+		// existing deployment has always run HTTP regardless of what this
+		// default said. Defaulting to "http" preserves that real,
+		// already-observed behavior for any config.yaml that omits
+		// transport entirely; explicit transport: stdio still opts in.
+		Transport:        "http",
 		HTTPBindAddr:     "127.0.0.1",
 		HTTPBindPort:     8088,
 		StreamingEnabled: true,
