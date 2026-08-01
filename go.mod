@@ -7,6 +7,7 @@ require gopkg.in/yaml.v3 v3.0.1
 require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.6.1
+	github.com/pelletier/go-toml/v2 v2.4.3
 	golang.org/x/image v0.44.0
 	golang.org/x/net v0.56.0
 	golang.org/x/oauth2 v0.35.0

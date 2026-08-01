@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
+	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 )
 
@@ -383,23 +384,50 @@ func ParseFrontmatterFile(path string) (map[string]any, error) {
 	return fm, nil
 }
 
+// splitFrontmatter reads both of Hugo's two most common front matter
+// formats: YAML (--- delimited) and TOML (+++ delimited). Front matter is
+// always read back into a plain map regardless of source format; writes
+// (create_page/update_page) always emit YAML, so a TOML page edited through
+// this server gets normalized to YAML on save — an accepted, one-way
+// normalization, not a round-trip preservation of the original format.
 func splitFrontmatter(raw []byte) (map[string]any, string) {
 	content := string(raw)
-	if !strings.HasPrefix(content, "---") {
+	switch {
+	case strings.HasPrefix(content, "---"):
+		return decodeDelimitedFrontmatter(content, "---", yamlDecode)
+	case strings.HasPrefix(content, "+++"):
+		return decodeDelimitedFrontmatter(content, "+++", tomlDecode)
+	default:
 		return map[string]any{}, content
 	}
-	parts := strings.SplitN(content, "---", 3)
+}
+
+func decodeDelimitedFrontmatter(content, delim string, decode func(string) map[string]any) (map[string]any, string) {
+	parts := strings.SplitN(content, delim, 3)
 	if len(parts) < 3 {
 		return map[string]any{}, content
 	}
-	fm := map[string]any{}
-	if err := yaml.NewDecoder(strings.NewReader(parts[1])).Decode(&fm); err != nil {
-		fm = map[string]any{}
-	}
+	fm := decode(parts[1])
 	if fm == nil {
 		fm = map[string]any{}
 	}
 	return fm, strings.TrimSpace(parts[2])
+}
+
+func yamlDecode(raw string) map[string]any {
+	fm := map[string]any{}
+	if err := yaml.NewDecoder(strings.NewReader(raw)).Decode(&fm); err != nil {
+		return map[string]any{}
+	}
+	return fm
+}
+
+func tomlDecode(raw string) map[string]any {
+	fm := map[string]any{}
+	if err := toml.Unmarshal([]byte(raw), &fm); err != nil {
+		return map[string]any{}
+	}
+	return fm
 }
 
 func stringVal(v any) string {
