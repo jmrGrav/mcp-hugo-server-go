@@ -277,7 +277,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			slog.Warn("generate_hero_image: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("security_error: symlink detected in image write path")
 		}
-		if err := renderFeaturedImage(bgDir, destPath, style, in.Title, in.Subtitle, in.Tags, accent); err != nil {
+		if err := renderFeaturedImage(bgDir, destPath, style, in.Title, in.Subtitle, in.Tags, accent, cfg.SiteName); err != nil {
 			slog.Error("generate_hero_image: render failed", "slug", in.Slug, "error", err)
 			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 		}

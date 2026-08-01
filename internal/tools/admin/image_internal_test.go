@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -51,6 +53,32 @@ func TestLogicalHugoRootPath(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := logicalHugoRootPath(tc.hugoRoot, tc.absPath); got != tc.want {
 				t.Fatalf("logicalHugoRootPath(%q, %q) = %q, want %q", tc.hugoRoot, tc.absPath, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderFeaturedImageSiteNameNotHardcoded is a regression test for a
+// deployment-portability bug: renderFeaturedImage used to draw the literal
+// string "arleo.eu" (the original production deployment's own domain) as a
+// brand mark on every generated hero image, regardless of who was running
+// this server. It's now the caller-supplied siteName (config.Config.SiteName),
+// and is skipped entirely when unset rather than falling back to any
+// hardcoded brand string.
+func TestRenderFeaturedImageSiteNameNotHardcoded(t *testing.T) {
+	for _, siteName := range []string{"My Blog", ""} {
+		t.Run("siteName="+siteName, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "out.jpg")
+			if err := renderFeaturedImage(dir, path, "", "A Title", "", nil, "#4c8bf5", siteName); err != nil {
+				t.Fatalf("renderFeaturedImage() error = %v", err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("output file not found: %v", err)
+			}
+			if info.Size() < 1000 {
+				t.Fatalf("rendered JPEG suspiciously small: %d bytes", info.Size())
 			}
 		})
 	}
