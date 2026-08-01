@@ -95,6 +95,32 @@ No new orchestration tool is needed for this — `apply_content_plan`'s existing
 - `write` is never exposed to anonymous or `read`-scoped callers.
 - Legacy scope aliases (`mcp`, `reader`, `content.read`, `content.write`, `site.admin`, `system.admin`, ...) are accepted for compatibility, but only `read`/`write` are advertised as canonical.
 
+## Privacy policy
+
+This section applies specifically to the **stdio transport** (`transport: stdio`) — the mode used for a local, single-user install such as an MCPB desktop extension. It does not describe the operator-run `mcp.arleo.eu` HTTP+OAuth deployment, which is a separate, self-hosted service with its own operational practices.
+
+**Data collection:** none. This server does not collect, transmit, or store any usage data, telemetry, or analytics about you or your content.
+
+**Data processing:** all reads and writes happen entirely on your own machine, against the Hugo site directories (`site_root`/`hugo_root`/`content_root`) you configure. Content you create, edit, or delete through this server never leaves your machine as part of that operation.
+
+**External network calls — none by default, opt-in only:** the base install (no optional config fields set) makes exactly one kind of external-adjacent call: invoking your local `hugo` CLI as a subprocess to build your site, which itself does not require network access. A handful of *optional*, individually-configured integrations do call external services, and only run if you explicitly set the corresponding config field:
+
+| Feature | Config field | External service called |
+|---|---|---|
+| Post-build webhooks | `post_build_hooks` | Whatever URL(s) you configure |
+| AI hero-image generation | `image_gen_url` / `image_gen_key` | Whatever image-generation API you configure |
+| Cloudflare cache purge | `cloudflare.*` | Cloudflare's API |
+| IndexNow search-engine ping | `indexnow.*` | IndexNow's API (or your configured endpoint) |
+| Google Search Console indexing | `google_indexing.*` | Google's Indexing API |
+
+None of these are set by default. If you never configure them, this server makes no outbound network calls at all beyond running your local `hugo` build.
+
+**Data retention:** any local state this server keeps (SQLite indexes, rate-limit counters, idempotency keys) lives entirely in files you control (`db_path`, etc.) on your own machine, and is deleted whenever you delete those files.
+
+**Third parties:** none, beyond the optional integrations you explicitly configure above, each of which is subject to that third party's own privacy practices.
+
+**Contact:** see [Security contact](#security-contact) below, or open an issue on this repository.
+
 ## Claude and MCP
 
 Claude Desktop and Claude.ai can connect directly to the public MCP endpoint above.

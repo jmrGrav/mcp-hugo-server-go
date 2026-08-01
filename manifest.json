@@ -1,0 +1,67 @@
+{
+  "manifest_version": "0.3",
+  "name": "mcp-hugo-server-go",
+  "version": "1.6.7",
+  "description": "Manage a Hugo static site — create, edit, and publish content, run builds, and audit site health — from Claude Desktop, over a local stdio connection.",
+  "author": {
+    "name": "jmrGrav",
+    "url": "https://github.com/jmrGrav"
+  },
+  "homepage": "https://github.com/jmrGrav/mcp-hugo-server-go",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jmrGrav/mcp-hugo-server-go"
+  },
+  "license": "MIT",
+  "keywords": ["hugo", "static-site", "content-management", "blogging", "markdown"],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/mcp-hugo-server-go",
+    "mcp_config": {
+      "command": "${__dirname}/server/mcp-hugo-server-go",
+      "args": [],
+      "env": {
+        "MCP_HUGO_SITE_ROOT": "${user_config.site_root}",
+        "MCP_HUGO_HUGO_ROOT": "${user_config.hugo_root}",
+        "MCP_HUGO_CONTENT_ROOT": "${user_config.content_root}",
+        "MCP_HUGO_SITE_URL": "${user_config.site_url}",
+        "MCP_HUGO_SITE_NAME": "${user_config.site_name}"
+      }
+    }
+  },
+  "user_config": {
+    "site_root": {
+      "type": "directory",
+      "title": "Hugo build output directory",
+      "description": "The Hugo build output directory (Hugo's publishDir, normally {hugo_root}/public). Must NOT be your Hugo project root — see the operator guide for why.",
+      "required": true
+    },
+    "hugo_root": {
+      "type": "directory",
+      "title": "Hugo project root",
+      "description": "The root of your Hugo project (contains content/, themes/, hugo.toml).",
+      "required": true
+    },
+    "content_root": {
+      "type": "directory",
+      "title": "Hugo content directory",
+      "description": "Where your Markdown content files live (normally {hugo_root}/content).",
+      "required": true
+    },
+    "site_url": {
+      "type": "string",
+      "title": "Site URL",
+      "description": "The public URL of your Hugo site (e.g. https://www.example.com).",
+      "required": true
+    },
+    "site_name": {
+      "type": "string",
+      "title": "Site name",
+      "description": "A display name for your site.",
+      "required": false
+    }
+  },
+  "privacy_policies": [
+    "https://github.com/jmrGrav/mcp-hugo-server-go#privacy-policy"
+  ]
+}

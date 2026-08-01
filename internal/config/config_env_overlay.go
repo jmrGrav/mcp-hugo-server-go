@@ -26,12 +26,24 @@ import (
 // is the regression test for exactly this — a config file plus an empty
 // environment must produce a byte-for-byte identical Config to before this
 // overlay existed.
+// Exported so other packages (and the MCPB manifest validity test) can
+// reference the real env var names rather than duplicating string literals
+// that could silently drift out of sync with what applyEnvOverlay actually
+// reads.
+const (
+	EnvSiteRoot    = "MCP_HUGO_SITE_ROOT"
+	EnvHugoRoot    = "MCP_HUGO_HUGO_ROOT"
+	EnvContentRoot = "MCP_HUGO_CONTENT_ROOT"
+	EnvSiteURL     = "MCP_HUGO_SITE_URL"
+	EnvSiteName    = "MCP_HUGO_SITE_NAME"
+)
+
 func applyEnvOverlay(cfg *Config) {
-	fillFromEnv(&cfg.SiteRoot, "MCP_HUGO_SITE_ROOT")
-	fillFromEnv(&cfg.HugoRoot, "MCP_HUGO_HUGO_ROOT")
-	fillFromEnv(&cfg.ContentRoot, "MCP_HUGO_CONTENT_ROOT")
-	fillFromEnv(&cfg.SiteURL, "MCP_HUGO_SITE_URL")
-	fillFromEnv(&cfg.SiteName, "MCP_HUGO_SITE_NAME")
+	fillFromEnv(&cfg.SiteRoot, EnvSiteRoot)
+	fillFromEnv(&cfg.HugoRoot, EnvHugoRoot)
+	fillFromEnv(&cfg.ContentRoot, EnvContentRoot)
+	fillFromEnv(&cfg.SiteURL, EnvSiteURL)
+	fillFromEnv(&cfg.SiteName, EnvSiteName)
 }
 
 func fillFromEnv(field *string, envVar string) {
