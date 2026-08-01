@@ -15,7 +15,6 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
@@ -129,7 +128,7 @@ func checkBuildWritable(paths ...string) error {
 		if statErr != nil {
 			return buildPreflightError(dir)
 		}
-		if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != euid {
+		if ownershipMismatch(fi, euid) {
 			return buildPreflightChownError(dir)
 		}
 	}
@@ -407,13 +406,11 @@ func runBuild(ctx context.Context, cfg config.Config, siteReload ...PostBuildCal
 	cmd := exec.CommandContext(tctx, "hugo", args...)
 	cmd.Dir = cfg.HugoRoot
 	cmd.Env = boundedCommandEnv()
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	setNewProcessGroup(cmd)
 	// Kill the whole process group on timeout/cancellation so that shell
 	// wrappers and any children spawned by hugo are also terminated (#240/#243).
 	cmd.Cancel = func() error {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		}
+		killProcessGroup(cmd)
 		return nil
 	}
 	var stderrBuf bytes.Buffer

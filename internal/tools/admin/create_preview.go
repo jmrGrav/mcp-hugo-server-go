@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
@@ -161,11 +160,9 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
 		cmd.Env = boundedCommandEnv()
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		setNewProcessGroup(cmd)
 		cmd.Cancel = func() error {
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
+			killProcessGroup(cmd)
 			return nil
 		}
 		var stderrBuf, stdoutBuf bytes.Buffer
