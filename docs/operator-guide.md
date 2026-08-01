@@ -12,6 +12,25 @@ export MCP_HUGO_SERVER_CONFIG=/etc/mcp-hugo-server-go/config.yaml
 
 If the environment variable is not set or points to an empty path, the server uses built-in defaults.
 
+### MCP_HUGO_*-namespaced env vars (stdio/MCPB installs without a config file)
+
+For a local single-user `transport: stdio` install (e.g. an MCPB desktop extension) there is
+typically no `config.yaml` at all — the deployer's `user_config` values arrive as environment
+variables instead. When these fields are still empty after loading `MCP_HUGO_SERVER_CONFIG`
+(or when that variable is unset entirely), the server falls back to:
+
+| Variable | Fills |
+|----------|-------|
+| `MCP_HUGO_SITE_ROOT` | `site_root` |
+| `MCP_HUGO_HUGO_ROOT` | `hugo_root` |
+| `MCP_HUGO_CONTENT_ROOT` | `content_root` |
+| `MCP_HUGO_SITE_URL` | `site_url` |
+| `MCP_HUGO_SITE_NAME` | `site_name` |
+
+A value already set in `config.yaml` always wins — these variables only fill gaps, they never
+override a file. This is why a normal HTTP deployment (which sets all of these explicitly in
+its `config.yaml`) is unaffected by this mechanism.
+
 ## Configuration Fields
 
 Configuration is stored in YAML format. The following table lists all available fields, their types, defaults, and purposes.

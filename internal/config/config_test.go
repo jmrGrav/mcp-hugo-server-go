@@ -277,3 +277,71 @@ func TestExternalURLValidationEdgeCases(t *testing.T) {
 		})
 	}
 }
+
+// TestLoadFileWithNoEnvVarsIsUnchanged is the discriminating regression test
+// for the MCP_HUGO_*-namespaced env overlay (#782 Phase 2, MCPB support): a
+// config.yaml that already sets its fields, loaded in an environment with
+// none of the overlay's env vars present, must produce a byte-for-byte
+// identical Config to what config.Load returned before the overlay existed.
+// This is what proves every real HTTP deployment (which always sets these
+// fields explicitly in its config.yaml) can't be silently affected by this
+// change — it exists purely to let a file-less MCPB/stdio install work.
+func TestLoadFileWithNoEnvVarsIsUnchanged(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("site_root: /tmp/site\nhugo_root: /tmp/hugo\ncontent_root: /tmp/content\nsite_url: https://example.test\nsite_name: Example\n")
+	f.Close()
+
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SiteRoot != "/tmp/site" || cfg.HugoRoot != "/tmp/hugo" || cfg.ContentRoot != "/tmp/content" ||
+		cfg.SiteURL != "https://example.test" || cfg.SiteName != "Example" {
+		t.Fatalf("file values were not preserved: %+v", cfg)
+	}
+}
+
+// TestLoadEnvOverlayNeverOverridesFileValue proves file-wins precedence:
+// even with every overlay env var set, a config.yaml that already sets its
+// own value for that field keeps the file's value.
+func TestLoadEnvOverlayNeverOverridesFileValue(t *testing.T) {
+	t.Setenv("MCP_HUGO_SITE_ROOT", "/env/site")
+	t.Setenv("MCP_HUGO_HUGO_ROOT", "/env/hugo")
+	t.Setenv("MCP_HUGO_CONTENT_ROOT", "/env/content")
+	t.Setenv("MCP_HUGO_SITE_URL", "https://env.test")
+	t.Setenv("MCP_HUGO_SITE_NAME", "EnvName")
+
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("site_root: /file/site\nhugo_root: /file/hugo\ncontent_root: /file/content\nsite_url: https://file.test\nsite_name: FileName\n")
+	f.Close()
+
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SiteRoot != "/file/site" || cfg.HugoRoot != "/file/hugo" || cfg.ContentRoot != "/file/content" ||
+		cfg.SiteURL != "https://file.test" || cfg.SiteName != "FileName" {
+		t.Fatalf("env overlay must not override values already set by the file: %+v", cfg)
+	}
+}
+
+// TestLoadEnvOverlayFillsGapsWithNoFile is the MCPB scenario itself: no
+// config.yaml at all (empty path, matching MCP_HUGO_SERVER_CONFIG being
+// unset), values arrive purely via env — the only channel the MCPB manifest
+// spec's ${user_config.*} substitution can inject into.
+func TestLoadEnvOverlayFillsGapsWithNoFile(t *testing.T) {
+	t.Setenv("MCP_HUGO_SITE_ROOT", "/env/site")
+	t.Setenv("MCP_HUGO_HUGO_ROOT", "/env/hugo")
+	t.Setenv("MCP_HUGO_CONTENT_ROOT", "/env/content")
+	t.Setenv("MCP_HUGO_SITE_URL", "https://env.test")
+	t.Setenv("MCP_HUGO_SITE_NAME", "EnvName")
+
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SiteRoot != "/env/site" || cfg.HugoRoot != "/env/hugo" || cfg.ContentRoot != "/env/content" ||
+		cfg.SiteURL != "https://env.test" || cfg.SiteName != "EnvName" {
+		t.Fatalf("env overlay should fill every field when there's no file: %+v", cfg)
+	}
+}
