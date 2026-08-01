@@ -1,6 +1,9 @@
 package site
 
 import (
+	"bytes"
+	"log/slog"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -40,6 +43,58 @@ func TestNewIndexEmpty(t *testing.T) {
 	if len(idx.Sitemap()) != 0 {
 		t.Fatalf("expected 0 pages, got %d", len(idx.Sitemap()))
 	}
+}
+
+// TestWarnIfSiteRootLooksLikeProjectRoot is a regression test for a real,
+// reproduced bug: pointing site_root at a Hugo project root (rather than the
+// build-output directory) causes vendored theme .html layout templates under
+// themes/ to be walked and misparsed as content pages, silently corrupting
+// published-page counts. NewIndex should now log a warning in that case, and
+// stay silent for a genuine build-output directory.
+func TestWarnIfSiteRootLooksLikeProjectRoot(t *testing.T) {
+	var buf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prevLogger)
+
+	t.Run("project root with themes/ triggers warning", func(t *testing.T) {
+		buf.Reset()
+		root := t.TempDir()
+		if err := os.Mkdir(filepath.Join(root, "themes"), 0o755); err != nil {
+			t.Fatalf("Mkdir themes: %v", err)
+		}
+		if _, err := NewIndex(minimalCfg(root)); err != nil {
+			t.Fatalf("NewIndex() error = %v", err)
+		}
+		if !strings.Contains(buf.String(), "site_root looks like a Hugo project root") {
+			t.Fatalf("expected project-root warning, got log: %s", buf.String())
+		}
+	})
+
+	t.Run("project root with hugo.toml triggers warning", func(t *testing.T) {
+		buf.Reset()
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "hugo.toml"), []byte("baseURL = \"https://example.test\"\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile hugo.toml: %v", err)
+		}
+		if _, err := NewIndex(minimalCfg(root)); err != nil {
+			t.Fatalf("NewIndex() error = %v", err)
+		}
+		if !strings.Contains(buf.String(), "site_root looks like a Hugo project root") {
+			t.Fatalf("expected project-root warning, got log: %s", buf.String())
+		}
+	})
+
+	t.Run("genuine build-output directory stays silent", func(t *testing.T) {
+		buf.Reset()
+		root := filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+		if _, err := NewIndex(minimalCfg(root)); err != nil {
+			t.Fatalf("NewIndex() error = %v", err)
+		}
+		if strings.Contains(buf.String(), "site_root looks like a Hugo project root") {
+			t.Fatalf("unexpected project-root warning for a real build-output dir: %s", buf.String())
+		}
+	})
 }
 
 func TestSearchPages(t *testing.T) {

@@ -11,6 +11,12 @@ import (
 )
 
 type Config struct {
+	// SiteRoot is the Hugo build-output directory (publishDir, normally
+	// {HugoRoot}/public) that gets walked and indexed for content-page
+	// discovery. It must NOT be set to the Hugo project root — a vendored
+	// theme's raw .html layout templates under {HugoRoot}/themes/ would get
+	// walked and mis-parsed as content pages (see index.go's project-root
+	// warning).
 	SiteRoot            string            `yaml:"site_root"`
 	HugoRoot            string            `yaml:"hugo_root"`
 	ContentRoot         string            `yaml:"content_root"`
