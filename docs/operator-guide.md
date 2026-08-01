@@ -20,8 +20,8 @@ Configuration is stored in YAML format. The following table lists all available 
 
 | Field | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `site_root` | string | (required) | Absolute path to the Hugo site root directory. |
-| `hugo_root` | string | (required) | Absolute path to the Hugo installation or theme root. |
+| `site_root` | string | (required) | Absolute path to the Hugo **build output** directory (Hugo's `publishDir`, normally `{hugo_root}/public`) — this is what gets indexed for content-page discovery/link graphs. It must **not** point at the Hugo project root: any vendored theme's raw `.html` layout templates under a project root's `themes/` directory get walked and mis-parsed as content pages (see the warning below). |
+| `hugo_root` | string | (required) | Absolute path to the Hugo project root (contains `content/`, `themes/`, `hugo.toml`/`hugo.yaml`, etc.). |
 | `content_root` | string | (required) | Absolute path to Hugo content directory (where `.md` files live). |
 | `site_url` | string | (required) | Public URL of the Hugo site (e.g., `https://www.arleo.eu`). |
 | `site_name` | string | (required) | Display name of the site. |
@@ -351,9 +351,10 @@ Also verify that `{hugo_root}/static/images` is writable at the Unix level by th
 service user (mode `0775` with the service user in the owning group, or `0755` with
 the service user as owner).
 
-Note: when `hugo_root` and `site_root` point to the same directory (single-root
-deployments), you may already have `ReadWritePaths` covering the parent — but if they
-differ, `static/images` under `hugo_root` is a distinct path that needs its own entry.
+Note: `site_root` (the build output, `{hugo_root}/public`) is always nested under
+`hugo_root`, so a `ReadWritePaths` entry covering `hugo_root` already covers `site_root`
+too — but `static/images` under `hugo_root` is a distinct path outside `site_root` that
+needs its own entry regardless.
 
 #### `get_broken_links` (and other index tools) return stale results after `build_site`
 
@@ -375,7 +376,7 @@ obtained immediately after `build_site` reflects the index from the previous bui
 Place the configuration file at the path referenced by `MCP_HUGO_SERVER_CONFIG`:
 
 ```yaml
-site_root: /srv/hugo-site
+site_root: /srv/hugo-site/public
 hugo_root: /srv/hugo-site
 content_root: /srv/hugo-site/content
 site_url: https://www.arleo.eu

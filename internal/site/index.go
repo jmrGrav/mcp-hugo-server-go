@@ -248,6 +248,7 @@ func NewIndex(cfg config.Config) (*Index, error) {
 	if err != nil {
 		return nil, err
 	}
+	warnIfSiteRootLooksLikeProjectRoot(canonicalRoot)
 
 	maxEntries := cfg.MaxIndexEntries
 	if maxEntries <= 0 {
@@ -890,6 +891,32 @@ func canonicalDir(root string) (string, error) {
 		return "", fmt.Errorf("root must not be a symlink: %s", abs)
 	}
 	return abs, nil
+}
+
+// warnIfSiteRootLooksLikeProjectRoot logs a warning when canonicalRoot looks
+// like a Hugo project root (contains a themes/ directory, or a hugo.toml/
+// hugo.yaml/hugo.yml/config.toml site config file) rather than a build-output
+// directory. site_root must be the Hugo build output (publishDir, normally
+// {hugo_root}/public) — pointing it at the project root causes any vendored
+// theme's raw .html layout templates under themes/ to be walked and
+// misparsed as content pages, silently corrupting published-page counts and
+// the link graph. This is a warning, not a hard error: it's a strong signal
+// of misconfiguration but not a certainty (an unusual but valid site could
+// have a themes/ or hugo.toml-named directory under its real publishDir).
+func warnIfSiteRootLooksLikeProjectRoot(canonicalRoot string) {
+	markers := []string{"themes", "content", "hugo.toml", "hugo.yaml", "hugo.yml", "config.toml"}
+	var found []string
+	for _, m := range markers {
+		if _, err := os.Stat(filepath.Join(canonicalRoot, m)); err == nil {
+			found = append(found, m)
+		}
+	}
+	if len(found) > 0 {
+		slog.Warn("site index: site_root looks like a Hugo project root, not a build-output directory",
+			"site_root", canonicalRoot,
+			"found", found,
+			"hint", "site_root should point at the Hugo build output (publishDir, normally {hugo_root}/public), not the project root — vendored theme .html templates under themes/ will otherwise be misparsed as content pages")
+	}
 }
 
 // NormalizeSlug normalizes a URL path to a canonical slug with leading and trailing slashes.
