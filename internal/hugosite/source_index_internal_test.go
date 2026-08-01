@@ -20,6 +20,7 @@ func TestNewSourceIndexFrontmatterVariants(t *testing.T) {
 	}
 	write("posts/time/index.md", "---\ntitle: 42\ndate: 2026-07-05T01:02:03Z\ndraft: true\ntags:\n  - go\n  - 7\ncategories:\n  - docs\n---\nBody\n")
 	write("posts/plain.md", "No frontmatter\n")
+	write("posts/toml/index.md", "+++\ntitle = \"42\"\ndate = \"2026-07-05T01:02:03Z\"\ndraft = true\ntags = [\"go\", \"7\"]\ncategories = [\"docs\"]\n+++\nBody\n")
 
 	idx, err := NewSourceIndex(root)
 	if err != nil {
@@ -46,6 +47,26 @@ func TestNewSourceIndexFrontmatterVariants(t *testing.T) {
 	}
 	if page2, ok := idx.GetBySlug("posts/plain"); !ok || page2.Title != "" {
 		t.Fatalf("plain page = %#v, ok=%v", page2, ok)
+	}
+
+	tomlPage, ok := idx.GetBySlug("posts/toml")
+	if !ok {
+		t.Fatal("expected posts/toml page")
+	}
+	if tomlPage.Title != page.Title {
+		t.Fatalf("TOML Title = %q, want same as YAML twin %q", tomlPage.Title, page.Title)
+	}
+	if tomlPage.Date != page.Date {
+		t.Fatalf("TOML Date = %q, want same as YAML twin %q", tomlPage.Date, page.Date)
+	}
+	if !tomlPage.Draft {
+		t.Fatal("expected TOML page draft=true")
+	}
+	if len(tomlPage.Tags) != 2 || tomlPage.Tags[1] != "7" {
+		t.Fatalf("TOML Tags = %#v", tomlPage.Tags)
+	}
+	if len(tomlPage.Categories) != 1 || tomlPage.Categories[0] != "docs" {
+		t.Fatalf("TOML Categories = %#v", tomlPage.Categories)
 	}
 
 	idx.Delete("missing")
@@ -81,6 +102,14 @@ func TestSplitFrontmatterFallbacks(t *testing.T) {
 	fm, body = splitFrontmatter([]byte("---\ninvalid: [\n---\nbody\n"))
 	if len(fm) != 0 || body != "body" {
 		t.Fatalf("splitFrontmatter(invalid fm) = %#v %q", fm, body)
+	}
+	fm, body = splitFrontmatter([]byte("+++\ntitle = \"Hello\"\ndate = \"2026-01-01\"\n+++\nbody\n"))
+	if fm["title"] != "Hello" || body != "body" {
+		t.Fatalf("splitFrontmatter(toml fm) = %#v %q", fm, body)
+	}
+	fm, body = splitFrontmatter([]byte("+++\ninvalid = [\n+++\nbody\n"))
+	if len(fm) != 0 || body != "body" {
+		t.Fatalf("splitFrontmatter(invalid toml fm) = %#v %q", fm, body)
 	}
 	if got := stringVal(time.Date(2026, 7, 5, 1, 2, 3, 0, time.UTC)); got != "2026-07-05T01:02:03Z" {
 		t.Fatalf("stringVal(time.Time) = %q", got)
