@@ -1736,6 +1736,98 @@ func TestUpdatePageSuccess(t *testing.T) {
 	}
 }
 
+// TestUpdatePageSetsFeaturedImageFrontmatterKey (#809) proves update_page's
+// new featured_image parameter writes the theme's expected `featuredImage`
+// frontmatter key verbatim — the only way, before this, to attach a
+// generate_hero_image-produced image to a page so it gets the theme's
+// list-card treatment.
+func TestUpdatePageSetsFeaturedImageFrontmatterKey(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "hero-post",
+		"title":      "Hero Post",
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "hero-post",
+		"featured_image":    "/images/hero-post-featured.jpg",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "hero-post", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page failed: %s", raw)
+	}
+
+	data, err := os.ReadFile(filepath.Join(contentRoot, "hero-post", "index.md"))
+	if err != nil {
+		t.Fatalf("file not found: %v", err)
+	}
+	if !strings.Contains(string(data), `featuredImage: /images/hero-post-featured.jpg`) &&
+		!strings.Contains(string(data), `featuredImage: "/images/hero-post-featured.jpg"`) {
+		t.Errorf("updated file missing featuredImage key: %s", data)
+	}
+}
+
+// TestUpdatePageRefreshesInMemoryFrontmatterRaw (#810) proves the in-memory
+// SourceIndex entry's FrontmatterRaw reflects a field update_page just set
+// (description, here) without requiring a full server reindex. Before the
+// fix, update_page's post-write index.Upsert only ever patched "title" into
+// FrontmatterRaw by hand — every other field (description, featured_image,
+// draft) was correctly written to the file on disk but the in-memory copy
+// kept serving its old value, which is what made check_ai_readiness /
+// get_page_for_edit's readiness block report description_present:false
+// immediately after a successful update_page that set description.
+func TestUpdatePageRefreshesInMemoryFrontmatterRaw(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, idx, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "needs-description",
+		"title":      "Needs Description",
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	if existing, ok := idx.GetBySlug("needs-description"); !ok || existing.FrontmatterRaw["description"] != nil {
+		t.Fatalf("expected no description in FrontmatterRaw right after create_page, got %#v", existing)
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "needs-description",
+		"description":       "A real description.",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "needs-description", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page failed: %s", raw)
+	}
+
+	updated, ok := idx.GetBySlug("needs-description")
+	if !ok {
+		t.Fatalf("page not found in in-memory index after update_page")
+	}
+	got, _ := updated.FrontmatterRaw["description"].(string)
+	if got != "A real description." {
+		t.Fatalf("in-memory FrontmatterRaw[\"description\"] = %q after update_page, want \"A real description.\" (without a full reindex, this is exactly the stale index.Upsert bug from #810)", got)
+	}
+}
+
 func TestUpdatePagePreservesComplexFrontmatter(t *testing.T) {
 	contentRoot := t.TempDir()
 	pageDir := filepath.Join(contentRoot, "posts", "complex-frontmatter")
