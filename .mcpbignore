@@ -1,0 +1,12 @@
+# Without this file, `mcpb pack` bundles the entire repo (Go source,
+# tests, CI configs, docs) into the .mcpb — 342 files / 14MB+ for a
+# runtime that only ever needs manifest.json, the icon, and the two
+# platform binaries staged under server/. Exclude everything, then
+# explicitly allow-list what the manifest actually references.
+*
+!/manifest.json
+!/LICENSE
+!/assets
+!/assets/icon.png
+!/server
+!/server/**
