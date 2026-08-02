@@ -66,6 +66,59 @@ func TestPlanContentChangeAndApplyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestApplyContentPlanSetFieldDescriptionRefreshesInMemoryIndex (#810) is a
+// regression test for the exact scenario that surfaced this bug in
+// production: plan_content_change + apply_content_plan's set_field
+// operation (currently the only way to set description) wrote the
+// description to disk correctly, but the in-memory SourceIndex entry's
+// FrontmatterRaw kept its old value until a full reindex — so
+// check_ai_readiness / get_page_for_edit's readiness block reported
+// description_present:false immediately after a successful apply.
+func TestApplyContentPlanSetFieldDescriptionRefreshesInMemoryIndex(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, idx, done := newTestServer(t, contentRoot)
+	defer done()
+
+	if existing, ok := idx.GetBySlug("posts/article"); !ok || existing.FrontmatterRaw["description"] != nil {
+		t.Fatalf("expected no description in FrontmatterRaw before the plan, got %#v", existing)
+	}
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/article",
+		"operations": []any{
+			map[string]any{"op": "set_field", "field": "description", "value": "A real description."},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_content_change failed: %s", marshalContent(t, planRes))
+	}
+	planID, _ := decodeWriteData(t, planRes)["plan_id"].(string)
+	if planID == "" {
+		t.Fatalf("plan_content_change did not return plan_id")
+	}
+
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
+	}
+
+	written := readFileString(t, contentRoot, "posts/article/index.md")
+	if !strings.Contains(written, "description: A real description.") &&
+		!strings.Contains(written, `description: "A real description."`) {
+		t.Fatalf("apply_content_plan did not write description to disk: %q", written)
+	}
+
+	updated, ok := idx.GetBySlug("posts/article")
+	if !ok {
+		t.Fatalf("page not found in in-memory index after apply_content_plan")
+	}
+	got, _ := updated.FrontmatterRaw["description"].(string)
+	if got != "A real description." {
+		t.Fatalf("in-memory FrontmatterRaw[\"description\"] = %q after apply_content_plan, want \"A real description.\" (#810)", got)
+	}
+}
+
 // TestApplyContentPlanUnknownPlanID is a regression test for #338/#340's
 // design: a missing/expired/already-applied plan_id must fail with
 // plan_not_found, distinguishing it from other error classes.

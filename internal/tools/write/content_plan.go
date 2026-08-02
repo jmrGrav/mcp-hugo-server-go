@@ -755,10 +755,6 @@ func registerContentPlanTools(
 		updated.Lang = entry.Lang
 		if entry.Title != "" {
 			updated.Title = entry.Title
-			if updated.FrontmatterRaw == nil {
-				updated.FrontmatterRaw = make(map[string]any)
-			}
-			updated.FrontmatterRaw["title"] = entry.Title
 		}
 		if entry.Body != "" {
 			updated.Body = entry.Body
@@ -768,6 +764,11 @@ func registerContentPlanTools(
 		}
 		if entry.Categories != nil {
 			updated.Categories = entry.Categories
+		}
+		// Re-parse FrontmatterRaw wholesale from the content just written —
+		// see the identical fix/comment on update_page in tools.go (#810).
+		if fm := parseFrontmatterMap([]byte(entry.Content)); fm != nil {
+			updated.FrontmatterRaw = fm
 		}
 		updated.BuildPending = true
 		idx.Upsert(updated)

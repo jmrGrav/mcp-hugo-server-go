@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [v1.7.1] - 2026-08-02
+
+### Added
+- **`update_page` gains a `featured_image` parameter** (#809): sets the theme's `featuredImage` frontmatter key verbatim — until now there was no MCP tool path to attach a `generate_hero_image`-generated image to a page's frontmatter at all, so generated hero images never got the theme's cover-photo/title-overlay list-card treatment, only the plain in-page render. Confirmed live before this fix: neither `plan_content_change`'s `set_field` nor a direct `update_page` parameter accepted it.
+
+### Fixed
+- **In-memory `SourceIndex.FrontmatterRaw` staleness after `update_page`/`apply_content_plan`/`rollback_change`** (#810): each of these tools patched only `title` into the in-memory index by hand after a successful write, so every other frontmatter field they can set — `description`, `draft`, and now `featured_image` — was written correctly to disk but the in-memory copy kept its old value until the next full server reindex. Surfaced in production as `check_ai_readiness`/`get_page_for_edit`'s readiness block reporting `description_present: false` immediately after a successful `update_page`/`apply_content_plan` call that set a description, even though the description was genuinely present in the file. All three call sites now re-parse `FrontmatterRaw` wholesale from the content actually written (or restored, for rollback) instead of patching individual keys in by hand — closes the gap for every current and future settable field at once.
+
 ## [v1.7.0] - 2026-08-02
 
 Milestone release: closes #782, the public distribution plan (MCPB/Claude Connectors Directory + npm). This is the first release published under all three install paths at once — self-hosted HTTP+OAuth (unchanged), `npx`/npm (`@jmrgrav/mcp-hugo-server-go`, live on the npm registry), and a `.mcpb` Claude Desktop extension (manually install-tested on real Windows/Claude Desktop, then submitted to the Claude Connectors Directory for review).

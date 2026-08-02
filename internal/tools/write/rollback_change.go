@@ -348,10 +348,16 @@ func registerRollbackChange(
 		updated.Lang = resolvedSource.Lang
 		if restoredTitle != "" {
 			updated.Title = restoredTitle
-			if updated.FrontmatterRaw == nil {
-				updated.FrontmatterRaw = make(map[string]any)
-			}
-			updated.FrontmatterRaw["title"] = restoredTitle
+		}
+		// FrontmatterRaw is reassigned wholesale from the snapshot's own
+		// parsed map (already computed above as restoredFM) instead of
+		// patching just "title" in by hand — see the identical fix on
+		// update_page/apply_content_plan in tools.go/content_plan.go
+		// (#810). Previously every other frontmatter field (description,
+		// featured_image, draft, ...) kept whatever stale value the index
+		// held from before the rollback until the next full reindex.
+		if restoredFM != nil {
+			updated.FrontmatterRaw = restoredFM
 		}
 		updated.Tags = restoredTags
 		updated.Categories = restoredCategories

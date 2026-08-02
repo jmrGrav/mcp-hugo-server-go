@@ -119,18 +119,24 @@ type createPageData struct {
 }
 
 type updatePageInput struct {
-	Slug                    string   `json:"slug"`
-	Lang                    string   `json:"lang,omitempty"`
-	Title                   string   `json:"title,omitempty"`
-	Body                    string   `json:"body,omitempty"`
-	Tags                    []string `json:"tags,omitempty"`
-	Categories              []string `json:"categories,omitempty"`
-	Draft                   *bool    `json:"draft,omitempty"`
-	Description             string   `json:"description,omitempty"`
-	NormalizeTaxonomyCasing bool     `json:"normalize_taxonomy_casing,omitempty"`
-	ExpectedRevision        string   `json:"expected_revision,omitempty"`
-	IdempotencyKey          string   `json:"idempotency_key,omitempty"`
-	DryRun                  bool     `json:"dry_run,omitempty"`
+	Slug        string   `json:"slug"`
+	Lang        string   `json:"lang,omitempty"`
+	Title       string   `json:"title,omitempty"`
+	Body        string   `json:"body,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Categories  []string `json:"categories,omitempty"`
+	Draft       *bool    `json:"draft,omitempty"`
+	Description string   `json:"description,omitempty"`
+	// FeaturedImage (#809) sets the theme's `featuredImage` frontmatter key
+	// verbatim — e.g. the path generate_hero_image's `data.path` response
+	// resolves to (typically "/images/{slug}-featured.jpg"). Without it, a
+	// generated hero image is never picked up by the theme's list-card
+	// template even though the file itself exists under static/images.
+	FeaturedImage           string `json:"featured_image,omitempty"`
+	NormalizeTaxonomyCasing bool   `json:"normalize_taxonomy_casing,omitempty"`
+	ExpectedRevision        string `json:"expected_revision,omitempty"`
+	IdempotencyKey          string `json:"idempotency_key,omitempty"`
+	DryRun                  bool   `json:"dry_run,omitempty"`
 }
 
 type updatePageOutput struct {
@@ -813,7 +819,8 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		Name:  "update_page",
 		Title: "Update page",
 		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
-			"Use title/body to revise content. Use tags/categories/draft/description to update front matter fields. " +
+			"Use title/body to revise content. Use tags/categories/draft/description/featured_image to update front matter fields. " +
+			"`featured_image` sets the theme's `featuredImage` frontmatter key verbatim — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); without it, a generated hero image file exists under static/images but is never picked up by the theme's list-card template (#809). " +
 			"`tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). " +
 			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
@@ -868,6 +875,11 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if in.Description != "" {
 			if err := rejectUnsafeText(in.Description); err != nil {
 				return nil, updatePageOutput{}, wrapErr(fmt.Errorf("invalid_params: description %w", err))
+			}
+		}
+		if in.FeaturedImage != "" {
+			if err := rejectUnsafeText(in.FeaturedImage); err != nil {
+				return nil, updatePageOutput{}, wrapErr(fmt.Errorf("invalid_params: featured_image %w", err))
 			}
 		}
 		callerKey := mutationCallerKey(ctx)
@@ -940,6 +952,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				Categories       []string `json:"categories,omitempty"`
 				Draft            *bool    `json:"draft,omitempty"`
 				Description      string   `json:"description,omitempty"`
+				FeaturedImage    string   `json:"featured_image,omitempty"`
 				ExpectedRevision string   `json:"expected_revision,omitempty"`
 			}{
 				Slug:             in.Slug,
@@ -950,6 +963,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				Categories:       in.Categories,
 				Draft:            in.Draft,
 				Description:      in.Description,
+				FeaturedImage:    in.FeaturedImage,
 				ExpectedRevision: in.ExpectedRevision,
 			})
 			if hashErr != nil {
@@ -1004,10 +1018,11 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			categoriesDelta = &d
 		}
 		opts := pageUpdateOpts{
-			Tags:        writeTags,
-			Categories:  writeCategories,
-			Draft:       in.Draft,
-			Description: in.Description,
+			Tags:          writeTags,
+			Categories:    writeCategories,
+			Draft:         in.Draft,
+			Description:   in.Description,
+			FeaturedImage: in.FeaturedImage,
 		}
 		content, err := applyPageUpdates(string(raw), in.Title, in.Body, opts)
 		if err != nil {
@@ -1064,13 +1079,21 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		updated.Lang = resolvedSource.Lang
 		if in.Title != "" {
 			updated.Title = in.Title
-			if updated.FrontmatterRaw == nil {
-				updated.FrontmatterRaw = make(map[string]any)
-			}
-			updated.FrontmatterRaw["title"] = in.Title
 		}
 		if in.Body != "" {
 			updated.Body = in.Body
+		}
+		// Re-parse FrontmatterRaw wholesale from the content just written,
+		// instead of patching individual keys in by hand — the latter
+		// silently went stale for every field update_page can set besides
+		// title (description, featured_image, draft, ...): the file on disk
+		// was correct, but the in-memory index kept serving whatever
+		// FrontmatterRaw held before this write until the next full
+		// reindex, so e.g. check_ai_readiness/get_page_for_edit's readiness
+		// check reported description_present:false right after a
+		// successful update_page that set description (#810).
+		if fm := parseFrontmatterMap([]byte(content)); fm != nil {
+			updated.FrontmatterRaw = fm
 		}
 		if writeTags != nil {
 			updated.Tags = writeTags
@@ -1741,6 +1764,8 @@ type pageUpdateOpts struct {
 	Categories  []string
 	Draft       *bool
 	Description string
+	// FeaturedImage — see the comment on updatePageInput.FeaturedImage (#809).
+	FeaturedImage string
 }
 
 // applyPageUpdates applies title, body, and optional front matter field changes
@@ -1759,7 +1784,7 @@ func applyPageUpdates(fileContent, newTitle, newBody string, opts pageUpdateOpts
 	bodyPart := rest[end+4:] // everything after the closing ---
 
 	needsYAML := newTitle != "" || opts.Tags != nil || opts.Categories != nil ||
-		opts.Draft != nil || opts.Description != ""
+		opts.Draft != nil || opts.Description != "" || opts.FeaturedImage != ""
 
 	if needsYAML {
 		var doc yaml.Node
@@ -1784,6 +1809,9 @@ func applyPageUpdates(fileContent, newTitle, newBody string, opts pageUpdateOpts
 		}
 		if opts.Description != "" {
 			setYAMLKey(mapping, "description", opts.Description)
+		}
+		if opts.FeaturedImage != "" {
+			setYAMLKey(mapping, "featuredImage", opts.FeaturedImage)
 		}
 		out, err := marshalWithIndent(doc.Content[0], 2)
 		if err != nil {
