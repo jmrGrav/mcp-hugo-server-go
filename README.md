@@ -7,6 +7,9 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/security-policy-green.svg)](SECURITY.md)
 [![MCP](https://img.shields.io/badge/MCP-streamable--HTTP-purple.svg)](https://modelcontextprotocol.io)
+[![MCP stdio](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://github.com/jmrGrav/mcp-hugo-server-go#installation)
+[![npx](https://img.shields.io/badge/npx-%40jmrgrav%2Fmcp--hugo--server--go-cb3837.svg?logo=npm&logoColor=white)](npm/)
+[![Claude Desktop](https://img.shields.io/badge/Claude%20Desktop-compatible-5f6bed.svg)](https://github.com/jmrGrav/mcp-hugo-server-go#installation)
 [![ChatGPT](https://img.shields.io/badge/ChatGPT-compatible-10a37f.svg)](https://chatgpt.com/)
 [![Claude](https://img.shields.io/badge/Claude.ai-compatible-5f6bed.svg)](https://claude.ai)
 [![Le Chat](https://img.shields.io/badge/Le%20Chat-compatible-ff7000.svg)](https://chat.mistral.ai/)
@@ -40,12 +43,20 @@ The same binary supports two transport modes. Pick based on who you are — they
 
 Use this if you manage your own Hugo site and want an MCP-capable client (Claude Desktop, or any other MCP host that can launch a local subprocess) to edit it directly on your machine. No OAuth, no server process to run or expose — the client launches the binary itself and talks to it over stdin/stdout.
 
+**Via npx/npm** (`npm/` in this repository — [package README](npm/README.md)): downloads and checksum-verifies the matching release binary automatically, no manual OS/arch selection needed.
+
+```bash
+npx @jmrgrav/mcp-hugo-server-go
+```
+
+**Or download the binary directly**:
+
 1. Download the `mcp-hugo-server-go` binary for your OS/arch from the [latest release](https://github.com/jmrGrav/mcp-hugo-server-go/releases/latest).
 2. Configure it either via a `config.yaml` (see [docs/operator-guide.md](docs/operator-guide.md) for the full field reference) with `transport: stdio`, or — if your MCP host can only inject environment variables, not a config file, which is the case for MCPB-style desktop extension installs — via the `MCP_HUGO_SITE_ROOT` / `MCP_HUGO_HUGO_ROOT` / `MCP_HUGO_CONTENT_ROOT` / `MCP_HUGO_SITE_URL` / `MCP_HUGO_SITE_NAME` environment variables instead. A file's values always win; env vars only fill in whatever the file (or an absent file) leaves empty.
 3. Point your MCP host at the binary as its launch command. See `manifest.json` in this repository for the shape a desktop-extension host expects.
 4. See [Privacy policy](#privacy-policy) below for exactly what this mode does and does not do with your data — nothing leaves your machine by default.
 
-A packaged `.mcpb` desktop extension and a Claude Connectors Directory listing for one-click installation are planned but not yet published; until then, use the manual binary + config steps above.
+A packaged `.mcpb` desktop extension and a Claude Connectors Directory listing for one-click installation are planned but not yet published; until then, use `npx` or the manual binary + config steps above. See the [wiki's Installation Guide](https://github.com/jmrGrav/mcp-hugo-server-go/wiki/Installation-Guide) for a deeper walkthrough of both transport modes side by side.
 
 ### Shared/remote, multi-user (advanced): HTTP + OAuth transport
 
