@@ -31,6 +31,8 @@ jobs:
   publish:
     name: Verify release assets and publish to npm
     runs-on: ubuntu-latest
+    outputs:
+      version_no_v: ${{ steps.meta.outputs.version_no_v }}
     steps:
       - uses: actions/checkout@v5
 
@@ -126,3 +128,48 @@ jobs:
             exit 1
           fi
           echo "Provenance attestation confirmed: $has_attestation"
+
+  publish-github-packages:
+    # Mirrors the same package to GitHub Packages (npm.pkg.github.com) for
+    # visibility on the repo/profile's Packages tab. Purely cosmetic —
+    # nothing installs from here; the real, functional registry is
+    # registry.npmjs.org (the previous job), which is what npx/npm actually
+    # use by default. Runs only after that real publish succeeds, so a
+    # failed npmjs.com publish never leaves a GitHub Packages entry with no
+    # corresponding real release.
+    name: Mirror to GitHub Packages
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://npm.pkg.github.com'
+          scope: '@jmrgrav'
+
+      # provenance is currently only supported when publishing to
+      # registry.npmjs.org — package.json's publishConfig.provenance:true
+      # would otherwise make this fail against a different registry, so
+      # it's explicitly disabled for this mirror publish only.
+      - name: npm publish (GitHub Packages mirror)
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm publish --registry=https://npm.pkg.github.com --provenance=false
+
+      - name: Confirm mirror is live
+        env:
+          WANT: ${{ needs.publish.outputs.version_no_v }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          got="$(npm view @jmrgrav/mcp-hugo-server-go version --registry=https://npm.pkg.github.com 2>/dev/null || true)"
+          if [[ "$got" != "$WANT" ]]; then
+            echo "GitHub Packages mirror publish reported success but the registry doesn't reflect version $WANT (got '$got')." >&2
+            exit 1
+          fi
+          echo "Confirmed GitHub Packages mirror @jmrgrav/mcp-hugo-server-go@$WANT is live."
