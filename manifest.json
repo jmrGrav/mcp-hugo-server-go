@@ -1,8 +1,9 @@
 {
   "manifest_version": "0.3",
   "name": "mcp-hugo-server-go",
-  "version": "1.6.7",
+  "version": "1.6.8",
   "description": "Manage a Hugo static site — create, edit, and publish content, run builds, and audit site health — from Claude Desktop, over a local stdio connection.",
+  "icon": "assets/icon.png",
   "author": {
     "name": "jmrGrav",
     "url": "https://github.com/jmrGrav"
