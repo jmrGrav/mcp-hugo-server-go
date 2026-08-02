@@ -130,3 +130,23 @@ jobs:
             --verify-tag \
             --title "${VERSION}" \
             --notes-file /tmp/release-notes.md
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      # Builds and attaches macOS/Windows/Linux binaries (#782 Phase 2/4) to
+      # the release created above. .goreleaser.yaml's release.mode is
+      # keep-existing, so this only uploads artifacts to that already-created
+      # release — it never writes its own release notes or creates a second
+      # release.
+      - name: Build and attach release binaries via GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GORELEASER_CURRENT_TAG: ${{ inputs.version }}

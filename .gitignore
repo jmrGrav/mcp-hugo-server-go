@@ -2,6 +2,9 @@
 /mcp-hugo-server-go
 *.exe
 
+# goreleaser local build/snapshot output
+/dist/
+
 # test cache
 /tmp/
 codex-mcp-live-audit*
