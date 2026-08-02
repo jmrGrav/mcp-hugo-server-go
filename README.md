@@ -32,6 +32,25 @@ It is the unified successor of:
 - [`hugo-mcp-go`](https://github.com/jmrGrav/hugo-mcp-go) for content and administration tools
 - [`mcp-runtime-go`](https://github.com/jmrGrav/mcp-runtime-go) for MCP transport/runtime behavior
 
+## Installation
+
+The same binary supports two transport modes. Pick based on who you are — they are not interchangeable and exist for different purposes.
+
+### Local, single-user (most people): stdio transport
+
+Use this if you manage your own Hugo site and want an MCP-capable client (Claude Desktop, or any other MCP host that can launch a local subprocess) to edit it directly on your machine. No OAuth, no server process to run or expose — the client launches the binary itself and talks to it over stdin/stdout.
+
+1. Download the `mcp-hugo-server-go` binary for your OS/arch from the [latest release](https://github.com/jmrGrav/mcp-hugo-server-go/releases/latest).
+2. Configure it either via a `config.yaml` (see [docs/operator-guide.md](docs/operator-guide.md) for the full field reference) with `transport: stdio`, or — if your MCP host can only inject environment variables, not a config file, which is the case for MCPB-style desktop extension installs — via the `MCP_HUGO_SITE_ROOT` / `MCP_HUGO_HUGO_ROOT` / `MCP_HUGO_CONTENT_ROOT` / `MCP_HUGO_SITE_URL` / `MCP_HUGO_SITE_NAME` environment variables instead. A file's values always win; env vars only fill in whatever the file (or an absent file) leaves empty.
+3. Point your MCP host at the binary as its launch command. See `manifest.json` in this repository for the shape a desktop-extension host expects.
+4. See [Privacy policy](#privacy-policy) below for exactly what this mode does and does not do with your data — nothing leaves your machine by default.
+
+A packaged `.mcpb` desktop extension and a Claude Connectors Directory listing for one-click installation are planned but not yet published; until then, use the manual binary + config steps above.
+
+### Shared/remote, multi-user (advanced): HTTP + OAuth transport
+
+Use this if you want a persistent, remotely-reachable instance — e.g. to let an agent running somewhere else (not on the machine with your Hugo site) manage the site, or to share access across multiple OAuth clients with `read`/`write` scoping. This is how this project's own instance at `https://mcp.arleo.eu/mcp` runs. It requires you to run and expose the server yourself (reverse proxy, TLS, OAuth client registration) — see [docs/operator-guide.md](docs/operator-guide.md) for a full deployment walkthrough. This is a materially higher setup cost than stdio and is meant for that more advanced use case, not the default choice.
+
 ## Access model
 
 The server enforces exactly two internal scopes (#450):
