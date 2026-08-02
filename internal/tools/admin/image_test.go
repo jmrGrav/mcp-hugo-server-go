@@ -269,6 +269,51 @@ func TestGenerateFeaturedImageLocalRender(t *testing.T) {
 	}
 }
 
+// TestGenerateFeaturedImageAdvisesAttachingToPage is a regression test for
+// the #812 follow-up: generate_hero_image only ever writes an image file,
+// never page frontmatter, so a caller that stops after this call ends up
+// with a generated image no page references — the exact gap that shipped a
+// broken homepage card earlier this session. The response must surface
+// data.public_path (the ready-to-paste featuredImage value) and a warning
+// pointing at update_page, instead of silently succeeding with no next step.
+func TestGenerateFeaturedImageAdvisesAttachingToPage(t *testing.T) {
+	hugoRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = hugoRoot
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
+		"slug":  "my-post",
+		"title": "Hello World",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	if got, want := data["public_path"], "/images/my-post-featured.jpg"; got != want {
+		t.Fatalf("data.public_path = %v, want %q", got, want)
+	}
+	warnings, ok := out["warnings"].([]any)
+	if !ok || len(warnings) == 0 {
+		t.Fatalf("warnings = %v, want at least one advisory about attaching the image to a page", out["warnings"])
+	}
+	joined := fmt.Sprint(warnings)
+	if !strings.Contains(joined, "update_page") || !strings.Contains(joined, "featured_image") {
+		t.Fatalf("warnings %v do not mention update_page/featured_image", warnings)
+	}
+}
+
 func TestGenerateFeaturedImageAcceptsCanonicalPublicSlugForms(t *testing.T) {
 	tests := []struct {
 		name     string

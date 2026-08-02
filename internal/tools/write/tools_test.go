@@ -1828,6 +1828,96 @@ func TestUpdatePageRefreshesInMemoryFrontmatterRaw(t *testing.T) {
 	}
 }
 
+// TestUpdatePageWarnsWhenTitleChangesWithStaleFeaturedImage is a regression
+// test for the #812 follow-up: generate_hero_image bakes the title text
+// directly into the image file, so a later update_page call that changes
+// title without also refreshing featured_image leaves a hero image whose
+// baked-in text no longer matches the page. update_page can't safely
+// auto-regenerate the image itself (no image-generation dependency in this
+// package, and not every hero image bakes the title verbatim), so it must
+// at least warn instead of silently leaving the two out of sync.
+func TestUpdatePageWarnsWhenTitleChangesWithStaleFeaturedImage(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "hero-drift",
+		"title":      "Original Title",
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "hero-drift",
+		"featured_image":    "/images/hero-drift-featured.jpg",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "hero-drift", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page (set featured_image) failed: %s", raw)
+	}
+
+	// Change the title without touching featured_image — the image's baked-in
+	// text now potentially drifts from the page title.
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "hero-drift",
+		"title":             "A Completely Different Title",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "hero-drift", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page (title change) failed: %s", raw)
+	}
+	dataEnvelope := decodeWriteData(t, res)
+	warning, _ := dataEnvelope["warning"].(string)
+	if !strings.Contains(warning, "featuredImage") || !strings.Contains(warning, "generate_hero_image") {
+		t.Fatalf("update_page data.warning = %q, want it to flag the now-possibly-stale featuredImage and point at generate_hero_image", warning)
+	}
+}
+
+// TestUpdatePageNoStaleFeaturedImageWarningWhenSetTogether proves the #812
+// follow-up warning doesn't fire when a caller sets title and featured_image
+// in the same call — there's nothing stale to flag since both changed together.
+func TestUpdatePageNoStaleFeaturedImageWarningWhenSetTogether(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "hero-together",
+		"title":      "Original Title",
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "hero-together",
+		"title":             "New Title",
+		"featured_image":    "/images/hero-together-featured.jpg",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "hero-together", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page failed: %s", raw)
+	}
+	dataEnvelope := decodeWriteData(t, res)
+	warning, _ := dataEnvelope["warning"].(string)
+	if strings.Contains(warning, "featuredImage") {
+		t.Fatalf("update_page data.warning = %q, should not flag featuredImage when both title and featured_image were set together", warning)
+	}
+}
+
 func TestUpdatePagePreservesComplexFrontmatter(t *testing.T) {
 	contentRoot := t.TempDir()
 	pageDir := filepath.Join(contentRoot, "posts", "complex-frontmatter")
