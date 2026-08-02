@@ -19,6 +19,7 @@ type manifestJSON struct {
 	Name            string `json:"name"`
 	Version         string `json:"version"`
 	Description     string `json:"description"`
+	Icon            string `json:"icon"`
 	Author          struct {
 		Name string `json:"name"`
 	} `json:"author"`
@@ -92,6 +93,17 @@ func TestManifestJSONIsValid(t *testing.T) {
 	for _, key := range []string{"site_root", "hugo_root", "content_root", "site_url"} {
 		if _, ok := m.UserConfig[key]; !ok {
 			t.Errorf("user_config is missing %q", key)
+		}
+	}
+
+	// icon is a relative path per the real MCPB spec ("Path to a png icon
+	// file, either relative in the package or a https:// url") — assert it
+	// resolves to a real file in this repo rather than a dangling reference.
+	if strings.TrimSpace(m.Icon) == "" {
+		t.Error("manifest.json: icon is empty")
+	} else if !strings.HasPrefix(m.Icon, "https://") {
+		if _, err := os.Stat(m.Icon); err != nil {
+			t.Errorf("manifest.json: icon %q does not resolve to a file in this repo: %v", m.Icon, err)
 		}
 	}
 
