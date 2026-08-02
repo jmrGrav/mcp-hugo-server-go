@@ -2,6 +2,23 @@
 
 All notable changes to this project are documented here.
 
+## [v1.6.8] - 2026-08-02
+
+### Added
+- **stdio transport for local, single-user MCPB/desktop-extension use** (#782, #789): a new `NewStdio` construction path grants write access unconditionally over stdio (no OAuth) — safe because it never shares the HTTP transport's scope-routing callback, proven by a bearerless-HTTP regression test. The existing `mcp.arleo.eu` HTTP+OAuth deployment is completely unchanged.
+- **`MCP_HUGO_*` environment-variable config overlay** (#790): `MCP_HUGO_SITE_ROOT`/`MCP_HUGO_HUGO_ROOT`/`MCP_HUGO_CONTENT_ROOT`/`MCP_HUGO_SITE_URL`/`MCP_HUGO_SITE_NAME` fill in config fields left empty by `config.yaml` (or its absence) — needed because MCPB-style hosts can only inject environment variables, never write a config file. File values always win.
+- **TOML (`+++`) frontmatter support** (#786, #788): pages using TOML frontmatter were previously silently misread as missing title/date. YAML and TOML are both read; writes still normalize to YAML only, unchanged.
+- **`manifest.json` draft and README installation guide** (#792, #794) for MCPB/Directory submission: `user_config`-driven env injection, `privacy_policies`, and a new README `## Installation` section covering both transport modes (stdio for local single-user use, HTTP+OAuth for shared/remote self-hosting) and which to pick.
+- **`TestAllToolsHaveAnnotations`** (#793): an enforced regression test, not just a one-time audit, proving every registered tool exposes correct `readOnlyHint`/`destructiveHint` MCP annotations — a Directory-submission requirement.
+
+### Fixed
+- **`suggest_links` rejected a resolved `slug` with no `tags`/`categories`** (#784): the validation ran before the slug's own tags/categories were merged in, so a valid taxonomy-free call incorrectly failed `invalid_params`.
+- **`site_root` pointed at a Hugo project root (instead of `public/`) silently ingested raw theme templates as content pages** (#785, #787): added a heuristic startup warning when `site_root` looks like a project root rather than a build output directory.
+- **Generated hero images hardcoded `arleo.eu` as the watermark** (#783): now uses the caller-supplied site domain, so third-party deployments no longer get this deployment's own brand on their images.
+
+### Internal
+- **Windows was never actually able to compile** (#791): POSIX-only `syscall` calls in `internal/tools/admin` (process-group handling, ownership checks) had no build-tag gating. Fixed via a `//go:build windows`/`!windows` platform split, verified on real `windows-latest`/`macos-latest` GitHub Actions runners via a new additive, non-blocking `stdio-cross-platform.yml` workflow.
+
 ## [v1.6.7] - 2026-07-27
 
 ### Added
