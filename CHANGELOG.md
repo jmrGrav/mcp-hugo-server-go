@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here.
 
+## [v1.7.0] - 2026-08-02
+
+Milestone release: closes #782, the public distribution plan (MCPB/Claude Connectors Directory + npm). This is the first release published under all three install paths at once — self-hosted HTTP+OAuth (unchanged), `npx`/npm (`@jmrgrav/mcp-hugo-server-go`, live on the npm registry), and a `.mcpb` Claude Desktop extension (manually install-tested on real Windows/Claude Desktop, then submitted to the Claude Connectors Directory for review).
+
+### Added
+- **`.mcpb` bundle packing automated into the release pipeline** (#806): every release now gets a correctly-scoped `.mcpb` attached automatically (`.mcpbignore` keeps it to the 5 files the manifest actually references, not the whole repo) — no more manual local builds.
+
+### Fixed
+- **README's Installation section corrected** (#807): no longer claims the `.mcpb` bundle and Directory listing are "planned but not yet published" — both are live. npx badge now points at the real npmjs.com listing.
+
+### Internal
+- Companion wiki refresh (Installation Guide, Home, Release Checklist) to match — the release process now has three distribution channels, not one, and the checklist previously only covered the self-hosted HTTP+OAuth deploy.
+
 ## [v1.6.10] - 2026-08-02
 
 ### Added
