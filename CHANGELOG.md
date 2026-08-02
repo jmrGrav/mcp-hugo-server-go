@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [v1.6.9] - 2026-08-02
+
+### Added
+- **GoReleaser cross-compile pipeline** (#782, #797): `release.yml` previously tagged the repo and wrote release notes but attached zero binaries to any GitHub release. Adds `.goreleaser.yaml` and wires it in, `release.mode: keep-existing`, so each release from this point on gets real `darwin/amd64`, `darwin/arm64`, `windows/amd64`, `linux/amd64`, `linux/arm64` binaries plus a `checksums.txt`. This is the first release built with the pipeline in place.
+- **`@jmrgrav/mcp-hugo-server-go` npm wrapper** (#782 Phase 4, #798): esbuild/ripgrep-pattern package — `npm install`/`npx` downloads the matching-version binary from this release's GitHub Release assets and verifies its SHA-256 against `checksums.txt`. Verified end-to-end against a real cross-compiled binary on a separate VM: all 51 tools reachable over stdio through the packaged shim. Not yet published to the npm registry.
+- **MCPB manifest icon** (#782, #796): 512x512 RGBA PNG wired into `manifest.json`'s `icon` field.
+- **README badges and npx install docs** (#799): `MCP-stdio`, `npx`, and `Claude Desktop` badges; `## Installation` now leads with `npx @jmrgrav/mcp-hugo-server-go`.
+
 ## [v1.6.8] - 2026-08-02
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@jmrgrav/mcp-hugo-server-go",
-  "version": "1.6.8",
+  "version": "1.6.9",
   "description": "MCP server for Hugo sites, distributed as a precompiled Go binary (esbuild/ripgrep pattern) — no separate install of the Go server required.",
   "license": "MIT",
   "homepage": "https://github.com/jmrGrav/mcp-hugo-server-go#readme",
