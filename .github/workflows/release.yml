@@ -150,3 +150,43 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GORELEASER_CURRENT_TAG: ${{ inputs.version }}
+
+      # Packs and attaches a .mcpb bundle (#782 Phase 2/5) to the release,
+      # so nobody ever needs to build one locally again. Uses the darwin
+      # and windows binaries GoReleaser just attached above (not a local
+      # build), and .mcpbignore (repo root) to keep the bundle scoped to
+      # exactly what manifest.json references — without it, `mcpb pack`
+      # bundles the entire repo (~340 files) instead of the 5 it needs.
+      #
+      # Not signed: `mcpb sign --self-signed` was confirmed broken as of
+      # mcpb@2.1.2 (reports success but writes nothing to the file; a
+      # manually-crafted cert.pem/key.pem does get a signature block
+      # appended, but `mcpb verify`/`mcpb info` still report "not signed"
+      # on that same file — a real upstream bug, not something fixable
+      # here). Revisit once that's fixed upstream. A self-signed cert
+      # wouldn't remove Claude Desktop's "unverified publisher" warning
+      # anyway — only Directory submission (Phase 5) does that.
+      - name: Pack .mcpb bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          v="${VERSION#v}"
+          mkdir -p server
+          curl -sSL -o server/mcp-hugo-server-go \
+            "https://github.com/${{ github.repository }}/releases/download/${VERSION}/mcp-hugo-server-go_darwin_amd64"
+          curl -sSL -o server/mcp-hugo-server-go.exe \
+            "https://github.com/${{ github.repository }}/releases/download/${VERSION}/mcp-hugo-server-go_windows_amd64.exe"
+          chmod +x server/mcp-hugo-server-go
+          # manifest.json's version field is normally kept in sync by hand
+          # alongside CHANGELOG.md — patch it here too so a missed manual
+          # bump never ships a mismatched .mcpb.
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            m.version = '$v';
+            fs.writeFileSync('manifest.json', JSON.stringify(m, null, 2) + '\n');
+          "
+          npm install -g @anthropic-ai/mcpb
+          mcpb pack . "mcp-hugo-server-go-${v}.mcpb"
+          gh release upload "${VERSION}" "mcp-hugo-server-go-${v}.mcpb" --repo "${{ github.repository }}"
