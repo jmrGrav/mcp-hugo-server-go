@@ -27,6 +27,11 @@
         "MCP_HUGO_CONTENT_ROOT": "${user_config.content_root}",
         "MCP_HUGO_SITE_URL": "${user_config.site_url}",
         "MCP_HUGO_SITE_NAME": "${user_config.site_name}"
+      },
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/mcp-hugo-server-go.exe"
+        }
       }
     }
   },
