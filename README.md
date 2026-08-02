@@ -8,7 +8,7 @@
 [![Security Policy](https://img.shields.io/badge/security-policy-green.svg)](SECURITY.md)
 [![MCP](https://img.shields.io/badge/MCP-streamable--HTTP-purple.svg)](https://modelcontextprotocol.io)
 [![MCP stdio](https://img.shields.io/badge/MCP-stdio-purple.svg)](https://github.com/jmrGrav/mcp-hugo-server-go#installation)
-[![npx](https://img.shields.io/badge/npx-%40jmrgrav%2Fmcp--hugo--server--go-cb3837.svg?logo=npm&logoColor=white)](npm/)
+[![npx](https://img.shields.io/badge/npx-%40jmrgrav%2Fmcp--hugo--server--go-cb3837.svg?logo=npm&logoColor=white)](https://www.npmjs.com/package/@jmrgrav/mcp-hugo-server-go)
 [![Claude Desktop](https://img.shields.io/badge/Claude%20Desktop-compatible-5f6bed.svg)](https://github.com/jmrGrav/mcp-hugo-server-go#installation)
 [![ChatGPT](https://img.shields.io/badge/ChatGPT-compatible-10a37f.svg)](https://chatgpt.com/)
 [![Claude](https://img.shields.io/badge/Claude.ai-compatible-5f6bed.svg)](https://claude.ai)
@@ -56,7 +56,7 @@ npx @jmrgrav/mcp-hugo-server-go
 3. Point your MCP host at the binary as its launch command. See `manifest.json` in this repository for the shape a desktop-extension host expects.
 4. See [Privacy policy](#privacy-policy) below for exactly what this mode does and does not do with your data — nothing leaves your machine by default.
 
-A packaged `.mcpb` desktop extension and a Claude Connectors Directory listing for one-click installation are planned but not yet published; until then, use `npx` or the manual binary + config steps above. See the [wiki's Installation Guide](https://github.com/jmrGrav/mcp-hugo-server-go/wiki/Installation-Guide) for a deeper walkthrough of both transport modes side by side.
+**Or use the packaged `.mcpb` desktop extension**: download the `.mcpb` file attached to the [latest release](https://github.com/jmrGrav/mcp-hugo-server-go/releases/latest) and double-click it (or drag it into Claude Desktop's Settings → Extensions) — Claude Desktop prompts for the same `user_config` fields (`site_root`/`hugo_root`/`content_root`/`site_url`/`site_name`) described above. Submitted to the Claude Connectors Directory; not yet listed there pending review, but installable manually today via the release download. See the [wiki's Installation Guide](https://github.com/jmrGrav/mcp-hugo-server-go/wiki/Installation-Guide) for a deeper walkthrough of all three install paths side by side.
 
 ### Shared/remote, multi-user (advanced): HTTP + OAuth transport
 
