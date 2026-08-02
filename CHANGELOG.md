@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [v1.7.2] - 2026-08-02
+
+### Fixed
+- **`generate_hero_image` local renderer now uses a proper display font instead of a tiny debug bitmap font** (#812): every baked-in text element (title, subtitle, tags, brand mark) was drawn with `golang.org/x/image/font/basicfont.Face7x13` — a fixed 7×13px monospace font meant for debug output, not display use — regardless of the requested visual size. This made every locally-rendered hero image look illegible and out of place next to hand-made card art, and separately caused `→` (U+2192) and other glyphs outside that font's tiny coverage to render as a missing-glyph box. Switched to `golang.org/x/image/font/gofont/gobold` rendered at real sizes (46px title / 20px subtitle / 15px tags / 18px brand) via `opentype.NewFace` — already vendored via `golang.org/x/image`, no new dependency. Verified via `sfnt.GlyphIndex` that gobold covers `→` and the accented French characters used throughout this site's content. Multi-line titles now anchor their last line to a fixed baseline and grow upward, so a long wrapped title no longer overlaps the subtitle/tag row below it.
+
 ## [v1.7.1] - 2026-08-02
 
 ### Added
