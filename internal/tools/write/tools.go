@@ -1129,6 +1129,26 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				warning = fmt.Sprintf("source updated but derived DB could not be updated: %v", err)
 			}
 		}
+		// Stale-hero-image advisory (#812 follow-up): the title just changed
+		// but featured_image wasn't part of this same call, and the page
+		// already had a featuredImage set — its baked-in title text (drawn
+		// by generate_hero_image) may no longer match the new title. Purely
+		// advisory, never blocks the write: not every hero image bakes the
+		// page title verbatim, and regenerating on every title edit would be
+		// unwanted churn for callers who don't want that coupling.
+		if in.Title != "" && in.FeaturedImage == "" {
+			if raw, ok := existing.FrontmatterRaw["featuredImage"]; ok {
+				if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+					hint := "title changed but featuredImage was left unchanged — its baked-in text may no longer match; " +
+						"regenerate via generate_hero_image and set featured_image on update_page if it should reflect the new title"
+					if warning == "" {
+						warning = hint
+					} else {
+						warning = warning + "; " + hint
+					}
+				}
+			}
+		}
 
 		state := updatePageState(rt.siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)

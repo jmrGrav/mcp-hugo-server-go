@@ -59,6 +59,12 @@ type generateFeaturedImageOutput struct {
 
 type generateFeaturedImageData struct {
 	Path string `json:"path"`
+	// PublicPath (#812 follow-up) is Path rewritten from the hugo_root-
+	// relative filesystem form ("static/images/...") to the public URL form
+	// ("/images/...") a page's featuredImage frontmatter field actually
+	// expects — ready to paste into update_page's featured_image parameter
+	// without the caller having to strip the "static" prefix by hand.
+	PublicPath string `json:"public_path"`
 }
 
 type imageWriteErrorPayload struct {
@@ -123,10 +129,42 @@ func ResolveHeroImageLocation(hugoRoot, slug string) (HeroImageLocation, error) 
 	}, nil
 }
 
+// publicImagePathFromLogical rewrites a hugo_root-relative logical path
+// ("static/images/posts/slug-featured.jpg") into the public URL form
+// ("/images/posts/slug-featured.jpg") that a page's featuredImage
+// frontmatter field expects. Returns "" if logicalPath isn't rooted at
+// "static/" (defensive; every path this package produces always is).
+func publicImagePathFromLogical(logicalPath string) string {
+	const prefix = "static/"
+	if !strings.HasPrefix(logicalPath, prefix) {
+		return ""
+	}
+	return "/" + strings.TrimPrefix(logicalPath, prefix)
+}
+
+// newGenerateFeaturedImageOutput builds the success envelope and attaches an
+// advisory warning (#812 follow-up): generate_hero_image only ever writes
+// the image file itself, never a page's frontmatter, so a caller that stops
+// after this call ends up with a generated image no page actually
+// references — the exact gap that shipped a broken homepage card earlier.
+// Deliberately a non-blocking warning rather than an automatic frontmatter
+// write: this tool has no language awareness (a bundle's translations each
+// need their own featured_image set via update_page) and no access to
+// update_page's optimistic-locking (expected_revision) machinery, so
+// writing frontmatter from here would mean either duplicating that locking
+// or silently bypassing it.
 func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeaturedImageOutput {
-	return generateFeaturedImageOutput{
+	data.PublicPath = publicImagePathFromLogical(data.Path)
+	out := generateFeaturedImageOutput{
 		ToolResponse: imageSuccessEnvelope(data),
 	}
+	if data.PublicPath != "" {
+		out.Warnings = append(out.Warnings, fmt.Sprintf(
+			"image generated but not attached to any page yet — call update_page with featured_image=%q to use it in card/list views (set it again per language if the page has translations)",
+			data.PublicPath,
+		))
+	}
+	return out
 }
 
 // Register wires all admin tools (site.admin scope).
@@ -174,7 +212,10 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			"`slug` accepts either the canonical public form (`/posts/example/`) or the source-key form (`posts/example`); " +
 			"language-prefixed public slugs are normalized to the same source key before writing. " +
 			"Uses local Go rendering (1200×675 JPEG, Unsplash photo background selected by title hash, dark gradient overlay, title, tags). " +
-			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo).",
+			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo). " +
+			"This tool only writes the image file — it never touches page frontmatter. `data.public_path` is the ready-to-use " +
+			"featuredImage value; call update_page with featured_image=data.public_path afterwards to attach it (per language, " +
+			"for a bundle with translations), or the image will exist but never appear on the site's card/list views.",
 		InputSchema: tools.WithEnum(
 			tools.MustSchema[generateFeaturedImageInput](),
 			"style",

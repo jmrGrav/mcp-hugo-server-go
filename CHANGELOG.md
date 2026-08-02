@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [v1.7.3] - 2026-08-02
+
+### Added
+- **`generate_hero_image` and `update_page` now advise instead of silently drifting on the hero-image/frontmatter link** (#814): considered fully automating `generate_hero_image` → `featuredImage` (the two-call gap that shipped a broken homepage card earlier), but ruled it out — the tool has no language awareness (a bundle's translations each need their own `featured_image`) and no access to `update_page`'s optimistic-locking (`expected_revision`), so a silent write would mean either duplicating that locking or bypassing it. Instead: `generate_hero_image` now returns `data.public_path` (the ready-to-paste `featuredImage` value) and a warning pointing at `update_page` when the generated image isn't attached to any page yet; `update_page` now warns when `title` changes without `featured_image` also being set in the same call and the page already has a `featuredImage` — since the hero image's title text is baked directly into the JPEG, a later title-only edit has no automatic way to reach it. Both are advisory (`warnings`/`data.warning`), never block the write.
+
 ## [v1.7.2] - 2026-08-02
 
 ### Fixed
