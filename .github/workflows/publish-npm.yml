@@ -19,6 +19,13 @@ on:
 
 permissions:
   contents: read
+  # Required for `npm publish --provenance`: OIDC-based cryptographic proof
+  # that this exact package was built by this exact workflow run/commit,
+  # published to the npm registry via Sigstore/Rekor. npm and third-party
+  # supply-chain scanners (Socket, npm's own "Provenance" badge) treat a
+  # provenance-backed publish as materially more trustworthy than a bare
+  # token-authenticated one.
+  id-token: write
 
 jobs:
   publish:
@@ -92,7 +99,7 @@ jobs:
         working-directory: npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public
+        run: npm publish --access public --provenance
 
       - name: Confirm published version is live
         env:
@@ -108,3 +115,14 @@ jobs:
           done
           echo "npm publish reported success but the registry doesn't reflect version $WANT yet (propagation delay is possible — check manually)." >&2
           exit 1
+
+      - name: Confirm provenance attestation is attached
+        env:
+          WANT: ${{ steps.meta.outputs.version_no_v }}
+        run: |
+          has_attestation="$(npm view "@jmrgrav/mcp-hugo-server-go@$WANT" dist.attestations.url 2>/dev/null || true)"
+          if [[ -z "$has_attestation" ]]; then
+            echo "Published version $WANT has no provenance attestation attached — --provenance may have silently no-op'd. Check the npm publish step's output above." >&2
+            exit 1
+          fi
+          echo "Provenance attestation confirmed: $has_attestation"
