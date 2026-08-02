@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"golang.org/x/image/font/sfnt"
 )
 
 func TestDefs(t *testing.T) {
@@ -81,6 +82,50 @@ func TestRenderFeaturedImageSiteNameNotHardcoded(t *testing.T) {
 				t.Fatalf("rendered JPEG suspiciously small: %d bytes", info.Size())
 			}
 		})
+	}
+}
+
+// TestHeroFontCoversArrowAndAccents is a regression test for #812: the old
+// basicfont.Face7x13 debug font silently dropped glyphs like "→" (U+2192),
+// baking a missing-glyph tofu box into any hero image whose title used a
+// character outside its tiny coverage. gobold must render both the arrow
+// and the accented French characters used throughout this site's content.
+func TestHeroFontCoversArrowAndAccents(t *testing.T) {
+	f, err := loadHeroFont()
+	if err != nil {
+		t.Fatalf("loadHeroFont() error = %v", err)
+	}
+	var buf sfnt.Buffer
+	for _, r := range []rune{'→', 'é', 'è', 'ê', 'ç', 'à', 'œ'} {
+		idx, err := f.GlyphIndex(&buf, r)
+		if err != nil {
+			t.Fatalf("GlyphIndex(%q) error = %v", r, err)
+		}
+		if idx == 0 {
+			t.Errorf("GlyphIndex(%q) = 0 (glyph .notdef), font does not cover this rune", r)
+		}
+	}
+}
+
+// TestRenderFeaturedImageLongTitleWraps is a regression test for #812: with
+// the old fixed 18px line height sized for a 13px bitmap font, a title long
+// enough to wrap onto a second line at the new, much larger display font
+// size would overlap the subtitle/tags fixed below it. renderFeaturedImage
+// must still succeed (not panic/error) and produce a normally-sized JPEG
+// for a title long enough to wrap.
+func TestRenderFeaturedImageLongTitleWraps(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.jpg")
+	longTitle := "MCP Hugo Server passe public : npm, npx et Claude Desktop (MCPB) avec support complet"
+	if err := renderFeaturedImage(dir, path, "tech", longTitle, "A subtitle", []string{"mcp", "claude"}, "#7aa2f7", "arleo.eu"); err != nil {
+		t.Fatalf("renderFeaturedImage() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("output file not found: %v", err)
+	}
+	if info.Size() < 1000 {
+		t.Fatalf("rendered JPEG suspiciously small: %d bytes", info.Size())
 	}
 }
 

@@ -13,11 +13,51 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"golang.org/x/image/font"
-	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
 )
+
+// heroFont is the parsed Go Bold typeface used for all baked-in hero-image
+// text. It replaces the basicfont.Face7x13 debug bitmap font used before
+// #812: that font rendered at a fixed 7×13px regardless of requested size
+// and dropped glyphs outside its tiny coverage (e.g. U+2192 "→"), producing
+// illegible titles once real posts started depending on the local-render
+// path. gobold is already vendored via golang.org/x/image (no new
+// dependency) and covers the Latin+Latin-Extended range including accented
+// French characters and common arrows/punctuation.
+var (
+	heroFontOnce sync.Once
+	heroFont     *opentype.Font
+	heroFontErr  error
+)
+
+func loadHeroFont() (*opentype.Font, error) {
+	heroFontOnce.Do(func() {
+		heroFont, heroFontErr = opentype.Parse(gobold.TTF)
+	})
+	return heroFont, heroFontErr
+}
+
+// newHeroFace creates a fresh rendering face at the given pixel size.
+// opentype.Face instances are not safe for concurrent use (each holds a
+// mutable glyph buffer), so callers must create one per render call rather
+// than sharing a package-level Face; the underlying *opentype.Font parse
+// above is cached and safe to reuse.
+func newHeroFace(size float64) (font.Face, error) {
+	f, err := loadHeroFont()
+	if err != nil {
+		return nil, err
+	}
+	return opentype.NewFace(f, &opentype.FaceOptions{
+		Size:    size,
+		DPI:     72,
+		Hinting: font.HintingFull,
+	})
+}
 
 // backgroundFiles lists the Unsplash photo filenames stored in featured-backgrounds/.
 // Order is fixed so md5(title)%6 selects consistently across runs.
@@ -41,7 +81,35 @@ func renderFeaturedImage(bgDir, path, style, title, subtitle string, tags []stri
 	const (
 		width  = 1200
 		height = 675
+		// titleBaselineBottom anchors the *last* line of a (possibly
+		// wrapped) title so multi-line titles grow upward instead of
+		// pushing the subtitle/tags off their fixed positions.
+		titleBaselineBottom = 460
+		titleLineHeight     = 54
+		subtitleY           = titleBaselineBottom + 55
+		tagsY               = 610
 	)
+
+	titleFace, err := newHeroFace(46)
+	if err != nil {
+		return fmt.Errorf("load hero font: %w", err)
+	}
+	defer titleFace.Close()
+	subtitleFace, err := newHeroFace(20)
+	if err != nil {
+		return fmt.Errorf("load hero font: %w", err)
+	}
+	defer subtitleFace.Close()
+	tagFace, err := newHeroFace(15)
+	if err != nil {
+		return fmt.Errorf("load hero font: %w", err)
+	}
+	defer tagFace.Close()
+	brandFace, err := newHeroFace(18)
+	if err != nil {
+		return fmt.Errorf("load hero font: %w", err)
+	}
+	defer brandFace.Close()
 
 	canvas, err := loadPhotoBackground(bgDir, title, width, height)
 	if err != nil {
@@ -58,19 +126,26 @@ func renderFeaturedImage(bgDir, path, style, title, subtitle string, tags []stri
 	drawCircle(canvas, 72, 54, 5, accentRGBA)
 
 	if siteName != "" {
-		drawImgText(canvas, 96, 60, siteName, accentRGBA)
+		drawImgText(canvas, 96, 60, siteName, accentRGBA, brandFace)
 	}
-	drawTitle(canvas, 60, 438, title, accentRGBA)
+
+	titleLines := wrapText(title, titleFace, 1040)
+	titleFirstY := titleBaselineBottom - (len(titleLines)-1)*titleLineHeight
+	for i, line := range titleLines {
+		drawImgString(canvas, 60, titleFirstY+i*titleLineHeight, line, color.RGBA{255, 255, 255, 255}, titleFace)
+	}
+	drawFillRect(canvas, 60, titleBaselineBottom+16, 64, 4, accentRGBA)
+
 	if subtitle != "" {
-		drawWrappedText(canvas, 60, 500, subtitle, color.RGBA{235, 235, 235, 255}, 980)
+		drawWrappedText(canvas, 60, subtitleY, subtitle, color.RGBA{235, 235, 235, 255}, 980, subtitleFace, 26)
 	}
 	for i, tag := range tags {
 		if i >= 6 {
 			break
 		}
 		x := 60 + i*178
-		drawRoundedRect(canvas, x, 610, 160, 28, color.RGBA{0, 0, 0, 140}, withAlpha(accentRGBA, 200))
-		drawCenteredText(canvas, x, 617, 160, "#"+tag, accentRGBA)
+		drawRoundedRect(canvas, x, tagsY, 160, 28, color.RGBA{0, 0, 0, 140}, withAlpha(accentRGBA, 200))
+		drawCenteredText(canvas, x, tagsY+19, 160, "#"+tag, accentRGBA, tagFace)
 	}
 
 	var buf bytes.Buffer
@@ -165,17 +240,11 @@ func featuredImagePalette(style, title string) (color.RGBA, color.RGBA) {
 	return base, variant
 }
 
-func drawTitle(img *image.RGBA, x, y int, title string, accent color.RGBA) {
-	drawWrappedText(img, x, y, title, color.RGBA{255, 255, 255, 255}, 1040)
-	drawFillRect(img, x, y+20, 64, 4, accent)
+func drawImgText(img *image.RGBA, x, y int, text string, clr color.RGBA, face font.Face) {
+	drawImgString(img, x, y, text, clr, face)
 }
 
-func drawImgText(img *image.RGBA, x, y int, text string, clr color.RGBA) {
-	drawImgString(img, x, y, text, clr, basicfont.Face7x13)
-}
-
-func drawCenteredText(img *image.RGBA, x, y, w int, text string, clr color.RGBA) {
-	face := basicfont.Face7x13
+func drawCenteredText(img *image.RGBA, x, y, w int, text string, clr color.RGBA, face font.Face) {
 	d := &font.Drawer{Dst: img, Src: image.NewUniform(clr), Face: face}
 	textWidth := d.MeasureString(text).Round()
 	startX := x + (w-textWidth)/2
@@ -185,10 +254,10 @@ func drawCenteredText(img *image.RGBA, x, y, w int, text string, clr color.RGBA)
 	drawImgString(img, startX, y, text, clr, face)
 }
 
-func drawWrappedText(img *image.RGBA, x, y int, text string, clr color.RGBA, maxWidth int) {
-	lines := wrapText(text, basicfont.Face7x13, maxWidth)
+func drawWrappedText(img *image.RGBA, x, y int, text string, clr color.RGBA, maxWidth int, face font.Face, lineHeight int) {
+	lines := wrapText(text, face, maxWidth)
 	for i, line := range lines {
-		drawImgString(img, x, y+i*18, line, clr, basicfont.Face7x13)
+		drawImgString(img, x, y+i*lineHeight, line, clr, face)
 	}
 }
 
