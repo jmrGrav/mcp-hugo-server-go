@@ -1,0 +1,48 @@
+version: 2
+
+# macOS + Windows are for the MCPB/stdio desktop-extension target (#782
+# Phase 2) — Claude Desktop doesn't run on Linux. Linux is included too
+# because the npm wrapper (#782 Phase 4) is meant to work for any MCP host
+# expecting an npx-style launch, not just Claude Desktop, and those hosts
+# very often run on Linux. This is independent of deploy.yml, which builds
+# and ships its own linux/amd64 binary straight to the arleo.eu VM with its
+# own build-metadata resolution — unaffected either way.
+builds:
+  - id: mcp-hugo-server-go
+    main: ./cmd/mcp-hugo-server-go
+    binary: mcp-hugo-server-go
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - windows
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version={{.Version}}
+      - -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.ReleaseVersion={{.Tag}}
+      - -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Commit={{.FullCommit}}
+      - -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.BuildChannel=release
+
+# Raw binaries, not archives — this is meant to be trivially fetchable by
+# both an MCPB bundle step and a future npm postinstall (esbuild/ripgrep
+# pattern), neither of which should need an unzip step.
+archives:
+  - formats: [binary]
+    name_template: "{{ .Binary }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  # release.yml creates the GitHub release itself (changelog/README gates,
+  # deployment-verification checks) before invoking goreleaser; goreleaser
+  # only needs to attach build artifacts to that already-existing release,
+  # never write its own release notes or create a second one.
+  mode: keep-existing
