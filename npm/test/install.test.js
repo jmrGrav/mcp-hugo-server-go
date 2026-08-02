@@ -6,7 +6,7 @@ const http = require('node:http');
 const os = require('node:os');
 const fs = require('node:fs');
 const path = require('node:path');
-const { expectedChecksum, sha256, installFrom } = require('../install.js');
+const { expectedChecksum, sha256, installFrom, download } = require('../install.js');
 
 test('expectedChecksum finds the matching line, ignores others', () => {
   const text = [
@@ -88,4 +88,51 @@ test('installFrom rejects a tampered binary (checksum mismatch)', async (t) => {
   const base = `http://127.0.0.1:${server.address().port}`;
 
   await assert.rejects(() => installFrom(base, { platform: 'linux', arch: 'x64' }), /checksum mismatch/);
+});
+
+// A Socket.dev supply-chain scan of the published package flagged
+// download()'s redirect-following as having no destination allowlist —
+// legitimate finding, since an unrestricted redirect could be steered to
+// a host that serves both a malicious binary and a matching
+// checksums.txt, defeating the checksum check entirely. These two tests
+// prove the fix actually works both ways: rejects an untrusted redirect
+// target by default, and still follows a redirect when the target is
+// explicitly allowed.
+test('download rejects a redirect to a host outside the default allowlist', async (t) => {
+  const server = http.createServer((req, res) => {
+    if (req.url === '/redirect-me') {
+      res.writeHead(302, { Location: 'http://127.0.0.1:1/elsewhere' });
+      res.end();
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/redirect-me`;
+
+  await assert.rejects(() => download(url), /refusing to follow redirect/);
+});
+
+test('download follows a redirect to an explicitly allowed host', async (t) => {
+  const payload = Buffer.from('redirected-payload');
+  const server = http.createServer((req, res) => {
+    if (req.url === '/redirect-me') {
+      res.writeHead(302, { Location: `http://127.0.0.1:${server.address().port}/final` });
+      res.end();
+    } else if (req.url === '/final') {
+      res.writeHead(200);
+      res.end(payload);
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => server.close());
+  const url = `http://127.0.0.1:${server.address().port}/redirect-me`;
+
+  const result = await download(url, { allowedRedirectHosts: /^127\.0\.0\.1$/, requireHTTPS: false });
+  assert.deepEqual(result, payload);
 });

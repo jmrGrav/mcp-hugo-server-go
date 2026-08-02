@@ -12,18 +12,36 @@ const { resolveAssetName, binaryFileName } = require('./platform.js');
 const REPO = 'jmrGrav/mcp-hugo-server-go';
 const BIN_DIR = path.join(__dirname, 'bin');
 
-// Overridable only for tests (a local fixture server) — real installs
-// always use the default GitHub Releases base.
-function releaseBaseURL(version, envOverride = process.env.MCP_HUGO_NPM_BASE_URL) {
-  if (envOverride) return envOverride;
+function releaseBaseURL(version) {
   return `https://github.com/${REPO}/releases/download/v${version}`;
 }
 
-async function download(url, { redirects = 5, fetchImpl = fetch } = {}) {
+// GitHub redirects release-asset downloads to its object storage CDN
+// (objects.githubusercontent.com) before serving the actual bytes. A
+// redirect-following download with no destination check would let
+// anything in the chain — a compromised proxy, a DNS hijack — silently
+// redirect this to an attacker-controlled host that also serves a
+// checksums.txt matching its own malicious binary (the SHA-256 check
+// alone can't defend against that, since it only proves the binary
+// matches whatever checksums.txt says — not that checksums.txt itself
+// came from GitHub). Restricting redirects to GitHub's own hosts closes
+// that gap.
+const ALLOWED_REDIRECT_HOSTS = /(^|\.)github\.com$|(^|\.)githubusercontent\.com$/;
+
+async function download(
+  url,
+  { redirects = 5, fetchImpl = fetch, allowedRedirectHosts = ALLOWED_REDIRECT_HOSTS, requireHTTPS = true } = {}
+) {
   const res = await fetchImpl(url, { redirect: 'manual' });
   if (res.status >= 300 && res.status < 400 && res.headers.get('location')) {
     if (redirects <= 0) throw new Error(`too many redirects fetching ${url}`);
-    return download(res.headers.get('location'), { redirects: redirects - 1, fetchImpl });
+    const location = new URL(res.headers.get('location'), url);
+    if ((requireHTTPS && location.protocol !== 'https:') || !allowedRedirectHosts.test(location.hostname)) {
+      throw new Error(
+        `mcp-hugo-server-go: refusing to follow redirect from ${url} to untrusted host ${location.hostname} — expected an https://*.github.com or https://*.githubusercontent.com URL.`
+      );
+    }
+    return download(location.href, { redirects: redirects - 1, fetchImpl, allowedRedirectHosts, requireHTTPS });
   }
   if (!res.ok) {
     throw new Error(`GET ${url} failed: ${res.status} ${res.statusText}`);

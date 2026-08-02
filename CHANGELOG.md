@@ -2,6 +2,12 @@
 
 All notable changes to this project are documented here.
 
+## [v1.6.10] - 2026-08-02
+
+### Added
+- **npm publish provenance** (#782): `publish-npm.yml` now publishes `@jmrgrav/mcp-hugo-server-go` with `--provenance` (`id-token: write` + `publishConfig.provenance: true`) — a cryptographically verifiable, Sigstore/Rekor-backed link between the published package and the exact GitHub Actions run/commit that built it. Supply-chain scanners (npm's own registry UI, Socket.dev, etc.) treat provenance-backed publishes as materially more trustworthy than a bare token-authenticated one. `v1.6.9` was published before this change and has no provenance attestation; `v1.6.10` is the first version that does.
+- **`npm/` package now bundles its own `LICENSE`** and declares an explicit `author` field — both were previously only present at the repository root, not in the published tarball/metadata.
+
 ## [v1.6.9] - 2026-08-02
 
 ### Added
