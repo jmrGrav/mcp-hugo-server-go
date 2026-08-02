@@ -1,0 +1,110 @@
+name: Publish npm package
+
+# Manual publish workflow for @jmrgrav/mcp-hugo-server-go (#782 Phase 4).
+# Requires an npm Automation token stored as the NPM_TOKEN repo secret
+# (npmjs.com -> Account Settings -> Access Tokens -> Generate New Token ->
+# Automation). Deliberately does NOT run on every push/release — the npm
+# wrapper's postinstall downloads a specific GitHub Release's binaries by
+# exact version tag, so publishing must stay a distinct, explicit step
+# taken only once that release's assets are confirmed to exist, never
+# something that fires automatically ahead of them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish, for example v1.6.9. Must match npm/package.json's version field and an existing GitHub Release with binaries already attached."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Verify release assets and publish to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Normalize version
+        id: meta
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          v="${VERSION#v}"
+          echo "version_no_v=$v" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+      - name: Confirm npm/package.json version matches
+        env:
+          WANT: ${{ steps.meta.outputs.version_no_v }}
+        run: |
+          got="$(node -p "require('./npm/package.json').version")"
+          if [[ "$got" != "$WANT" ]]; then
+            echo "npm/package.json version ($got) does not match requested version ($WANT) — refusing to publish a mismatched version." >&2
+            exit 1
+          fi
+
+      # This is the gate that actually matters: the npm wrapper's
+      # postinstall downloads GitHub Release assets by this exact tag. If
+      # GoReleaser silently failed on that release (still possible even
+      # after release.yml's own steps succeeded — see the .goreleaser.yaml
+      # rollout notes), publishing now would ship a package that 404s for
+      # every real installer. Fail closed instead of trusting the tag exists.
+      - name: Verify release assets exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          want=(
+            "mcp-hugo-server-go_darwin_amd64"
+            "mcp-hugo-server-go_darwin_arm64"
+            "mcp-hugo-server-go_linux_amd64"
+            "mcp-hugo-server-go_linux_arm64"
+            "mcp-hugo-server-go_windows_amd64.exe"
+            "checksums.txt"
+          )
+          assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          missing=0
+          for a in "${want[@]}"; do
+            if ! grep -qxF "$a" <<<"$assets"; then
+              echo "missing release asset: $a" >&2
+              missing=1
+            fi
+          done
+          if [[ "$missing" -ne 0 ]]; then
+            echo "Release $TAG is missing expected binary assets — refusing to publish. Re-run the GoReleaser step of release.yml, or investigate why it didn't attach them." >&2
+            exit 1
+          fi
+          echo "All expected assets present on release $TAG."
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Run npm package tests
+        working-directory: npm
+        run: node --test
+
+      - name: npm publish
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
+
+      - name: Confirm published version is live
+        env:
+          WANT: ${{ steps.meta.outputs.version_no_v }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            got="$(npm view @jmrgrav/mcp-hugo-server-go version 2>/dev/null || true)"
+            if [[ "$got" == "$WANT" ]]; then
+              echo "Confirmed @jmrgrav/mcp-hugo-server-go@$WANT is live on the registry."
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "npm publish reported success but the registry doesn't reflect version $WANT yet (propagation delay is possible — check manually)." >&2
+          exit 1
