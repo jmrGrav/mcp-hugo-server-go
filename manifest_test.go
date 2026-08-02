@@ -26,8 +26,11 @@ type manifestJSON struct {
 	Server struct {
 		Type      string `json:"type"`
 		MCPConfig struct {
-			Command string            `json:"command"`
-			Env     map[string]string `json:"env"`
+			Command           string            `json:"command"`
+			Env               map[string]string `json:"env"`
+			PlatformOverrides map[string]struct {
+				Command string `json:"command"`
+			} `json:"platform_overrides"`
 		} `json:"mcp_config"`
 	} `json:"server"`
 	UserConfig      map[string]json.RawMessage `json:"user_config"`
@@ -68,6 +71,20 @@ func TestManifestJSONIsValid(t *testing.T) {
 	}
 	if strings.TrimSpace(m.Server.MCPConfig.Command) == "" {
 		t.Error("server.mcp_config.command is empty")
+	}
+	if strings.HasSuffix(m.Server.MCPConfig.Command, ".exe") {
+		t.Error("server.mcp_config.command (the default/darwin+linux command) must not end in .exe — that belongs only in the win32 platform_overrides entry")
+	}
+
+	// Claude Desktop only runs on macOS/Windows, but the default command
+	// above is the darwin (no extension) binary — win32 needs its own
+	// override or every Windows install would try to exec a filename with
+	// no .exe suffix and fail immediately.
+	win32, ok := m.Server.MCPConfig.PlatformOverrides["win32"]
+	if !ok {
+		t.Error("server.mcp_config.platform_overrides is missing a \"win32\" entry")
+	} else if !strings.HasSuffix(win32.Command, ".exe") {
+		t.Errorf("server.mcp_config.platform_overrides.win32.command = %q, want a .exe suffix", win32.Command)
 	}
 
 	// The whole point of mcp_config.env is to deliver user_config values to
