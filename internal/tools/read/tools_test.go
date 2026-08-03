@@ -980,6 +980,106 @@ func TestGetPageFrontmatterIncludesSourceKey(t *testing.T) {
 	}
 }
 
+// featuredImageFixtureSourceIndex builds an isolated hugosite.SourceIndex
+// over a fresh t.TempDir() containing a single page with featuredImage/
+// featuredImagePreview/description/draft set — deliberately not added to
+// the shared testdata/fixtures/content tree, which several unrelated
+// packages (internal/hugosite, internal/contracttests golden snapshots)
+// assert exact page counts/hashes against.
+func featuredImageFixtureSourceIndex(t *testing.T) (*hugosite.SourceIndex, string) {
+	t.Helper()
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	page := "---\n" +
+		"title: Featured Fixture\n" +
+		"date: 2024-01-16T10:00:00Z\n" +
+		"draft: false\n" +
+		"description: The featured-image fixture post.\n" +
+		"featuredImage: /images/posts/featured-fixture-featured.jpg\n" +
+		"featuredImagePreview: /images/posts/featured-fixture-preview.jpg\n" +
+		"tags:\n  - go\n" +
+		"categories:\n  - tutorials\n" +
+		"---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "featured-fixture.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	return srcIdx, contentRoot
+}
+
+// TestGetPageFrontmatterExposesFeaturedImageAndDescription is a regression
+// test for #817: get_page_frontmatter previously had no way to surface
+// featuredImage/featuredImagePreview/description/draft even though they were
+// present in source frontmatter and already writable via update_page's
+// featured_image/description/draft params — the only way to discover them
+// was an indirect tool like diff_page or list_page_assets. Field names are
+// snake_case to match update_page's write parameters directly (read/write
+// round-tripping is the whole point).
+func TestGetPageFrontmatterExposesFeaturedImageAndDescription(t *testing.T) {
+	idx := mustTestIndex(t)
+	srcIdx, contentRoot := featuredImageFixtureSourceIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/posts/featured-fixture"})
+	if res.IsError {
+		t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	fm, ok := m["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_frontmatter: 'frontmatter' is %T, want map", m["frontmatter"])
+	}
+	if got, want := fm["featured_image"], "/images/posts/featured-fixture-featured.jpg"; got != want {
+		t.Fatalf("get_page_frontmatter featured_image = %v, want %q", got, want)
+	}
+	if got, want := fm["featured_image_preview"], "/images/posts/featured-fixture-preview.jpg"; got != want {
+		t.Fatalf("get_page_frontmatter featured_image_preview = %v, want %q", got, want)
+	}
+	if got, want := fm["description"], "The featured-image fixture post."; got != want {
+		t.Fatalf("get_page_frontmatter description = %v, want %q", got, want)
+	}
+	if got, ok := fm["draft"].(bool); !ok || got != false {
+		t.Fatalf("get_page_frontmatter draft = %v (present=%v), want false", fm["draft"], ok)
+	}
+}
+
+// TestGetPageForEditExposesFeaturedImage proves the same fields reach
+// get_page_for_edit's nested frontmatter object — the exact tool+field an
+// external live audit reported as missing (#817).
+func TestGetPageForEditExposesFeaturedImage(t *testing.T) {
+	idx := mustTestIndex(t)
+	srcIdx, contentRoot := featuredImageFixtureSourceIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/featured-fixture"})
+	if res.IsError {
+		t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit: 'page' is %T, want map", m["page"])
+	}
+	fm, ok := page["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit: 'frontmatter' is %T, want map", page["frontmatter"])
+	}
+	if got, want := fm["featured_image"], "/images/posts/featured-fixture-featured.jpg"; got != want {
+		t.Fatalf("get_page_for_edit frontmatter.featured_image = %v, want %q", got, want)
+	}
+}
+
 func TestGetPageForEditIncludeShapesResponse(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

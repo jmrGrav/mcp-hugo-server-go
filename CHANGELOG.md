@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [v1.7.4] - 2026-08-03
+
+Live-audit follow-up. A ChatGPT-based live audit initially reported `update_page`'s `featured_image` write param as missing — that was wrong (stale client-side tool schema; the auditor retracted it after re-verifying live) and no code change was needed for it. Two things from the same audit *were* real and are fixed here:
+
+### Fixed
+- **`get_page_frontmatter`/`get_page_for_edit` didn't expose `featured_image`/`featured_image_preview`/`description`/`draft`** (#817): these were present in source frontmatter and already writable via `update_page`, but invisible to a caller reading through the structured frontmatter tools — the only way to discover e.g. a page's `featuredImage` was an indirect tool like `diff_page` or `list_page_assets`. Now populated from source frontmatter (omitted, not a zero value, when unset or when only public output is resolvable) with field names matching `update_page`'s write parameters for direct read→write round-tripping.
+- **Production deploys silently lost release identity (`build_channel: "main"` instead of the actual release tag) whenever the `Deploy to Production` workflow's optional `release_version` input was omitted** (#816): `git describe --tags --exact-match` always fails for this repo's deploy-then-tag ordering (Release requires the deployment to already be live before it cuts the tag), and #555's fix required a human to remember to pass `release_version` by hand on every dispatch — forgotten on the last two production deploys (v1.7.2, v1.7.3) in a row. `deploy.yml` now falls back to reading `npm/package.json`'s `version` (already bumped as part of every release commit) when both the explicit input and `git describe` come up empty, so the deployed identity is correct without relying on anyone remembering an optional flag.
+
 ## [v1.7.3] - 2026-08-02
 
 ### Added
