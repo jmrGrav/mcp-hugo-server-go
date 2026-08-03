@@ -3030,6 +3030,56 @@ func TestValidateFrontMatterReturnsCanonicalSlugs(t *testing.T) {
 	}
 }
 
+func TestValidateFrontMatterSlugIncludesAllTranslations(t *testing.T) {
+	contentRoot := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/multi/index.en.md", "---\ntitle: Hello\ndate: 2026-01-01\n---\nEnglish body.\n")
+	write("posts/multi/index.fr.md", "---\ntitle: Bonjour\ndate: 2026-01-02\n---\nCorps francais.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex() error = %v", err)
+	}
+	session, done := newTestClientWithSourceIndex(t, mustTestIndex(t), srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_frontmatter", map[string]any{"slug": "posts/multi", "limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if got := data["pages_checked"]; got != float64(2) {
+		t.Fatalf("pages_checked = %v, want 2 translations validated", got)
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 2 {
+		t.Fatalf("pages = %#v, want both translations", pages)
+	}
+	langs := map[string]bool{}
+	for _, raw := range pages {
+		page, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("validate_frontmatter page type = %T", raw)
+		}
+		if got := page["slug"]; got != "/posts/multi/" {
+			t.Fatalf("page.slug = %v, want canonical shared slug /posts/multi/", got)
+		}
+		lang, _ := page["lang"].(string)
+		langs[lang] = true
+	}
+	if !langs["en"] || !langs["fr"] {
+		t.Fatalf("validated langs = %v, want en and fr", langs)
+	}
+}
+
 func TestValidateFrontMatterGlobalPaginationDistinguishesScanFromDetailPage(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
