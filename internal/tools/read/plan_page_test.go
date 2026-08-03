@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func writePlanPageFixtureHTML(t *testing.T, root, rel, html string) {
@@ -58,6 +60,38 @@ func mustPlanPageIndex(t *testing.T) *site.Index {
 	return idx
 }
 
+func mustPlanPageSourceIndex(t *testing.T) (*hugosite.SourceIndex, string) {
+	t.Helper()
+	contentRoot := t.TempDir()
+	write := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	write(filepath.Join("posts", "go-basics", "index.md"), "---\ntitle: Go Basics\ndate: 2026-08-03\ntags:\n  - go\n  - tutorial\ncategories:\n  - programming\n---\nBody.\n")
+	write(filepath.Join("posts", "debug-guide", "index.md"), "---\ntitle: Debug Guide\ndate: 2026-08-03\ntags:\n  - debug\n---\nBody.\n")
+	write(filepath.Join("posts", "go-basics", "index.fr.md"), "---\ntitle: Bases de Go\ndate: 2026-08-03\nlang: fr\ntags:\n  - go\n  - tutorial\ncategories:\n  - programming\n---\nContenu.\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	return srcIdx, contentRoot
+}
+
+func newPlanPageClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
+	t.Helper()
+	cfg := config.Default()
+	srcIdx, contentRoot := mustPlanPageSourceIndex(t)
+	cfg.ContentRoot = contentRoot
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	return session, done
+}
+
 // TestPlanPageBundlesContentTypesTagsAndLinks is the core regression test
 // for #622: plan_page must bundle content_types (identical to
 // list_content_types), relevant_tags/relevant_categories (a substring
@@ -65,7 +99,7 @@ func mustPlanPageIndex(t *testing.T) *site.Index {
 // (identical to suggest_links) into a single call.
 func TestPlanPageBundlesContentTypesTagsAndLinks(t *testing.T) {
 	idx := mustPlanPageIndex(t)
-	session, done := newTestClient(t, idx)
+	session, done := newPlanPageClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "plan_page", map[string]any{
@@ -120,7 +154,7 @@ func TestPlanPageBundlesContentTypesTagsAndLinks(t *testing.T) {
 // least one of slug/tags/categories be given to score anything.
 func TestPlanPageOmitsLinksWithoutTagsOrCategories(t *testing.T) {
 	idx := mustPlanPageIndex(t)
-	session, done := newTestClient(t, idx)
+	session, done := newPlanPageClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "plan_page", map[string]any{"topic": "a topic with no tags"})
@@ -142,7 +176,7 @@ func TestPlanPageOmitsLinksWithoutTagsOrCategories(t *testing.T) {
 // casing/spelling" use case).
 func TestPlanPageRelevantTagsMatchesExistingCasingVariant(t *testing.T) {
 	idx := mustPlanPageIndex(t)
-	session, done := newTestClient(t, idx)
+	session, done := newPlanPageClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "plan_page", map[string]any{"tags": []any{"Debug"}})
@@ -164,7 +198,7 @@ func TestPlanPageRelevantTagsMatchesExistingCasingVariant(t *testing.T) {
 
 func TestPlanPageLanguageFiltersSuggestions(t *testing.T) {
 	idx := mustPlanPageIndex(t)
-	session, done := newTestClient(t, idx)
+	session, done := newPlanPageClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "plan_page", map[string]any{
@@ -198,7 +232,7 @@ func TestPlanPageLanguageFiltersSuggestions(t *testing.T) {
 // limit last.
 func TestPlanPageLanguageFilterSurvivesLowSuggestionLimit(t *testing.T) {
 	idx := mustPlanPageIndex(t)
-	session, done := newTestClient(t, idx)
+	session, done := newPlanPageClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "plan_page", map[string]any{
@@ -227,7 +261,7 @@ func TestPlanPageLanguageFilterSurvivesLowSuggestionLimit(t *testing.T) {
 
 func TestPlanPageOnePerSourceKeyCollapsesTranslations(t *testing.T) {
 	idx := mustPlanPageIndex(t)
-	session, done := newTestClient(t, idx)
+	session, done := newPlanPageClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "plan_page", map[string]any{
@@ -255,7 +289,7 @@ func TestPlanPageOnePerSourceKeyCollapsesTranslations(t *testing.T) {
 
 func TestPlanPageCompactOmitsHeavyContentTypeDetail(t *testing.T) {
 	idx := mustPlanPageIndex(t)
-	session, done := newTestClient(t, idx)
+	session, done := newPlanPageClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "plan_page", map[string]any{
@@ -286,7 +320,7 @@ func TestPlanPageCompactOmitsHeavyContentTypeDetail(t *testing.T) {
 
 func TestPlanPageExplainsMissingRelevantCategories(t *testing.T) {
 	idx := mustPlanPageIndex(t)
-	session, done := newTestClient(t, idx)
+	session, done := newPlanPageClient(t, idx)
 	defer done()
 
 	res := callTool(t, session, "plan_page", map[string]any{
@@ -301,5 +335,125 @@ func TestPlanPageExplainsMissingRelevantCategories(t *testing.T) {
 	}
 	if got := data["empty_categories_reason"]; got == nil || got == "" {
 		t.Fatal("plan_page empty_categories_reason missing, want explicit explanation")
+	}
+}
+
+func TestPlanPageRelevantVocabularyPrefersSourceIndex(t *testing.T) {
+	htmlDir := t.TempDir()
+	writePlanPageFixtureHTML(t, htmlDir, filepath.Join("posts", "source-vs-public", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/source-vs-public/">
+<meta property="og:title" content="Source vs public">
+<meta property="article:tag" content="publictag">
+<meta property="article:section" content="publiccat">
+</head><body><article>Body.</article></body></html>`)
+
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "source-vs-public"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "source-vs-public", "index.md"), []byte("---\ntitle: Source vs public\ndate: 2026-08-03\ntags:\n  - sourcetag\ncategories:\n  - sourcecat\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.ContentRoot = contentRoot
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{"tags": []any{"source"}})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	relevantTags, _ := decodeContent(t, res)["relevant_tags"].([]any)
+	foundSource := false
+	foundPublic := false
+	for _, v := range relevantTags {
+		switch v {
+		case "sourcetag":
+			foundSource = true
+		case "publictag":
+			foundPublic = true
+		}
+	}
+	if !foundSource {
+		t.Fatalf("plan_page relevant_tags = %v, want source-index tag sourcetag", relevantTags)
+	}
+	if foundPublic {
+		t.Fatalf("plan_page relevant_tags = %v, want source-index vocabulary, not stale publictag", relevantTags)
+	}
+}
+
+func TestPlanPageRelevantVocabularyUsesCanonicalAliases(t *testing.T) {
+	htmlDir := t.TempDir()
+	writePlanPageFixtureHTML(t, htmlDir, filepath.Join("posts", "security-note", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/security-note/">
+<meta property="og:title" content="Security note">
+<meta property="article:tag" content="sécurité">
+</head><body><article>Body.</article></body></html>`)
+
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "security-note"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "security-note", "index.md"), []byte("---\ntitle: Security note\ndate: 2026-08-03\ntags:\n  - sécurité\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.ContentRoot = contentRoot
+	cfg.TaxonomyAliases = map[string]string{"sécurité": "security"}
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{"tags": []any{"security"}})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	relevantTags, _ := decodeContent(t, res)["relevant_tags"].([]any)
+	foundCanonical := false
+	foundAlias := false
+	for _, v := range relevantTags {
+		switch v {
+		case "security":
+			foundCanonical = true
+		case "sécurité":
+			foundAlias = true
+		}
+	}
+	if !foundCanonical {
+		t.Fatalf("plan_page relevant_tags = %v, want canonical security", relevantTags)
+	}
+	if foundAlias {
+		t.Fatalf("plan_page relevant_tags = %v, alias sécurité should have been folded away", relevantTags)
 	}
 }
