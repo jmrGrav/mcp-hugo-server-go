@@ -15,10 +15,12 @@ func FuzzApplyPageUpdatesRoundTrip(f *testing.F) {
 			return
 		}
 		opts := pageUpdateOpts{
-			Tags:        splitCSV(tagsCSV),
-			Categories:  splitCSV(categoriesCSV),
-			Draft:       &draft,
-			Description: description,
+			Tags:       splitCSV(tagsCSV),
+			Categories: splitCSV(categoriesCSV),
+			Draft:      &draft,
+		}
+		if description != "" {
+			opts.Description = strPtr(description)
 		}
 
 		got, err := applyPageUpdates(input, newTitle, newBody, opts)
