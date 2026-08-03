@@ -35,15 +35,28 @@ func TestStoreServesValidPreview(t *testing.T) {
 		BuildStatus: "passed",
 	})
 
-	// Request the directory root (not "index.html" explicitly) — http.FileServer
-	// 301-redirects "/index.html" to "/" to canonicalize URLs, and this is the
-	// shape create_preview's own returned URL uses (a trailing-slash directory).
 	req := httptest.NewRequest(http.MethodGet, "/preview/abc123/secret-token/", nil)
 	rec := httptest.NewRecorder()
 	s.HTTPHandler().ServeHTTP(rec, req)
 
+	if rec.Code != http.StatusFound {
+		t.Fatalf("entry URL status = %d, want redirect", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/preview/abc123/" {
+		t.Fatalf("redirect Location = %q, want /preview/abc123/", got)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("cookies = %v, want exactly one session cookie", cookies)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/preview/abc123/", nil)
+	req.AddCookie(cookies[0])
+	rec = httptest.NewRecorder()
+	s.HTTPHandler().ServeHTTP(rec, req)
+
 	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("clean URL status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "hello preview") {
 		t.Fatalf("body = %q, missing expected content", rec.Body.String())
@@ -74,8 +87,8 @@ func TestStoreServesSecurityHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
 	s.HTTPHandler().ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusFound {
+		t.Fatalf("status = %d, want redirect", rec.Code)
 	}
 	cases := map[string]string{
 		"Cache-Control":           "no-store",
@@ -194,5 +207,47 @@ func TestNewIDReturnsDistinctValues(t *testing.T) {
 	}
 	if len(a) != 32 { // 16 bytes hex-encoded = 32 chars
 		t.Fatalf("NewID(16) length = %d, want 32", len(a))
+	}
+}
+
+func TestStoreCleanPathRequiresCookieBackedSession(t *testing.T) {
+	dir := t.TempDir()
+	writePreviewFile(t, dir, "index.html", "session content")
+
+	s := previewstore.New()
+	s.Put("abc123", &previewstore.Entry{
+		Dir:       dir,
+		Token:     "secret-token",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/preview/abc123/", nil)
+	rec := httptest.NewRecorder()
+	s.HTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 without session cookie", rec.Code)
+	}
+}
+
+func TestStoreRevokeRemovesDirectoryAndEntry(t *testing.T) {
+	dir := t.TempDir()
+	writePreviewFile(t, dir, "index.html", "preview content")
+
+	s := previewstore.New()
+	s.Put("abc123", &previewstore.Entry{
+		Dir:       dir,
+		Token:     "tok",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	if !s.Revoke("abc123") {
+		t.Fatal("Revoke() = false, want true")
+	}
+	if _, ok := s.GetByToken("abc123", "tok"); ok {
+		t.Fatal("revoked preview should no longer be fetchable by token")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("revoked preview directory should be removed, stat err = %v", err)
 	}
 }

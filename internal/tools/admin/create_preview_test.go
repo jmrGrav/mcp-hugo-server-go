@@ -81,6 +81,7 @@ func newCreatePreviewServer(t *testing.T, cfg config.Config) (*mcp.ClientSession
 	store := previewstore.New()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	admin.RegisterCreatePreview(s, cfg, store, "https://mcp.example.test")
+	admin.RegisterPreviewAccessTools(s, store, "https://mcp.example.test")
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -146,8 +147,22 @@ func TestCreatePreviewBuildsIsolatedDirAndServesViaStore(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/preview/"+previewID+"/"+token+"/", nil)
 	rec := httptest.NewRecorder()
 	store.HTTPHandler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound {
+		t.Fatalf("preview entry status = %d, want redirect", rec.Code)
+	}
+	if got := rec.Header().Get("Location"); got != "/preview/"+previewID+"/" {
+		t.Fatalf("preview redirect Location = %q, want /preview/%s/", got, previewID)
+	}
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("preview cookies = %v, want one session cookie", cookies)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/preview/"+previewID+"/", nil)
+	req.AddCookie(cookies[0])
+	rec = httptest.NewRecorder()
+	store.HTTPHandler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("preview serve status = %d, body = %s", rec.Code, rec.Body.String())
+		t.Fatalf("preview clean-url serve status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "preview marker content") {
 		t.Fatalf("served content = %q, missing marker", rec.Body.String())
@@ -296,14 +311,23 @@ func TestCreatePreviewPassesBaseURLPointedAtOwnMount(t *testing.T) {
 		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
 	returnedURL, _ := data["url"].(string)
+	cleanURL := strings.Replace(returnedURL, "/preview/"+strings.TrimSuffix(strings.TrimPrefix(returnedURL, "https://mcp.example.test/preview/"), "/"), "", 1)
+	parts := strings.Split(strings.TrimPrefix(returnedURL, "https://mcp.example.test/preview/"), "/")
+	if len(parts) < 2 {
+		t.Fatalf("returned preview URL %q did not contain preview id + token", returnedURL)
+	}
+	cleanURL = "https://mcp.example.test/preview/" + parts[0] + "/"
 
 	argv, err := os.ReadFile(argvFile)
 	if err != nil {
 		t.Fatalf("read captured argv: %v", err)
 	}
 	argvStr := strings.TrimSpace(string(argv))
-	if !strings.Contains(argvStr, "--baseURL "+returnedURL) {
-		t.Fatalf("hugo invocation missing --baseURL pointed at the returned preview URL %q; argv = %q", returnedURL, argvStr)
+	if !strings.Contains(argvStr, "--baseURL "+cleanURL) {
+		t.Fatalf("hugo invocation missing --baseURL pointed at the clean preview URL %q; argv = %q", cleanURL, argvStr)
+	}
+	if strings.Contains(argvStr, "--baseURL "+returnedURL) {
+		t.Fatalf("hugo invocation still used the token-bearing entry URL %q as baseURL; argv = %q", returnedURL, argvStr)
 	}
 	if !strings.Contains(argvStr, "--environment preview") {
 		t.Fatalf("hugo invocation missing preview environment flag; argv = %q", argvStr)
