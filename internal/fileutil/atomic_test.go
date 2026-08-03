@@ -116,6 +116,47 @@ func TestAtomicWriteCheckedSucceedsNormalPath(t *testing.T) {
 	}
 }
 
+func TestAtomicWriteCheckedAllowsSymlinkWhenGuardConfiguredToAllowIt(t *testing.T) {
+	base := t.TempDir()
+	target := t.TempDir()
+	symlinkDir := filepath.Join(base, "subdir")
+	if err := os.Symlink(target, symlinkDir); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	pg, err := security.New(base, false)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+
+	filePath := filepath.Join(symlinkDir, "file.txt")
+	if err := fileutil.AtomicWriteChecked(filePath, "hello", pg); err != nil {
+		t.Fatalf("AtomicWriteChecked() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(target, "file.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(target/file.txt): %v", err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("content = %q, want hello", data)
+	}
+}
+
+func TestAtomicWriteCheckedMkdirFailure(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "nested")
+	if err := os.WriteFile(blocker, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	pg, err := security.New(root, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+	if err := fileutil.AtomicWriteChecked(filepath.Join(blocker, "file.txt"), "hello", pg); err == nil {
+		t.Fatal("expected AtomicWriteChecked() to fail when parent path is a file")
+	}
+}
+
 func TestAtomicCreateCheckedRejectsExistingFile(t *testing.T) {
 	base := t.TempDir()
 	pg, err := security.New(base, true)
@@ -137,6 +178,21 @@ func TestAtomicCreateCheckedRejectsExistingFile(t *testing.T) {
 	}
 	if string(data) != "first" {
 		t.Fatalf("content = %q, want first", string(data))
+	}
+}
+
+func TestAtomicCreateCheckedMkdirFailure(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "bundle")
+	if err := os.WriteFile(blocker, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	pg, err := security.New(root, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+	if err := fileutil.AtomicCreateChecked(filepath.Join(blocker, "index.md"), "hello", pg); err == nil {
+		t.Fatal("expected AtomicCreateChecked() to fail when parent path is a file")
 	}
 }
 
@@ -186,6 +242,21 @@ func TestAtomicCreateCheckedBytesSucceedsAndRejectsExistingFile(t *testing.T) {
 	}
 	if string(data) != string(first) {
 		t.Fatalf("content = %q, want %q", string(data), string(first))
+	}
+}
+
+func TestAtomicCreateCheckedBytesMkdirFailure(t *testing.T) {
+	root := t.TempDir()
+	blocker := filepath.Join(root, "bundle")
+	if err := os.WriteFile(blocker, []byte("not a dir"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	pg, err := security.New(root, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+	if err := fileutil.AtomicCreateCheckedBytes(filepath.Join(blocker, "cover.png"), []byte{1, 2, 3}, pg); err == nil {
+		t.Fatal("expected AtomicCreateCheckedBytes() to fail when parent path is a file")
 	}
 }
 

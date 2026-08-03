@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,5 +39,44 @@ func TestRunVersionAndMissingSiteRoot(t *testing.T) {
 	t.Setenv("MCP_HUGO_SERVER_CONFIG", "")
 	if err := run(); err == nil || !strings.Contains(err.Error(), "site_root not configured") {
 		t.Fatalf("run(missing site_root) error = %v", err)
+	}
+}
+
+func TestRunAcceptsAllVersionSpellings(t *testing.T) {
+	origArgs := os.Args
+	origStdout := os.Stdout
+	origVersion := buildinfo.Version
+	defer func() {
+		os.Args = origArgs
+		os.Stdout = origStdout
+		buildinfo.Version = origVersion
+	}()
+
+	for _, arg := range []string{"--version", "-version", "version"} {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("os.Pipe() error = %v", err)
+		}
+		os.Stdout = w
+		buildinfo.Version = "spellings-version"
+		os.Args = []string{"mcp-hugo-server-go", arg}
+		if err := run(); err != nil {
+			t.Fatalf("run(%s) error = %v", arg, err)
+		}
+		_ = w.Close()
+		out, _ := io.ReadAll(r)
+		if !strings.Contains(string(out), "spellings-version") {
+			t.Fatalf("stdout for %s = %q", arg, out)
+		}
+	}
+}
+
+func TestRunPropagatesConfigLoadError(t *testing.T) {
+	origArgs := os.Args
+	defer func() { os.Args = origArgs }()
+	os.Args = []string{"mcp-hugo-server-go"}
+	t.Setenv("MCP_HUGO_SERVER_CONFIG", filepath.Join(t.TempDir(), "missing-config.yaml"))
+	if err := run(); err == nil {
+		t.Fatal("run(missing config file) error = nil, want config load failure")
 	}
 }
