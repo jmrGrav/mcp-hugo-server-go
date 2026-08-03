@@ -2,7 +2,7 @@ package admin
 
 import (
 	"bytes"
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"image"
@@ -60,7 +60,7 @@ func newHeroFace(size float64) (font.Face, error) {
 }
 
 // backgroundFiles lists the Unsplash photo filenames stored in featured-backgrounds/.
-// Order is fixed so md5(title)%6 selects consistently across runs.
+// Order is fixed so a stable 64-bit hash of title selects consistently across runs.
 var backgroundFiles = []string{
 	"0c180e9a.jpg",
 	"6727bbee.jpg",
@@ -159,8 +159,7 @@ func renderFeaturedImage(bgDir, path, style, title, subtitle string, tags []stri
 
 // selectBackground picks one of the 6 background filenames deterministically from title.
 func selectBackground(title string) string {
-	h := md5.Sum([]byte(title))
-	n := binary.BigEndian.Uint64(h[:8])
+	n := stableUint64Hash(title)
 	return backgroundFiles[n%uint64(len(backgroundFiles))]
 }
 
@@ -214,7 +213,7 @@ func gradientBackground(style, title string, width, height int) *image.RGBA {
 }
 
 func featuredImagePalette(style, title string) (color.RGBA, color.RGBA) {
-	h := md5.Sum([]byte(style + "::" + title))
+	h := sha256.Sum256([]byte(style + "::" + title))
 	base := colorFromHex(map[string]string{
 		"geo":  "#2a2254",
 		"tech": "#14243f",
@@ -240,6 +239,11 @@ func featuredImagePalette(style, title string) (color.RGBA, color.RGBA) {
 		A: 255,
 	}
 	return base, variant
+}
+
+func stableUint64Hash(s string) uint64 {
+	sum := sha256.Sum256([]byte(s))
+	return binary.BigEndian.Uint64(sum[:8])
 }
 
 func drawImgText(img *image.RGBA, x, y int, text string, clr color.RGBA, face font.Face) {
