@@ -223,6 +223,13 @@ func TestCreatePreviewClampsTTLToConfiguredBounds(t *testing.T) {
 	if !ok {
 		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
+	if got := data["effective_ttl_seconds"]; got != float64(3600) {
+		t.Fatalf("data.effective_ttl_seconds = %v, want 3600", got)
+	}
+	warnings, _ := out["warnings"].([]any)
+	if len(warnings) == 0 {
+		t.Fatal("warnings missing, want clamp warning")
+	}
 	expiresAt, _ := data["expires_at"].(string)
 	if expiresAt == "" {
 		t.Fatal("data.expires_at must not be empty")
@@ -263,6 +270,9 @@ func TestCreatePreviewPassesBaseURLPointedAtOwnMount(t *testing.T) {
 	argvStr := strings.TrimSpace(string(argv))
 	if !strings.Contains(argvStr, "--baseURL "+returnedURL) {
 		t.Fatalf("hugo invocation missing --baseURL pointed at the returned preview URL %q; argv = %q", returnedURL, argvStr)
+	}
+	if !strings.Contains(argvStr, "--environment preview") {
+		t.Fatalf("hugo invocation missing preview environment flag; argv = %q", argvStr)
 	}
 	if strings.Contains(argvStr, cfg.SiteURL) {
 		t.Fatalf("hugo invocation must not use the public site's baseURL for a preview build; argv = %q", argvStr)
