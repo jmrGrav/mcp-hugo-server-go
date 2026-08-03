@@ -17,6 +17,10 @@ import (
 // would use (spaces, uppercase, punctuation) before they ever reach disk.
 var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9/_-]*[a-z0-9])?$`)
 
+// htmlTagPattern matches actual tag-like markup while still allowing plain
+// comparison text such as "3 < 5" in titles.
+var htmlTagPattern = regexp.MustCompile(`(?i)<\s*/?\s*[a-z!][^>]*>`)
+
 const (
 	// maxTitleRunes and maxBodyBytes bound create_page/update_page input,
 	// per #380. Values match the issue's own proposal (title 255 chars,
@@ -38,7 +42,7 @@ func validateTitleFormat(title string) error {
 	if err := rejectUnsafeText(title); err != nil {
 		return fmt.Errorf("invalid_params: title %w", err)
 	}
-	if strings.ContainsAny(title, "<>") {
+	if htmlTagPattern.MatchString(title) {
 		return fmt.Errorf("invalid_params: title must not contain HTML markup")
 	}
 	if n := utf8.RuneCountInString(title); n > maxTitleRunes {

@@ -73,6 +73,14 @@ func TestValidateTitleFormatRejectsHTMLMarkup(t *testing.T) {
 	}
 }
 
+func TestValidateTitleFormatAllowsPlainAngleBracketText(t *testing.T) {
+	for _, title := range []string{"3 < 5", "A > B", "Rust < Go?"} {
+		if err := validateTitleFormat(title); err != nil {
+			t.Fatalf("validateTitleFormat(%q) = %v, want nil", title, err)
+		}
+	}
+}
+
 func TestValidateFeaturedImagePath(t *testing.T) {
 	valid := []string{"/images/posts/hero.jpg", "/images/posts/hero-featured.jpg"}
 	for _, s := range valid {
