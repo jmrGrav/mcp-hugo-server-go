@@ -30,7 +30,7 @@ const (
 
 type createPreviewInput struct {
 	IncludeDrafts bool `json:"include_drafts,omitempty"`
-	TTLSeconds    int  `json:"ttl_seconds,omitempty"`
+	TTLSeconds    *int `json:"ttl_seconds,omitempty"`
 }
 
 // createPreviewData is the canonical data.* payload (#552).
@@ -64,6 +64,23 @@ func newCreatePreviewOutput(data createPreviewData) createPreviewOutput {
 	}
 }
 
+func resolvedPreviewTTL(input *int) (time.Duration, bool) {
+	if input == nil {
+		return previewDefaultTTL, false
+	}
+	ttl := time.Duration(*input) * time.Second
+	clamped := false
+	if ttl < previewMinTTL {
+		ttl = previewMinTTL
+		clamped = true
+	}
+	if ttl > previewMaxTTL {
+		ttl = previewMaxTTL
+		clamped = true
+	}
+	return ttl, clamped
+}
+
 // RegisterCreatePreview wires create_preview (site.admin scope). Unlike
 // preview_build (render-to-memory, no URL, no drafts), this builds actual
 // files into an isolated temp directory — never cfg.SiteRoot — and
@@ -93,19 +110,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		if cfg.HugoRoot == "" {
 			return nil, createPreviewOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 		}
-		ttl := time.Duration(in.TTLSeconds) * time.Second
-		if ttl <= 0 {
-			ttl = previewDefaultTTL
-		}
-		clamped := false
-		if ttl < previewMinTTL {
-			ttl = previewMinTTL
-			clamped = true
-		}
-		if ttl > previewMaxTTL {
-			ttl = previewMaxTTL
-			clamped = true
-		}
+		ttl, clamped := resolvedPreviewTTL(in.TTLSeconds)
 
 		// Opportunistic cleanup of expired previews before adding a new one,
 		// so disk usage doesn't grow unbounded even if nobody ever revisits

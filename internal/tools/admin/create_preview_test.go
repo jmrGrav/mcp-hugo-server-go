@@ -236,6 +236,40 @@ func TestCreatePreviewClampsTTLToConfiguredBounds(t *testing.T) {
 	}
 }
 
+func TestCreatePreviewClampsExplicitNonPositiveTTLToMinimum(t *testing.T) {
+	hugoDir := writeMockHugoForPreview(t, "marker")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+
+	session, _, done := newCreatePreviewServer(t, cfg)
+	defer done()
+
+	for _, ttl := range []int{0, -1} {
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{"ttl_seconds": ttl}})
+		if err != nil {
+			t.Fatalf("CallTool error: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("create_preview returned error: %s", resultText(res))
+		}
+		out := decodeStructuredResult(t, res)
+		data, ok := out["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("data type = %T, want map[string]any", out["data"])
+		}
+		if got := data["effective_ttl_seconds"]; got != float64(60) {
+			t.Fatalf("ttl_seconds=%d data.effective_ttl_seconds = %v, want 60", ttl, got)
+		}
+		warnings, _ := out["warnings"].([]any)
+		if len(warnings) == 0 {
+			t.Fatalf("ttl_seconds=%d warnings missing, want clamp warning", ttl)
+		}
+	}
+}
+
 func TestCreatePreviewPassesBaseURLPointedAtOwnMount(t *testing.T) {
 	argvFile := filepath.Join(t.TempDir(), "argv.txt")
 	hugoDir := writeMockHugoCapturingArgv(t, argvFile)
