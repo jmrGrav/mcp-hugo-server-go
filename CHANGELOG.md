@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here.
 
+## [v1.7.5] - 2026-08-03
+
+The two items deliberately scoped out of v1.7.4 as "larger, independent additions" — pulled forward.
+
+### Added
+- **`inspect_rendered` gains a dedicated `featured_image` check** (#818): the existing `missing_images` check treats every `<img>` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means a configured `featuredImage` doesn't resolve to a file in the built public output; `warn` covers fixable-not-broken issues (no alt text on the rendered `<img>` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` reports decoded pixel dimensions when available. Deliberately local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL — this server's own production deployment terminates TLS upstream of the process it runs in, so a self-fetch of the page's `https://` URL isn't guaranteed to even resolve from where the server runs.
+- **`get_site_health` gains `untracked_source_pages`** (#819): counts source pages with no git-tracked file, via a single `git ls-files --others` call scoped to the content root rather than one check per page — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via `diff_page`'s own `git_untracked` status. Omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), so a genuine "0 untracked" is never confused with "couldn't check." Never affects `score`/`status`.
+
 ## [v1.7.4] - 2026-08-03
 
 Live-audit follow-up. A ChatGPT-based live audit initially reported `update_page`'s `featured_image` write param as missing — that was wrong (stale client-side tool schema; the auditor retracted it after re-verifying live) and no code change was needed for it. Two things from the same audit *were* real and are fixed here:

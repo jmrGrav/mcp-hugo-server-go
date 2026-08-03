@@ -174,7 +174,7 @@ func TestValidationHelpers(t *testing.T) {
 	if !out.Success || out.Data.PagesChecked != 2 || len(out.Data.Pages) != 1 {
 		t.Fatalf("validatePagesWithIssues() = %#v", out)
 	}
-	health := buildSiteHealth(&site.Index{}, src, nil)
+	health := buildSiteHealth(context.Background(), &site.Index{}, src, nil, config.Config{})
 	if health.SourcePages != 2 || health.DraftPages != 1 {
 		t.Fatalf("buildSiteHealth() = %#v", health)
 	}
