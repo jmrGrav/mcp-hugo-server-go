@@ -153,6 +153,47 @@ func TestKnownToolsSet(t *testing.T) {
 	}
 }
 
+func TestConfiguredMaxRequestBytes(t *testing.T) {
+	if got := configuredMaxRequestBytes(config.Config{}); got != 1<<20 {
+		t.Fatalf("configuredMaxRequestBytes(default) = %d, want %d", got, 1<<20)
+	}
+	if got := configuredMaxRequestBytes(config.Config{MaxRequestBytes: -1}); got != 1<<20 {
+		t.Fatalf("configuredMaxRequestBytes(negative) = %d, want %d", got, 1<<20)
+	}
+	if got := configuredMaxRequestBytes(config.Config{MaxRequestBytes: 4096}); got != 4096 {
+		t.Fatalf("configuredMaxRequestBytes(explicit) = %d, want 4096", got)
+	}
+}
+
+func TestApplyOAuthCORS(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodOptions, "/oauth/register", nil)
+	if handled := applyOAuthCORS(rec, req, "GET, POST"); !handled {
+		t.Fatal("applyOAuthCORS(OPTIONS) = false, want true")
+	}
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("OPTIONS status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("OPTIONS Allow-Origin = %q, want *", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST" {
+		t.Fatalf("OPTIONS Allow-Methods = %q, want GET, POST", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got != "Content-Type, Authorization" {
+		t.Fatalf("OPTIONS Allow-Headers = %q", got)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/oauth/register", nil)
+	if handled := applyOAuthCORS(rec, req, "GET, POST"); handled {
+		t.Fatal("applyOAuthCORS(POST) = true, want false")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("POST Allow-Origin = %q, want *", got)
+	}
+}
+
 func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
 	want := []string{
 		"index_reload",

@@ -10,6 +10,9 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"golang.org/x/image/font/sfnt"
+	"image"
+	"image/color"
+	"image/jpeg"
 )
 
 func TestDefs(t *testing.T) {
@@ -59,6 +62,72 @@ func TestLogicalHugoRootPath(t *testing.T) {
 	}
 }
 
+func TestResolveHeroImageLocation(t *testing.T) {
+	root := t.TempDir()
+	got, err := ResolveHeroImageLocation(root, "posts/demo")
+	if err != nil {
+		t.Fatalf("ResolveHeroImageLocation() error = %v", err)
+	}
+	wantAbs := filepath.Join(root, "static", "images", "posts", "demo"+HeroImageSuffix)
+	if got.AbsPath != wantAbs {
+		t.Fatalf("AbsPath = %q, want %q", got.AbsPath, wantAbs)
+	}
+	if got.LogicalPath != "static/images/posts/demo"+HeroImageSuffix {
+		t.Fatalf("LogicalPath = %q", got.LogicalPath)
+	}
+	if got.Name != "demo"+HeroImageSuffix {
+		t.Fatalf("Name = %q, want %q", got.Name, "demo"+HeroImageSuffix)
+	}
+}
+
+func TestResolveHeroImageLocationRejectsTraversal(t *testing.T) {
+	root := t.TempDir()
+	if _, err := ResolveHeroImageLocation(root, "../escape"); err == nil {
+		t.Fatal("ResolveHeroImageLocation() error = nil, want traversal rejection")
+	}
+}
+
+func TestPublicImagePathFromLogical(t *testing.T) {
+	if got := publicImagePathFromLogical("static/images/posts/demo-featured.jpg"); got != "/images/posts/demo-featured.jpg" {
+		t.Fatalf("publicImagePathFromLogical(static path) = %q", got)
+	}
+	if got := publicImagePathFromLogical("images/posts/demo-featured.jpg"); got != "" {
+		t.Fatalf("publicImagePathFromLogical(non-static path) = %q, want empty", got)
+	}
+}
+
+func TestNormalizeHeroImageSlug(t *testing.T) {
+	tests := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{name: "source key", in: "posts/demo", want: "posts/demo"},
+		{name: "public slug", in: "/posts/demo/", want: "posts/demo"},
+		{name: "language-prefixed public slug", in: "/fr/posts/demo/", want: "posts/demo"},
+		{name: "empty", in: "   ", want: ""},
+		{name: "bad public slug missing trailing slash", in: "/posts/demo", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizeHeroImageSlug(tt.in)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("normalizeHeroImageSlug() error = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("normalizeHeroImageSlug() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("normalizeHeroImageSlug() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 // TestRenderFeaturedImageSiteNameNotHardcoded is a regression test for a
 // deployment-portability bug: renderFeaturedImage used to draw the literal
 // string "arleo.eu" (the original production deployment's own domain) as a
@@ -82,6 +151,96 @@ func TestRenderFeaturedImageSiteNameNotHardcoded(t *testing.T) {
 				t.Fatalf("rendered JPEG suspiciously small: %d bytes", info.Size())
 			}
 		})
+	}
+}
+
+func writeJPEG(t *testing.T, path string, width, height int) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 10, G: 20, B: 30, A: 255})
+		}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("os.Create(%s): %v", path, err)
+	}
+	defer f.Close()
+	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 80}); err != nil {
+		t.Fatalf("jpeg.Encode(%s): %v", path, err)
+	}
+}
+
+func TestLoadPhotoBackground(t *testing.T) {
+	dir := t.TempDir()
+	title := "hello world"
+	name := selectBackground(title)
+	writeJPEG(t, filepath.Join(dir, name), 1200, 675)
+
+	got, err := loadPhotoBackground(dir, title, 1200, 675)
+	if err != nil {
+		t.Fatalf("loadPhotoBackground() error = %v", err)
+	}
+	if got.Bounds().Dx() != 1200 || got.Bounds().Dy() != 675 {
+		t.Fatalf("bounds = %v, want 1200x675", got.Bounds())
+	}
+}
+
+func TestLoadPhotoBackgroundRejectsWrongSize(t *testing.T) {
+	dir := t.TempDir()
+	title := "hello world"
+	name := selectBackground(title)
+	writeJPEG(t, filepath.Join(dir, name), 100, 100)
+
+	if _, err := loadPhotoBackground(dir, title, 1200, 675); err == nil {
+		t.Fatal("loadPhotoBackground() error = nil, want size mismatch")
+	}
+}
+
+func TestLoadPhotoBackgroundRejectsInvalidJPEG(t *testing.T) {
+	dir := t.TempDir()
+	title := "hello world"
+	name := selectBackground(title)
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("not-a-jpeg"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := loadPhotoBackground(dir, title, 1200, 675); err == nil {
+		t.Fatal("loadPhotoBackground() error = nil, want decode failure")
+	}
+}
+
+func TestColorHelpers(t *testing.T) {
+	if got := colorFromHex("#7aa2f7"); got != (color.RGBA{R: 122, G: 162, B: 247, A: 255}) {
+		t.Fatalf("colorFromHex() = %#v", got)
+	}
+	if got := colorFromHex("bad"); got != (color.RGBA{}) {
+		t.Fatalf("colorFromHex(bad) = %#v, want zero", got)
+	}
+	if got := mustHexColor("bad"); got != (color.RGBA{R: 122, G: 162, B: 247, A: 255}) {
+		t.Fatalf("mustHexColor(bad) = %#v", got)
+	}
+	if got := withAlpha(color.RGBA{R: 1, G: 2, B: 3, A: 4}, 200); got != (color.RGBA{R: 1, G: 2, B: 3, A: 200}) {
+		t.Fatalf("withAlpha() = %#v", got)
+	}
+	if got, err := hexToRGB("7aa2f7"); err != nil || got != [3]byte{122, 162, 247} {
+		t.Fatalf("hexToRGB() = %#v, %v", got, err)
+	}
+	if _, err := hexToRGB("xyz"); err == nil {
+		t.Fatal("hexToRGB(invalid) error = nil, want error")
+	}
+	if got, err := parseHexByte("7a"); err != nil || got != 122 {
+		t.Fatalf("parseHexByte() = %v, %v", got, err)
+	}
+	if _, err := parseHexByte("x"); err == nil {
+		t.Fatal("parseHexByte(short) error = nil, want error")
+	}
+	if got, ok := hexVal('F'); !ok || got != 15 {
+		t.Fatalf("hexVal('F') = (%v, %v), want (15, true)", got, ok)
+	}
+	if _, ok := hexVal('x'); ok {
+		t.Fatal("hexVal('x') ok = true, want false")
 	}
 }
 
