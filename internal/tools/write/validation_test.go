@@ -98,6 +98,15 @@ func TestValidateFeaturedImagePath(t *testing.T) {
 		"https://example.test/hero.jpg",
 		"javascript:alert(1)",
 		"file:///etc/passwd",
+		// #835: a value that's a normalized, local, non-traversal path with
+		// no disallowed scheme prefix still must not carry HTML/attribute-
+		// breakout metacharacters, since featuredImage frontmatter is
+		// rendered into HTML attributes/CSS url() by the site theme without
+		// re-validating.
+		`/img.jpg" onerror="alert(1)`,
+		"/images/<script>.jpg",
+		"/images/hero.jpg onload=alert(1)",
+		"/images/hero'.jpg",
 	}
 	for _, s := range invalid {
 		if err := validateFeaturedImagePath(s); err == nil {

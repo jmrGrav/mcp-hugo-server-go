@@ -21,6 +21,18 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9/_-]*[a-z0-9])?$`)
 // comparison text such as "3 < 5" in titles.
 var htmlTagPattern = regexp.MustCompile(`(?i)<\s*/?\s*[a-z!][^>]*>`)
 
+// featuredImageCharsetPattern allowlists the character set for a
+// site-root-relative image path. The prefix/scheme/traversal checks in
+// validateFeaturedImagePath reject specific bad shapes, but don't bound the
+// character set itself — this closes that gap. Without it, a value like
+// `/img.jpg" onerror="alert(1)` or `/images/<script>.jpg` passes every
+// existing check (it's a normalized, local, non-traversal path with no
+// disallowed scheme prefix) and is written verbatim to featuredImage
+// frontmatter, which the site theme renders into HTML attributes/CSS url()
+// without re-validating — the same class of stored-injection risk already
+// fixed for page titles in this file.
+var featuredImageCharsetPattern = regexp.MustCompile(`^/[A-Za-z0-9._~/-]+$`)
+
 const (
 	// maxTitleRunes and maxBodyBytes bound create_page/update_page input,
 	// per #380. Values match the issue's own proposal (title 255 chars,
@@ -80,6 +92,9 @@ func validateFeaturedImagePath(v string) error {
 	}
 	if cleaned := path.Clean(v); cleaned != v {
 		return fmt.Errorf("invalid_params: featured_image must be a normalized local path")
+	}
+	if !featuredImageCharsetPattern.MatchString(v) {
+		return fmt.Errorf("invalid_params: featured_image must contain only letters, digits, and ._~/- characters")
 	}
 	return nil
 }
