@@ -588,34 +588,6 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
 		}
-		if in.Slug == "" {
-			return nil, createPageOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
-		}
-		resolvedLang, err := validateLangParam(in.Lang)
-		if err != nil {
-			return nil, createPageOutput{}, wrapErr(err)
-		}
-		if in.Title == "" {
-			return nil, createPageOutput{}, wrapErr(fmt.Errorf("invalid_params: title must not be empty"))
-		}
-		if reservedSlugs[in.Slug] {
-			return nil, createPageOutput{}, wrapErr(fmt.Errorf("invalid_params: slug is reserved"))
-		}
-		if err := validateSlugFormat(in.Slug); err != nil {
-			return nil, createPageOutput{}, wrapErr(err)
-		}
-		if err := validateTitleFormat(in.Title); err != nil {
-			return nil, createPageOutput{}, wrapErr(err)
-		}
-		if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
-			return nil, createPageOutput{}, wrapErr(err)
-		}
-		if in.TestContent != nil && in.TestContent.TTLHours != nil {
-			ttl := *in.TestContent.TTLHours
-			if ttl <= 0 || ttl > testContentMaxTTLHours {
-				return nil, createPageOutput{}, wrapErr(fmt.Errorf("invalid_params: test_content.ttl_hours must be between 1 and %d hours when provided", testContentMaxTTLHours))
-			}
-		}
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
@@ -623,6 +595,34 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
 				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
 			)
+		}
+		if in.Slug == "" {
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
+		}
+		resolvedLang, err := validateLangParam(in.Lang)
+		if err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if in.Title == "" {
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: title must not be empty"))
+		}
+		if reservedSlugs[in.Slug] {
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug is reserved"))
+		}
+		if err := validateSlugFormat(in.Slug); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateTitleFormat(in.Title); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if in.TestContent != nil && in.TestContent.TTLHours != nil {
+			ttl := *in.TestContent.TTLHours
+			if ttl <= 0 || ttl > testContentMaxTTLHours {
+				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: test_content.ttl_hours must be between 1 and %d hours when provided", testContentMaxTTLHours))
+			}
 		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
 		// original position, so every non-dry-run failure path below
@@ -851,39 +851,6 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
 		}
-		if in.Slug == "" {
-			return nil, updatePageOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
-		}
-		lang, err := validateLangParam(in.Lang)
-		if err != nil {
-			return nil, updatePageOutput{}, wrapErr(err)
-		}
-		if err := validateSlugFormat(in.Slug); err != nil {
-			return nil, updatePageOutput{}, wrapErr(err)
-		}
-		// Title/body are optional on update (empty means "leave unchanged" —
-		// see applyPageUpdates), so only validate format when the caller is
-		// actually setting a new value.
-		if in.Title != "" {
-			if err := validateTitleFormat(in.Title); err != nil {
-				return nil, updatePageOutput{}, wrapErr(err)
-			}
-		}
-		if in.Body != "" {
-			if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
-				return nil, updatePageOutput{}, wrapErr(err)
-			}
-		}
-		if in.Description != nil {
-			if err := rejectUnsafeText(*in.Description); err != nil {
-				return nil, updatePageOutput{}, wrapErr(fmt.Errorf("invalid_params: description %w", err))
-			}
-		}
-		if in.FeaturedImage != nil {
-			if err := validateFeaturedImagePath(*in.FeaturedImage); err != nil {
-				return nil, updatePageOutput{}, wrapErr(err)
-			}
-		}
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
@@ -891,6 +858,39 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
 				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
 			)
+		}
+		if in.Slug == "" {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
+		}
+		lang, err := validateLangParam(in.Lang)
+		if err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateSlugFormat(in.Slug); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+		}
+		// Title/body are optional on update (empty means "leave unchanged" —
+		// see applyPageUpdates), so only validate format when the caller is
+		// actually setting a new value.
+		if in.Title != "" {
+			if err := validateTitleFormat(in.Title); err != nil {
+				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+			}
+		}
+		if in.Body != "" {
+			if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
+				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+			}
+		}
+		if in.Description != nil {
+			if err := rejectUnsafeText(*in.Description); err != nil {
+				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: description %w", err))
+			}
+		}
+		if in.FeaturedImage != nil {
+			if err := validateFeaturedImagePath(*in.FeaturedImage); err != nil {
+				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+			}
 		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
 		// original position — before the missing/stale expected_revision

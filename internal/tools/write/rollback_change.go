@@ -194,20 +194,6 @@ func registerRollbackChange(
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
 		}
-		if in.Slug == "" {
-			return nil, rollbackChangeOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
-		}
-		lang, err := validateLangParam(in.Lang)
-		if err != nil {
-			return nil, rollbackChangeOutput{}, wrapErr(err)
-		}
-		if err := validateSlugFormat(in.Slug); err != nil {
-			return nil, rollbackChangeOutput{}, wrapErr(err)
-		}
-		if strings.TrimSpace(in.ToRevision) == "" {
-			return nil, rollbackChangeOutput{}, wrapErr(fmt.Errorf("invalid_params: to_revision must not be empty"))
-		}
-
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
@@ -215,6 +201,19 @@ func registerRollbackChange(
 				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
 				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
 			)
+		}
+		if in.Slug == "" {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
+		}
+		lang, err := validateLangParam(in.Lang)
+		if err != nil {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateSlugFormat(in.Slug); err != nil {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
+		}
+		if strings.TrimSpace(in.ToRevision) == "" {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: to_revision must not be empty"))
 		}
 		if !in.DryRun && !limiter.Allow() {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(rateLimitExceededErr("rollback_change", cfg.RateLimit.CreateUpdatePerMin, limiter))
