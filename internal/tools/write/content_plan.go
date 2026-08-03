@@ -624,10 +624,6 @@ func registerContentPlanTools(
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{})
 		}
-		if strings.TrimSpace(in.PlanID) == "" {
-			return nil, applyContentPlanOutput{}, wrapErr(fmt.Errorf("invalid_params: plan_id must not be empty"))
-		}
-
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
@@ -635,6 +631,9 @@ func registerContentPlanTools(
 				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
 				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
 			)
+		}
+		if strings.TrimSpace(in.PlanID) == "" {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: plan_id must not be empty"))
 		}
 		if !in.DryRun && !limiter.Allow() {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(rateLimitExceededErr("apply_content_plan", cfg.RateLimit.CreateUpdatePerMin, limiter))

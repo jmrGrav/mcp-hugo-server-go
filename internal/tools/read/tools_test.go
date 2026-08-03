@@ -1218,6 +1218,23 @@ func TestGetPageForEditMaxBodyCharsTruncatesAndWarns(t *testing.T) {
 	}
 }
 
+func TestGetPageForEditRejectsNonPositiveMaxBodyChars(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	for _, v := range []int{0, -1} {
+		res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello", "max_body_chars": v})
+		if !res.IsError {
+			t.Fatalf("get_page_for_edit max_body_chars=%d: expected error", v)
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "max_body_chars must be greater than 0") {
+			t.Fatalf("get_page_for_edit max_body_chars=%d error = %s", v, raw)
+		}
+	}
+}
+
 func TestGetPageForEditInvalidIncludeRejected(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -1757,6 +1774,23 @@ func TestBuildAgentContextMaxBodyCharsTruncatesAndWarns(t *testing.T) {
 	warnings, _ := envelope["warnings"].([]any)
 	if len(warnings) == 0 {
 		t.Fatal("build_agent_context max_body_chars=10: expected a truncation warning")
+	}
+}
+
+func TestBuildAgentContextRejectsNonPositiveMaxBodyChars(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	for _, v := range []int{0, -1} {
+		res := callTool(t, session, "build_agent_context", map[string]any{"slug": "/posts/hello", "max_body_chars": v})
+		if !res.IsError {
+			t.Fatalf("build_agent_context max_body_chars=%d: expected error", v)
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "max_body_chars must be greater than 0") {
+			t.Fatalf("build_agent_context max_body_chars=%d error = %s", v, raw)
+		}
 	}
 }
 

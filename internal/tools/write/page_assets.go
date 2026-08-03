@@ -240,13 +240,6 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				Filename: filename,
 			})
 		}
-		if slug == "" {
-			return nil, uploadPageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"), strings.TrimSpace(in.Filename))
-		}
-		filename, ext, wantMIME, err := validateAssetFilename(in.Filename)
-		if err != nil {
-			return nil, uploadPageAssetOutput{}, wrapErr(err, strings.TrimSpace(in.Filename))
-		}
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
 		wrapErrWithLimiter := func(err error) error {
@@ -263,6 +256,13 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 					"filename": filename,
 				},
 			)
+		}
+		if slug == "" {
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("invalid_params: slug must not be empty"), strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
+		}
+		filename, ext, wantMIME, err := validateAssetFilename(in.Filename)
+		if err != nil {
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
 		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
 		// original position, so every non-dry-run failure path below
@@ -616,33 +616,10 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: slug})
 		}
-		if slug == "" {
-			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
-		}
-		filename, err := validateDeleteAssetFilename(in.Filename)
-		if err != nil {
-			return nil, deletePageAssetOutput{}, wrapErr(err)
-		}
-		scope, err := validateDeleteAssetScope(in.Scope)
-		if err != nil {
-			return nil, deletePageAssetOutput{}, wrapErr(err)
-		}
-		if err := validateBundleSlug(idx, slug); err != nil {
-			return nil, deletePageAssetOutput{}, wrapErr(err)
-		}
-		dir, err := pg.SafeJoin(slug)
-		if err != nil {
-			slog.Warn("delete_page_asset: path validation failed", "slug", slug, "error", err)
-			return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
-		}
-		target, err := resolveDeleteAssetTarget(pg, cfg, slug, filename, scope)
-		if err != nil {
-			return nil, deletePageAssetOutput{}, wrapErr(err)
-		}
-		filePath := target.filePath
-
-		// Fetching the limiter doesn't consume budget (#466's dry-run fix
-		// applies equally here).
+		// Fetching the limiter never consumes budget, so do it before any
+		// validation that might fail early; otherwise the typed error envelope
+		// falls back to rate_limit_remaining=0 from the zero value instead of
+		// reporting the caller's real remaining destructive quota (#836).
 		callerKey := mutationCallerKey(ctx)
 		limiter := callerLimiter(deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 		wrapErrWithLimiter := func(err error) error {
@@ -651,15 +628,39 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
 			)
 		}
+		if slug == "" {
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
+		}
+		filename, err := validateDeleteAssetFilename(in.Filename)
+		if err != nil {
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+		}
+		scope, err := validateDeleteAssetScope(in.Scope)
+		if err != nil {
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateBundleSlug(idx, slug); err != nil {
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+		}
+		dir, err := pg.SafeJoin(slug)
+		if err != nil {
+			slog.Warn("delete_page_asset: path validation failed", "slug", slug, "error", err)
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+		}
+		target, err := resolveDeleteAssetTarget(pg, cfg, slug, filename, scope)
+		if err != nil {
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+		}
+		filePath := target.filePath
 
 		if in.DryRun {
 			data, readErr := os.ReadFile(filePath)
 			if readErr != nil {
 				if os.IsNotExist(readErr) {
-					return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug))
+					return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug))
 				}
 				slog.Error("delete_page_asset: dry-run read failed", "slug", slug, "filename", filename, "error", readErr)
-				return nil, deletePageAssetOutput{}, wrapErr(fmt.Errorf("read_error: failed to read asset"))
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read asset"))
 			}
 			referencedIn, refErr := findAssetReferences(dir, filename, target.referenceID)
 			if refErr != nil {

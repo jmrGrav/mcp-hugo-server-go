@@ -1222,6 +1222,42 @@ func TestUpdatePageRequiresExpectedRevisionForWrite(t *testing.T) {
 	}
 }
 
+func TestCreatePageEarlyValidationErrorReportsRealQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "",
+		"title":      "Original",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if !res.IsError {
+		t.Fatal("create_page with empty slug should fail")
+	}
+	m := decodeWriteErrorEnvelope(t, res)
+	wantRemaining := float64(config.Default().RateLimit.CreateUpdatePerMin)
+	if got := m["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("create_page empty slug rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
+	data := decodeWriteErrorData(t, res)
+	if got := data["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("create_page empty slug data.rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
+	bucket, ok := data["rate_limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("create_page empty slug data.rate_limit = %#v, want object", data["rate_limit"])
+	}
+	if got := bucket["remaining"]; got != wantRemaining {
+		t.Fatalf("create_page empty slug data.rate_limit.remaining = %v, want %v", got, wantRemaining)
+	}
+	if got := bucket["scope"]; got != "create_update_upload" {
+		t.Fatalf("create_page empty slug data.rate_limit.scope = %v, want create_update_upload", got)
+	}
+}
+
 func TestUpdatePageRejectsStaleExpectedRevision(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
@@ -1623,6 +1659,40 @@ func TestDeletePageNotFoundPreservesRequestContext(t *testing.T) {
 	}
 	if _, present := m["slug"]; present {
 		t.Fatalf("top-level slug = %v, want omitted on error (real value lives in request_context.slug)", m["slug"])
+	}
+}
+
+func TestDeletePageAssetEarlyValidationErrorReportsRealQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":     "posts/example",
+		"filename": "image.png",
+		"scope":    "bogus",
+	})
+	if !res.IsError {
+		t.Fatal("delete_page_asset with invalid scope should fail")
+	}
+	m := decodeWriteErrorEnvelope(t, res)
+	wantRemaining := float64(config.Default().RateLimit.DestructivePerMin)
+	if got := m["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("delete_page_asset invalid scope rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
+	data := decodeWriteErrorData(t, res)
+	if got := data["rate_limit_remaining"]; got != wantRemaining {
+		t.Fatalf("delete_page_asset invalid scope data.rate_limit_remaining = %v, want %v", got, wantRemaining)
+	}
+	bucket, ok := data["rate_limit"].(map[string]any)
+	if !ok {
+		t.Fatalf("delete_page_asset invalid scope data.rate_limit = %#v, want object", data["rate_limit"])
+	}
+	if got := bucket["remaining"]; got != wantRemaining {
+		t.Fatalf("delete_page_asset invalid scope data.rate_limit.remaining = %v, want %v", got, wantRemaining)
+	}
+	if got := bucket["scope"]; got != "destructive" {
+		t.Fatalf("delete_page_asset invalid scope data.rate_limit.scope = %v, want destructive", got)
 	}
 }
 

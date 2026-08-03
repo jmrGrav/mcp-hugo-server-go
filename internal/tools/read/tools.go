@@ -206,7 +206,7 @@ func newEmptyResultExplanation(candidatesEvaluated, minimumScore int) *emptyResu
 type buildAgentContextInput struct {
 	Slug         string `json:"slug"`
 	ResponseMode string `json:"response_mode,omitempty"`
-	MaxBodyChars int    `json:"max_body_chars,omitempty"`
+	MaxBodyChars *int   `json:"max_body_chars,omitempty"`
 	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
 
@@ -295,7 +295,7 @@ type exportAgentContextOutput struct {
 type getPageForEditInput struct {
 	Slug         string   `json:"slug"`
 	Include      []string `json:"include,omitempty"`
-	MaxBodyChars int      `json:"max_body_chars,omitempty"`
+	MaxBodyChars *int     `json:"max_body_chars,omitempty"`
 	ResponseMode string   `json:"response_mode,omitempty"`
 	IncludeTerms *bool    `json:"include_terms,omitempty"`
 }
@@ -538,10 +538,13 @@ func registerReadRelationshipTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 
 func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config, aliases map[string]string) {
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
-		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or discussing a page. If you're about to mutate this page instead, prefer get_page_for_edit — it adds `revision` and `quality` (needed for create_page/update_page/delete_page) but omits translations/related_pages. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode). `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. Omitting both preserves the full default shape. `lang` is now populated immediately for a source-only page read back before the next Hugo build — it no longer lags behind `resolved_lang` until the page is built. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or discussing a page. If you're about to mutate this page instead, prefer get_page_for_edit — it adds `revision` and `quality` (needed for create_page/update_page/delete_page) but omits translations/related_pages. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode, N must be greater than 0 when provided). `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. Omitting both preserves the full default shape. `lang` is now populated immediately for a source-only page read back before the next Hugo build — it no longer lags behind `resolved_lang` until the page is built. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in buildAgentContextInput) (*mcp.CallToolResult, buildAgentContextOutput, error) {
 			if idx == nil {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("index not initialized")
+			}
+			if err := positiveMaxBodyCharsError(in.MaxBodyChars); err != nil {
+				return nil, buildAgentContextOutput{}, err
 			}
 			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 			if err != nil {
@@ -560,7 +563,7 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 			rt := readingTimeMinutes(md)
 			fm := toFrontmatterDTO(p, resolved, cfg.ContentRoot, cfg.SiteRoot, rt, includeTerms(mode, in.IncludeTerms))
 			state := resolvedState(resolved, cfg.SiteRoot)
-			md, truncated := toolcontract.TruncateBody(md, in.MaxBodyChars)
+			md, truncated := toolcontract.TruncateBody(md, derefMaxBodyChars(in.MaxBodyChars))
 
 			var ac any
 			if mode == toolcontract.ResponseModeCompact {
@@ -581,7 +584,7 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 			}
 			var warnings []string
 			if truncated {
-				warnings = append(warnings, fmt.Sprintf("markdown truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", in.MaxBodyChars))
+				warnings = append(warnings, fmt.Sprintf("markdown truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", *in.MaxBodyChars))
 			}
 			return nil, newBuildAgentContextOutput(buildAgentContextData{Context: ac}, warnings, time.Now().UTC()), nil
 		}, func(s any) any {
@@ -706,10 +709,13 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 		})
 
 	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
-		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `frontmatter.featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated when set in source frontmatter, matching update_page's write parameter names for direct round-tripping. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body; must be greater than 0 when provided) shape the response down. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `frontmatter.featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated when set in source frontmatter, matching update_page's write parameter names for direct round-tripping. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageForEditInput) (*mcp.CallToolResult, getPageForEditOutput, error) {
 			if idx == nil {
 				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
+			}
+			if err := positiveMaxBodyCharsError(in.MaxBodyChars); err != nil {
+				return nil, getPageForEditOutput{}, err
 			}
 			include, err := resolveEditInclude(in.Include)
 			if err != nil {
@@ -741,10 +747,10 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				page.Frontmatter = &fm
 			}
 			if include["markdown"] {
-				md, truncated := toolcontract.TruncateBody(resolvedMarkdown(resolved), in.MaxBodyChars)
+				md, truncated := toolcontract.TruncateBody(resolvedMarkdown(resolved), derefMaxBodyChars(in.MaxBodyChars))
 				page.Markdown = md
 				if truncated {
-					warnings = append(warnings, fmt.Sprintf("markdown truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", in.MaxBodyChars))
+					warnings = append(warnings, fmt.Sprintf("markdown truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", *in.MaxBodyChars))
 				}
 			}
 			if include["state"] {
@@ -1193,6 +1199,20 @@ func negativeLimitError(v int) error {
 		return fmt.Errorf("invalid_params: limit must not be negative")
 	}
 	return nil
+}
+
+func positiveMaxBodyCharsError(v *int) error {
+	if v != nil && *v <= 0 {
+		return fmt.Errorf("invalid_params: max_body_chars must be greater than 0")
+	}
+	return nil
+}
+
+func derefMaxBodyChars(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 func nullsafeStrings(s []string) []string {
