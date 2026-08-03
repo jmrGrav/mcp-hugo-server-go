@@ -30,15 +30,16 @@ const (
 
 type createPreviewInput struct {
 	IncludeDrafts bool `json:"include_drafts,omitempty"`
-	TTLSeconds    int  `json:"ttl_seconds,omitempty"`
+	TTLSeconds    *int `json:"ttl_seconds,omitempty"`
 }
 
 // createPreviewData is the canonical data.* payload (#552).
 type createPreviewData struct {
-	PreviewID string `json:"preview_id"`
-	URL       string `json:"url"`
-	ExpiresAt string `json:"expires_at"`
-	Build     string `json:"build"`
+	PreviewID           string `json:"preview_id"`
+	URL                 string `json:"url"`
+	ExpiresAt           string `json:"expires_at"`
+	Build               string `json:"build"`
+	EffectiveTTLSeconds int    `json:"effective_ttl_seconds"`
 }
 
 // createPreviewOutput's payload lives only under data.* as of v1.5.9 (#573)
@@ -63,6 +64,23 @@ func newCreatePreviewOutput(data createPreviewData) createPreviewOutput {
 	}
 }
 
+func resolvedPreviewTTL(input *int) (time.Duration, bool) {
+	if input == nil {
+		return previewDefaultTTL, false
+	}
+	ttl := time.Duration(*input) * time.Second
+	clamped := false
+	if ttl < previewMinTTL {
+		ttl = previewMinTTL
+		clamped = true
+	}
+	if ttl > previewMaxTTL {
+		ttl = previewMaxTTL
+		clamped = true
+	}
+	return ttl, clamped
+}
+
 // RegisterCreatePreview wires create_preview (site.admin scope). Unlike
 // preview_build (render-to-memory, no URL, no drafts), this builds actual
 // files into an isolated temp directory — never cfg.SiteRoot — and
@@ -79,7 +97,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		Description: "Build the current source (optionally including drafts) into an isolated, non-public directory and " +
 			"expose it at a temporary, token-gated URL for visual inspection. The URL is opaque (not a raw process ID), " +
 			"non-indexable (X-Robots-Tag: noindex), isolated from the public site (a dedicated build, never cfg.SiteRoot), " +
-			"and expires after ttl_seconds (default 900s, max 3600s). Requires site.admin.",
+			"and expires after ttl_seconds (default 900s, min 60s, max 3600s). Preview builds run Hugo with `--environment preview` so templates can suppress preview-unsafe features such as share links. The response always echoes the actual applied TTL as `data.effective_ttl_seconds`; values outside the allowed range are clamped with a warning. Requires site.admin.",
 		InputSchema:  tools.MustSchema[createPreviewInput](),
 		OutputSchema: tools.MustSchema[createPreviewOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -92,16 +110,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		if cfg.HugoRoot == "" {
 			return nil, createPreviewOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 		}
-		ttl := time.Duration(in.TTLSeconds) * time.Second
-		if ttl <= 0 {
-			ttl = previewDefaultTTL
-		}
-		if ttl < previewMinTTL {
-			ttl = previewMinTTL
-		}
-		if ttl > previewMaxTTL {
-			ttl = previewMaxTTL
-		}
+		ttl, clamped := resolvedPreviewTTL(in.TTLSeconds)
 
 		// Opportunistic cleanup of expired previews before adding a new one,
 		// so disk usage doesn't grow unbounded even if nobody ever revisits
@@ -153,7 +162,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			return nil, createPreviewOutput{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
 		}
 
-		args := []string{"--noBuildLock", "--cacheDir", cacheDir, "--destination", destDir, "--baseURL", previewURLBase}
+		args := []string{"--noBuildLock", "--cacheDir", cacheDir, "--destination", destDir, "--baseURL", previewURLBase, "--environment", "preview"}
 		if in.IncludeDrafts {
 			args = append(args, "--buildDrafts")
 		}
@@ -204,11 +213,16 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			"ttl_seconds", int(ttl.Seconds()),
 		)
 
-		return nil, newCreatePreviewOutput(createPreviewData{
-			PreviewID: previewID,
-			URL:       previewURLBase,
-			ExpiresAt: expiresAt.UTC().Format(time.RFC3339),
-			Build:     "passed",
-		}), nil
+		out := newCreatePreviewOutput(createPreviewData{
+			PreviewID:           previewID,
+			URL:                 previewURLBase,
+			ExpiresAt:           expiresAt.UTC().Format(time.RFC3339),
+			Build:               "passed",
+			EffectiveTTLSeconds: int(ttl.Seconds()),
+		})
+		if clamped {
+			out.Warnings = append(out.Warnings, fmt.Sprintf("ttl_seconds was clamped to %d", int(ttl.Seconds())))
+		}
+		return nil, out, nil
 	}))
 }

@@ -1848,6 +1848,112 @@ func TestUpdatePageSetsFeaturedImageFrontmatterKey(t *testing.T) {
 	}
 }
 
+func TestUpdatePageCanClearDescriptionAndFeaturedImage(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "clear-fields",
+		"title":      "Clear Fields",
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	pagePath := filepath.Join(contentRoot, "clear-fields", "index.md")
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "clear-fields",
+		"description":       "Initial description",
+		"featured_image":    "/images/clear-fields-featured.jpg",
+		"expected_revision": currentRevision(t, pagePath),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page (set fields) failed: %s", raw)
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "clear-fields",
+		"description":       "",
+		"featured_image":    "",
+		"expected_revision": currentRevision(t, pagePath),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page (clear fields) failed: %s", raw)
+	}
+
+	data, err := os.ReadFile(pagePath)
+	if err != nil {
+		t.Fatalf("file not found: %v", err)
+	}
+	if strings.Contains(string(data), "description:") {
+		t.Fatalf("description should be removed from frontmatter, got:\n%s", data)
+	}
+	if strings.Contains(string(data), "featuredImage:") {
+		t.Fatalf("featuredImage should be removed from frontmatter, got:\n%s", data)
+	}
+}
+
+func TestUpdatePageRejectsUnsafeFeaturedImageSchemes(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "bad-featured-image",
+		"title":      "Bad Featured Image",
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	for _, bad := range []string{"data:text/html;base64,AAAA", "http://example.test/x.jpg", "/images/../etc/passwd"} {
+		res = callTool(t, session, "update_page", map[string]any{
+			"slug":              "bad-featured-image",
+			"featured_image":    bad,
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, "bad-featured-image", "index.md")),
+		})
+		if !res.IsError {
+			t.Fatalf("update_page should reject featured_image=%q", bad)
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "invalid_params") {
+			t.Fatalf("update_page featured_image=%q must return invalid_params, got: %s", bad, raw)
+		}
+	}
+}
+
+func TestCreatePageRejectsHTMLInTitle(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "unsafe-title",
+		"title":      `<img src=x onerror=window.__MCP_XSS=1>`,
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if !res.IsError {
+		t.Fatal("create_page with HTML title should fail")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "title must not contain HTML markup") {
+		t.Fatalf("create_page HTML title error = %s", raw)
+	}
+}
+
 // TestUpdatePageRefreshesInMemoryFrontmatterRaw (#810) proves the in-memory
 // SourceIndex entry's FrontmatterRaw reflects a field update_page just set
 // (description, here) without requiring a full server reindex. Before the
@@ -2304,6 +2410,102 @@ func TestUpdatePageAmbiguousLanguageStructuredError(t *testing.T) {
 	allowed, ok := resolution["allowed_values"].([]any)
 	if !ok || len(allowed) != 2 {
 		t.Fatalf("update_page allowed_values = %#v", resolution["allowed_values"])
+	}
+}
+
+func TestUpdatePageMultilingualKeepsResolvedLanguageBodyAndTitle(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual-update")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: Titre FR\ndescription: Ancienne FR\n---\nCorps FR"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN Title\ndescription: Old EN\n---\nEnglish body"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, idx, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/bilingual-update",
+		"lang":              "fr",
+		"description":       "Nouvelle description FR",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.fr.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page(lang=fr) failed: %s", raw)
+	}
+
+	fr, ok := idx.GetBySlugLang("posts/bilingual-update", "fr")
+	if !ok {
+		t.Fatal("fr translation missing from in-memory SourceIndex after update")
+	}
+	if fr.Title != "Titre FR" {
+		t.Fatalf("fr title = %q, want original FR title preserved", fr.Title)
+	}
+	if fr.Body != "Corps FR" {
+		t.Fatalf("fr body = %q, want original FR body preserved", fr.Body)
+	}
+	if got, _ := fr.FrontmatterRaw["description"].(string); got != "Nouvelle description FR" {
+		t.Fatalf("fr frontmatter description = %q, want updated value", got)
+	}
+
+	en, ok := idx.GetBySlugLang("posts/bilingual-update", "en")
+	if !ok {
+		t.Fatal("en translation missing from in-memory SourceIndex after update")
+	}
+	if en.Title != "EN Title" {
+		t.Fatalf("en title = %q, want untouched EN title", en.Title)
+	}
+	if en.Body != "English body" {
+		t.Fatalf("en body = %q, want untouched EN body", en.Body)
+	}
+
+	// #829: the corruption only reproduced when the updated language differs
+	// from whichever language SourceIndex.GetBySlug (language-agnostic)
+	// happens to return internally. Updating "fr" above didn't exercise that
+	// path in this fixture, since GetBySlug happened to already resolve to
+	// fr. Update "en" here — a regression (reading fields from the wrong
+	// language's *existing before language resolution) would corrupt en's
+	// title/body with fr's, which this asserts against.
+	res2 := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/bilingual-update",
+		"lang":              "en",
+		"description":       "Nouvelle description EN",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.en.md")),
+	})
+	if res2.IsError {
+		raw, _ := json.Marshal(res2.Content)
+		t.Fatalf("update_page(lang=en) failed: %s", raw)
+	}
+
+	enAfter, ok := idx.GetBySlugLang("posts/bilingual-update", "en")
+	if !ok {
+		t.Fatal("en translation missing from in-memory SourceIndex after en-language update")
+	}
+	if enAfter.Title != "EN Title" {
+		t.Fatalf("en title after en-language update = %q, want untouched EN title (not fr's)", enAfter.Title)
+	}
+	if enAfter.Body != "English body" {
+		t.Fatalf("en body after en-language update = %q, want untouched EN body (not fr's)", enAfter.Body)
+	}
+	if got, _ := enAfter.FrontmatterRaw["description"].(string); got != "Nouvelle description EN" {
+		t.Fatalf("en frontmatter description = %q, want updated value", got)
+	}
+
+	frAfter, ok := idx.GetBySlugLang("posts/bilingual-update", "fr")
+	if !ok {
+		t.Fatal("fr translation missing from in-memory SourceIndex after en-language update")
+	}
+	if frAfter.Title != "Titre FR" {
+		t.Fatalf("fr title after en-language update = %q, want untouched FR title", frAfter.Title)
+	}
+	if frAfter.Body != "Corps FR" {
+		t.Fatalf("fr body after en-language update = %q, want untouched FR body", frAfter.Body)
 	}
 }
 

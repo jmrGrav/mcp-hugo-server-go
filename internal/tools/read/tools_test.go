@@ -3064,6 +3064,56 @@ func TestValidateFrontMatterReturnsCanonicalSlugs(t *testing.T) {
 	}
 }
 
+func TestValidateFrontMatterSlugIncludesAllTranslations(t *testing.T) {
+	contentRoot := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/multi/index.en.md", "---\ntitle: Hello\ndate: 2026-01-01\n---\nEnglish body.\n")
+	write("posts/multi/index.fr.md", "---\ntitle: Bonjour\ndate: 2026-01-02\n---\nCorps francais.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex() error = %v", err)
+	}
+	session, done := newTestClientWithSourceIndex(t, mustTestIndex(t), srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_frontmatter", map[string]any{"slug": "posts/multi", "limit": 10, "offset": 0})
+	if res.IsError {
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if got := data["pages_checked"]; got != float64(2) {
+		t.Fatalf("pages_checked = %v, want 2 translations validated", got)
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 2 {
+		t.Fatalf("pages = %#v, want both translations", pages)
+	}
+	langs := map[string]bool{}
+	for _, raw := range pages {
+		page, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("validate_frontmatter page type = %T", raw)
+		}
+		if got := page["slug"]; got != "/posts/multi/" {
+			t.Fatalf("page.slug = %v, want canonical shared slug /posts/multi/", got)
+		}
+		lang, _ := page["lang"].(string)
+		langs[lang] = true
+	}
+	if !langs["en"] || !langs["fr"] {
+		t.Fatalf("validated langs = %v, want en and fr", langs)
+	}
+}
+
 func TestValidateFrontMatterGlobalPaginationDistinguishesScanFromDetailPage(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
@@ -3161,6 +3211,12 @@ func TestValidateSiteTestContentSlugsIsAdvisoryOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "test-audit-bilingual", "index.fr.md"), []byte("---\ntitle: Audit bilingue\ndate: 2026-07-20\n---\nContenu.\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "ordinary-slug"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "ordinary-slug", "index.md"), []byte("---\ntitle: Explicit marker\ndate: 2026-07-20\ntest_content: true\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
 	cfg := config.Default()
@@ -3193,10 +3249,10 @@ func TestValidateSiteTestContentSlugsIsAdvisoryOnly(t *testing.T) {
 		t.Fatalf("data.invalid = %v, want 0 — test-content match is advisory only", data["invalid"])
 	}
 	testContentSlugs, ok := data["test_content_slugs"].([]any)
-	if !ok || len(testContentSlugs) != 2 {
-		t.Fatalf("data.test_content_slugs = %#v, want exactly 2 entries (mcp-audit-v159-20260720, test-audit-bilingual deduped across en/fr)", data["test_content_slugs"])
+	if !ok || len(testContentSlugs) != 3 {
+		t.Fatalf("data.test_content_slugs = %#v, want exactly 3 entries (reserved-prefix single, deduped bilingual, explicit test_content marker)", data["test_content_slugs"])
 	}
-	var sawSingleLang, sawBilingualCount int
+	var sawSingleLang, sawBilingualCount, sawExplicitMarker int
 	for _, s := range testContentSlugs {
 		str, _ := s.(string)
 		if strings.Contains(str, "mcp-audit-v159-20260720") {
@@ -3204,6 +3260,9 @@ func TestValidateSiteTestContentSlugsIsAdvisoryOnly(t *testing.T) {
 		}
 		if strings.Contains(str, "test-audit-bilingual") {
 			sawBilingualCount++
+		}
+		if strings.Contains(str, "ordinary-slug") {
+			sawExplicitMarker++
 		}
 		// The real security-audit article ("audit-securite-...") must NOT be
 		// flagged — bare "audit-" is deliberately excluded from the reserved
@@ -3217,6 +3276,9 @@ func TestValidateSiteTestContentSlugsIsAdvisoryOnly(t *testing.T) {
 	}
 	if sawBilingualCount != 1 {
 		t.Fatalf("expected exactly 1 deduped entry for test-audit-bilingual (en+fr variants), got %d in %v", sawBilingualCount, testContentSlugs)
+	}
+	if sawExplicitMarker != 1 {
+		t.Fatalf("expected explicit test_content page outside reserved prefixes to be flagged once, got %d in %v", sawExplicitMarker, testContentSlugs)
 	}
 }
 

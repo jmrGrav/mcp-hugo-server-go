@@ -2,6 +2,7 @@ package write
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -15,6 +16,22 @@ import (
 // content-convention boundary that rejects slugs no legitimate Hugo section
 // would use (spaces, uppercase, punctuation) before they ever reach disk.
 var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9/_-]*[a-z0-9])?$`)
+
+// htmlTagPattern matches actual tag-like markup while still allowing plain
+// comparison text such as "3 < 5" in titles.
+var htmlTagPattern = regexp.MustCompile(`(?i)<\s*/?\s*[a-z!][^>]*>`)
+
+// featuredImageCharsetPattern allowlists the character set for a
+// site-root-relative image path. The prefix/scheme/traversal checks in
+// validateFeaturedImagePath reject specific bad shapes, but don't bound the
+// character set itself — this closes that gap. Without it, a value like
+// `/img.jpg" onerror="alert(1)` or `/images/<script>.jpg` passes every
+// existing check (it's a normalized, local, non-traversal path with no
+// disallowed scheme prefix) and is written verbatim to featuredImage
+// frontmatter, which the site theme renders into HTML attributes/CSS url()
+// without re-validating — the same class of stored-injection risk already
+// fixed for page titles in this file.
+var featuredImageCharsetPattern = regexp.MustCompile(`^/[A-Za-z0-9._~/-]+$`)
 
 const (
 	// maxTitleRunes and maxBodyBytes bound create_page/update_page input,
@@ -37,8 +54,47 @@ func validateTitleFormat(title string) error {
 	if err := rejectUnsafeText(title); err != nil {
 		return fmt.Errorf("invalid_params: title %w", err)
 	}
+	if htmlTagPattern.MatchString(title) {
+		return fmt.Errorf("invalid_params: title must not contain HTML markup")
+	}
 	if n := utf8.RuneCountInString(title); n > maxTitleRunes {
 		return fmt.Errorf("invalid_params: title exceeds %d characters (got %d)", maxTitleRunes, n)
+	}
+	return nil
+}
+
+func validateFeaturedImagePath(v string) error {
+	if err := rejectUnsafeText(v); err != nil {
+		return fmt.Errorf("invalid_params: featured_image %w", err)
+	}
+	if v == "" {
+		return nil
+	}
+	if !strings.HasPrefix(v, "/") {
+		return fmt.Errorf("invalid_params: featured_image must be a site-root-relative path starting with /")
+	}
+	if strings.HasPrefix(v, "//") {
+		return fmt.Errorf("invalid_params: featured_image must not be protocol-relative")
+	}
+	if strings.Contains(v, `\`) {
+		return fmt.Errorf("invalid_params: featured_image must not contain backslashes")
+	}
+	lower := strings.ToLower(v)
+	for _, prefix := range []string{"data:", "javascript:", "file:", "http://", "https://"} {
+		if strings.HasPrefix(lower, prefix) {
+			return fmt.Errorf("invalid_params: featured_image must be a local site path, not %q", prefix)
+		}
+	}
+	for _, seg := range strings.Split(strings.TrimPrefix(v, "/"), "/") {
+		if seg == "." || seg == ".." {
+			return fmt.Errorf("invalid_params: featured_image must not contain dot path segments")
+		}
+	}
+	if cleaned := path.Clean(v); cleaned != v {
+		return fmt.Errorf("invalid_params: featured_image must be a normalized local path")
+	}
+	if !featuredImageCharsetPattern.MatchString(v) {
+		return fmt.Errorf("invalid_params: featured_image must contain only letters, digits, and ._~/- characters")
 	}
 	return nil
 }

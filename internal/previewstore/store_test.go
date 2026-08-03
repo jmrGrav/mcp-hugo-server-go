@@ -53,6 +53,43 @@ func TestStoreServesValidPreview(t *testing.T) {
 	}
 }
 
+// TestStoreServesSecurityHeaders is a regression test for #831: the preview
+// URL's token is the sole access control, so responses must not be
+// cacheable by shared/intermediate caches and must resist being framed or
+// leaking the URL via Referer, in addition to the pre-existing
+// X-Robots-Tag noindex check above.
+func TestStoreServesSecurityHeaders(t *testing.T) {
+	dir := t.TempDir()
+	writePreviewFile(t, dir, "index.html", "<html>hello preview</html>")
+
+	s := previewstore.New()
+	s.Put("abc123", &previewstore.Entry{
+		Dir:         dir,
+		Token:       "secret-token",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		BuildStatus: "passed",
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/preview/abc123/secret-token/", nil)
+	rec := httptest.NewRecorder()
+	s.HTTPHandler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	cases := map[string]string{
+		"Cache-Control":           "no-store",
+		"Referrer-Policy":         "no-referrer",
+		"X-Frame-Options":         "DENY",
+		"Content-Security-Policy": "frame-ancestors 'none'",
+	}
+	for header, want := range cases {
+		if got := rec.Header().Get(header); !strings.Contains(got, want) {
+			t.Fatalf("%s = %q, want to contain %q", header, got, want)
+		}
+	}
+}
+
 func TestStoreRejectsWrongToken(t *testing.T) {
 	dir := t.TempDir()
 	writePreviewFile(t, dir, "index.html", "secret content")

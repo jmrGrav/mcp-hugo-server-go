@@ -9,6 +9,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -53,8 +54,9 @@ func RegisterPlanPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 	if s == nil {
 		return
 	}
+	aliases := taxonomy.NormalizeAliasMap(cfg.TaxonomyAliases)
 	addReadOnlyTool(s, "plan_page", "Plan a new page",
-		"Pre-writing scaffold bundling three calls into one, before you write the first line of a new article: `content_types`/`special_files` (identical to list_content_types — the expected archetype and front matter fields for the site's content types), `relevant_tags`/`relevant_categories` (the subset of the site's existing tag/category vocabulary matching `topic` or any of the submitted `tags`/`categories`, via a case-insensitive substring match in either direction — this also surfaces an existing differently-cased spelling for a tag/category you're about to introduce, e.g. submitting `tags: [\"Debug\"]` when the index already has \"debug\" returns \"debug\" in `relevant_tags\"`), and `suggested_links` (identical to suggest_links — internal-linking candidates scored by shared tags/categories, using `topic` as the body-mention text) when at least one of `tags`/`categories` is provided (omitted with `empty_links_reason` when neither is set, since suggest_links itself requires at least one to score anything). `language` filters suggestions to one language and `one_per_source_key=true` collapses translation siblings to one conceptual recommendation while preserving the default backward-compatible ungrouped behavior — both are applied against the full scored candidate pool, not a pre-truncated one, so a matching lower-ranked candidate is never lost to `suggestion_limit` before the filter runs; `suggestion_limit` narrows only the final suggestion list. `response_mode:\"compact\"` keeps planning guidance but trims heavyweight content-type detail. All three facets are read-only and reuse the exact same underlying logic as their standalone tools — nothing here is a new heuristic beyond the tag/category substring match and optional translation grouping. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		"Pre-writing scaffold bundling three calls into one, before you write the first line of a new article: `content_types`/`special_files` (identical to list_content_types — the expected archetype and front matter fields for the site's content types), `relevant_tags`/`relevant_categories` (the subset of the site's existing tag/category vocabulary matching `topic` or any of the submitted `tags`/`categories`, via a case-insensitive substring match in either direction — this also surfaces an existing differently-cased spelling for a tag/category you're about to introduce, e.g. submitting `tags: [\"Debug\"]` when the index already has \"debug\" returns \"debug\" in `relevant_tags\"`). This vocabulary now comes from the same source as `list_tags`/`list_categories`: source index when available to a write-capable caller, otherwise the public index, with taxonomy aliases folded to their canonical form first. `suggested_links` remains identical to suggest_links — internal-linking candidates scored by shared tags/categories, using `topic` as the body-mention text — and is returned when at least one of `tags`/`categories` is provided (omitted with `empty_links_reason` when neither is set, since suggest_links itself requires at least one to score anything). `language` filters suggestions to one language and `one_per_source_key=true` collapses translation siblings to one conceptual recommendation while preserving the default backward-compatible ungrouped behavior — both are applied against the full scored candidate pool, not a pre-truncated one, so a matching lower-ranked candidate is never lost to `suggestion_limit` before the filter runs; `suggestion_limit` narrows only the final suggestion list. `response_mode:\"compact\"` keeps planning guidance but trims heavyweight content-type detail. All three facets are read-only and reuse the exact same underlying logic as their standalone tools — nothing here is a new heuristic beyond the tag/category substring match and optional translation grouping. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in planPageInput) (*mcp.CallToolResult, planPageOutput, error) {
 			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 			if err != nil {
@@ -77,8 +79,9 @@ func RegisterPlanPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			var suggestedLinks []linkSuggestionDTO
 			var emptyLinksReason *emptyResultExplanationDTO
 			if idx != nil {
-				relevantTags = matchVocabulary(idx.AllTags(), searchTerms)
-				relevantCategories = matchVocabulary(idx.AllCategories(), searchTerms)
+				tags, categories := planPageVocabulary(ctx, idx, srcIdx, aliases)
+				relevantTags = matchVocabulary(tags, searchTerms)
+				relevantCategories = matchVocabulary(categories, searchTerms)
 				if len(relevantCategories) == 0 && hasNonEmpty(in.Categories...) {
 					emptyCategoriesReason = "no_existing_categories_matched_submitted_terms"
 				}
@@ -125,6 +128,18 @@ func RegisterPlanPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				EmptyLinksReason:      emptyLinksReason,
 			}, time.Now().UTC()), nil
 		})
+}
+
+func planPageVocabulary(ctx context.Context, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) ([]string, []string) {
+	tags := idx.AllTags()
+	categories := idx.AllCategories()
+	if srcIdx != nil && !site.IsReaderProfile(ctx) {
+		tags = srcIdx.AllTags()
+		categories = srcIdx.AllCategories()
+	}
+	tags = taxonomy.ApplyAliases(tags, aliases)
+	categories = taxonomy.ApplyAliases(categories, aliases)
+	return tags, categories
 }
 
 func compactContentTypes(in []contentTypeDTO) []contentTypeDTO {

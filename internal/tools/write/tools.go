@@ -58,16 +58,15 @@ type createPageInput struct {
 }
 
 // testContentInput is create_page's opt-in test-content marker (#661).
-// TTLHours <= 0 means "use the default" (24h); a negative value is
-// rejected as invalid_params the same way negative limit values are
-// elsewhere in this repo (#641) — zero/omitted is a legitimate "use
-// default," a genuinely negative value is a caller-side bug.
+// TTLHours is a pointer so omitted and explicit 0 stay distinguishable:
+// omission keeps the default, while explicit 0 is now rejected (#833).
 type testContentInput struct {
-	TTLHours int    `json:"ttl_hours,omitempty"`
+	TTLHours *int   `json:"ttl_hours,omitempty"`
 	Owner    string `json:"owner,omitempty"`
 }
 
 const testContentDefaultTTLHours = 24
+const testContentMaxTTLHours = 24 * 7
 
 type createPageOutput struct {
 	toolcontract.ToolResponse[createPageData]
@@ -126,17 +125,17 @@ type updatePageInput struct {
 	Tags        []string `json:"tags,omitempty"`
 	Categories  []string `json:"categories,omitempty"`
 	Draft       *bool    `json:"draft,omitempty"`
-	Description string   `json:"description,omitempty"`
+	Description *string  `json:"description,omitempty"`
 	// FeaturedImage (#809) sets the theme's `featuredImage` frontmatter key
 	// verbatim — e.g. the path generate_hero_image's `data.path` response
 	// resolves to (typically "/images/{slug}-featured.jpg"). Without it, a
 	// generated hero image is never picked up by the theme's list-card
 	// template even though the file itself exists under static/images.
-	FeaturedImage           string `json:"featured_image,omitempty"`
-	NormalizeTaxonomyCasing bool   `json:"normalize_taxonomy_casing,omitempty"`
-	ExpectedRevision        string `json:"expected_revision,omitempty"`
-	IdempotencyKey          string `json:"idempotency_key,omitempty"`
-	DryRun                  bool   `json:"dry_run,omitempty"`
+	FeaturedImage           *string `json:"featured_image,omitempty"`
+	NormalizeTaxonomyCasing bool    `json:"normalize_taxonomy_casing,omitempty"`
+	ExpectedRevision        string  `json:"expected_revision,omitempty"`
+	IdempotencyKey          string  `json:"idempotency_key,omitempty"`
+	DryRun                  bool    `json:"dry_run,omitempty"`
 }
 
 type updatePageOutput struct {
@@ -572,7 +571,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` (default `ttl_hours`: 24) — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -619,8 +618,11 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
-		if in.TestContent != nil && in.TestContent.TTLHours < 0 {
-			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: test_content.ttl_hours must not be negative"))
+		if in.TestContent != nil && in.TestContent.TTLHours != nil {
+			ttl := *in.TestContent.TTLHours
+			if ttl <= 0 || ttl > testContentMaxTTLHours {
+				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: test_content.ttl_hours must be between 1 and %d hours when provided", testContentMaxTTLHours))
+			}
 		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
 		// original position, so every non-dry-run failure path below
@@ -820,7 +822,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		Title: "Update page",
 		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
 			"Use title/body to revise content. Use tags/categories/draft/description/featured_image to update front matter fields. " +
-			"`featured_image` sets the theme's `featuredImage` frontmatter key verbatim — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); without it, a generated hero image file exists under static/images but is never picked up by the theme's list-card template (#809). " +
+			"`featured_image` sets the theme's `featuredImage` frontmatter key to a local public path — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); sending `featured_image:\"\"` explicitly clears that frontmatter key, while omitting the field leaves it unchanged (#825, #835). " +
 			"`tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). " +
 			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
@@ -880,14 +882,14 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 			}
 		}
-		if in.Description != "" {
-			if err := rejectUnsafeText(in.Description); err != nil {
+		if in.Description != nil {
+			if err := rejectUnsafeText(*in.Description); err != nil {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: description %w", err))
 			}
 		}
-		if in.FeaturedImage != "" {
-			if err := rejectUnsafeText(in.FeaturedImage); err != nil {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: featured_image %w", err))
+		if in.FeaturedImage != nil {
+			if err := validateFeaturedImagePath(*in.FeaturedImage); err != nil {
+				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 			}
 		}
 		// Allow() is skipped for dry-run (#588) but otherwise stays at its
@@ -934,6 +936,10 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			return nil, updatePageOutput{}, wrapErrWithLimiter(langErr)
 		}
 		filePath := resolvedSource.SourcePath
+		currentSource := existing
+		if p, ok := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); ok {
+			currentSource = p
+		}
 
 		// Idempotency replay must be checked before the expected_revision
 		// staleness check: a true replay of an already-applied mutation is
@@ -951,8 +957,8 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				Tags             []string `json:"tags,omitempty"`
 				Categories       []string `json:"categories,omitempty"`
 				Draft            *bool    `json:"draft,omitempty"`
-				Description      string   `json:"description,omitempty"`
-				FeaturedImage    string   `json:"featured_image,omitempty"`
+				Description      *string  `json:"description,omitempty"`
+				FeaturedImage    *string  `json:"featured_image,omitempty"`
 				ExpectedRevision string   `json:"expected_revision,omitempty"`
 			}{
 				Slug:             in.Slug,
@@ -1010,11 +1016,11 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 		var tagsDelta, categoriesDelta *taxonomyDeltaDTO
 		if in.Tags != nil {
-			d := computeTaxonomyDelta(existing.Tags, writeTags)
+			d := computeTaxonomyDelta(currentSource.Tags, writeTags)
 			tagsDelta = &d
 		}
 		if in.Categories != nil {
-			d := computeTaxonomyDelta(existing.Categories, writeCategories)
+			d := computeTaxonomyDelta(currentSource.Categories, writeCategories)
 			categoriesDelta = &d
 		}
 		opts := pageUpdateOpts{
@@ -1074,7 +1080,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// deliberately not snapshotted — there's no meaningful "pre-create"
 		// state to restore to.
 		rt.snapshots.put(filePath, currentRevision, string(raw))
-		updated := *existing
+		updated := *currentSource
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang
 		if in.Title != "" {
@@ -1136,8 +1142,8 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// advisory, never blocks the write: not every hero image bakes the
 		// page title verbatim, and regenerating on every title edit would be
 		// unwanted churn for callers who don't want that coupling.
-		if in.Title != "" && in.FeaturedImage == "" {
-			if raw, ok := existing.FrontmatterRaw["featuredImage"]; ok {
+		if in.Title != "" && in.FeaturedImage == nil {
+			if raw, ok := currentSource.FrontmatterRaw["featuredImage"]; ok {
 				if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
 					hint := "title changed but featuredImage was left unchanged — its baked-in text may no longer match; " +
 						"regenerate via generate_hero_image and set featured_image on update_page if it should reflect the new title"
@@ -1745,9 +1751,9 @@ func buildFrontmatter(title string, tags, categories []string, body string, test
 		Draft:      false,
 	}
 	if testContent != nil {
-		ttlHours := testContent.TTLHours
-		if ttlHours <= 0 {
-			ttlHours = testContentDefaultTTLHours
+		ttlHours := testContentDefaultTTLHours
+		if testContent.TTLHours != nil {
+			ttlHours = *testContent.TTLHours
 		}
 		doc.Draft = true
 		doc.TestContent = true
@@ -1783,9 +1789,9 @@ type pageUpdateOpts struct {
 	Tags        []string
 	Categories  []string
 	Draft       *bool
-	Description string
+	Description *string
 	// FeaturedImage — see the comment on updatePageInput.FeaturedImage (#809).
-	FeaturedImage string
+	FeaturedImage *string
 }
 
 // applyPageUpdates applies title, body, and optional front matter field changes
@@ -1804,7 +1810,7 @@ func applyPageUpdates(fileContent, newTitle, newBody string, opts pageUpdateOpts
 	bodyPart := rest[end+4:] // everything after the closing ---
 
 	needsYAML := newTitle != "" || opts.Tags != nil || opts.Categories != nil ||
-		opts.Draft != nil || opts.Description != "" || opts.FeaturedImage != ""
+		opts.Draft != nil || opts.Description != nil || opts.FeaturedImage != nil
 
 	if needsYAML {
 		var doc yaml.Node
@@ -1827,11 +1833,19 @@ func applyPageUpdates(fileContent, newTitle, newBody string, opts pageUpdateOpts
 		if opts.Draft != nil {
 			setYAMLBool(mapping, "draft", *opts.Draft)
 		}
-		if opts.Description != "" {
-			setYAMLKey(mapping, "description", opts.Description)
+		if opts.Description != nil {
+			if *opts.Description == "" {
+				deleteYAMLKey(mapping, "description")
+			} else {
+				setYAMLKey(mapping, "description", *opts.Description)
+			}
 		}
-		if opts.FeaturedImage != "" {
-			setYAMLKey(mapping, "featuredImage", opts.FeaturedImage)
+		if opts.FeaturedImage != nil {
+			if *opts.FeaturedImage == "" {
+				deleteYAMLKey(mapping, "featuredImage")
+			} else {
+				setYAMLKey(mapping, "featuredImage", *opts.FeaturedImage)
+			}
 		}
 		out, err := marshalWithIndent(doc.Content[0], 2)
 		if err != nil {
@@ -1860,6 +1874,15 @@ func setYAMLKey(mapping *yaml.Node, key, value string) {
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: key},
 		&yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value},
 	)
+}
+
+func deleteYAMLKey(mapping *yaml.Node, key string) {
+	for i := 0; i+1 < len(mapping.Content); i += 2 {
+		if mapping.Content[i].Value == key {
+			mapping.Content = append(mapping.Content[:i], mapping.Content[i+2:]...)
+			return
+		}
+	}
 }
 
 // setYAMLSeq sets a sequence (list) value in a YAML mapping node in-place,

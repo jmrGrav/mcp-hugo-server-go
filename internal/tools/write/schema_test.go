@@ -36,6 +36,7 @@ func TestWriteToolSchemasPresent(t *testing.T) {
 	assertSchemaHasProperties(t, updateTool, "outputSchema.data", "status", "slug", "source_key", "resolved_source_path", "rate_limit_remaining", "rate_limit")
 
 	deleteTool := got["delete_page"]
+	assertSchemaHasProperties(t, deleteTool, "inputSchema", "slug", "lang", "expected_revision", "dry_run")
 	assertSchemaHasProperties(t, deleteTool, "outputSchema.data", "status", "slug", "source_key", "resolved_source_path", "rate_limit_remaining", "rate_limit")
 }
 

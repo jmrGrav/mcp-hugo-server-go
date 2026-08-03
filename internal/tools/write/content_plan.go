@@ -538,10 +538,12 @@ func registerContentPlanTools(
 		}
 
 		opts := pageUpdateOpts{
-			Tags:        resolved.Tags,
-			Categories:  resolved.Categories,
-			Draft:       resolved.Draft,
-			Description: resolved.Description,
+			Tags:       resolved.Tags,
+			Categories: resolved.Categories,
+			Draft:      resolved.Draft,
+		}
+		if resolved.Description != "" {
+			opts.Description = strPtr(resolved.Description)
 		}
 		content, err := applyPageUpdates(string(raw), resolved.Title, resolved.Body, opts)
 		if err != nil {
