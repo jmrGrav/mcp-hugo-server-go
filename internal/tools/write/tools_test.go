@@ -2237,6 +2237,59 @@ func TestUpdatePageAmbiguousLanguageStructuredError(t *testing.T) {
 	}
 }
 
+func TestUpdatePageMultilingualKeepsResolvedLanguageBodyAndTitle(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual-update")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: Titre FR\ndescription: Ancienne FR\n---\nCorps FR"), 0o644); err != nil {
+		t.Fatalf("WriteFile fr: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.en.md"), []byte("---\ntitle: EN Title\ndescription: Old EN\n---\nEnglish body"), 0o644); err != nil {
+		t.Fatalf("WriteFile en: %v", err)
+	}
+
+	session, idx, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/bilingual-update",
+		"lang":              "fr",
+		"description":       "Nouvelle description FR",
+		"expected_revision": currentRevision(t, filepath.Join(pageDir, "index.fr.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page(lang=fr) failed: %s", raw)
+	}
+
+	fr, ok := idx.GetBySlugLang("posts/bilingual-update", "fr")
+	if !ok {
+		t.Fatal("fr translation missing from in-memory SourceIndex after update")
+	}
+	if fr.Title != "Titre FR" {
+		t.Fatalf("fr title = %q, want original FR title preserved", fr.Title)
+	}
+	if fr.Body != "Corps FR" {
+		t.Fatalf("fr body = %q, want original FR body preserved", fr.Body)
+	}
+	if got, _ := fr.FrontmatterRaw["description"].(string); got != "Nouvelle description FR" {
+		t.Fatalf("fr frontmatter description = %q, want updated value", got)
+	}
+
+	en, ok := idx.GetBySlugLang("posts/bilingual-update", "en")
+	if !ok {
+		t.Fatal("en translation missing from in-memory SourceIndex after update")
+	}
+	if en.Title != "EN Title" {
+		t.Fatalf("en title = %q, want untouched EN title", en.Title)
+	}
+	if en.Body != "English body" {
+		t.Fatalf("en body = %q, want untouched EN body", en.Body)
+	}
+}
+
 func TestCreatePageAcceptsExplicitLang(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)

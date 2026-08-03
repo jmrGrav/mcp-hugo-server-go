@@ -1424,8 +1424,20 @@ func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) ([]hugosit
 	if slug == "" {
 		return idx.ListPages(0, 0), nil
 	}
-	if p, ok := idx.GetBySlug(slug); ok {
-		return []hugosite.SourcePage{*p}, nil
+	var matches []hugosite.SourcePage
+	for _, p := range idx.ListPages(0, 0) {
+		if strings.Trim(strings.TrimSpace(p.Slug), "/") == slug {
+			matches = append(matches, p)
+		}
+	}
+	if len(matches) > 0 {
+		sort.SliceStable(matches, func(i, j int) bool {
+			if matches[i].Slug != matches[j].Slug {
+				return matches[i].Slug < matches[j].Slug
+			}
+			return matches[i].Lang < matches[j].Lang
+		})
+		return matches, nil
 	}
 	return nil, fmt.Errorf("content_not_found: no source page matched slug %q", slug)
 }

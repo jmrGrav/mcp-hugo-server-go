@@ -934,6 +934,10 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			return nil, updatePageOutput{}, wrapErrWithLimiter(langErr)
 		}
 		filePath := resolvedSource.SourcePath
+		currentSource := existing
+		if p, ok := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); ok {
+			currentSource = p
+		}
 
 		// Idempotency replay must be checked before the expected_revision
 		// staleness check: a true replay of an already-applied mutation is
@@ -1010,11 +1014,11 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 		var tagsDelta, categoriesDelta *taxonomyDeltaDTO
 		if in.Tags != nil {
-			d := computeTaxonomyDelta(existing.Tags, writeTags)
+			d := computeTaxonomyDelta(currentSource.Tags, writeTags)
 			tagsDelta = &d
 		}
 		if in.Categories != nil {
-			d := computeTaxonomyDelta(existing.Categories, writeCategories)
+			d := computeTaxonomyDelta(currentSource.Categories, writeCategories)
 			categoriesDelta = &d
 		}
 		opts := pageUpdateOpts{
@@ -1074,7 +1078,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// deliberately not snapshotted — there's no meaningful "pre-create"
 		// state to restore to.
 		rt.snapshots.put(filePath, currentRevision, string(raw))
-		updated := *existing
+		updated := *currentSource
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang
 		if in.Title != "" {
@@ -1137,7 +1141,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// page title verbatim, and regenerating on every title edit would be
 		// unwanted churn for callers who don't want that coupling.
 		if in.Title != "" && in.FeaturedImage == "" {
-			if raw, ok := existing.FrontmatterRaw["featuredImage"]; ok {
+			if raw, ok := currentSource.FrontmatterRaw["featuredImage"]; ok {
 				if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
 					hint := "title changed but featuredImage was left unchanged — its baked-in text may no longer match; " +
 						"regenerate via generate_hero_image and set featured_image on update_page if it should reflect the new title"
