@@ -2226,6 +2226,71 @@ func TestRichReadToolsPreferMatchingLanguageSource(t *testing.T) {
 	})
 }
 
+func TestRichReadToolsSupportExplicitLangSelection(t *testing.T) {
+	session, done := newMultilingualHelloReadSession(t)
+	defer done()
+
+	checkFrontmatter := func(t *testing.T, fm map[string]any) {
+		t.Helper()
+		if got := fm["lang"]; got != "en" {
+			t.Fatalf("lang = %v, want en", got)
+		}
+		if got := fm["resolved_lang"]; got != "en" {
+			t.Fatalf("resolved_lang = %v, want en", got)
+		}
+		if got := asString(t, fm["resolved_source_path"]); got != "content/posts/hello/index.en.md" {
+			t.Fatalf("resolved_source_path = %q, want content/posts/hello/index.en.md", got)
+		}
+	}
+
+	t.Run("get_page_frontmatter", func(t *testing.T) {
+		res := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/posts/hello/", "lang": "en"})
+		if res.IsError {
+			t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+		}
+		fm := decodeContent(t, res)["frontmatter"].(map[string]any)
+		checkFrontmatter(t, fm)
+	})
+
+	t.Run("get_page_markdown", func(t *testing.T) {
+		res := callTool(t, session, "get_page_markdown", map[string]any{"slug": "posts/hello", "lang": "en"})
+		if res.IsError {
+			t.Fatalf("get_page_markdown returned error: %v", res.Content)
+		}
+		page := decodeContent(t, res)["page"].(map[string]any)
+		checkFrontmatter(t, page)
+		if md, _ := page["markdown"].(string); !strings.Contains(md, "Hello from the English source.") {
+			t.Fatalf("markdown = %q, want English source content", md)
+		}
+	})
+
+	t.Run("get_page_for_edit", func(t *testing.T) {
+		res := callTool(t, session, "get_page_for_edit", map[string]any{"slug": "/posts/hello/", "lang": "en"})
+		if res.IsError {
+			t.Fatalf("get_page_for_edit returned error: %v", res.Content)
+		}
+		page := decodeContent(t, res)["page"].(map[string]any)
+		fm := page["frontmatter"].(map[string]any)
+		checkFrontmatter(t, fm)
+		if md, _ := page["markdown"].(string); !strings.Contains(md, "Hello from the English source.") {
+			t.Fatalf("markdown = %q, want English source content", md)
+		}
+	})
+
+	t.Run("build_agent_context", func(t *testing.T) {
+		res := callTool(t, session, "build_agent_context", map[string]any{"slug": "/posts/hello/", "lang": "en"})
+		if res.IsError {
+			t.Fatalf("build_agent_context returned error: %v", res.Content)
+		}
+		ctx := decodeContent(t, res)["context"].(map[string]any)
+		fm := ctx["frontmatter"].(map[string]any)
+		checkFrontmatter(t, fm)
+		if md, _ := ctx["markdown"].(string); !strings.Contains(md, "Hello from the English source.") {
+			t.Fatalf("markdown = %q, want English source content", md)
+		}
+	})
+}
+
 func TestReadToolsPreferDefaultLanguageForSourceOnlyMultilingualPage(t *testing.T) {
 	session, done := newSourceOnlyBilingualDefaultLangReadSession(t)
 	defer done()
@@ -2284,6 +2349,99 @@ func TestReadToolsPreferDefaultLanguageForSourceOnlyMultilingualPage(t *testing.
 			t.Fatalf("markdown = %q, want French source body", md)
 		}
 	})
+}
+
+func TestValidateFrontmatterSupportsExplicitLangFilter(t *testing.T) {
+	contentRoot := t.TempDir()
+	write := func(rel, raw string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/multi/index.en.md", "---\ntitle: Hello\ndate: 2026-01-01\n---\nEnglish body.\n")
+	write("posts/multi/index.fr.md", "---\ntitle: Bonjour\ndate: 2026-01-02\n---\nCorps francais.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex() error = %v", err)
+	}
+	session, done := newTestClientWithSourceIndex(t, mustTestIndex(t), srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_frontmatter", map[string]any{
+		"slug":   "posts/multi",
+		"lang":   "en",
+		"limit":  10,
+		"offset": 0,
+	})
+	if res.IsError {
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if got := data["pages_checked"]; got != float64(1) {
+		t.Fatalf("pages_checked = %v, want 1 when lang=en is explicit", got)
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 1 {
+		t.Fatalf("pages = %#v, want one translation", pages)
+	}
+	page := pages[0].(map[string]any)
+	if got := page["slug"]; got != "/posts/multi/" {
+		t.Fatalf("page.slug = %v, want canonical shared slug /posts/multi/", got)
+	}
+	if got := page["lang"]; got != "en" {
+		t.Fatalf("page.lang = %v, want en", got)
+	}
+}
+
+func TestValidateFrontmatterSupportsExplicitLangFilterForPublicSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	write := func(rel, raw string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/multi/index.en.md", "---\ntitle: Hello\ndate: 2026-01-01\n---\nEnglish body.\n")
+	write("posts/multi/index.fr.md", "---\ntitle: Bonjour\ndate: 2026-01-02\n---\nCorps francais.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex() error = %v", err)
+	}
+	session, done := newTestClientWithSourceIndex(t, mustTestIndex(t), srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_frontmatter", map[string]any{
+		"slug":   "/en/posts/multi/",
+		"lang":   "en",
+		"limit":  10,
+		"offset": 0,
+	})
+	if res.IsError {
+		t.Fatalf("validate_frontmatter returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if got := data["pages_checked"]; got != float64(1) {
+		t.Fatalf("pages_checked = %v, want 1 when public English slug and lang=en are explicit", got)
+	}
+	pages, _ := data["pages"].([]any)
+	if len(pages) != 1 {
+		t.Fatalf("pages = %#v, want one translation", pages)
+	}
+	page := pages[0].(map[string]any)
+	if got := page["lang"]; got != "en" {
+		t.Fatalf("page.lang = %v, want en", got)
+	}
 }
 
 func TestGetRelatedContentSeparatesTranslations(t *testing.T) {

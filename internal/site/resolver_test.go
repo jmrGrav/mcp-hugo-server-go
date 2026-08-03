@@ -103,6 +103,36 @@ func TestPageResolverPrefersMatchingLanguageVariant(t *testing.T) {
 	}
 }
 
+func TestPageResolverResolveWithLangOverridesImplicitSlugLanguage(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSourcePage(t, contentRoot, "posts/hello/index.fr.md", "---\ntitle: Bonjour\n---\nBonjour FR\n")
+	writeSourcePage(t, contentRoot, "posts/hello/index.en.md", "---\ntitle: Hello\n---\nHello EN\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &Index{
+		entries: []entry{
+			{page: Page{Slug: "/posts/hello/", Lang: "fr", Title: "Rendered FR", RawHTML: "<article>Rendered FR</article>"}},
+			{page: Page{Slug: "/en/posts/hello/", Lang: "en", Title: "Rendered EN", RawHTML: "<article>Rendered EN</article>"}},
+		},
+		bySlug: map[string]int{"/posts/hello/": 0, "/en/posts/hello/": 1},
+		info:   map[string]string{},
+	}
+	resolver := NewPageResolver(idx, srcIdx, config.Config{ContentRoot: contentRoot, DefaultLanguage: "fr"})
+
+	got, ok := resolver.ResolveWithLang("/posts/hello/", "en")
+	if !ok {
+		t.Fatal("ResolveWithLang(/posts/hello/, en) not found")
+	}
+	if got.Source == nil || got.Source.Lang != "en" {
+		t.Fatalf("ResolveWithLang(/posts/hello/, en).Source = %#v, want english source", got.Source)
+	}
+	if got.Public == nil || got.Public.Lang != "en" || got.Public.Slug != "/en/posts/hello/" {
+		t.Fatalf("ResolveWithLang(/posts/hello/, en).Public = %#v, want english public page", got.Public)
+	}
+}
+
 func TestPageResolverResolvesSourceOnlyPageAfterCreateWithoutBuild(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeSourcePage(t, contentRoot, "drafts/fresh/index.md", "---\ntitle: Fresh\n---\nFresh source body\n")

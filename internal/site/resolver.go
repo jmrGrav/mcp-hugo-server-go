@@ -24,11 +24,47 @@ func NewPageResolver(idx *Index, srcIdx *hugosite.SourceIndex, cfg config.Config
 }
 
 func (r *PageResolver) Resolve(rawSlug string) (ResolvedPage, bool) {
+	return r.ResolveWithLang(rawSlug, "")
+}
+
+func (r *PageResolver) ResolveWithLang(rawSlug, explicitLang string) (ResolvedPage, bool) {
 	publicSlug, sourceSlug := normalizeResolverSlugs(rawSlug)
 	if publicSlug == "" && sourceSlug == "" {
 		return ResolvedPage{}, false
 	}
+	explicitLang = strings.TrimSpace(explicitLang)
+	if explicitLang == "" {
+		return r.resolveImplicit(publicSlug, sourceSlug)
+	}
 
+	var out ResolvedPage
+	if r != nil && r.srcIdx != nil {
+		if p, ok := r.resolveSource(sourceSlug, explicitLang); ok {
+			out.Source = p
+			out.SourcePath = p.FilePath
+			sourceSlug = p.Slug
+		}
+	}
+	if r != nil && r.idx != nil {
+		if pub, ok := r.resolvePublicForSourceLang(sourceSlug, explicitLang); ok {
+			out.Public = pub
+		} else if p, ok := r.idx.GetBySlug(publicSlug); ok && pageMatchesExplicitLang(p, explicitLang, r.cfg.DefaultLanguage) {
+			out.Public = p
+			if out.Source == nil {
+				_, sourceSlug = normalizeResolverSlugs(p.Slug)
+			}
+		}
+	}
+	if out.Source == nil && out.Public != nil && r != nil && r.srcIdx != nil {
+		if p, ok := r.resolveSource(sourceSlug, explicitLang); ok {
+			out.Source = p
+			out.SourcePath = p.FilePath
+		}
+	}
+	return out, out.Public != nil || out.Source != nil
+}
+
+func (r *PageResolver) resolveImplicit(publicSlug, sourceSlug string) (ResolvedPage, bool) {
 	var out ResolvedPage
 	resolvedLang := languagePrefixFromSlug(publicSlug)
 	if r != nil && r.idx != nil {
@@ -50,6 +86,46 @@ func (r *PageResolver) Resolve(rawSlug string) (ResolvedPage, bool) {
 		}
 	}
 	return out, out.Public != nil || out.Source != nil
+}
+
+func (r *PageResolver) resolvePublicForSourceLang(sourceSlug, lang string) (*Page, bool) {
+	if r == nil || r.idx == nil {
+		return nil, false
+	}
+	sourceSlug = strings.Trim(sourceSlug, "/")
+	lang = strings.TrimSpace(lang)
+	if sourceSlug == "" || lang == "" {
+		return nil, false
+	}
+	return r.idx.GetBySlug(canonicalPublicSlugForSourceLang(sourceSlug, lang, r.cfg.DefaultLanguage))
+}
+
+func canonicalPublicSlugForSourceLang(sourceSlug, lang, defaultLang string) string {
+	sourceSlug = strings.Trim(sourceSlug, "/")
+	lang = strings.TrimSpace(lang)
+	defaultLang = strings.TrimSpace(defaultLang)
+	if sourceSlug == "" {
+		return ""
+	}
+	if lang == "" || lang == defaultLang {
+		return normalizeSlug(sourceSlug)
+	}
+	return normalizeSlug("/" + lang + "/" + sourceSlug)
+}
+
+func pageMatchesExplicitLang(p *Page, lang, defaultLang string) bool {
+	if p == nil {
+		return false
+	}
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return true
+	}
+	pageLang := strings.TrimSpace(p.Lang)
+	if pageLang != "" {
+		return pageLang == lang
+	}
+	return lang == strings.TrimSpace(defaultLang) && languagePrefixFromSlug(p.Slug) == ""
 }
 
 func (r *PageResolver) resolveSource(sourceSlug, lang string) (*hugosite.SourcePage, bool) {

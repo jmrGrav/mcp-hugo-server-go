@@ -203,6 +203,7 @@ type searchContentEnvelope struct {
 
 type validateFrontMatterInput struct {
 	Slug         string `json:"slug,omitempty"`
+	Lang         string `json:"lang,omitempty"`
 	Limit        int    `json:"limit,omitempty"`
 	Offset       int    `json:"offset,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
@@ -641,7 +642,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. When a slug maps to a multilingual bundle, the default is bundle-wide validation across every translation sharing that source key; pass `lang` to restrict validation to one translation explicitly. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -649,7 +650,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			if srcIdx == nil {
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
-			pages, err := sourcePagesForValidation(srcIdx, in.Slug)
+			pages, err := sourcePagesForValidation(srcIdx, in.Slug, in.Lang)
 			if err != nil {
 				return nil, validateOutput{}, err
 			}
@@ -1443,18 +1444,37 @@ func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) [
 	return issues
 }
 
-func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) ([]hugosite.SourcePage, error) {
+func sourcePagesForValidation(idx *hugosite.SourceIndex, slug, lang string) ([]hugosite.SourcePage, error) {
 	if idx == nil {
 		return nil, nil
 	}
+	rawSlug := strings.TrimSpace(slug)
 	slug = strings.Trim(strings.TrimSpace(slug), "/")
+	lang = strings.TrimSpace(lang)
 	if slug == "" {
-		return idx.ListPages(0, 0), nil
+		if lang == "" {
+			return idx.ListPages(0, 0), nil
+		}
+		var filtered []hugosite.SourcePage
+		for _, p := range idx.ListPages(0, 0) {
+			if p.Lang == lang {
+				filtered = append(filtered, p)
+			}
+		}
+		return filtered, nil
+	}
+	candidates := site.SourceSlugCandidates(strings.Trim(site.NormalizeSlug(rawSlug), "/"))
+	if len(candidates) == 0 {
+		candidates = []string{slug}
 	}
 	var matches []hugosite.SourcePage
 	for _, p := range idx.ListPages(0, 0) {
-		if strings.Trim(strings.TrimSpace(p.Slug), "/") == slug {
-			matches = append(matches, p)
+		pageSlug := strings.Trim(strings.TrimSpace(p.Slug), "/")
+		for _, candidate := range candidates {
+			if pageSlug == candidate && (lang == "" || p.Lang == lang) {
+				matches = append(matches, p)
+				break
+			}
 		}
 	}
 	if len(matches) > 0 {
@@ -1465,6 +1485,9 @@ func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) ([]hugosit
 			return matches[i].Lang < matches[j].Lang
 		})
 		return matches, nil
+	}
+	if lang != "" {
+		return nil, fmt.Errorf("content_not_found: no source page matched slug %q for lang %q", slug, lang)
 	}
 	return nil, fmt.Errorf("content_not_found: no source page matched slug %q", slug)
 }

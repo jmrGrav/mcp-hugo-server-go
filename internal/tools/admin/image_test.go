@@ -134,6 +134,15 @@ func TestGenerateFeaturedImage_Success(t *testing.T) {
 	if got := data["path"]; got != expectedLogicalPath {
 		t.Fatalf("generate_hero_image data.path = %v, want %q", got, expectedLogicalPath)
 	}
+	if got := data["source_key"]; got != "my-post" {
+		t.Fatalf("generate_hero_image data.source_key = %v, want my-post", got)
+	}
+	if got := data["delete_scope"]; got != "generated" {
+		t.Fatalf("generate_hero_image data.delete_scope = %v, want generated", got)
+	}
+	if got := data["delete_filename"]; got != "my-post-featured.jpg" {
+		t.Fatalf("generate_hero_image data.delete_filename = %v, want my-post-featured.jpg", got)
+	}
 	// #573: root-level path must no longer be mirrored alongside data.path.
 	if _, present := out["path"]; present {
 		t.Fatalf("root path = %v, want absent — no more root/data duplication (#573)", out["path"])
@@ -306,6 +315,15 @@ func TestGenerateFeaturedImageAdvisesAttachingToPage(t *testing.T) {
 	if got, want := data["public_path"], "/images/my-post-featured.jpg"; got != want {
 		t.Fatalf("data.public_path = %v, want %q", got, want)
 	}
+	if got, want := data["source_key"], "my-post"; got != want {
+		t.Fatalf("data.source_key = %v, want %q", got, want)
+	}
+	if got, want := data["delete_scope"], "generated"; got != want {
+		t.Fatalf("data.delete_scope = %v, want %q", got, want)
+	}
+	if got, want := data["delete_filename"], "my-post-featured.jpg"; got != want {
+		t.Fatalf("data.delete_filename = %v, want %q", got, want)
+	}
 	warnings, ok := out["warnings"].([]any)
 	if !ok || len(warnings) == 0 {
 		t.Fatalf("warnings = %v, want at least one advisory about attaching the image to a page", out["warnings"])
@@ -363,6 +381,9 @@ func TestGenerateFeaturedImageAcceptsCanonicalPublicSlugForms(t *testing.T) {
 			}
 			if got := data["path"]; got != tc.wantPath {
 				t.Fatalf("generate_hero_image(%q) data.path = %v, want %q", tc.slug, got, tc.wantPath)
+			}
+			if got := data["source_key"]; got != strings.TrimSuffix(strings.TrimPrefix(tc.wantPath, "static/images/"), "-featured.jpg") {
+				t.Fatalf("generate_hero_image(%q) data.source_key = %v, want canonical source key from path", tc.slug, got)
 			}
 			if _, err := os.Stat(filepath.Join(hugoRoot, filepath.FromSlash(tc.wantPath))); err != nil {
 				t.Fatalf("expected generated file at %q: %v", tc.wantPath, err)

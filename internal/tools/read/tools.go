@@ -22,6 +22,7 @@ import (
 
 type getFullPageMarkdownInput struct {
 	Slug         string `json:"slug"`
+	Lang         string `json:"lang,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
 	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
@@ -50,6 +51,7 @@ type getFullPageMarkdownData struct {
 
 type getPageFrontmatterInput struct {
 	Slug         string `json:"slug"`
+	Lang         string `json:"lang,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
 	IncludeTerms *bool  `json:"include_terms,omitempty"`
 }
@@ -205,6 +207,7 @@ func newEmptyResultExplanation(candidatesEvaluated, minimumScore int) *emptyResu
 
 type buildAgentContextInput struct {
 	Slug         string `json:"slug"`
+	Lang         string `json:"lang,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
 	MaxBodyChars *int   `json:"max_body_chars,omitempty"`
 	IncludeTerms *bool  `json:"include_terms,omitempty"`
@@ -294,6 +297,7 @@ type exportAgentContextOutput struct {
 
 type getPageForEditInput struct {
 	Slug         string   `json:"slug"`
+	Lang         string   `json:"lang,omitempty"`
 	Include      []string `json:"include,omitempty"`
 	MaxBodyChars *int     `json:"max_body_chars,omitempty"`
 	ResponseMode string   `json:"response_mode,omitempty"`
@@ -438,7 +442,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 
 func registerReadPageTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config) {
 	addReadOnlyTool(s, "get_page_markdown", "Read page Markdown",
-		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. The response includes a `state` object so agents can tell whether they are reading built public content, source-only content, or stale source ahead of the last build. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same Markdown body alongside frontmatter, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. The response includes a `state` object so agents can tell whether they are reading built public content, source-only content, or stale source ahead of the last build. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same Markdown body alongside frontmatter, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getFullPageMarkdownInput) (*mcp.CallToolResult, getFullPageMarkdownOutput, error) {
 			if idx == nil && srcIdx == nil {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("index not initialized")
@@ -447,7 +451,7 @@ func registerReadPageTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sour
 			if err != nil {
 				return nil, getFullPageMarkdownOutput{}, err
 			}
-			resolved, ok := resolver.Resolve(in.Slug)
+			resolved, ok := resolver.ResolveWithLang(in.Slug, in.Lang)
 			if !ok {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
@@ -461,7 +465,7 @@ func registerReadPageTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sour
 		})
 
 	addReadOnlyTool(s, "get_page_frontmatter", "Read page metadata",
-		"Read structured metadata for a published page, including title, tags, categories, date, URL, estimated reading time, and a `state` object describing source/build/public/index freshness. `featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated from source frontmatter when available and omitted (not a zero value) when unset or when only public output is resolvable — `featured_image`'s name matches update_page's `featured_image` write parameter for direct read-then-write round-tripping. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. `lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. right after create_page) — it no longer lags behind `resolved_lang` until the page is built. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same metadata alongside markdown, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Read structured metadata for a published page, including title, tags, categories, date, URL, estimated reading time, and a `state` object describing source/build/public/index freshness. `featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated from source frontmatter when available and omitted (not a zero value) when unset or when only public output is resolvable — `featured_image`'s name matches update_page's `featured_image` write parameter for direct read-then-write round-tripping. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. `lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. right after create_page) — it no longer lags behind `resolved_lang` until the page is built. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same metadata alongside markdown, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageFrontmatterInput) (*mcp.CallToolResult, getPageFrontmatterOutput, error) {
 			if idx == nil {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("index not initialized")
@@ -470,7 +474,7 @@ func registerReadPageTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sour
 			if err != nil {
 				return nil, getPageFrontmatterOutput{}, err
 			}
-			resolved, ok := resolver.Resolve(in.Slug)
+			resolved, ok := resolver.ResolveWithLang(in.Slug, in.Lang)
 			if !ok {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
@@ -538,7 +542,7 @@ func registerReadRelationshipTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 
 func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config, aliases map[string]string) {
 	addReadOnlyTool(s, "build_agent_context", "Build agent context",
-		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or discussing a page. If you're about to mutate this page instead, prefer get_page_for_edit — it adds `revision` and `quality` (needed for create_page/update_page/delete_page) but omits translations/related_pages. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode, N must be greater than 0 when provided). `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. Omitting both preserves the full default shape. `lang` is now populated immediately for a source-only page read back before the next Hugo build — it no longer lags behind `resolved_lang` until the page is built. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or discussing a page. If you're about to mutate this page instead, prefer get_page_for_edit — it adds `revision` and `quality` (needed for create_page/update_page/delete_page) but omits translations/related_pages. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode, N must be greater than 0 when provided). `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. Omitting both preserves the full default shape. `lang` is now populated immediately for a source-only page read back before the next Hugo build — it no longer lags behind `resolved_lang` until the page is built. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in buildAgentContextInput) (*mcp.CallToolResult, buildAgentContextOutput, error) {
 			if idx == nil {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("index not initialized")
@@ -550,7 +554,7 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 			if err != nil {
 				return nil, buildAgentContextOutput{}, err
 			}
-			resolved, ok := resolver.Resolve(in.Slug)
+			resolved, ok := resolver.ResolveWithLang(in.Slug, in.Lang)
 			if !ok {
 				return nil, buildAgentContextOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
@@ -709,7 +713,7 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 		})
 
 	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
-		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body; must be greater than 0 when provided) shape the response down. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `frontmatter.featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated when set in source frontmatter, matching update_page's write parameter names for direct round-tripping. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body; must be greater than 0 when provided) shape the response down. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `frontmatter.featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated when set in source frontmatter, matching update_page's write parameter names for direct round-tripping. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageForEditInput) (*mcp.CallToolResult, getPageForEditOutput, error) {
 			if idx == nil {
 				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
@@ -721,7 +725,7 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 			if err != nil {
 				return nil, getPageForEditOutput{}, err
 			}
-			resolved, ok := resolver.Resolve(in.Slug)
+			resolved, ok := resolver.ResolveWithLang(in.Slug, in.Lang)
 			if !ok {
 				return nil, getPageForEditOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
@@ -760,7 +764,7 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 			if include["quality"] {
 				qSrc := sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx))
 				if qSrc != nil {
-					if srcPages, err := sourcePagesForValidation(qSrc, in.Slug); err == nil && len(srcPages) > 0 {
+					if srcPages, err := sourcePagesForValidation(qSrc, in.Slug, in.Lang); err == nil && len(srcPages) > 0 {
 						issues := validateFrontMatterPage(srcPages[0], aliases)
 						broken := 0
 						if indexedPage, found := idx.GetBySlug(p.Slug); found {
