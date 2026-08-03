@@ -1,4 +1,4 @@
-.PHONY: build test test-contracts lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core
+.PHONY: build test test-contracts lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core gosec
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
@@ -34,6 +34,10 @@ fmt:
 
 vuln:
 	govulncheck ./...
+
+gosec:
+	go install github.com/securego/gosec/v2/cmd/gosec@v2.22.9
+	"$(shell go env GOPATH)/bin/gosec" -tests=false ./cmd/... ./internal/...
 
 fuzz-smoke:
 	go test ./internal/security -run=^$$ -fuzz=FuzzPathGuardSafeJoin -fuzztime=3s

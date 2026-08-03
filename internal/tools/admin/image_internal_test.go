@@ -129,6 +129,15 @@ func TestRenderFeaturedImageLongTitleWraps(t *testing.T) {
 	}
 }
 
+func TestStableUint64HashDeterministic(t *testing.T) {
+	if got1, got2 := stableUint64Hash("hello world"), stableUint64Hash("hello world"); got1 != got2 {
+		t.Fatalf("stableUint64Hash() not deterministic: %d vs %d", got1, got2)
+	}
+	if got1, got2 := stableUint64Hash("hello world"), stableUint64Hash("different"); got1 == got2 {
+		t.Fatalf("stableUint64Hash() collision on trivial inputs: %d", got1)
+	}
+}
+
 func TestRegisterNilServer(t *testing.T) {
 	Register(nil, config.Default(), nil)
 	RegisterSiteAdmin(nil, config.Default(), nil)
