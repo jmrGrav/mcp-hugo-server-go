@@ -223,9 +223,50 @@ func TestCreatePreviewClampsTTLToConfiguredBounds(t *testing.T) {
 	if !ok {
 		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
+	if got := data["effective_ttl_seconds"]; got != float64(3600) {
+		t.Fatalf("data.effective_ttl_seconds = %v, want 3600", got)
+	}
+	warnings, _ := out["warnings"].([]any)
+	if len(warnings) == 0 {
+		t.Fatal("warnings missing, want clamp warning")
+	}
 	expiresAt, _ := data["expires_at"].(string)
 	if expiresAt == "" {
 		t.Fatal("data.expires_at must not be empty")
+	}
+}
+
+func TestCreatePreviewClampsExplicitNonPositiveTTLToMinimum(t *testing.T) {
+	hugoDir := writeMockHugoForPreview(t, "marker")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+
+	session, _, done := newCreatePreviewServer(t, cfg)
+	defer done()
+
+	for _, ttl := range []int{0, -1} {
+		res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{"ttl_seconds": ttl}})
+		if err != nil {
+			t.Fatalf("CallTool error: %v", err)
+		}
+		if res.IsError {
+			t.Fatalf("create_preview returned error: %s", resultText(res))
+		}
+		out := decodeStructuredResult(t, res)
+		data, ok := out["data"].(map[string]any)
+		if !ok {
+			t.Fatalf("data type = %T, want map[string]any", out["data"])
+		}
+		if got := data["effective_ttl_seconds"]; got != float64(60) {
+			t.Fatalf("ttl_seconds=%d data.effective_ttl_seconds = %v, want 60", ttl, got)
+		}
+		warnings, _ := out["warnings"].([]any)
+		if len(warnings) == 0 {
+			t.Fatalf("ttl_seconds=%d warnings missing, want clamp warning", ttl)
+		}
 	}
 }
 
@@ -263,6 +304,9 @@ func TestCreatePreviewPassesBaseURLPointedAtOwnMount(t *testing.T) {
 	argvStr := strings.TrimSpace(string(argv))
 	if !strings.Contains(argvStr, "--baseURL "+returnedURL) {
 		t.Fatalf("hugo invocation missing --baseURL pointed at the returned preview URL %q; argv = %q", returnedURL, argvStr)
+	}
+	if !strings.Contains(argvStr, "--environment preview") {
+		t.Fatalf("hugo invocation missing preview environment flag; argv = %q", argvStr)
 	}
 	if strings.Contains(argvStr, cfg.SiteURL) {
 		t.Fatalf("hugo invocation must not use the public site's baseURL for a preview build; argv = %q", argvStr)
