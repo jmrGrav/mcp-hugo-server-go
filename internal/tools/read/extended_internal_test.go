@@ -153,6 +153,8 @@ func TestValidationHelpers(t *testing.T) {
 	}
 	write("posts/a/index.md", "---\ntitle: Alpha\ndate: 2026-07-03\n---\nBody A\n")
 	write("posts/b/index.md", "---\ndraft: true\n---\nBody B\n")
+	write("posts/multi/index.fr.md", "---\ntitle: Bonjour\ndate: 2026-07-05\n---\nBody FR\n")
+	write("posts/multi/index.en.md", "---\ntitle: Hello\ndate: 2026-07-05\n---\nBody EN\n")
 	src, err := hugosite.NewSourceIndex(root)
 	if err != nil {
 		t.Fatalf("NewSourceIndex() error = %v", err)
@@ -160,7 +162,12 @@ func TestValidationHelpers(t *testing.T) {
 	if got, err := sourcePagesForValidation(src, "posts/a"); err != nil || len(got) != 1 {
 		t.Fatalf("sourcePagesForValidation(slug) = %#v err=%v", got, err)
 	}
-	if got, err := sourcePagesForValidation(src, ""); err != nil || len(got) != 2 {
+	if got, err := sourcePagesForValidation(src, "posts/multi"); err != nil || len(got) != 2 {
+		t.Fatalf("sourcePagesForValidation(multilingual slug) = %#v err=%v", got, err)
+	} else if got[0].Lang != "en" || got[1].Lang != "fr" {
+		t.Fatalf("sourcePagesForValidation(multilingual slug) langs = %q, %q want en, fr", got[0].Lang, got[1].Lang)
+	}
+	if got, err := sourcePagesForValidation(src, ""); err != nil || len(got) != 4 {
 		t.Fatalf("sourcePagesForValidation(all) = %#v err=%v", got, err)
 	}
 	if _, err := sourcePagesForValidation(src, "does-not-exist"); err == nil {
@@ -171,11 +178,11 @@ func TestValidationHelpers(t *testing.T) {
 		t.Fatalf("validateFrontMatterPage() = %#v", issues)
 	}
 	out := validatePagesWithIssues(src.ListPages(0, 0), 0, 1, nil, site.NewPageResolver(&site.Index{}, src, config.Config{}))
-	if !out.Success || out.Data.PagesChecked != 2 || len(out.Data.Pages) != 1 {
+	if !out.Success || out.Data.PagesChecked != 4 || len(out.Data.Pages) != 1 {
 		t.Fatalf("validatePagesWithIssues() = %#v", out)
 	}
 	health := buildSiteHealth(context.Background(), &site.Index{}, src, nil, config.Config{})
-	if health.SourcePages != 2 || health.DraftPages != 1 {
+	if health.SourcePages != 4 || health.DraftPages != 1 {
 		t.Fatalf("buildSiteHealth() = %#v", health)
 	}
 }

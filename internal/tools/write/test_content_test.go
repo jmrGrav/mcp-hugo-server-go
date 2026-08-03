@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const maxTestContentTTLHours = 24 * 7
+
 // TestCreatePageTestContentForcesDraftAndWritesMetadata is the core
 // regression test for #661: create_page's opt-in test_content parameter
 // must force draft:true regardless of any other setting, and write
@@ -87,21 +89,20 @@ func TestCreatePageTestContentDefaultTTL(t *testing.T) {
 	}
 }
 
-// TestCreatePageTestContentRejectsNegativeTTL confirms a negative
-// ttl_hours is rejected as invalid_params (#641's negative-limit
-// convention), distinct from an omitted/zero value meaning "use default."
-func TestCreatePageTestContentRejectsNegativeTTL(t *testing.T) {
+func TestCreatePageTestContentRejectsInvalidTTLBounds(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
 	defer done()
 
-	res := callTool(t, session, "create_page", map[string]any{
-		"slug": "posts/audit-bad-ttl", "title": "T", "body": "B",
-		"tags": []any{}, "categories": []any{},
-		"test_content": map[string]any{"ttl_hours": -1},
-	})
-	if !res.IsError {
-		t.Fatal("create_page with test_content.ttl_hours=-1 expected an error, got success")
+	for _, ttl := range []int{-1, 0, maxTestContentTTLHours + 1} {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": "posts/audit-bad-ttl", "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+			"test_content": map[string]any{"ttl_hours": ttl},
+		})
+		if !res.IsError {
+			t.Fatalf("create_page with test_content.ttl_hours=%d expected an error, got success", ttl)
+		}
 	}
 }
 

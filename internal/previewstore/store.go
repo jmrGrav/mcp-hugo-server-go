@@ -104,12 +104,23 @@ func (s *Store) Sweep() {
 
 // HTTPHandler serves preview content at /preview/{id}/{token}/{path...}.
 // Every response carries X-Robots-Tag: noindex (acceptance criterion:
-// preview URLs must be non-indexable). File serving goes through
+// preview URLs must be non-indexable), plus a set of defense-in-depth
+// headers since the token embedded in the URL path is the sole access
+// control (#831): Cache-Control prevents shared/intermediate caches from
+// retaining a token-bearing URL, CSP/X-Frame-Options limit what a preview
+// page (which may render attacker-influenced draft content) can do if
+// embedded or scripted, and Referrer-Policy is set as a real HTTP header
+// rather than relying solely on the page's <meta> tag, which doesn't
+// cover the first request. File serving goes through
 // http.FileServer(http.Dir(...)) + http.StripPrefix so path traversal is
 // handled by the standard library rather than manual path joining.
 func (s *Store) HTTPHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Robots-Tag", "noindex, nofollow")
+		w.Header().Set("Cache-Control", "private, no-store, max-age=0")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'")
 
 		rest := strings.TrimPrefix(r.URL.Path, "/preview/")
 		parts := strings.SplitN(rest, "/", 3)

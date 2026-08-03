@@ -284,10 +284,12 @@ type validateOutputData struct {
 	NextOffset   *int                  `json:"next_offset,omitempty"`
 	Pages        []frontMatterIssueDTO `json:"pages"`
 
-	// TestContentSlugs lists slugs matching a reserved test/audit prefix
-	// (#584) — advisory only, never affects Invalid/PagesPassed/Status. A
-	// slug landing here means "confirm this isn't leftover throwaway
-	// content before publishing," not "this page's frontmatter is broken."
+	// TestContentSlugs lists disposable test content — first from explicit
+	// frontmatter markers, then from the reserved-prefix heuristic for
+	// older content that predates that marker (#584, #832). Advisory only,
+	// never affects Invalid/PagesPassed/Status. A slug landing here means
+	// "confirm this isn't leftover throwaway content before publishing,"
+	// not "this page's frontmatter is broken."
 	TestContentSlugs []string `json:"test_content_slugs,omitempty"`
 }
 
@@ -639,7 +641,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. `test_content_slugs` separately lists any slug matching a reserved test/audit prefix (`mcp-audit-`, `test-audit-`, `codex-`) — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -655,7 +657,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases, resolver), nil
 		})
 
-	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. `test_content_slugs` separately lists any slug matching a reserved test/audit prefix (`mcp-audit-`, `test-audit-`, `codex-`) — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateSiteInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -1280,7 +1282,7 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 			invalid++
 		}
 		slug := canonicalValidationSlug(p, resolver)
-		if hasReservedTestSlugPrefix(p.Slug) && !seenTestContentSlugs[slug] {
+		if isTestContentPage(p) && !seenTestContentSlugs[slug] {
 			seenTestContentSlugs[slug] = true
 			testContentSlugs = append(testContentSlugs, slug)
 		}
@@ -1380,6 +1382,31 @@ func hasReservedTestSlugPrefix(slug string) bool {
 	return contentmodel.IsReservedTestSlug(slug)
 }
 
+func isExplicitTestContent(frontmatterRaw map[string]any) bool {
+	if frontmatterRaw == nil {
+		return false
+	}
+	raw, ok := frontmatterRaw["test_content"]
+	if !ok {
+		return false
+	}
+	switch v := raw.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
+}
+
+func isTestContentPage(p hugosite.SourcePage) bool {
+	if isExplicitTestContent(p.FrontmatterRaw) {
+		return true
+	}
+	return hasReservedTestSlugPrefix(p.Slug)
+}
+
 func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) []string {
 	var issues []string
 	if strings.TrimSpace(p.Title) == "" {
@@ -1424,8 +1451,20 @@ func sourcePagesForValidation(idx *hugosite.SourceIndex, slug string) ([]hugosit
 	if slug == "" {
 		return idx.ListPages(0, 0), nil
 	}
-	if p, ok := idx.GetBySlug(slug); ok {
-		return []hugosite.SourcePage{*p}, nil
+	var matches []hugosite.SourcePage
+	for _, p := range idx.ListPages(0, 0) {
+		if strings.Trim(strings.TrimSpace(p.Slug), "/") == slug {
+			matches = append(matches, p)
+		}
+	}
+	if len(matches) > 0 {
+		sort.SliceStable(matches, func(i, j int) bool {
+			if matches[i].Slug != matches[j].Slug {
+				return matches[i].Slug < matches[j].Slug
+			}
+			return matches[i].Lang < matches[j].Lang
+		})
+		return matches, nil
 	}
 	return nil, fmt.Errorf("content_not_found: no source page matched slug %q", slug)
 }
