@@ -547,6 +547,77 @@ func TestInspectRenderedPageFeaturedImageFailsWhenMissing(t *testing.T) {
 	}
 }
 
+// TestInspectRenderedPageFeaturedImageRejectsPathTraversal is a regression
+// test for a path-traversal vulnerability caught in review before this
+// package's PR (#818/#821) merged: featuredImage is a generic,
+// agent-writable frontmatter string (settable via update_page's fields
+// passthrough, validated only for control characters — not path shape), and
+// the original implementation built its filesystem lookup with a bare
+// filepath.Join, which runs Clean and collapses "..". A featuredImage of
+// "/../../../etc/hostname"-style would resolve outside SiteRoot entirely,
+// turning this read-only SEO check into an arbitrary-file existence/size/
+// dimensions oracle for anything readable by the server process. The fix
+// routes the lookup through security.PathGuard.SafeJoin, the same
+// containment primitive every other on-disk lookup in this codebase uses.
+// A canary file placed just outside siteRoot proves it is never touched:
+// if containment ever regresses, this test would start reporting the
+// canary's real size/dimensions in featured_image's Detail instead of fail.
+func TestInspectRenderedPageFeaturedImageRejectsPathTraversal(t *testing.T) {
+	parent := t.TempDir()
+	siteRoot := filepath.Join(parent, "public")
+	contentRoot := filepath.Join(parent, "content")
+	if err := os.MkdirAll(siteRoot, 0o755); err != nil {
+		t.Fatalf("mkdir siteRoot: %v", err)
+	}
+
+	// Canary file outside siteRoot — proving containment means this is
+	// never Stat'd/Open'd by checkFeaturedImage, regardless of how deep the
+	// featuredImage traversal tries to reach.
+	canary := filepath.Join(parent, "canary-secret.txt")
+	if err := os.WriteFile(canary, []byte("should never be read by inspect_rendered"), 0o644); err != nil {
+		t.Fatalf("write canary: %v", err)
+	}
+
+	writeRenderedHTML(t, siteRoot, "posts/traversal/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Traversal</title><meta name="description" content="A post whose featuredImage attempts path traversal."><link rel="canonical" href="https://example.test/posts/traversal/"></head>
+<body>Body.</body>
+</html>`)
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "traversal"), 0o755); err != nil {
+		t.Fatalf("mkdir content: %v", err)
+	}
+	// "../canary-secret.txt" resolves, via bare filepath.Join+Clean, to a
+	// real file one directory above siteRoot — exactly the escape this test
+	// guards against.
+	page := "---\ntitle: Traversal\nfeaturedImage: /../canary-secret.txt\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "traversal", "index.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClientWithSource(t, siteRoot, contentRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/traversal/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	data := decodeContent(t, res)
+	checks := findChecks(t, data)
+	fi, ok := checks["featured_image"]
+	if !ok {
+		t.Fatalf("missing featured_image check, got checks = %v", checks)
+	}
+	if fi["status"] != "fail" {
+		t.Fatalf("featured_image status = %v, want fail — traversal must be rejected, not resolved (detail=%v)", fi["status"], fi["detail"])
+	}
+	detail, _ := fi["detail"].(string)
+	if strings.Contains(detail, "exists=true") || strings.Contains(detail, "dimensions=") {
+		t.Fatalf("featured_image detail = %q leaked information about a path outside SiteRoot — containment regressed", detail)
+	}
+}
+
 // TestInspectRenderedPageFeaturedImageWarnsOnMissingAltAndOGMismatch is a
 // regression test for #818: an existing featuredImage whose rendered <img>
 // has no alt text and whose og:image doesn't match must warn (fixable, not

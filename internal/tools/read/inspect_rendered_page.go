@@ -16,6 +16,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -382,10 +383,28 @@ func checkFeaturedImage(cfg config.Config, resolved site.ResolvedPage, doc *html
 		return renderCheckResult{Check: "featured_image", Status: "pass", Detail: "no featuredImage configured"}
 	}
 
-	localPath := filepath.Join(cfg.SiteRoot, filepath.FromSlash(strings.TrimPrefix(featuredImage, "/")))
+	// featuredImage is a generic, agent-writable frontmatter string (set via
+	// update_page's fields passthrough, validated only for control
+	// characters, not path shape) — resolve it through the same PathGuard
+	// containment every other on-disk lookup in this codebase uses, rather
+	// than a bare filepath.Join. filepath.Join alone runs Clean, which
+	// collapses ".." and would let e.g. featuredImage: /../../../etc/hostname
+	// resolve outside SiteRoot, turning this read-only SEO check into an
+	// arbitrary-file existence/size/dimensions oracle.
+	guard, err := security.New(cfg.SiteRoot, true)
+	if err != nil {
+		return renderCheckResult{Check: "featured_image", Status: "warn", Detail: "could not initialize path guard to validate featuredImage"}
+	}
+	localPath, err := guard.SafeJoin(strings.TrimPrefix(featuredImage, "/"))
+	if err != nil {
+		return renderCheckResult{Check: "featured_image", Status: "fail", Detail: fmt.Sprintf("featuredImage %q is not a safe path (%v)", featuredImage, err)}
+	}
 	info, statErr := os.Stat(localPath)
 	if statErr != nil {
 		return renderCheckResult{Check: "featured_image", Status: "fail", Detail: fmt.Sprintf("featuredImage %q is configured but not found in the built public output", featuredImage)}
+	}
+	if info.IsDir() {
+		return renderCheckResult{Check: "featured_image", Status: "fail", Detail: fmt.Sprintf("featuredImage %q resolves to a directory, not a file", featuredImage)}
 	}
 
 	var warnings []string
