@@ -1,0 +1,69 @@
+name: Commit identity
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  commit-identity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify commit authors and message trailers
+        run: |
+          set -euo pipefail
+
+          # Every commit pushed to this repo must be authored as the
+          # project's own account, never a contributor's personal identity.
+          ALLOWED_AUTHOR_NAME="jmrGrav"
+          ALLOWED_AUTHOR_EMAIL="276982731+jmrGrav@users.noreply.github.com"
+
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            RANGE="origin/${{ github.event.pull_request.base.ref }}..HEAD"
+          else
+            # push to main: check only the commits introduced by this push,
+            # not the full history (older history is out of scope for this
+            # gate and rewriting it is a separate, deliberate decision).
+            BEFORE="${{ github.event.before }}"
+            if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+              RANGE="HEAD"
+            else
+              RANGE="$BEFORE..HEAD"
+            fi
+          fi
+
+          fail=0
+
+          while IFS=$'\t' read -r sha name email; do
+            if [ "$name" != "$ALLOWED_AUTHOR_NAME" ] || [ "$email" != "$ALLOWED_AUTHOR_EMAIL" ]; then
+              echo "::error::commit $sha has author '$name <$email>', expected '$ALLOWED_AUTHOR_NAME <$ALLOWED_AUTHOR_EMAIL>'"
+              fail=1
+            fi
+          done < <(git log --format='%H%x09%an%x09%ae' "$RANGE" 2>/dev/null || true)
+
+          # Any email in a commit message (e.g. a Co-authored-by trailer)
+          # must be a GitHub noreply address or a known automation address
+          # — never a personal email.
+          while IFS=$'\t' read -r sha email; do
+            case "$email" in
+              *@users.noreply.github.com|*@anthropic.com) ;;
+              *)
+                echo "::error::commit $sha message contains non-allowlisted email '$email' (likely a personal address leaked via Co-authored-by or similar trailer)"
+                fail=1
+                ;;
+            esac
+          done < <(git log --format='%H' "$RANGE" 2>/dev/null | while read -r sha; do
+              git log -1 --format='%B' "$sha" | grep -oE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' | while read -r email; do
+                printf '%s\t%s\n' "$sha" "$email"
+              done
+            done || true)
+
+          exit $fail
