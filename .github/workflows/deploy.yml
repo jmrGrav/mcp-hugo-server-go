@@ -78,11 +78,27 @@ jobs:
             BUILD_VERSION="$TAG_NAME"
             RELEASE_VERSION="$TAG_NAME"
             BUILD_CHANNEL="release"
+          elif PKG_VERSION="$(node -p "require('./npm/package.json').version" 2>/dev/null)" && [ -n "$PKG_VERSION" ]; then
+            # #816: git describe always fails here (this repo deploys before
+            # tagging — Release requires the deployment to already be live
+            # and verified first, see release.yml), and every previous
+            # deploy of an untagged release commit relied on a human
+            # remembering to pass the release_version input by hand. That
+            # was forgotten twice in a row (v1.7.2, v1.7.3), reproducing the
+            # exact problem #555 introduced the input to solve. npm/package.json's
+            # version is already bumped as part of every release commit
+            # (repo convention, checked by cmd/check-readme-release) before
+            # it's merged to main, so it's a reliable durable fallback
+            # instead of a manual one — no caller has to remember anything.
+            BUILD_VERSION="v$PKG_VERSION"
+            RELEASE_VERSION="v$PKG_VERSION"
+            BUILD_CHANNEL="release"
           else
             BUILD_VERSION="main-$SHORT_SHA"
             # Mainline production deploys with no explicit release_version
-            # input omit it: callers should use build_version=main-<sha>
-            # plus commit/build_channel instead.
+            # input, no exact tag, and no readable npm/package.json version
+            # omit it: callers should use build_version=main-<sha> plus
+            # commit/build_channel instead.
             RELEASE_VERSION=""
             BUILD_CHANNEL="main"
           fi

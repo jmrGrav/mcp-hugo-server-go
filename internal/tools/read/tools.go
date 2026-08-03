@@ -70,6 +70,21 @@ type frontmatterDTO struct {
 	Revision           string                      `json:"revision,omitempty"`
 	State              site.LifecycleState         `json:"state"`
 	ReadingTimeMin     int                         `json:"reading_time_minutes"`
+	// FeaturedImage/FeaturedImagePreview/Description/Draft (#817) surface
+	// frontmatter fields that were already writable (update_page's
+	// featured_image/description/draft params) but invisible to a caller
+	// reading through get_page_frontmatter/get_page_for_edit/
+	// build_agent_context/export_agent_context — the only way to discover
+	// e.g. a page's featuredImage was an indirect tool like diff_page or
+	// list_page_assets. Named to match update_page's write-side parameter
+	// names (snake_case, featured_image not featuredImage) so a caller can
+	// round-trip a read value straight back into a write call. Omitted
+	// (never a zero value) when unset in frontmatter or when only
+	// resolved.Public is available (no source frontmatter to read at all).
+	FeaturedImage        string `json:"featured_image,omitempty"`
+	FeaturedImagePreview string `json:"featured_image_preview,omitempty"`
+	Description          string `json:"description,omitempty"`
+	Draft                *bool  `json:"draft,omitempty"`
 }
 
 type getPageFrontmatterData struct {
@@ -446,7 +461,7 @@ func registerReadPageTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sour
 		})
 
 	addReadOnlyTool(s, "get_page_frontmatter", "Read page metadata",
-		"Read structured metadata for a published page, including title, tags, categories, date, URL, estimated reading time, and a `state` object describing source/build/public/index freshness. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. `lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. right after create_page) — it no longer lags behind `resolved_lang` until the page is built. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same metadata alongside markdown, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Read structured metadata for a published page, including title, tags, categories, date, URL, estimated reading time, and a `state` object describing source/build/public/index freshness. `featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated from source frontmatter when available and omitted (not a zero value) when unset or when only public output is resolvable — `featured_image`'s name matches update_page's `featured_image` write parameter for direct read-then-write round-tripping. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. `lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. right after create_page) — it no longer lags behind `resolved_lang` until the page is built. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same metadata alongside markdown, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageFrontmatterInput) (*mcp.CallToolResult, getPageFrontmatterOutput, error) {
 			if idx == nil {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("index not initialized")
@@ -691,7 +706,7 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 		})
 
 	addReadOnlyTool(s, "get_page_for_edit", "Get page for edit",
-		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body) shape the response down. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `frontmatter.featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated when set in source frontmatter, matching update_page's write parameter names for direct round-tripping. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageForEditInput) (*mcp.CallToolResult, getPageForEditOutput, error) {
 			if idx == nil {
 				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
@@ -926,6 +941,15 @@ func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, contentRoot, site
 	if includeTerms {
 		dto.TagTerms = identity.Tags
 		dto.CategoryTerms = identity.Categories
+	}
+	if resolved.Source != nil {
+		fm := resolved.Source.FrontmatterRaw
+		dto.FeaturedImage = frontmatterStringValue(fm["featuredImage"])
+		dto.FeaturedImagePreview = frontmatterStringValue(fm["featuredImagePreview"])
+		dto.Description = frontmatterStringValue(fm["description"])
+		if b, ok := fm["draft"].(bool); ok {
+			dto.Draft = &b
+		}
 	}
 	return dto
 }
