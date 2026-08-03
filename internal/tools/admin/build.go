@@ -403,6 +403,8 @@ func runBuild(ctx context.Context, cfg config.Config, siteReload ...PostBuildCal
 	start := time.Now()
 	runID := newBuildID(start)
 	args := buildCommandArgs(cacheDir, false)
+	// #nosec G204 -- executable is fixed to hugo; args come from
+	// buildCommandArgs and validated config, not from MCP caller input.
 	cmd := exec.CommandContext(tctx, "hugo", args...)
 	cmd.Dir = cfg.HugoRoot
 	cmd.Env = boundedCommandEnv()

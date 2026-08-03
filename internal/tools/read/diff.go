@@ -270,6 +270,8 @@ func unifiedDiff(relPath string, base, current []byte) (string, error) {
 		return "", err
 	}
 
+	// #nosec G204 -- executable and flags are fixed; the compared paths come
+	// from os.CreateTemp in this function, not from caller-controlled input.
 	cmd := exec.Command("git", "diff", "--no-index", "--unified=3", "--no-renames", "--", baseFile.Name(), currentFile.Name())
 	out, err := cmd.CombinedOutput()
 	if err != nil {

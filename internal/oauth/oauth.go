@@ -45,6 +45,7 @@ const CtxCallerIP ctxKey = "caller_ip"
 // idempotency-key result. Empty when OAuth is disabled or no bearer was
 // presented; callers must treat "" as its own single shared bucket rather
 // than failing, since some deployments run with OAuth off entirely.
+// #nosec G101 -- this is a context-key label, not a credential or token.
 const CtxTokenID ctxKey = "oauth_token_id"
 
 var cryptoRandReader io.Reader = rand.Reader

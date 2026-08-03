@@ -177,7 +177,7 @@ func checkQuota(cfg config.GoogleIndexConfig, needed, limit int) (int, error) {
 
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err == nil {
 		out, _ := json.Marshal(state)
-		_ = os.WriteFile(statePath, out, 0o644)
+		_ = os.WriteFile(statePath, out, 0o600)
 	}
 	return allowed, nil
 }

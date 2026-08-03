@@ -101,6 +101,8 @@ func RegisterPreviewBuild(s *mcp.Server, cfg config.Config) {
 		start := time.Now()
 		runID := newBuildID(start)
 		args := buildCommandArgs(cacheDir, true)
+		// #nosec G204 -- executable is fixed to hugo; args come from
+		// buildCommandArgs and validated server config.
 		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
 		cmd.Env = boundedCommandEnv()
