@@ -398,6 +398,77 @@ func TestPlanPageRelevantVocabularyPrefersSourceIndex(t *testing.T) {
 	}
 }
 
+// TestPlanPageRelevantVocabularyPrefersSourceIndexForCategories is the
+// category-side counterpart to the tag-side test above — the category side
+// is what #826 actually reported (plan_page(categories: ["infrastructure"])
+// returning empty_categories_reason despite list_categories confirming the
+// category exists), so this exercises the exact reported input shape rather
+// than only the tag-side path, which happens to share the same code but was
+// never itself asserted against a categories query.
+func TestPlanPageRelevantVocabularyPrefersSourceIndexForCategories(t *testing.T) {
+	htmlDir := t.TempDir()
+	writePlanPageFixtureHTML(t, htmlDir, filepath.Join("posts", "source-vs-public-cat", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/source-vs-public-cat/">
+<meta property="og:title" content="Source vs public cat">
+<meta property="article:tag" content="publictag">
+<meta property="article:section" content="publiccat">
+</head><body><article>Body.</article></body></html>`)
+
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "source-vs-public-cat"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "source-vs-public-cat", "index.md"), []byte("---\ntitle: Source vs public cat\ndate: 2026-08-03\ntags:\n  - sourcetag\ncategories:\n  - sourcecat\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.ContentRoot = contentRoot
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{"categories": []any{"source"}})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if reason, present := data["empty_categories_reason"]; present {
+		t.Fatalf("plan_page empty_categories_reason = %v, want no empty-categories reason since sourcecat matches", reason)
+	}
+	relevantCategories, _ := data["relevant_categories"].([]any)
+	foundSource := false
+	foundPublic := false
+	for _, v := range relevantCategories {
+		switch v {
+		case "sourcecat":
+			foundSource = true
+		case "publiccat":
+			foundPublic = true
+		}
+	}
+	if !foundSource {
+		t.Fatalf("plan_page relevant_categories = %v, want source-index category sourcecat", relevantCategories)
+	}
+	if foundPublic {
+		t.Fatalf("plan_page relevant_categories = %v, want source-index vocabulary, not stale publiccat", relevantCategories)
+	}
+}
+
 func TestPlanPageRelevantVocabularyUsesCanonicalAliases(t *testing.T) {
 	htmlDir := t.TempDir()
 	writePlanPageFixtureHTML(t, htmlDir, filepath.Join("posts", "security-note", "index.html"), `<!DOCTYPE html><html lang="en"><head>
@@ -455,5 +526,116 @@ func TestPlanPageRelevantVocabularyUsesCanonicalAliases(t *testing.T) {
 	}
 	if foundAlias {
 		t.Fatalf("plan_page relevant_tags = %v, alias sécurité should have been folded away", relevantTags)
+	}
+}
+
+// TestPlanPageRelevantVocabularyUsesCanonicalAliasesForCategories is the
+// category-side counterpart to the tag-side alias test above — same
+// planPageVocabulary code path applies taxonomy.ApplyAliases to categories
+// too, but it was never itself exercised with a categories query.
+func TestPlanPageRelevantVocabularyUsesCanonicalAliasesForCategories(t *testing.T) {
+	htmlDir := t.TempDir()
+	writePlanPageFixtureHTML(t, htmlDir, filepath.Join("posts", "security-note-cat", "index.html"), `<!DOCTYPE html><html lang="en"><head>
+<link rel="canonical" href="https://example.test/posts/security-note-cat/">
+<meta property="og:title" content="Security note cat">
+<meta property="article:section" content="sécurité">
+</head><body><article>Body.</article></body></html>`)
+
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "security-note-cat"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "security-note-cat", "index.md"), []byte("---\ntitle: Security note cat\ndate: 2026-08-03\ncategories:\n  - sécurité\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.ContentRoot = contentRoot
+	cfg.TaxonomyAliases = map[string]string{"sécurité": "security"}
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{"categories": []any{"security"}})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if reason, present := data["empty_categories_reason"]; present {
+		t.Fatalf("plan_page empty_categories_reason = %v, want no empty-categories reason since the aliased category matches", reason)
+	}
+	relevantCategories, _ := data["relevant_categories"].([]any)
+	foundCanonical := false
+	foundAlias := false
+	for _, v := range relevantCategories {
+		switch v {
+		case "security":
+			foundCanonical = true
+		case "sécurité":
+			foundAlias = true
+		}
+	}
+	if !foundCanonical {
+		t.Fatalf("plan_page relevant_categories = %v, want canonical security", relevantCategories)
+	}
+	if foundAlias {
+		t.Fatalf("plan_page relevant_categories = %v, alias sécurité should have been folded away", relevantCategories)
+	}
+}
+
+// TestPlanPageRelevantVocabularyHandlesTagsAndCategoriesTogether covers a
+// single call submitting both tags and categories at once — plan_page's
+// real-world usage shape, not exercised by any of the tag-only/category-only
+// tests above, which could in principle each pass while the two facets
+// interfered with each other in a combined call.
+func TestPlanPageRelevantVocabularyHandlesTagsAndCategoriesTogether(t *testing.T) {
+	idx := mustPlanPageIndex(t)
+	session, done := newPlanPageClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "plan_page", map[string]any{
+		"tags":       []any{"go"},
+		"categories": []any{"programming"},
+	})
+	if res.IsError {
+		t.Fatalf("plan_page returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	relevantTags, _ := data["relevant_tags"].([]any)
+	relevantCategories, _ := data["relevant_categories"].([]any)
+	foundTag := false
+	for _, v := range relevantTags {
+		if v == "go" {
+			foundTag = true
+		}
+	}
+	foundCategory := false
+	for _, v := range relevantCategories {
+		if v == "programming" {
+			foundCategory = true
+		}
+	}
+	if !foundTag {
+		t.Fatalf("plan_page relevant_tags = %v, want go", relevantTags)
+	}
+	if !foundCategory {
+		t.Fatalf("plan_page relevant_categories = %v, want programming", relevantCategories)
+	}
+	if _, present := data["empty_categories_reason"]; present {
+		t.Fatalf("plan_page empty_categories_reason present = %#v, want omitted when programming matches", data["empty_categories_reason"])
 	}
 }
