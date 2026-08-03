@@ -74,6 +74,8 @@ func Command(ctx context.Context, repoRoot string, args ...string) *exec.Cmd {
 		safeDirValue = ""
 	}
 	gitArgs := append([]string{"-c", "safe.directory=" + safeDirValue, "-C", repoRoot}, args...)
+	// #nosec G204 -- the executable is fixed to git and callers pass only
+	// vetted repo-scoped arguments through this shared wrapper.
 	return exec.CommandContext(ctx, "git", gitArgs...)
 }
 

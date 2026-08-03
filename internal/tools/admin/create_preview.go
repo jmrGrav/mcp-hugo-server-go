@@ -158,6 +158,8 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		if in.IncludeDrafts {
 			args = append(args, "--buildDrafts")
 		}
+		// #nosec G204 -- executable is fixed to hugo; args are derived from
+		// server-controlled preview settings and validated config.
 		cmd := exec.CommandContext(tctx, "hugo", args...)
 		cmd.Dir = cfg.HugoRoot
 		cmd.Env = boundedCommandEnv()

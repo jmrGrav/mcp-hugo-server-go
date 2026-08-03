@@ -71,6 +71,8 @@ func renderFeaturedImage(bgDir, path, style, title, subtitle string, tags []stri
 	if err := jpeg.Encode(&buf, canvas, &jpeg.Options{Quality: 88}); err != nil {
 		return err
 	}
+	// #nosec G306 -- generated hero images live under the public site tree and
+	// must remain world-readable for Hugo/static hosting to serve them.
 	return os.WriteFile(path, buf.Bytes(), 0o644)
 }
 
