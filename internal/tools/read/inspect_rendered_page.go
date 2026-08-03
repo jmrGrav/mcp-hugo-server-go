@@ -3,6 +3,9 @@ package read
 import (
 	"context"
 	"fmt"
+	"image"
+	_ "image/jpeg" // registers the JPEG decoder with image.DecodeConfig
+	_ "image/png"  // registers the PNG decoder with image.DecodeConfig
 	"net/url"
 	"os"
 	"path/filepath"
@@ -91,7 +94,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `<img>` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `<img>` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in inspectRenderedPageInput) (*mcp.CallToolResult, inspectRenderedPageOutput, error) {
 			if idx == nil {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("index not initialized")
@@ -120,6 +123,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				checkHreflang(doc, idx, page),
 				checkInternalLinks(idx, page, doc),
 				checkMissingImages(cfg, page, doc),
+				checkFeaturedImage(cfg, resolved, doc),
 				checkRenderErrors(raw),
 			}
 
@@ -357,6 +361,87 @@ func checkMissingImages(cfg config.Config, page site.Page, doc *html.Node) rende
 		return renderCheckResult{Check: "missing_images", Status: "fail", Detail: fmt.Sprintf("%d missing local image(s), e.g. %s", len(missing), strings.Join(sample, ", "))}
 	}
 	return renderCheckResult{Check: "missing_images", Status: "pass"}
+}
+
+// checkFeaturedImage (#818) is a dedicated check for the page's featuredImage
+// (as opposed to checkMissingImages, which treats every <img> uniformly and
+// can't tell a broken hero image apart from a broken body image). All
+// sub-checks are local filesystem/DOM inspection, deliberately not an
+// outbound HTTP request to the page's own public URL: this server's own
+// production deployment terminates TLS upstream of the process it runs in,
+// so a self-fetch of the page's https:// URL is not guaranteed to even
+// resolve from where the server runs, and a network call would add latency/
+// hang/egress failure modes to what is otherwise an entirely local, fast,
+// deterministic tool.
+func checkFeaturedImage(cfg config.Config, resolved site.ResolvedPage, doc *html.Node) renderCheckResult {
+	if resolved.Source == nil {
+		return renderCheckResult{Check: "featured_image", Status: "pass", Detail: "no source frontmatter available to check"}
+	}
+	featuredImage := frontmatterStringValue(resolved.Source.FrontmatterRaw["featuredImage"])
+	if featuredImage == "" {
+		return renderCheckResult{Check: "featured_image", Status: "pass", Detail: "no featuredImage configured"}
+	}
+
+	localPath := filepath.Join(cfg.SiteRoot, filepath.FromSlash(strings.TrimPrefix(featuredImage, "/")))
+	info, statErr := os.Stat(localPath)
+	if statErr != nil {
+		return renderCheckResult{Check: "featured_image", Status: "fail", Detail: fmt.Sprintf("featuredImage %q is configured but not found in the built public output", featuredImage)}
+	}
+
+	var warnings []string
+	detail := fmt.Sprintf("configured=%s, exists=true", featuredImage)
+	if info.Size() == 0 {
+		warnings = append(warnings, "file exists but is 0 bytes")
+	} else if f, err := os.Open(localPath); err == nil {
+		cfgImg, _, decErr := image.DecodeConfig(f)
+		_ = f.Close()
+		if decErr == nil {
+			detail += fmt.Sprintf(", dimensions=%dx%d", cfgImg.Width, cfgImg.Height)
+		}
+	}
+
+	// Theme markup may lazy-load images via data-src with a placeholder src
+	// (confirmed live: this site's rendered <img> for its own hero image
+	// uses data-src, not src, for the real URL) — check both attributes so
+	// the alt-text check isn't blind to lazy-loaded markup.
+	altMissing := true
+	walkNodes(doc, func(n *html.Node) bool {
+		if n.Type == html.ElementNode && n.Data == "img" {
+			src := strings.TrimSpace(htmlAttr(n, "src"))
+			dataSrc := strings.TrimSpace(htmlAttr(n, "data-src"))
+			if src == featuredImage || dataSrc == featuredImage {
+				if strings.TrimSpace(htmlAttr(n, "alt")) != "" {
+					altMissing = false
+				}
+				return false
+			}
+		}
+		return true
+	})
+	if altMissing {
+		warnings = append(warnings, "no alt text found on the rendered <img> referencing this image")
+	}
+
+	ogImage := ""
+	walkNodes(doc, func(n *html.Node) bool {
+		if n.Type == html.ElementNode && n.Data == "meta" &&
+			(strings.EqualFold(htmlAttr(n, "property"), "og:image") || strings.EqualFold(htmlAttr(n, "name"), "og:image")) {
+			ogImage = strings.TrimSpace(htmlAttr(n, "content"))
+			return false
+		}
+		return true
+	})
+	if siteURL := strings.TrimRight(strings.TrimSpace(cfg.SiteURL), "/"); siteURL != "" && ogImage != "" {
+		expectedOG := siteURL + featuredImage
+		if ogImage != expectedOG {
+			warnings = append(warnings, fmt.Sprintf("og:image %q does not match featuredImage's expected public URL %q", ogImage, expectedOG))
+		}
+	}
+
+	if len(warnings) > 0 {
+		return renderCheckResult{Check: "featured_image", Status: "warn", Detail: detail + "; " + strings.Join(warnings, "; ")}
+	}
+	return renderCheckResult{Check: "featured_image", Status: "pass", Detail: detail}
 }
 
 func checkRenderErrors(raw []byte) renderCheckResult {

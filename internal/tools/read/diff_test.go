@@ -282,6 +282,82 @@ func TestDiffPageUntrackedFileReturnsGitUntrackedStatus(t *testing.T) {
 	}
 }
 
+// TestGetSiteHealthCountsUntrackedSourcePages is a regression test for
+// #819: get_site_health previously had no way to surface published content
+// with no git-tracked source file, only discoverable per-page via
+// diff_page's own git_untracked status. One tracked page + one untracked
+// page must report untracked_source_pages: 1, not 0 or 2.
+func TestGetSiteHealthCountsUntrackedSourcePages(t *testing.T) {
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	if err := os.MkdirAll(contentRoot, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	runGit(t, root, "init")
+	runGit(t, root, "config", "user.email", "test@example.test")
+	runGit(t, root, "config", "user.name", "Test User")
+
+	trackedPath := filepath.Join(contentRoot, "posts", "tracked", "index.md")
+	if err := os.MkdirAll(filepath.Dir(trackedPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(trackedPath, []byte("---\ntitle: Tracked\ndate: 2026-07-03\n---\nCommitted.\n"), 0o644); err != nil {
+		t.Fatalf("write tracked page: %v", err)
+	}
+	runGit(t, root, "add", ".")
+	runGit(t, root, "commit", "-m", "initial")
+
+	untrackedPath := filepath.Join(contentRoot, "posts", "untracked", "index.md")
+	if err := os.MkdirAll(filepath.Dir(untrackedPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(untrackedPath, []byte("---\ntitle: Untracked\ndate: 2026-07-03\n---\nNot committed.\n"), 0o644); err != nil {
+		t.Fatalf("write untracked page: %v", err)
+	}
+
+	session, done := newDiffPageClient(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	got, ok := data["untracked_source_pages"].(float64)
+	if !ok {
+		t.Fatalf("get_site_health untracked_source_pages = %v (%T), want a number", data["untracked_source_pages"], data["untracked_source_pages"])
+	}
+	if got != 1 {
+		t.Fatalf("get_site_health untracked_source_pages = %v, want 1 (only the untracked page)", got)
+	}
+}
+
+// TestGetSiteHealthOmitsUntrackedSourcePagesWithoutGit proves the field is
+// omitted entirely (not a misleading 0) when git status can't be determined
+// at all — e.g. content root outside any git repository.
+func TestGetSiteHealthOmitsUntrackedSourcePagesWithoutGit(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "hello", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Hello\ndate: 2026-07-03\n---\nHello.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+
+	session, done := newDiffPageClient(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if _, present := data["untracked_source_pages"]; present {
+		t.Fatalf("get_site_health untracked_source_pages = %v, want omitted (no git repo)", data["untracked_source_pages"])
+	}
+}
+
 func TestDiffPageGitBaselineDisabledSkipsHostProbing(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")

@@ -1,6 +1,9 @@
 package read_test
 
 import (
+	"image"
+	"image/color"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +14,28 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// writeTestJPEG encodes a real (if trivial) JPEG so image.DecodeConfig can
+// successfully report its dimensions, exercising checkFeaturedImage's
+// dimensions-in-Detail path end-to-end rather than just its "can't decode,
+// omit dimensions" fallback.
+func writeTestJPEG(t *testing.T, path string, width, height int) {
+	t.Helper()
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			img.Set(x, y, color.RGBA{R: 100, G: 120, B: 140, A: 255})
+		}
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+	defer f.Close()
+	if err := jpeg.Encode(f, img, nil); err != nil {
+		t.Fatalf("encode jpeg: %v", err)
+	}
+}
 
 func writeRenderedHTML(t *testing.T, siteRoot, rel, body string) {
 	t.Helper()
@@ -404,6 +429,182 @@ func TestInspectRenderedPageFlagsCanonicalMismatch(t *testing.T) {
 	checks := findChecks(t, data)
 	if checks["canonical"]["status"] != "warn" {
 		t.Fatalf("canonical status = %v, want warn (rendered canonical host %q differs from configured cfg.SiteURL)", checks["canonical"]["status"], "staging.example.test")
+	}
+}
+
+// newInspectRenderedPageClientWithSource wires a real hugosite.SourceIndex
+// (built from contentRoot) alongside the site.Index (built from siteRoot),
+// so resolved.Source is populated and checkFeaturedImage's frontmatter read
+// path is actually exercised — the plain newInspectRenderedPageClient helper
+// above passes a nil srcIdx, so resolved.Source is always nil there and
+// checkFeaturedImage only ever takes its "no source available" pass path.
+func newInspectRenderedPageClientWithSource(t *testing.T, siteRoot, contentRoot string, idx *site.Index) (*mcp.ClientSession, func()) {
+	t.Helper()
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	cfg := inspectRenderedPageConfig(siteRoot)
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
+// TestInspectRenderedPageFeaturedImagePassesWithDimensions is a regression
+// test for #818: a configured, existing featuredImage with alt text and a
+// matching og:image must pass, and report decoded pixel dimensions in Detail.
+func TestInspectRenderedPageFeaturedImagePassesWithDimensions(t *testing.T) {
+	siteRoot := t.TempDir()
+	contentRoot := t.TempDir()
+
+	writeRenderedHTML(t, siteRoot, "posts/hero/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Hero</title>
+<meta name="description" content="A post with a proper hero image.">
+<link rel="canonical" href="https://example.test/posts/hero/">
+<meta property="og:image" content="https://example.test/images/hero-featured.jpg">
+</head>
+<body>
+<img data-src="/images/hero-featured.jpg" alt="Hero image">
+</body>
+</html>`)
+	if err := os.MkdirAll(filepath.Join(siteRoot, "images"), 0o755); err != nil {
+		t.Fatalf("mkdir images: %v", err)
+	}
+	writeTestJPEG(t, filepath.Join(siteRoot, "images", "hero-featured.jpg"), 12, 8)
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "hero"), 0o755); err != nil {
+		t.Fatalf("mkdir content: %v", err)
+	}
+	page := "---\ntitle: Hero\nfeaturedImage: /images/hero-featured.jpg\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "hero", "index.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClientWithSource(t, siteRoot, contentRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/hero/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	data := decodeContent(t, res)
+	checks := findChecks(t, data)
+	fi, ok := checks["featured_image"]
+	if !ok {
+		t.Fatalf("missing featured_image check, got checks = %v", checks)
+	}
+	if fi["status"] != "pass" {
+		t.Fatalf("featured_image status = %v, want pass (detail=%v)", fi["status"], fi["detail"])
+	}
+	detail, _ := fi["detail"].(string)
+	if !strings.Contains(detail, "dimensions=12x8") {
+		t.Fatalf("featured_image detail = %q, want it to include dimensions=12x8", detail)
+	}
+}
+
+// TestInspectRenderedPageFeaturedImageFailsWhenMissing is a regression test
+// for #818: a configured featuredImage whose file doesn't exist in the built
+// public output must fail, distinguishing a broken hero image from a
+// broken body image (which only moves the separate missing_images check).
+func TestInspectRenderedPageFeaturedImageFailsWhenMissing(t *testing.T) {
+	siteRoot := t.TempDir()
+	contentRoot := t.TempDir()
+
+	writeRenderedHTML(t, siteRoot, "posts/broken-hero/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Broken Hero</title><meta name="description" content="A post whose hero image is missing."><link rel="canonical" href="https://example.test/posts/broken-hero/"></head>
+<body>Body.</body>
+</html>`)
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "broken-hero"), 0o755); err != nil {
+		t.Fatalf("mkdir content: %v", err)
+	}
+	page := "---\ntitle: Broken Hero\nfeaturedImage: /images/does-not-exist-featured.jpg\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "broken-hero", "index.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClientWithSource(t, siteRoot, contentRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/broken-hero/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	data := decodeContent(t, res)
+	if got := data["status"]; got != "issues_found" {
+		t.Fatalf("status = %v, want issues_found", got)
+	}
+	checks := findChecks(t, data)
+	if checks["featured_image"]["status"] != "fail" {
+		t.Fatalf("featured_image status = %v, want fail (detail=%v)", checks["featured_image"]["status"], checks["featured_image"]["detail"])
+	}
+	if checks["missing_images"]["status"] != "pass" {
+		t.Fatalf("missing_images status = %v, want pass — no <img> tags on this page, only a configured featuredImage", checks["missing_images"]["status"])
+	}
+}
+
+// TestInspectRenderedPageFeaturedImageWarnsOnMissingAltAndOGMismatch is a
+// regression test for #818: an existing featuredImage whose rendered <img>
+// has no alt text and whose og:image doesn't match must warn (fixable, not
+// broken), not fail or silently pass.
+func TestInspectRenderedPageFeaturedImageWarnsOnMissingAltAndOGMismatch(t *testing.T) {
+	siteRoot := t.TempDir()
+	contentRoot := t.TempDir()
+
+	writeRenderedHTML(t, siteRoot, "posts/sloppy-hero/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Sloppy Hero</title>
+<meta name="description" content="A post with alt/og issues on its hero image.">
+<link rel="canonical" href="https://example.test/posts/sloppy-hero/">
+<meta property="og:image" content="https://example.test/images/wrong-image.jpg">
+</head>
+<body>
+<img data-src="/images/sloppy-featured.jpg">
+</body>
+</html>`)
+	if err := os.MkdirAll(filepath.Join(siteRoot, "images"), 0o755); err != nil {
+		t.Fatalf("mkdir images: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(siteRoot, "images", "sloppy-featured.jpg"), []byte("not-a-real-jpeg-but-non-empty"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "sloppy-hero"), 0o755); err != nil {
+		t.Fatalf("mkdir content: %v", err)
+	}
+	page := "---\ntitle: Sloppy Hero\nfeaturedImage: /images/sloppy-featured.jpg\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "sloppy-hero", "index.md"), []byte(page), 0o644); err != nil {
+		t.Fatalf("write content: %v", err)
+	}
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClientWithSource(t, siteRoot, contentRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/sloppy-hero/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	data := decodeContent(t, res)
+	if got := data["status"]; got != "warnings_found" {
+		t.Fatalf("status = %v, want warnings_found", got)
+	}
+	checks := findChecks(t, data)
+	fi := checks["featured_image"]
+	if fi["status"] != "warn" {
+		t.Fatalf("featured_image status = %v, want warn (detail=%v)", fi["status"], fi["detail"])
+	}
+	detail, _ := fi["detail"].(string)
+	if !strings.Contains(detail, "no alt text") {
+		t.Fatalf("featured_image detail = %q, want it to mention missing alt text", detail)
+	}
+	if !strings.Contains(detail, "og:image") {
+		t.Fatalf("featured_image detail = %q, want it to mention the og:image mismatch", detail)
 	}
 }
 

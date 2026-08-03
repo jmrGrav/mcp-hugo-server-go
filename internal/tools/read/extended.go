@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
@@ -159,11 +161,19 @@ type contentEnvelopeData struct {
 	TaxonomyInconsistencies      []string                   `json:"taxonomy_inconsistencies,omitempty"`
 	TaxonomyInconsistencyDetails []taxonomyInconsistencyDTO `json:"taxonomy_inconsistency_details,omitempty"`
 	OrphanPages                  []string                   `json:"orphan_pages,omitempty"`
-	Sections                     []sectionDTO               `json:"sections,omitempty"`
-	Languages                    []string                   `json:"languages,omitempty"`
-	Summary                      string                     `json:"summary,omitempty"`
-	RecentPages                  []pageDTO                  `json:"recent_pages,omitempty"`
-	Notes                        []string                   `json:"notes,omitempty"`
+	// UntrackedSourcePages (#819) counts published pages whose source file
+	// isn't tracked by git — surfaced proactively here instead of only
+	// discovered per-page via diff_page's own git_untracked status. A
+	// pointer so "0 untracked, checked" (empty object omitted by omitempty
+	// only when nil) is distinguishable from "couldn't check at all" (no
+	// git repo, git unavailable) — see buildSiteHealth's call to
+	// untrackedSourcePageCount.
+	UntrackedSourcePages *int         `json:"untracked_source_pages,omitempty"`
+	Sections             []sectionDTO `json:"sections,omitempty"`
+	Languages            []string     `json:"languages,omitempty"`
+	Summary              string       `json:"summary,omitempty"`
+	RecentPages          []pageDTO    `json:"recent_pages,omitempty"`
+	Notes                []string     `json:"notes,omitempty"`
 }
 
 type contentEnvelope struct {
@@ -604,12 +614,12 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, newContentEnvelope(data, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `status` on an otherwise healthy site, while a `warning`-severity taxonomy finding still promotes `status` to `healthy_with_advisories` without moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `status` on an otherwise healthy site, while a `warning`-severity taxonomy finding still promotes `status` to `healthy_with_advisories` without moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own `git_untracked` status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
-			health := buildSiteHealth(idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases)
+			health := buildSiteHealth(ctx, idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases, cfg)
 			return nil, newContentEnvelope(contentEnvelopeData{
 				Status:                       health.Status,
 				Score:                        health.Score,
@@ -625,6 +635,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				ValidationErrors:             health.ValidationErrors,
 				TaxonomyInconsistencies:      health.TaxonomyInconsistencies,
 				TaxonomyInconsistencyDetails: health.TaxonomyInconsistencyDetails,
+				UntrackedSourcePages:         health.UntrackedSourcePages,
 			}, time.Now().UTC()), nil
 		})
 
@@ -1430,9 +1441,56 @@ func clampScore(v int) int {
 	return v
 }
 
-func buildSiteHealth(idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) contentEnvelopeData {
+// untrackedSourcePageCount (#819) reports how many source pages have no
+// git-tracked file, via a single `git ls-files --others` invocation scoped
+// to contentRoot rather than one `git show`/status check per page (the
+// per-page approach diff_page uses is fine for one slug at a time, but
+// get_site_health runs over the whole site and must stay cheap regardless
+// of page count). Returns (0, false) — not an error — when git status can't
+// be determined at all (content root unset, no git repo, git unavailable),
+// so callers can omit the field entirely rather than report a misleading
+// zero; diff_page's own get_site_health-independent per-page check already
+// establishes the same "no git repo -> fall back gracefully" precedent.
+func untrackedSourcePageCount(ctx context.Context, srcIdx *hugosite.SourceIndex, contentRoot string) (int, bool) {
+	contentRoot = strings.TrimSpace(contentRoot)
+	if srcIdx == nil || contentRoot == "" {
+		return 0, false
+	}
+	gitRoot, err := gitutil.DiscoverRoot(contentRoot)
+	if err != nil {
+		return 0, false
+	}
+	relContentRoot, err := filepath.Rel(gitRoot, contentRoot)
+	if err != nil {
+		return 0, false
+	}
+	out, err := gitutil.Output(ctx, gitRoot, "ls-files", "--others", "--exclude-standard", "--", filepath.ToSlash(relContentRoot))
+	if err != nil {
+		return 0, false
+	}
+	untracked := make(map[string]bool)
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		untracked[filepath.Join(gitRoot, filepath.FromSlash(line))] = true
+	}
+	count := 0
+	for _, p := range srcIdx.ListPages(0, 0) {
+		if untracked[p.FilePath] {
+			count++
+		}
+	}
+	return count, true
+}
+
+func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string, cfg config.Config) contentEnvelopeData {
 	health := contentEnvelopeData{
 		Status: "healthy",
+	}
+	if count, ok := untrackedSourcePageCount(ctx, srcIdx, cfg.ContentRoot); ok {
+		health.UntrackedSourcePages = &count
 	}
 	if idx != nil {
 		contentPages := idx.ContentPages()
