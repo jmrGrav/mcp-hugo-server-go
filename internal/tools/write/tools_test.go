@@ -1778,6 +1778,112 @@ func TestUpdatePageSetsFeaturedImageFrontmatterKey(t *testing.T) {
 	}
 }
 
+func TestUpdatePageCanClearDescriptionAndFeaturedImage(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "clear-fields",
+		"title":      "Clear Fields",
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	pagePath := filepath.Join(contentRoot, "clear-fields", "index.md")
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "clear-fields",
+		"description":       "Initial description",
+		"featured_image":    "/images/clear-fields-featured.jpg",
+		"expected_revision": currentRevision(t, pagePath),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page (set fields) failed: %s", raw)
+	}
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug":              "clear-fields",
+		"description":       "",
+		"featured_image":    "",
+		"expected_revision": currentRevision(t, pagePath),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page (clear fields) failed: %s", raw)
+	}
+
+	data, err := os.ReadFile(pagePath)
+	if err != nil {
+		t.Fatalf("file not found: %v", err)
+	}
+	if strings.Contains(string(data), "description:") {
+		t.Fatalf("description should be removed from frontmatter, got:\n%s", data)
+	}
+	if strings.Contains(string(data), "featuredImage:") {
+		t.Fatalf("featuredImage should be removed from frontmatter, got:\n%s", data)
+	}
+}
+
+func TestUpdatePageRejectsUnsafeFeaturedImageSchemes(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "bad-featured-image",
+		"title":      "Bad Featured Image",
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	for _, bad := range []string{"data:text/html;base64,AAAA", "http://example.test/x.jpg", "/images/../etc/passwd"} {
+		res = callTool(t, session, "update_page", map[string]any{
+			"slug":              "bad-featured-image",
+			"featured_image":    bad,
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, "bad-featured-image", "index.md")),
+		})
+		if !res.IsError {
+			t.Fatalf("update_page should reject featured_image=%q", bad)
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "invalid_params") {
+			t.Fatalf("update_page featured_image=%q must return invalid_params, got: %s", bad, raw)
+		}
+	}
+}
+
+func TestCreatePageRejectsHTMLInTitle(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "unsafe-title",
+		"title":      `<img src=x onerror=window.__MCP_XSS=1>`,
+		"body":       "Body.",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if !res.IsError {
+		t.Fatal("create_page with HTML title should fail")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "title must not contain HTML markup") {
+		t.Fatalf("create_page HTML title error = %s", raw)
+	}
+}
+
 // TestUpdatePageRefreshesInMemoryFrontmatterRaw (#810) proves the in-memory
 // SourceIndex entry's FrontmatterRaw reflects a field update_page just set
 // (description, here) without requiring a full server reindex. Before the

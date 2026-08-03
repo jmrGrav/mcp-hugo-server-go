@@ -285,7 +285,7 @@ func TestApplyPageUpdatesExtendedFields(t *testing.T) {
 		Tags:        []string{"go", "hugo"},
 		Categories:  []string{"Infrastructure"},
 		Draft:       &draft,
-		Description: "A test page.",
+		Description: strPtr("A test page."),
 	})
 	if err != nil {
 		t.Fatalf("applyPageUpdates error: %v", err)
@@ -340,12 +340,29 @@ func TestApplyPageUpdatesPreservesTwoSpaceSequenceIndent(t *testing.T) {
 
 func TestApplyPageUpdatesNewDescription(t *testing.T) {
 	input := "---\ntitle: Page\ntags: []\n---\n\nBody."
-	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{Description: "New desc."})
+	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{Description: strPtr("New desc.")})
 	if err != nil {
 		t.Fatalf("applyPageUpdates error: %v", err)
 	}
 	if !strings.Contains(got, "description: New desc.") {
 		t.Errorf("description not appended: %s", got)
+	}
+}
+
+func TestApplyPageUpdatesClearsDescriptionAndFeaturedImage(t *testing.T) {
+	input := "---\ntitle: Page\ndescription: Old desc\nfeaturedImage: /images/old.jpg\n---\n\nBody."
+	got, err := applyPageUpdates(input, "", "", pageUpdateOpts{
+		Description:   strPtr(""),
+		FeaturedImage: strPtr(""),
+	})
+	if err != nil {
+		t.Fatalf("applyPageUpdates error: %v", err)
+	}
+	if strings.Contains(got, "description:") {
+		t.Fatalf("description should be removed, got:\n%s", got)
+	}
+	if strings.Contains(got, "featuredImage:") {
+		t.Fatalf("featuredImage should be removed, got:\n%s", got)
 	}
 }
 

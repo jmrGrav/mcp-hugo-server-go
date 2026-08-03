@@ -67,6 +67,37 @@ func TestValidateTitleFormatAllowsMaxLength(t *testing.T) {
 	}
 }
 
+func TestValidateTitleFormatRejectsHTMLMarkup(t *testing.T) {
+	if err := validateTitleFormat(`<img src=x onerror=alert(1)>`); err == nil {
+		t.Fatal("validateTitleFormat: want error for raw HTML markup in title, got nil")
+	}
+}
+
+func TestValidateFeaturedImagePath(t *testing.T) {
+	valid := []string{"/images/posts/hero.jpg", "/images/posts/hero-featured.jpg"}
+	for _, s := range valid {
+		if err := validateFeaturedImagePath(s); err != nil {
+			t.Fatalf("validateFeaturedImagePath(%q) = %v, want nil", s, err)
+		}
+	}
+	invalid := []string{
+		"images/posts/hero.jpg",
+		"//cdn.example.test/img.jpg",
+		"/images/../etc/passwd",
+		`/images\evil.jpg`,
+		"data:text/html;base64,AAAA",
+		"http://example.test/hero.jpg",
+		"https://example.test/hero.jpg",
+		"javascript:alert(1)",
+		"file:///etc/passwd",
+	}
+	for _, s := range invalid {
+		if err := validateFeaturedImagePath(s); err == nil {
+			t.Fatalf("validateFeaturedImagePath(%q) = nil, want error", s)
+		}
+	}
+}
+
 func TestValidateBodyFormatRejectsOverLength(t *testing.T) {
 	long := make([]byte, maxBodyBytes+1)
 	for i := range long {

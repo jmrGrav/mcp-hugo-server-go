@@ -2,6 +2,7 @@ package write
 
 import (
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -37,8 +38,44 @@ func validateTitleFormat(title string) error {
 	if err := rejectUnsafeText(title); err != nil {
 		return fmt.Errorf("invalid_params: title %w", err)
 	}
+	if strings.ContainsAny(title, "<>") {
+		return fmt.Errorf("invalid_params: title must not contain HTML markup")
+	}
 	if n := utf8.RuneCountInString(title); n > maxTitleRunes {
 		return fmt.Errorf("invalid_params: title exceeds %d characters (got %d)", maxTitleRunes, n)
+	}
+	return nil
+}
+
+func validateFeaturedImagePath(v string) error {
+	if err := rejectUnsafeText(v); err != nil {
+		return fmt.Errorf("invalid_params: featured_image %w", err)
+	}
+	if v == "" {
+		return nil
+	}
+	if !strings.HasPrefix(v, "/") {
+		return fmt.Errorf("invalid_params: featured_image must be a site-root-relative path starting with /")
+	}
+	if strings.HasPrefix(v, "//") {
+		return fmt.Errorf("invalid_params: featured_image must not be protocol-relative")
+	}
+	if strings.Contains(v, `\`) {
+		return fmt.Errorf("invalid_params: featured_image must not contain backslashes")
+	}
+	lower := strings.ToLower(v)
+	for _, prefix := range []string{"data:", "javascript:", "file:", "http://", "https://"} {
+		if strings.HasPrefix(lower, prefix) {
+			return fmt.Errorf("invalid_params: featured_image must be a local site path, not %q", prefix)
+		}
+	}
+	for _, seg := range strings.Split(strings.TrimPrefix(v, "/"), "/") {
+		if seg == "." || seg == ".." {
+			return fmt.Errorf("invalid_params: featured_image must not contain dot path segments")
+		}
+	}
+	if cleaned := path.Clean(v); cleaned != v {
+		return fmt.Errorf("invalid_params: featured_image must be a normalized local path")
 	}
 	return nil
 }
