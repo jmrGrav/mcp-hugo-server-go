@@ -40,6 +40,19 @@ type ResponseMeta struct {
 	// meta with unambiguous names removes that confusion instead of leaving
 	// two same-named-sounding fields at different levels.
 	SchemaVersion string `json:"schema_version"`
+	// RequestID (#860) is a per-tool-call correlation id injected by the
+	// server's tool-call middleware onto every response (success and error),
+	// so an agent can tie a response back to a specific call in logs/metrics
+	// without inferring it from timing. It is omitted on responses built
+	// outside the served middleware (e.g. direct in-process unit tests),
+	// hence omitempty.
+	RequestID string `json:"request_id,omitempty"`
+	// DurationMs (#860) is the envelope-level wall-clock latency of the tool
+	// call in milliseconds, injected by the same middleware. A pointer so a
+	// genuine 0ms is distinguishable from "not measured" (absent). This is
+	// the whole-call timing; it is distinct from any tool-specific timing a
+	// data payload may already carry (e.g. build_site's data.duration_ms).
+	DurationMs *int64 `json:"duration_ms,omitempty"`
 }
 
 type ErrorResolution struct {

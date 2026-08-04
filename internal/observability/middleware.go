@@ -2,9 +2,12 @@ package observability
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -88,9 +91,18 @@ func NewToolCallMiddleware(log *slog.Logger, m *Metrics, scope string, knownTool
 				}
 			}
 
+			requestID := newRequestID()
 			start := time.Now()
 			result, err := next(ctx, method, req)
 			durationMs := time.Since(start).Milliseconds()
+
+			// #860: stamp every tool response (success and error) with a
+			// per-call request_id and the envelope-level duration_ms, so an
+			// agent gets consistent correlation + timing metadata without each
+			// tool having to opt in. Injected centrally here (after the handler
+			// has already been schema-validated) so it holds uniformly across
+			// every tool and both success/error envelopes.
+			injectEnvelopeMetadata(result, requestID, durationMs)
 
 			resultClass := classifyToolResult(result, err)
 			responseBytes := estimateResultBytes(result)
@@ -124,6 +136,51 @@ func NewToolCallMiddleware(log *slog.Logger, m *Metrics, scope string, knownTool
 			return result, err
 		}
 	}
+}
+
+// newRequestID returns a short random hex correlation id for one tool call.
+// crypto/rand is not required — this is a non-security correlation token, not
+// a secret — but it must be collision-resistant enough to disambiguate
+// concurrent calls in logs, so 8 bytes (64 bits) is ample.
+func newRequestID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// Fall back to a timestamp-derived id; correlation is best-effort.
+		return "req-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return "req-" + hex.EncodeToString(b[:])
+}
+
+// injectEnvelopeMetadata stamps request_id and duration_ms into the response
+// envelope's meta object (#860). It operates on the already-built
+// StructuredContent generically (marshal → map → inject → set back) so it
+// works for every tool and both success and error envelopes without each tool
+// participating. Additive only: it never touches any existing field, so it
+// cannot alter a tool's own payload or a golden-comparable field. A no-op if
+// there is no structured content to stamp.
+func injectEnvelopeMetadata(result mcp.Result, requestID string, durationMs int64) {
+	r, ok := result.(*mcp.CallToolResult)
+	if !ok || r == nil || r.StructuredContent == nil {
+		return
+	}
+	raw, err := json.Marshal(r.StructuredContent)
+	if err != nil {
+		return
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return
+	}
+	meta, ok := m["meta"].(map[string]any)
+	if !ok || meta == nil {
+		// Every envelope this server produces carries a meta object; if one
+		// somehow doesn't, don't fabricate envelope shape here.
+		return
+	}
+	meta["request_id"] = requestID
+	meta["duration_ms"] = durationMs
+	m["meta"] = meta
+	r.StructuredContent = m
 }
 
 func classifyToolResult(result mcp.Result, err error) string {

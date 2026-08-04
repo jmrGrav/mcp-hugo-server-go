@@ -2323,3 +2323,58 @@ func TestBearerlessHTTPCannotReachWriteTools(t *testing.T) {
 		t.Fatalf("bearerless create_page must be rejected as unknown/forbidden, got: %q", rec.Body.String())
 	}
 }
+
+// TestToolResponseCarriesRequestIDAndDurationMeta is the #860 contract test:
+// every tool response served through the tool-call middleware must carry a
+// meta.request_id and a meta.duration_ms, injected centrally so an agent gets
+// consistent correlation + timing without each tool opting in. Exercised over
+// the real served HTTP path (not a direct handler call), so it also proves the
+// added ResponseMeta fields survive the SDK's outbound schema validation.
+func TestToolResponseCarriesRequestIDAndDurationMeta(t *testing.T) {
+	srv := mustTestServer(t) // bearerless (OAuth disabled): anonymous tools callable directly
+	rec := doMCPCall(t, srv, "", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_capabilities"}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get_capabilities status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	meta := extractResultMeta(t, rec.Body.String())
+	reqID, _ := meta["request_id"].(string)
+	if !strings.HasPrefix(reqID, "req-") {
+		t.Fatalf("meta.request_id = %v, want a req- prefixed id (#860); meta=%v", meta["request_id"], meta)
+	}
+	if _, ok := meta["duration_ms"]; !ok {
+		t.Fatalf("meta.duration_ms missing (#860); meta=%v", meta)
+	}
+	if _, ok := meta["duration_ms"].(float64); !ok {
+		t.Fatalf("meta.duration_ms type = %T, want number", meta["duration_ms"])
+	}
+	// Two calls must get distinct request ids (per-call correlation, not static).
+	rec2 := doMCPCall(t, srv, "", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_capabilities"}}`))
+	meta2 := extractResultMeta(t, rec2.Body.String())
+	if reqID == meta2["request_id"] {
+		t.Fatalf("two calls shared request_id %q, want distinct per-call ids", reqID)
+	}
+}
+
+// extractResultMeta parses an MCP tools/call HTTP response (JSON or SSE
+// framed) and returns result.structuredContent.meta.
+func extractResultMeta(t *testing.T, body string) map[string]any {
+	t.Helper()
+	// SSE framing prefixes JSON with "data: "; strip to the first '{'.
+	payload := body
+	if i := strings.Index(payload, "{"); i > 0 {
+		payload = payload[i:]
+	}
+	var rpc struct {
+		Result struct {
+			StructuredContent map[string]any `json:"structuredContent"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(payload), &rpc); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v\nbody=%q", err, body)
+	}
+	meta, ok := rpc.Result.StructuredContent["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("result.structuredContent.meta missing; body=%q", body)
+	}
+	return meta
+}

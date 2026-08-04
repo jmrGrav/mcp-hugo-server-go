@@ -154,6 +154,14 @@ type updatePageData struct {
 	ResolvedSourcePath *string              `json:"resolved_source_path,omitempty"`
 	DryRun             bool                 `json:"dry_run,omitempty"`
 	Diff               string               `json:"diff,omitempty"`
+	// Changed (#860) makes a no-op update explicit: false when the resulting
+	// content is byte-identical to what was already on disk (nothing to
+	// write), true when the call actually changed the page. A pointer so the
+	// value is always present on an update_page success response (including
+	// the false case) rather than being elided by omitempty — an agent must
+	// be able to tell "succeeded, no change" apart from "succeeded, changed"
+	// without diffing revisions itself.
+	Changed            *bool                `json:"changed,omitempty"`
 	Warning            string               `json:"warning,omitempty"`
 	NewRevision        string               `json:"new_revision,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
@@ -822,6 +830,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		Title: "Update page",
 		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
 			"Use title/body to revise content. Use tags/categories/draft/description/featured_image to update front matter fields. " +
+			"`data.changed` (#860) is an explicit no-op signal: it is `false` when the resulting content is byte-identical to what was already on disk (the call succeeded but changed nothing) and `true` when the page was actually modified — present on both `dry_run` and real writes, so a caller never has to diff revisions itself to tell a no-op apart from a real edit. " +
 			"`featured_image` sets the theme's `featuredImage` frontmatter key to a local public path — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); sending `featured_image:\"\"` explicitly clears that frontmatter key, while omitting the field leaves it unchanged (#825, #835). " +
 			"`tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). " +
 			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
@@ -1046,6 +1055,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			diffLabel := in.Slug + "/" + filepath.Base(filePath)
 			diff := simpleDiff(diffLabel, string(raw), content)
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+			dryRunChanged := content != string(raw)
 			return nil, newUpdatePageOutput(updatePageData{
 				Status:                   "ok",
 				Slug:                     canonicalPublicSlug(in.Slug),
@@ -1054,6 +1064,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				ResolvedSourcePath:       strPtr(logicalPath),
 				DryRun:                   true,
 				Diff:                     diff,
+				Changed:                  &dryRunChanged,
 				RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 				TaxonomyCasingNormalized: taxonomyNormalized,
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
@@ -1158,12 +1169,14 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 
 		state := updatePageState(rt.siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+		realChanged := content != string(raw)
 		out := newUpdatePageOutput(updatePageData{
 			Status:                   status,
 			Slug:                     canonicalPublicSlug(in.Slug),
 			SourceKey:                in.Slug,
 			ResolvedLang:             strPtr(resolvedSource.Lang),
 			ResolvedSourcePath:       strPtr(logicalPath),
+			Changed:                  &realChanged,
 			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
 			Warning:                  appendLastBuildWarning(warning),
 			State:                    &state,
