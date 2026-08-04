@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // SourceRevisionBytes returns the stable optimistic-concurrency revision for a
@@ -80,4 +81,39 @@ func BundleRevision(bundleDir string) (string, error) {
 		h.Write([]byte("\n"))
 	}
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// BundleTranslations enumerates the translation source files in a page-bundle
+// directory, returning lang -> absolute file path. The default (unsuffixed)
+// index.md is keyed under the empty string "". Non-index files and
+// subdirectories are ignored. Returns an empty map for a directory with no
+// index.* files (i.e. not a page bundle). (#854 builds on #857's
+// BundleRevision above; this is the translation-enumeration companion it
+// needs to resolve which files a bundle mutation touches.)
+func BundleTranslations(bundleDir string) (map[string]string, error) {
+	dirEntries, err := os.ReadDir(bundleDir)
+	if err != nil {
+		return nil, fmt.Errorf("read bundle dir: %w", err)
+	}
+	out := map[string]string{}
+	for _, de := range dirEntries {
+		if de.IsDir() {
+			continue
+		}
+		name := de.Name()
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		if name == "index.md" {
+			out[""] = filepath.Join(bundleDir, name)
+			continue
+		}
+		if strings.HasPrefix(name, "index.") {
+			lang := strings.TrimSuffix(strings.TrimPrefix(name, "index."), ".md")
+			if lang != "" {
+				out[lang] = filepath.Join(bundleDir, name)
+			}
+		}
+	}
+	return out, nil
 }
