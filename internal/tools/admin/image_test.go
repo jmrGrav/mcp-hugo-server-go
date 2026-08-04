@@ -320,6 +320,9 @@ func TestGenerateFeaturedImageAdvisesAttachingToPage(t *testing.T) {
 	if got, want := data["source_key"], "my-post"; got != want {
 		t.Fatalf("data.source_key = %v, want %q", got, want)
 	}
+	if got, want := data["delete_slug"], "my-post"; got != want {
+		t.Fatalf("data.delete_slug = %v, want %q", got, want)
+	}
 	if got, want := data["delete_scope"], "generated"; got != want {
 		t.Fatalf("data.delete_scope = %v, want %q", got, want)
 	}
@@ -384,8 +387,16 @@ func TestGenerateFeaturedImageAcceptsCanonicalPublicSlugForms(t *testing.T) {
 			if got := data["path"]; got != tc.wantPath {
 				t.Fatalf("generate_hero_image(%q) data.path = %v, want %q", tc.slug, got, tc.wantPath)
 			}
-			if got := data["source_key"]; got != strings.TrimSuffix(strings.TrimPrefix(tc.wantPath, "static/images/"), "-featured.jpg") {
-				t.Fatalf("generate_hero_image(%q) data.source_key = %v, want canonical source key from path", tc.slug, got)
+			wantSourceKey := strings.TrimPrefix(strings.Trim(tc.wantPath, "/"), "static/images/")
+			wantSourceKey = strings.TrimSuffix(wantSourceKey, "-featured.jpg")
+			if got := data["source_key"]; got != wantSourceKey {
+				t.Fatalf("generate_hero_image(%q) data.source_key = %v, want %q", tc.slug, got, wantSourceKey)
+			}
+			if got := data["delete_slug"]; got != wantSourceKey {
+				t.Fatalf("generate_hero_image(%q) data.delete_slug = %v, want %q", tc.slug, got, wantSourceKey)
+			}
+			if got := data["delete_filename"]; got != filepath.Base(tc.wantPath) {
+				t.Fatalf("generate_hero_image(%q) data.delete_filename = %v, want %q", tc.slug, got, filepath.Base(tc.wantPath))
 			}
 			if _, err := os.Stat(filepath.Join(hugoRoot, filepath.FromSlash(tc.wantPath))); err != nil {
 				t.Fatalf("expected generated file at %q: %v", tc.wantPath, err)

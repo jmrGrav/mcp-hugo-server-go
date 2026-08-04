@@ -58,7 +58,10 @@ type generateFeaturedImageOutput struct {
 }
 
 type generateFeaturedImageData struct {
-	Path      string `json:"path"`
+	Path string `json:"path"`
+	// SourceKey is the canonical slug form shared by write tools and by
+	// generated-asset cleanup logic, regardless of whether the caller used a
+	// public slug (/posts/example/) or a source-key slug (posts/example).
 	SourceKey string `json:"source_key"`
 	// PublicPath (#812 follow-up) is Path rewritten from the hugo_root-
 	// relative filesystem form ("static/images/...") to the public URL form
@@ -66,9 +69,12 @@ type generateFeaturedImageData struct {
 	// expects — ready to paste into update_page's featured_image parameter
 	// without the caller having to strip the "static" prefix by hand.
 	PublicPath string `json:"public_path"`
-	// DeleteScope/DeleteFilename are the exact delete_page_asset arguments
-	// needed to reverse this operation without the caller guessing at slug
-	// family or path mapping (#845, #846).
+	// DeleteSlug/DeleteScope/DeleteFilename close the generate_hero_image →
+	// delete_page_asset contract gap (#845, #846): callers can feed these
+	// straight back into delete_page_asset (with SourceKey as the canonical
+	// slug identity) without re-deriving a second filename/scope contract
+	// from data.path.
+	DeleteSlug     string `json:"delete_slug"`
 	DeleteScope    string `json:"delete_scope"`
 	DeleteFilename string `json:"delete_filename"`
 }
@@ -167,9 +173,17 @@ func publicImagePathFromLogical(logicalPath string) string {
 // or silently bypassing it.
 func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeaturedImageOutput {
 	data.PublicPath = publicImagePathFromLogical(data.Path)
-	data.DeleteScope = "generated"
-	if data.DeleteFilename == "" && data.SourceKey != "" {
-		data.DeleteFilename = filepath.Base(data.SourceKey + HeroImageSuffix)
+	if data.SourceKey == "" && strings.HasPrefix(data.Path, "static/images/") {
+		data.SourceKey = strings.TrimSuffix(strings.TrimPrefix(data.Path, "static/images/"), HeroImageSuffix)
+	}
+	if data.DeleteScope == "" {
+		data.DeleteScope = "generated"
+	}
+	if data.DeleteSlug == "" {
+		data.DeleteSlug = data.SourceKey
+	}
+	if data.DeleteFilename == "" {
+		data.DeleteFilename = filepath.Base(data.Path)
 	}
 	out := generateFeaturedImageOutput{
 		ToolResponse: imageSuccessEnvelope(data),
@@ -234,7 +248,9 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo). " +
 			"This tool only writes the image file — it never touches page frontmatter. `data.public_path` is the ready-to-use " +
 			"featuredImage value; call update_page with featured_image=data.public_path afterwards to attach it (per language, " +
-			"for a bundle with translations), or the image will exist but never appear on the site's card/list views.",
+			"for a bundle with translations), or the image will exist but never appear on the site's card/list views. " +
+			"`data.source_key` is the canonical page identifier after slug normalization, and `data.delete_slug` + `data.delete_scope` + `data.delete_filename` " +
+			"can be passed straight to delete_page_asset later to remove this generated file without re-deriving the cleanup contract.",
 		InputSchema: tools.WithEnum(
 			tools.MustSchema[generateFeaturedImageInput](),
 			"style",

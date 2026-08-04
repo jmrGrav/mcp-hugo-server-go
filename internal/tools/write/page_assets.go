@@ -584,6 +584,13 @@ func generatedHeroReferenceID(slug string) string {
 	return "/images/" + slug + admin.HeroImageSuffix
 }
 
+func deleteAssetNotFoundErr(scope, filename, slug string) error {
+	if scope == deleteAssetScopeGenerated {
+		return fmt.Errorf("not_found: generated asset %q not found for source key %q", filename, slug)
+	}
+	return fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug)
+}
+
 // registerDeletePageAsset registers delete_page_asset (#460). Shares
 // delete_page's own destructive per-caller budget (deleteMu/deleteLimiters),
 // not upload_page_asset's create/update quota — deleting is the destructive
@@ -640,20 +647,39 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if err != nil {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 		}
-		if scope == deleteAssetScopeGenerated {
+		var (
+			dir          string
+			hasBundleDir bool
+		)
+		switch scope {
+		case deleteAssetScopeBundle:
+			if err := validateBundleSlug(idx, slug); err != nil {
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+			}
+			dir, err = pg.SafeJoin(slug)
+			if err != nil {
+				slog.Warn("delete_page_asset: path validation failed", "slug", slug, "error", err)
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+			}
+			hasBundleDir = true
+		case deleteAssetScopeGenerated:
+			// Normalize to the canonical hero source key (#867) so a
+			// language-prefixed or public slug resolves to the same generated
+			// path generate_hero_image wrote. The bundle is optional here (#872):
+			// an orphaned hero image can still be deleted even when no page
+			// bundle exists, so only wire dir/hasBundleDir when it does.
 			slug, err = admin.NormalizeHeroImageSlug(rawSlug)
 			if err != nil {
 				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 			}
-		} else {
-			if err := validateBundleSlug(idx, slug); err != nil {
-				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+			if err := validateBundleSlug(idx, slug); err == nil {
+				dir, err = pg.SafeJoin(slug)
+				if err != nil {
+					slog.Warn("delete_page_asset: path validation failed", "slug", slug, "error", err)
+					return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+				}
+				hasBundleDir = true
 			}
-		}
-		dir, err := pg.SafeJoin(slug)
-		if err != nil {
-			slog.Warn("delete_page_asset: path validation failed", "slug", slug, "error", err)
-			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
 		}
 		target, err := resolveDeleteAssetTarget(pg, cfg, slug, filename, scope)
 		if err != nil {
@@ -665,14 +691,20 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			data, readErr := os.ReadFile(filePath)
 			if readErr != nil {
 				if os.IsNotExist(readErr) {
-					return nil, deletePageAssetOutput{}, wrapErrWithLimiter(deletePageAssetNotFoundErr(filename, slug, target.scope))
+					return nil, deletePageAssetOutput{}, wrapErrWithLimiter(deleteAssetNotFoundErr(target.scope, filename, slug))
 				}
 				slog.Error("delete_page_asset: dry-run read failed", "slug", slug, "filename", filename, "error", readErr)
 				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read asset"))
 			}
-			referencedIn, refErr := findAssetReferences(dir, filename, target.referenceID)
-			if refErr != nil {
-				slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
+			var (
+				referencedIn []string
+				refErr       error
+			)
+			if hasBundleDir {
+				referencedIn, refErr = findAssetReferences(dir, filename, target.referenceID)
+				if refErr != nil {
+					slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
+				}
 			}
 			return nil, newDeletePageAssetOutput(deletePageAssetData{
 				Status:       "ok",
@@ -748,23 +780,30 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		data, readErr := os.ReadFile(filePath)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
-				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(deletePageAssetNotFoundErr(filename, slug, target.scope))
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(deleteAssetNotFoundErr(target.scope, filename, slug))
 			}
 			slog.Error("delete_page_asset: read failed", "slug", slug, "filename", filename, "error", readErr)
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read asset"))
 		}
 		actualHash := contentmodel.SourceRevisionBytes(data)
 		actualBundleRevision := ""
-		if resolvedSource := inspectDeleteSource(dir); resolvedSource.SourcePath != "" {
-			if rev, revErr := contentmodel.SourceRevision(resolvedSource.SourcePath); revErr == nil {
-				actualBundleRevision = rev
+		if hasBundleDir {
+			if resolvedSource := inspectDeleteSource(dir); resolvedSource.SourcePath != "" {
+				if rev, revErr := contentmodel.SourceRevision(resolvedSource.SourcePath); revErr == nil {
+					actualBundleRevision = rev
+				}
 			}
 		}
-		referencedIn, refErr := findAssetReferences(dir, filename, target.referenceID)
-		if refErr != nil {
-			slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
+		var (
+			referencedIn []string
+			refErr       error
+		)
+		if hasBundleDir {
+			referencedIn, refErr = findAssetReferences(dir, filename, target.referenceID)
+			if refErr != nil {
+				slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
+			}
 		}
-
 		if in.ExpectedSha256 != "" && in.ExpectedSha256 != actualHash {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
 		}
@@ -809,11 +848,4 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 		return nil, out, nil
 	}))
-}
-
-func deletePageAssetNotFoundErr(filename, slug, scope string) error {
-	if scope == deleteAssetScopeGenerated {
-		return fmt.Errorf("not_found: generated asset %q not found for source key %q", filename, slug)
-	}
-	return fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug)
 }

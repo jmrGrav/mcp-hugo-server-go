@@ -33,8 +33,7 @@ func TestAdminToolSchemasPresent(t *testing.T) {
 		assertObjectSchema(t, tool, "inputSchema")
 		assertObjectSchema(t, tool, "outputSchema")
 	}
-	assertSchemaHasProperties(t, got["generate_hero_image"], "outputSchema.data", "path")
-	assertSchemaHasProperties(t, got["generate_hero_image"], "outputSchema.data", "source_key", "delete_scope", "delete_filename")
+	assertSchemaHasProperties(t, got["generate_hero_image"], "outputSchema.data", "path", "public_path", "source_key", "delete_slug", "delete_scope", "delete_filename")
 	assertSchemaHasProperties(t, got["run_post_build_hooks"], "inputSchema", "dry_run")
 	assertSchemaHasProperties(t, got["run_post_build_hooks"], "outputSchema.data", "results", "configured_count")
 	assertSchemaHasProperties(t, got["create_preview"], "outputSchema.data", "preview_id", "url", "expires_at", "build", "effective_ttl_seconds")
