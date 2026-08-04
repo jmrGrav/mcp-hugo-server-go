@@ -26,11 +26,12 @@ import (
 //	                            delete_page_asset, get_mutation_status, get_rate_limits,
 //	                            plan_content_change (no scope gate — see #450), apply_content_plan,
 //	                            rollback_change
-//	site.admin:          10  — build_site, preview_build, run_post_build_hooks,
+//	site.admin:          13  — build_site, preview_build, run_post_build_hooks,
 //	                            generate_hero_image, check_sri_versions, get_runtime_status,
 //	                            get_theme_status, verify_publication, create_preview,
-//	                            publish_changes
-const expectedToolCount = 51
+//	                            publish_changes, list_previews, revoke_preview,
+//	                            revoke_all_previews
+const expectedToolCount = 54
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())

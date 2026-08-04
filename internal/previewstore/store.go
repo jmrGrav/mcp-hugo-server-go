@@ -117,8 +117,12 @@ func (s *Store) GetBySession(id, sessionToken string) (*Entry, bool) {
 		_ = os.RemoveAll(entry.Dir)
 		return nil, false
 	}
+	// SessionToken is mutated by EstablishSession under the lock (unlike
+	// Token, which is immutable after Put) — snapshot it here before
+	// unlocking so the compare below never races EstablishSession's write.
+	storedSessionToken := entry.SessionToken
 	s.mu.Unlock()
-	if subtle.ConstantTimeCompare([]byte(entry.SessionToken), []byte(sessionToken)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(storedSessionToken), []byte(sessionToken)) != 1 {
 		return nil, false
 	}
 	return entry, true

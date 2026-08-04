@@ -70,7 +70,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, store *previewstore.Store, baseUR
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "list_previews",
 		Title:        "List previews",
-		Description:  "List currently active preview sessions with owner and expiry metadata. Returns clean preview URLs without re-emitting the one-time entry token. Requires site.admin.",
+		Description:  "List currently active preview sessions with owner and expiry metadata. Returns clean preview URLs without re-emitting the entry token — the entry token is not currently invalidated after first exchange, so it remains valid (like any bearer secret) for the preview's remaining TTL; use revoke_preview if a URL has been exposed and access must be cut off immediately (#853 follow-up: enforce single-use). Requires site.admin.",
 		InputSchema:  tools.MustSchema[listPreviewsInput](),
 		OutputSchema: tools.MustSchema[listPreviewsOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -112,7 +112,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, store *previewstore.Store, baseUR
 		OutputSchema: tools.MustSchema[revokePreviewOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: fileutil.BoolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(true),
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
@@ -141,7 +141,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, store *previewstore.Store, baseUR
 		OutputSchema: tools.MustSchema[revokeAllPreviewsOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: fileutil.BoolPtr(false),
+			DestructiveHint: fileutil.BoolPtr(true),
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
