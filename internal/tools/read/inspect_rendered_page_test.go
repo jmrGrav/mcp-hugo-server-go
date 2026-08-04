@@ -281,6 +281,36 @@ func TestInspectRenderedPageFlagsInlineEventHandlersAndUnsafeURLs(t *testing.T) 
 	}
 }
 
+// TestInspectRenderedPageFlagsVBScriptURL is a regression test for a CodeQL
+// "Incomplete URL scheme check" finding (go/incomplete-url-scheme-check):
+// checkRenderedUnsafeURLs flagged javascript: and data: URLs but not
+// vbscript:, an equally executable URL scheme in legacy IE-rendering
+// contexts. Fails against the pre-fix switch (no vbscript: case) and
+// passes once vbscript: is flagged alongside javascript:.
+func TestInspectRenderedPageFlagsVBScriptURL(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/vbscript/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>VBScript</title><meta name="description" content="Valid enough description."><link rel="canonical" href="https://example.test/posts/vbscript/"></head>
+<body>
+<a href="vbscript:msgbox(1)">boom</a>
+</body>
+</html>`)
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/vbscript/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	checks := findChecks(t, decodeContent(t, res))
+	if got := checks["security_unsafe_urls"]["status"]; got != "fail" {
+		t.Fatalf("security_unsafe_urls status = %v, want fail for vbscript: URL", got)
+	}
+}
+
 func TestInspectRenderedPageFlagsPreviewTokenLeakPattern(t *testing.T) {
 	siteRoot := t.TempDir()
 	writeRenderedHTML(t, siteRoot, "posts/preview-leak/index.html", `<!DOCTYPE html>

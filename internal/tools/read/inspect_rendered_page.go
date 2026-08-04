@@ -522,6 +522,8 @@ func checkRenderedUnsafeURLs(doc *html.Node) renderCheckResult {
 			switch {
 			case strings.HasPrefix(lower, "javascript:"):
 				findings = append(findings, fmt.Sprintf("<%s> %s uses javascript: URL", n.Data, key))
+			case strings.HasPrefix(lower, "vbscript:"):
+				findings = append(findings, fmt.Sprintf("<%s> %s uses vbscript: URL", n.Data, key))
 			case strings.HasPrefix(lower, "data:") && !isSafeRenderedDataURL(n.Data, key, lower):
 				findings = append(findings, fmt.Sprintf("<%s> %s uses unsafe data: URL", n.Data, key))
 			}
