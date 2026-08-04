@@ -540,6 +540,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	rt := newWriteRegisterRuntime(cfg, siteIdxs...)
 	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots)
 	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots)
+	registerBundleTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.bundlePlans, rt.bundleSnapshots)
 	registerCreatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerUpdatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerDeletePageTool(s, pg, idx, cfg, siteDB, rt)
@@ -558,6 +559,8 @@ type writeRegisterRuntime struct {
 	idem             *idempotencyStore
 	plans            *planStore
 	snapshots        *snapshotStore
+	bundlePlans      *bundlePlanStore
+	bundleSnapshots  *bundleSnapshotStore
 }
 
 func newWriteRegisterRuntime(cfg config.Config, siteIdxs ...*site.Index) *writeRegisterRuntime {
@@ -572,6 +575,8 @@ func newWriteRegisterRuntime(cfg config.Config, siteIdxs ...*site.Index) *writeR
 		idem:             newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256),
 		plans:            newPlanStore(planTTL, planMaxEntries),
 		snapshots:        newSnapshotStore(snapshotTTL, snapshotMaxEntries),
+		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries),
+		bundleSnapshots:  newBundleSnapshotStore(snapshotTTL, snapshotMaxEntries),
 	}
 }
 
@@ -2034,6 +2039,9 @@ func Defs() []tools.ToolDef {
 		{Name: "plan_content_change", RequiredScope: ""},
 		{Name: "apply_content_plan", RequiredScope: "write"},
 		{Name: "rollback_change", RequiredScope: "write"},
+		{Name: "plan_bundle_change", RequiredScope: ""},
+		{Name: "apply_bundle_plan", RequiredScope: "write"},
+		{Name: "rollback_bundle", RequiredScope: "write"},
 	}
 }
 

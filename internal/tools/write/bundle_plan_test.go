@@ -1,0 +1,290 @@
+package write_test
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
+)
+
+// writeBilingualBundle creates a content/<slug>/ page bundle with two
+// translations (index.fr.md + index.en.md) — the editorial unit #854's
+// bundle transactions operate on.
+func writeBilingualBundle(t *testing.T, contentRoot, slug string) {
+	t.Helper()
+	dir := filepath.Join(contentRoot, slug)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.fr.md"), []byte("---\ntitle: Article FR\n---\nCorps FR.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.en.md"), []byte("---\ntitle: Article EN\n---\nBody EN.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func bodyOp(body string) map[string]any {
+	return map[string]any{"op": "update_body", "body": body}
+}
+
+// TestBundleApplyFRENSuccess — AC5 case 1: FR+EN update as one bundle applies
+// both translations, reporting per-translation outcomes plus one bundle status.
+func TestBundleApplyFRENSuccess(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/example")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/example",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Nouveau corps FR.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("New body EN.")}},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_bundle_change failed: %s", marshalContent(t, planRes))
+	}
+	planData := decodeWriteData(t, planRes)
+	planID := planData["plan_id"].(string)
+	if len(planData["translations"].([]any)) != 2 {
+		t.Fatalf("plan translations = %v, want 2", planData["translations"])
+	}
+
+	applyRes := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_bundle_plan failed: %s", marshalContent(t, applyRes))
+	}
+	applyData := decodeWriteData(t, applyRes)
+	if applyData["bundle_status"] != "applied" {
+		t.Fatalf("bundle_status = %v, want applied", applyData["bundle_status"])
+	}
+	if got := len(applyData["translations"].([]any)); got != 2 {
+		t.Fatalf("apply translations = %d, want 2", got)
+	}
+	if got := readFileString(t, contentRoot, "posts/example/index.fr.md"); !strings.Contains(got, "Nouveau corps FR.") {
+		t.Fatalf("fr file not updated: %q", got)
+	}
+	if got := readFileString(t, contentRoot, "posts/example/index.en.md"); !strings.Contains(got, "New body EN.") {
+		t.Fatalf("en file not updated: %q", got)
+	}
+}
+
+// TestBundlePlanValidationFailureRejectsWholeBundle — AC5 case 2: one
+// translation failing validation rejects the whole bundle; NO file changes.
+func TestBundlePlanValidationFailureRejectsWholeBundle(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/example")
+	beforeFR := readFileString(t, contentRoot, "posts/example/index.fr.md")
+	beforeEN := readFileString(t, contentRoot, "posts/example/index.en.md")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// EN carries a blocked shortcode; validation must fail the whole plan.
+	res := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/example",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Corps FR valide.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("Bad {{< script >}} body.")}},
+		},
+	})
+	if !res.IsError {
+		t.Fatalf("plan_bundle_change with a blocked shortcode should fail, got: %s", marshalContent(t, res))
+	}
+	if afterFR := readFileString(t, contentRoot, "posts/example/index.fr.md"); afterFR != beforeFR {
+		t.Fatalf("fr file changed despite whole-bundle rejection:\nbefore=%q\nafter=%q", beforeFR, afterFR)
+	}
+	if afterEN := readFileString(t, contentRoot, "posts/example/index.en.md"); afterEN != beforeEN {
+		t.Fatalf("en file changed despite whole-bundle rejection:\nbefore=%q\nafter=%q", beforeEN, afterEN)
+	}
+}
+
+// TestBundleApplyInterruptionRollsBack — AC5 case 3: an interruption partway
+// through the apply (simulated write failure at the second translation) leaves
+// NO partial state — the first, already-written translation is rolled back.
+func TestBundleApplyInterruptionRollsBack(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/example")
+	beforeFR := readFileString(t, contentRoot, "posts/example/index.fr.md")
+	beforeEN := readFileString(t, contentRoot, "posts/example/index.en.md")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/example",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Corps FR modifie.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("Modified body EN.")}},
+		},
+	})
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	// Fail the write of the SECOND translation (index 1) after the first has
+	// already been written, exercising the in-process rollback path.
+	restore := write.SetApplyBundleWriteHook(func(index int) error {
+		if index == 1 {
+			return fmt.Errorf("injected interruption")
+		}
+		return nil
+	})
+	defer restore()
+
+	applyRes := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if !applyRes.IsError {
+		t.Fatalf("apply_bundle_plan should fail on injected interruption, got: %s", marshalContent(t, applyRes))
+	}
+	if afterFR := readFileString(t, contentRoot, "posts/example/index.fr.md"); afterFR != beforeFR {
+		t.Fatalf("fr file left partially applied after interruption:\nbefore=%q\nafter=%q", beforeFR, afterFR)
+	}
+	if afterEN := readFileString(t, contentRoot, "posts/example/index.en.md"); afterEN != beforeEN {
+		t.Fatalf("en file changed after interruption:\nbefore=%q\nafter=%q", beforeEN, afterEN)
+	}
+}
+
+// TestRollbackBundleRestoresAllTranslations — AC5 case 4: after a successful
+// bundle apply, rollback_bundle restores every translation atomically.
+func TestRollbackBundleRestoresAllTranslations(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/example")
+	beforeFR := readFileString(t, contentRoot, "posts/example/index.fr.md")
+	beforeEN := readFileString(t, contentRoot, "posts/example/index.en.md")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/example",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Corps FR v2.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("Body EN v2.")}},
+		},
+	})
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	applyRes := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_bundle_plan failed: %s", marshalContent(t, applyRes))
+	}
+	applyData := decodeWriteData(t, applyRes)
+	preApplyRev := applyData["before_revision"].(string)
+	postApplyRev := applyData["after_revision"].(string)
+
+	rbRes := callTool(t, session, "rollback_bundle", map[string]any{
+		"slug":                     "posts/example",
+		"to_bundle_revision":       preApplyRev,
+		"expected_bundle_revision": postApplyRev,
+	})
+	if rbRes.IsError {
+		t.Fatalf("rollback_bundle failed: %s", marshalContent(t, rbRes))
+	}
+	if decodeWriteData(t, rbRes)["bundle_status"] != "restored" {
+		t.Fatalf("rollback bundle_status = %v, want restored", decodeWriteData(t, rbRes)["bundle_status"])
+	}
+	if afterFR := readFileString(t, contentRoot, "posts/example/index.fr.md"); afterFR != beforeFR {
+		t.Fatalf("fr not restored:\nbefore=%q\nafter=%q", beforeFR, afterFR)
+	}
+	if afterEN := readFileString(t, contentRoot, "posts/example/index.en.md"); afterEN != beforeEN {
+		t.Fatalf("en not restored:\nbefore=%q\nafter=%q", beforeEN, afterEN)
+	}
+}
+
+// TestBundleApplyIdempotentReplay — AC3 (idempotency guarantee): replaying an
+// apply_bundle_plan with the same idempotency_key returns the cached applied
+// result rather than plan_not_found, even though the plan is consumed on the
+// first apply. Confirms the replay check sits before plan consumption.
+func TestBundleApplyIdempotentReplay(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/example")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/example",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Corps FR idem.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("Body EN idem.")}},
+		},
+	})
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	first := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID, "idempotency_key": "k1"})
+	if first.IsError {
+		t.Fatalf("first apply failed: %s", marshalContent(t, first))
+	}
+	firstAfter := decodeWriteData(t, first)["after_revision"]
+
+	second := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID, "idempotency_key": "k1"})
+	if second.IsError {
+		t.Fatalf("idempotent replay should return cached result, not error: %s", marshalContent(t, second))
+	}
+	secondData := decodeWriteData(t, second)
+	if secondData["bundle_status"] != "applied" {
+		t.Fatalf("replay bundle_status = %v, want applied", secondData["bundle_status"])
+	}
+	if secondData["after_revision"] != firstAfter {
+		t.Fatalf("replay after_revision = %v, want cached %v", secondData["after_revision"], firstAfter)
+	}
+}
+
+// TestBundleApplyConflictRejectsWholeBundle — AC2/AC3: if the bundle changed
+// since the plan (BundleRevision mismatch), the whole apply fails, unapplied.
+func TestBundleApplyConflictRejectsWholeBundle(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/example")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/example",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Corps FR conflit.")}},
+		},
+	})
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	// Mutate a bundle file out-of-band after the plan, changing BundleRevision.
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts/example/index.en.md"),
+		[]byte("---\ntitle: Article EN edited\n---\nEdited.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	beforeFR := readFileString(t, contentRoot, "posts/example/index.fr.md")
+
+	applyRes := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if !applyRes.IsError {
+		t.Fatalf("apply_bundle_plan should fail with bundle_conflict, got: %s", marshalContent(t, applyRes))
+	}
+	if !strings.Contains(marshalContent(t, applyRes), "bundle_conflict") {
+		t.Fatalf("expected bundle_conflict, got: %s", marshalContent(t, applyRes))
+	}
+	if afterFR := readFileString(t, contentRoot, "posts/example/index.fr.md"); afterFR != beforeFR {
+		t.Fatalf("fr file changed despite bundle_conflict rejection")
+	}
+}
+
+// TestPlanBundleChangeRejectsLeafPage documents the scope-down decision: leaf
+// multilingual pages (no bundle directory) are rejected with not_a_bundle.
+func TestPlanBundleChangeRejectsLeafPage(t *testing.T) {
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts/leaf.fr.md"), []byte("---\ntitle: Leaf\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug":         "posts/leaf",
+		"translations": []any{map[string]any{"lang": "fr", "operations": []any{bodyOp("x")}}},
+	})
+	if !res.IsError {
+		t.Fatalf("plan_bundle_change on a leaf page should fail")
+	}
+	if !strings.Contains(marshalContent(t, res), "not_a_bundle") {
+		t.Fatalf("expected not_a_bundle, got: %s", marshalContent(t, res))
+	}
+}
