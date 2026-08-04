@@ -516,7 +516,7 @@ func TestStoreCountByOwnerAndDiskUsage(t *testing.T) {
 	dirB := t.TempDir()
 	dirExpired := t.TempDir()
 	writePreviewFile(t, dirA, "index.html", "aaaaaaaaaa") // 10 bytes
-	writePreviewFile(t, dirB, "index.html", "bbbbb")       // 5 bytes
+	writePreviewFile(t, dirB, "index.html", "bbbbb")      // 5 bytes
 	writePreviewFile(t, dirExpired, "index.html", "zzzzzzzzzzzzzzzzzzzz")
 
 	s := previewstore.New()
