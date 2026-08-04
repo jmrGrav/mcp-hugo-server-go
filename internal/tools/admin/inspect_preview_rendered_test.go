@@ -39,7 +39,7 @@ func newPreviewInspectionServer(t *testing.T, cfg config.Config) (*mcp.ClientSes
 	}
 	admin.Register(s, cfg, srcIdx)
 	admin.RegisterCreatePreview(s, cfg, store, "https://mcp.example.test")
-	admin.RegisterPreviewAccessTools(s, store, "https://mcp.example.test")
+	admin.RegisterPreviewAccessTools(s, cfg, store, "https://mcp.example.test")
 	read.RegisterInspectPreviewRenderedPage(s, nil, srcIdx, cfg, store, "https://mcp.example.test")
 
 	ctx := context.Background()
