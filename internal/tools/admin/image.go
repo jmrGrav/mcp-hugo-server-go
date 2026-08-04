@@ -233,6 +233,7 @@ func Defs() []tools.ToolDef {
 		{Name: "list_previews", RequiredScope: "write"},
 		{Name: "revoke_preview", RequiredScope: "write"},
 		{Name: "revoke_all_previews", RequiredScope: "write"},
+		{Name: "inspect_preview_rendered", RequiredScope: "write"},
 		{Name: "publish_changes", RequiredScope: "write"},
 	}
 }

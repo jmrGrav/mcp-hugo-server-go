@@ -287,3 +287,24 @@ func TestStoreGetBySessionDoesNotRaceEstablishSession(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestStoreLookupDistinguishesMissingFromExpired(t *testing.T) {
+	s := previewstore.New()
+	if entry, status := s.Lookup("missing"); entry != nil || status != previewstore.LookupMissing {
+		t.Fatalf("Lookup(missing) = (%v, %v), want (nil, %v)", entry, status, previewstore.LookupMissing)
+	}
+
+	dir := t.TempDir()
+	writePreviewFile(t, dir, "index.html", "expired")
+	s.Put("expired", &previewstore.Entry{
+		Dir:       dir,
+		Token:     "tok",
+		ExpiresAt: time.Now().Add(-time.Minute),
+	})
+	if entry, status := s.Lookup("expired"); entry != nil || status != previewstore.LookupExpired {
+		t.Fatalf("Lookup(expired) = (%v, %v), want (nil, %v)", entry, status, previewstore.LookupExpired)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expired preview directory should have been removed, stat err = %v", err)
+	}
+}
