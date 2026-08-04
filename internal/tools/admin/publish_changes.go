@@ -52,6 +52,7 @@ type publishChangesData struct {
 	// (build_error/build_in_progress), identical to build_site's own
 	// behavior — it never reaches this data shape.
 	Status      string                 `json:"status"`
+	ReasonCode  string                 `json:"reason_code,omitempty"`
 	Build       publishChangesBuildDTO `json:"build"`
 	Publication verifyPublicationData  `json:"publication"`
 }
@@ -79,7 +80,7 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 		Title: "Publish changes",
 		Description: "Build the site and confirm a page is actually live — bundles build_site + verify_publication into one explicit, separately-confirmed step. " +
 			"Never auto-chained onto apply_content_plan/update_page; publishing is always its own deliberate call (#340). " +
-			"`data.status` is \"published\" only when the build succeeds cleanly (no failed post-build callback — e.g. a CDN purge failure could leave stale bytes cached at the edge even though local files are fresh) and verify_publication's own check comes back \"fresh\" (source/build/public/index all agree and, if `site_url` is configured, the live HTTP response confirms it); otherwise it's \"build_succeeded_unverified\" — the build did not fail outright, but publication isn't confirmed clean yet (see `data.build.warning` for a callback failure and `data.publication.status`/`data.publication.explanation` for which publication stage is behind). " +
+			"`data.status` is \"published\" only when the build succeeds cleanly (no failed post-build callback — e.g. a CDN purge failure could leave stale bytes cached at the edge even though local files are fresh) and verify_publication's own check comes back \"fresh\" (source/build/public/index all agree and, if `site_url` is configured, the live HTTP response confirms it). If verify_publication reports an intentional exclusion (for example a `draft:true` or protected `test_content` page), `data.status` is `intentionally_unpublished` and `data.reason_code` mirrors the publication reason. Any other non-fresh publication result reports \"build_succeeded_unverified\" — the build did not fail outright, but publication isn't confirmed clean yet (see `data.build.warning` for a callback failure and `data.publication.status`/`data.publication.explanation` for which publication stage is behind). " +
 			"A failed build surfaces as a tool error (`build_error`/`build_in_progress`), identical to `build_site`'s own behavior — it never reaches `data.status`. " +
 			"Optional `wait_seconds` is forwarded to verify_publication's own local settle-then-check wait (bounded server-side). " +
 			"Writes only build output and derived indexes — never touches page source; that's `apply_content_plan`/`update_page`'s layer.",
@@ -117,12 +118,17 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 		// leaving stale bytes cached at the edge. data.build.warning always
 		// carries the specific callback failure either way.
 		status := "build_succeeded_unverified"
-		if buildData.Status == "ok" && pub.Status == "fresh" {
+		reasonCode := ""
+		if pub.Status == "intentionally_unpublished" {
+			status = "intentionally_unpublished"
+			reasonCode = pub.ReasonCode
+		} else if buildData.Status == "ok" && pub.Status == "fresh" {
 			status = "published"
 		}
 
 		return nil, newPublishChangesOutput(publishChangesData{
-			Status: status,
+			Status:     status,
+			ReasonCode: reasonCode,
 			Build: publishChangesBuildDTO{
 				BuildID:        buildData.BuildID,
 				DurationMs:     buildData.DurationMs,

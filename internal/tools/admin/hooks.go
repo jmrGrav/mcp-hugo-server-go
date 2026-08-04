@@ -42,6 +42,7 @@ type hookResult struct {
 
 // runPostBuildHooksData is the canonical data.* payload (#552).
 type runPostBuildHooksData struct {
+	Status          string       `json:"status"`
 	Results         []hookResult `json:"results"`
 	DryRun          bool         `json:"dry_run,omitempty"`
 	ConfiguredCount int          `json:"configured_count"`
@@ -53,6 +54,7 @@ type runPostBuildHooksData struct {
 // breaking change.
 type runPostBuildHooksOutput struct {
 	toolcontract.ToolResponse[runPostBuildHooksData]
+	Status          string       `json:"status"`
 	Results         []hookResult `json:"results"`
 	DryRun          bool         `json:"dry_run,omitempty"`
 	ConfiguredCount int          `json:"configured_count"`
@@ -65,6 +67,7 @@ func hooksSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 func newRunPostBuildHooksOutput(data runPostBuildHooksData) runPostBuildHooksOutput {
 	return runPostBuildHooksOutput{
 		ToolResponse:    hooksSuccessEnvelope(data),
+		Status:          data.Status,
 		Results:         data.Results,
 		DryRun:          data.DryRun,
 		ConfiguredCount: data.ConfiguredCount,
@@ -79,7 +82,7 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "run_post_build_hooks",
 		Title:        "Run post-build hooks",
-		Description:  "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Set `dry_run:true` to inspect the configured hook targets without contacting them; this returns the same `results[]` URL list plus `configured_count`, making `no hooks configured` distinguishable from `hooks configured but intentionally not executed`. Only configured URLs are ever reported or contacted.",
+		Description:  "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Set `dry_run:true` to inspect the configured hook targets without contacting them; this returns the same `results[]` URL list plus `configured_count`, making `no hooks configured` distinguishable from `hooks configured but intentionally not executed`. `data.status` is `no_hooks_configured` when zero hooks are configured, `dry_run` when hooks are configured but intentionally not contacted, and `completed` when one or more hooks were actually attempted. Only configured URLs are ever reported or contacted.",
 		InputSchema:  tools.MustSchema[runPostBuildHooksInput](),
 		OutputSchema: tools.MustSchema[runPostBuildHooksOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -91,14 +94,24 @@ func RegisterHooks(s *mcp.Server, cfg config.Config) {
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in runPostBuildHooksInput) (*mcp.CallToolResult, runPostBuildHooksOutput, error) {
 		if in.DryRun {
 			results := previewHooks(cfg)
+			status := "dry_run"
+			if len(results) == 0 {
+				status = "no_hooks_configured"
+			}
 			return nil, newRunPostBuildHooksOutput(runPostBuildHooksData{
+				Status:          status,
 				Results:         results,
 				DryRun:          true,
 				ConfiguredCount: len(results),
 			}), nil
 		}
 		results := fireHooks(ctx, cfg, hookClient)
+		status := "completed"
+		if len(cfg.PostBuildHooks) == 0 {
+			status = "no_hooks_configured"
+		}
 		return nil, newRunPostBuildHooksOutput(runPostBuildHooksData{
+			Status:          status,
 			Results:         results,
 			ConfiguredCount: len(cfg.PostBuildHooks),
 		}), nil

@@ -205,6 +205,96 @@ func TestPublishChangesUnverifiedWhenPublicationNotFresh(t *testing.T) {
 	}
 }
 
+func TestPublishChangesTestContentDraftReportsIntentionalUnpublication(t *testing.T) {
+	wantRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "audit", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Audit\ndate: 2026-07-14\ndraft: true\ntest_content: true\ntest_content_owner: audit\ntest_content_expires_at: 2026-08-05T00:00:00Z\n---\nDraft body.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = wantRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+
+	session, done := newPublishChangesServer(t, cfg, srcIdx)
+	defer done()
+
+	res, err := callTool(t, session, "publish_changes", map[string]any{"slug": "posts/audit"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("publish_changes returned error: %s", resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+	if got := data["status"]; got != "intentionally_unpublished" {
+		t.Fatalf("data.status = %v, want intentionally_unpublished (data=%v)", got, data)
+	}
+	pub, ok := data["publication"].(map[string]any)
+	if !ok || pub["status"] != "intentionally_unpublished" {
+		t.Fatalf("data.publication.status = %v, want intentionally_unpublished", data["publication"])
+	}
+}
+
+func TestPublishChangesDraftReportsIntentionalUnpublication(t *testing.T) {
+	wantRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "draft-only", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Draft Only\ndate: 2026-07-14\ndraft: true\n---\nDraft body.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = wantRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+
+	session, done := newPublishChangesServer(t, cfg, srcIdx)
+	defer done()
+
+	res, err := callTool(t, session, "publish_changes", map[string]any{"slug": "posts/draft-only"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("publish_changes returned error: %s", resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+	if got := data["status"]; got != "intentionally_unpublished" {
+		t.Fatalf("data.status = %v, want intentionally_unpublished (data=%v)", got, data)
+	}
+	pub, ok := data["publication"].(map[string]any)
+	if !ok || pub["status"] != "intentionally_unpublished" {
+		t.Fatalf("data.publication.status = %v, want intentionally_unpublished", data["publication"])
+	}
+}
+
 // TestPublishChangesBuildFailurePropagatesAsToolError verifies a failed
 // build surfaces the same tool error build_site itself would produce,
 // never a data.status value — publish_changes must not swallow a build

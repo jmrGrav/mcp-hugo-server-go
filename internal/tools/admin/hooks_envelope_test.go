@@ -52,6 +52,9 @@ func TestRunPostBuildHooksHasEnvelopeMatchingRootFields(t *testing.T) {
 	if rootEntry["url"] != dataEntry["url"] || rootEntry["status"] != dataEntry["status"] {
 		t.Fatalf("data.results[0] = %#v, root results[0] = %#v — must match (#552)", dataEntry, rootEntry)
 	}
+	if got := data["status"]; got != "completed" {
+		t.Fatalf("data.status = %v, want completed", got)
+	}
 }
 
 func TestRunPostBuildHooksDryRunListsConfiguredHooksWithoutContactingThem(t *testing.T) {
@@ -98,6 +101,9 @@ func TestRunPostBuildHooksDryRunListsConfiguredHooksWithoutContactingThem(t *tes
 	if _, present := entry["status"]; present {
 		t.Fatalf("dry-run preview entry must not include status, got %#v", entry)
 	}
+	if got := data["status"]; got != "dry_run" {
+		t.Fatalf("data.status = %v, want dry_run", got)
+	}
 }
 
 func TestRunPostBuildHooksDryRunReportsNoHooksConfigured(t *testing.T) {
@@ -124,5 +130,31 @@ func TestRunPostBuildHooksDryRunReportsNoHooksConfigured(t *testing.T) {
 	results, ok := data["results"].([]any)
 	if !ok || len(results) != 0 {
 		t.Fatalf("data.results = %#v, want empty array when no hooks are configured", data["results"])
+	}
+	if got := data["status"]; got != "no_hooks_configured" {
+		t.Fatalf("data.status = %v, want no_hooks_configured", got)
+	}
+}
+
+func TestRunPostBuildHooksRealExecutionReportsNoHooksConfigured(t *testing.T) {
+	cfg := config.Default()
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "run_post_build_hooks", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("run_post_build_hooks returned error: %s", resultText(res))
+	}
+
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	if data["configured_count"] != float64(0) {
+		t.Fatalf("data.configured_count = %v, want 0", data["configured_count"])
+	}
+	if got := data["status"]; got != "no_hooks_configured" {
+		t.Fatalf("data.status = %v, want no_hooks_configured", got)
 	}
 }
