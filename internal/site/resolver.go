@@ -46,7 +46,7 @@ func (r *PageResolver) ResolveWithLang(rawSlug, explicitLang string) (ResolvedPa
 		}
 	}
 	if r != nil && r.idx != nil {
-		if pub, ok := r.resolvePublicForSourceLang(sourceSlug, explicitLang); ok {
+		if pub, ok := r.resolvePublicForSourceLang(sourceSlug, explicitLang); ok && pageMatchesExplicitLang(pub, explicitLang, r.cfg.DefaultLanguage) {
 			out.Public = pub
 		} else if p, ok := r.idx.GetBySlug(publicSlug); ok && pageMatchesExplicitLang(p, explicitLang, r.cfg.DefaultLanguage) {
 			out.Public = p
