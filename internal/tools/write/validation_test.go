@@ -115,6 +115,55 @@ func TestValidateFeaturedImagePath(t *testing.T) {
 	}
 }
 
+// TestValidateFeaturedImagePathCharacterization pins the EXACT error string
+// (or nil) validateFeaturedImagePath returns for a battery of inputs. It was
+// written BEFORE the #855 migration onto the shared urlpolicy validator and
+// must stay byte-for-byte green afterwards — this is the regression guard
+// proving the migration does not alter featured_image's observable behavior,
+// including the check ORDER that makes the #835 fix effective (e.g. a
+// scheme-looking value with no leading "/" must report the leading-slash
+// error, not a scheme error, because that gate runs first).
+func TestValidateFeaturedImagePathCharacterization(t *testing.T) {
+	cases := []struct {
+		in  string
+		err string // "" means nil (accepted)
+	}{
+		{"", ""},
+		{"/images/posts/hero.jpg", ""},
+		{"/images/posts/hero-featured.jpg", ""},
+		{"/images/x-featured.jpg", ""},
+		{"/a_b/c~d/e.jpg", ""},
+		{"images/posts/hero.jpg", "invalid_params: featured_image must be a site-root-relative path starting with /"},
+		{"javascript:alert(1)", "invalid_params: featured_image must be a site-root-relative path starting with /"},
+		{"data:text/html;base64,AAAA", "invalid_params: featured_image must be a site-root-relative path starting with /"},
+		{"vbscript:msgbox(1)", "invalid_params: featured_image must be a site-root-relative path starting with /"},
+		{"http://example.test/hero.jpg", "invalid_params: featured_image must be a site-root-relative path starting with /"},
+		{"https://example.test/hero.jpg", "invalid_params: featured_image must be a site-root-relative path starting with /"},
+		{"file:///etc/passwd", "invalid_params: featured_image must be a site-root-relative path starting with /"},
+		{"//cdn.example.test/img.jpg", "invalid_params: featured_image must not be protocol-relative"},
+		{`/images\evil.jpg`, "invalid_params: featured_image must not contain backslashes"},
+		{"/images/../etc/passwd", "invalid_params: featured_image must not contain dot path segments"},
+		{"/a/../b", "invalid_params: featured_image must not contain dot path segments"},
+		{"/./a.jpg", "invalid_params: featured_image must not contain dot path segments"},
+		{`/img.jpg" onerror="alert(1)`, "invalid_params: featured_image must contain only letters, digits, and ._~/- characters"},
+		{"/images/<script>.jpg", "invalid_params: featured_image must contain only letters, digits, and ._~/- characters"},
+		{"/images/hero.jpg onload=alert(1)", "invalid_params: featured_image must contain only letters, digits, and ._~/- characters"},
+		{"/images/hero'.jpg", "invalid_params: featured_image must contain only letters, digits, and ._~/- characters"},
+		{"/img\x01.jpg", "invalid_params: featured_image must not contain control characters (found U+0001)"},
+		{"/img\x00.jpg", "invalid_params: featured_image must not contain null bytes"},
+	}
+	for _, tc := range cases {
+		err := validateFeaturedImagePath(tc.in)
+		got := ""
+		if err != nil {
+			got = err.Error()
+		}
+		if got != tc.err {
+			t.Errorf("validateFeaturedImagePath(%q) = %q, want %q", tc.in, got, tc.err)
+		}
+	}
+}
+
 func TestValidateBodyFormatRejectsOverLength(t *testing.T) {
 	long := make([]byte, maxBodyBytes+1)
 	for i := range long {
