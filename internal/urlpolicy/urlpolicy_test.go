@@ -77,13 +77,13 @@ func TestValidateExternalAllowed(t *testing.T) {
 		// attribute the theme renders the value into. LocalOnly blocks these
 		// via its charset allowlist; ExternalAllowed must too. Each of these
 		// returned nil (accepted) before the metacharacter denylist was added.
-		`https://good.example/a" onerror="alert(1)`,   // attribute breakout
+		`https://good.example/a" onerror="alert(1)`,     // attribute breakout
 		`https://x.example/"><script>alert(1)</script>`, // tag injection
-		"https://good.example/a b",                    // raw space
-		"https://good.example/a\tb",                   // tab (exempt from control-char check)
-		"https://good.example/a\nb",                   // newline
-		"https://good.example/a'b",                    // single quote
-		"https://good.example/a`b",                    // backtick
+		"https://good.example/a b",                      // raw space
+		"https://good.example/a\tb",                     // tab (exempt from control-char check)
+		"https://good.example/a\nb",                     // newline
+		"https://good.example/a'b",                      // single quote
+		"https://good.example/a`b",                      // backtick
 	}
 	for _, s := range rejected {
 		if err := Validate(s, ExternalAllowed); err == nil {
