@@ -100,7 +100,7 @@ func TestInspectPreviewRenderedSchemaAndToolPresence(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 	for _, tool := range result.Tools {
-		if tool.Name == "inspect_preview_rendered" {
+		if tool.Name == "inspect_preview" {
 			return
 		}
 	}
@@ -130,7 +130,7 @@ func TestInspectPreviewRenderedSupportsDraftPage(t *testing.T) {
 		Owner:       "audit",
 	})
 
-	res, err := callTool(t, session, "inspect_preview_rendered", map[string]any{
+	res, err := callTool(t, session, "inspect_preview", map[string]any{
 		"slug":       "posts/draft",
 		"preview_id": "abc123",
 	})
@@ -180,7 +180,7 @@ func TestInspectPreviewRenderedPreviewExpiredReturnsStableCode(t *testing.T) {
 		ExpiresAt: time.Now().Add(-time.Minute),
 	})
 
-	res, err := callTool(t, session, "inspect_preview_rendered", map[string]any{
+	res, err := callTool(t, session, "inspect_preview", map[string]any{
 		"slug":       "posts/draft",
 		"preview_id": "expired",
 	})
@@ -207,7 +207,7 @@ func TestInspectPreviewRenderedPreviewMissingReturnsStableCode(t *testing.T) {
 	session, _, done := newPreviewInspectionServer(t, cfg)
 	defer done()
 
-	res, err := callTool(t, session, "inspect_preview_rendered", map[string]any{
+	res, err := callTool(t, session, "inspect_preview", map[string]any{
 		"slug":       "posts/draft",
 		"preview_id": "missing",
 	})
@@ -245,7 +245,7 @@ func TestInspectPreviewRenderedRevokedPreviewReturnsStableCode(t *testing.T) {
 		t.Fatal("Revoke(revoked) = false, want true")
 	}
 
-	res, err := callTool(t, session, "inspect_preview_rendered", map[string]any{
+	res, err := callTool(t, session, "inspect_preview", map[string]any{
 		"slug":       "posts/draft",
 		"preview_id": "revoked",
 	})
