@@ -109,6 +109,28 @@ type Config struct {
 	// upgrading to a version with this field never silently changes an
 	// existing deployment's behavior or log volume.
 	StaleTestContentThresholdHours int `yaml:"stale_test_content_threshold_hours"`
+	// PreviewMaxPerCaller (#871) caps how many active previews a single caller
+	// may hold open at once, enforced in create_preview before a build starts.
+	// It bounds the number of isolated Hugo build directories an agent can
+	// accumulate under the system temp dir. NOTE on granularity: "caller" here
+	// is the preview's Owner, which is the server's OS process user
+	// (currentUserForLog), not a per-OAuth-client identity — in the common
+	// single-process deployment this is effectively a global active-preview
+	// cap, and is documented as such rather than overclaiming per-client
+	// isolation. Defaults to 5. A non-positive value is treated as
+	// "unset -> default" (see clampPreviewLimits), never as "unlimited", so an
+	// upgrade or a config typo can't silently remove the cap.
+	PreviewMaxPerCaller int `yaml:"preview_max_per_caller"`
+	// PreviewMaxDiskBytes (#871) is a *global* cap on the total on-disk size of
+	// all active preview build directories, checked in create_preview before a
+	// build. Global (not per-caller) is deliberate: disk is a single shared
+	// physical resource and Owner attribution is best-effort OS-user (see
+	// above), so the meaningful protection against filling the disk is one
+	// aggregate budget. Once current usage is at/over the cap, new previews are
+	// refused with an explicit error until existing ones expire or are revoked.
+	// Defaults to 512 MiB. Non-positive -> default (clampPreviewLimits), so the
+	// disk protection can't be silently disabled by a zeroed/omitted value.
+	PreviewMaxDiskBytes int64 `yaml:"preview_max_disk_bytes"`
 }
 
 // GitBaselineConfig defines the local Git checkout model used as the trusted
@@ -234,8 +256,19 @@ func Default() Config {
 		},
 		BlockedShortcodes:     []string{"raw", "rawhtml", "script", "style"},
 		IdempotencyTTLSeconds: DefaultIdempotencyTTLSeconds,
+		PreviewMaxPerCaller:   DefaultPreviewMaxPerCaller,
+		PreviewMaxDiskBytes:   DefaultPreviewMaxDiskBytes,
 	}
 }
+
+// DefaultPreviewMaxPerCaller and DefaultPreviewMaxDiskBytes are the fail-safe
+// values for the create_preview active-count and preview-disk caps (#871),
+// applied when the config value is unset or non-positive. Exported so the
+// admin layer can single-source the same defensive fallback.
+const (
+	DefaultPreviewMaxPerCaller = 5
+	DefaultPreviewMaxDiskBytes = 512 * 1024 * 1024 // 512 MiB
+)
 
 // DefaultIdempotencyTTLSeconds is the retention window (in seconds) used when
 // idempotency_ttl_seconds is unset or configured to an invalid (non-positive)
@@ -269,7 +302,24 @@ func Load(path string) (Config, error) {
 	}
 	cfg.RateLimit.clampMutationLimits()
 	cfg.clampIdempotencyTTL()
+	cfg.clampPreviewLimits()
 	return cfg, nil
+}
+
+// clampPreviewLimits guards the create_preview caps (#871) against a config
+// file zeroing or negating them: a non-positive count or disk cap would
+// otherwise be read as "no limit", silently reintroducing the unbounded
+// preview-accumulation / disk-exhaustion risk this feature exists to prevent.
+// Fall back to the safe Default() values instead of failing closed, mirroring
+// clampIdempotencyTTL / clampMutationLimits' treatment of the same class of
+// misconfiguration.
+func (c *Config) clampPreviewLimits() {
+	if c.PreviewMaxPerCaller <= 0 {
+		c.PreviewMaxPerCaller = DefaultPreviewMaxPerCaller
+	}
+	if c.PreviewMaxDiskBytes <= 0 {
+		c.PreviewMaxDiskBytes = DefaultPreviewMaxDiskBytes
+	}
 }
 
 // clampIdempotencyTTL guards against a config file zeroing or negating the

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,14 @@ type Entry struct {
 	BuildStatus  string
 	CreatedAt    time.Time
 	Owner        string
+	// sessionActivated records that the session cookie minted from this
+	// entry's single-use Token has since been used to fetch actual preview
+	// content (a successful GetBySession), not merely exchanged on the
+	// redirect. It is the pivot for single-use enforcement (#871): the entry
+	// Token is honoured for re-exchange up until activation, then refused.
+	// Mutated only under Store.mu (like SessionToken, unlike the immutable
+	// Token) — never read or written without the lock held.
+	sessionActivated bool
 }
 
 type Snapshot struct {
@@ -153,11 +162,40 @@ func (s *Store) GetBySession(id, sessionToken string) (*Entry, bool) {
 	if subtle.ConstantTimeCompare([]byte(storedSessionToken), []byte(sessionToken)) != 1 {
 		return nil, false
 	}
+	// A session cookie has now successfully fetched real content: the
+	// entry->session handoff is provably complete, so the single-use entry
+	// Token may be retired (see EstablishSession). Re-lock to flip the flag —
+	// sessionActivated is shared mutable state guarded by s.mu. The entry
+	// pointer may have been deleted from the map by a concurrent expiry/revoke
+	// between unlock and here; writing the field on the (still-live) pointer is
+	// harmless in that case.
+	s.mu.Lock()
+	entry.sessionActivated = true
+	s.mu.Unlock()
 	return entry, true
 }
 
 // EstablishSession validates the entry URL token and returns the corresponding
 // preview entry plus a clean-path session cookie value.
+//
+// Single-use semantics (#871): the entry Token is not retired on the first
+// exchange — it stays valid for *re-exchange* only until the session it minted
+// is confirmed in active use (sessionActivated, flipped by GetBySession on the
+// first content fetch). This deliberately keeps the legitimate re-exchange
+// cases working, all of which happen *before* any content has been fetched:
+//   - page reload / network retry of the entry request before the redirect's
+//     Set-Cookie ever reached the browser (so the client has no cookie yet and
+//     must re-exchange the token),
+//   - opening the same entry URL in a second tab before the first completes.
+//
+// Each of those re-exchanges returns the *same* SessionToken, so they are
+// idempotent. Once the browser has followed the redirect and fetched real
+// content with the cookie, the token is no longer needed and any further
+// exchange attempt is refused — a captured/leaked token can no longer mint a
+// fresh, independent session. The security value is honest: this converts
+// *silent* reuse of a leaked entry token into a *detectable* lockout (a
+// legitimate user who is unexpectedly refused is a signal the link leaked); it
+// does not protect against a token exfiltrated before the real flow completes.
 func (s *Store) EstablishSession(id, token string) (*Entry, string, bool) {
 	s.mu.Lock()
 	entry, ok := s.entries[id]
@@ -172,6 +210,12 @@ func (s *Store) EstablishSession(id, token string) (*Entry, string, bool) {
 		return nil, "", false
 	}
 	if subtle.ConstantTimeCompare([]byte(entry.Token), []byte(token)) != 1 {
+		s.mu.Unlock()
+		return nil, "", false
+	}
+	// Token is valid, but if its session is already in active use the token is
+	// spent: refuse to mint or hand back a session from it again.
+	if entry.SessionToken != "" && entry.sessionActivated {
 		s.mu.Unlock()
 		return nil, "", false
 	}
@@ -232,6 +276,61 @@ func (s *Store) List() []Snapshot {
 		_ = os.RemoveAll(dir)
 	}
 	return out
+}
+
+// CountByOwner returns how many non-expired previews are attributed to owner.
+// Used by create_preview to enforce a per-caller active-preview cap (#871).
+// Callers should Sweep() first so expired entries don't inflate the count.
+func (s *Store) CountByOwner(owner string) int {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, entry := range s.entries {
+		if now.After(entry.ExpiresAt) {
+			continue
+		}
+		if entry.Owner == owner {
+			n++
+		}
+	}
+	return n
+}
+
+// DiskUsageBytes returns the total on-disk size of every non-expired preview's
+// build directory. Used by create_preview to enforce a global preview-disk cap
+// (#871). The walk is best-effort: entries can be expired/revoked and their
+// temp dirs removed concurrently, so per-file/per-dir errors (including a whole
+// directory vanishing mid-walk) are ignored rather than failing the caller —
+// an undercount is the safe direction for a create that is about to add more.
+func (s *Store) DiskUsageBytes() int64 {
+	now := time.Now()
+	s.mu.Lock()
+	dirs := make([]string, 0, len(s.entries))
+	for _, entry := range s.entries {
+		if now.After(entry.ExpiresAt) {
+			continue
+		}
+		dirs = append(dirs, entry.Dir)
+	}
+	s.mu.Unlock()
+
+	var total int64
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		_ = filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // skip vanished/unreadable entries, keep walking
+			}
+			if !info.IsDir() {
+				total += info.Size()
+			}
+			return nil
+		})
+	}
+	return total
 }
 
 func (s *Store) Revoke(id string) bool {
@@ -311,6 +410,25 @@ func (s *Store) HTTPHandler() http.Handler {
 				}
 				http.Redirect(w, r, target, http.StatusFound)
 				return
+			}
+			// The entry token was refused. If this is a spent single-use token
+			// (#871) but the same browser already holds a valid session cookie
+			// — its Path (/preview/{id}/) prefix-matches this entry URL, so it
+			// is sent here — gracefully redirect to the clean URL instead of
+			// letting the request fall through to the file server, where the
+			// token still in the path would 404 as a bogus filename. A
+			// token-only attacker with no cookie gets the 404 below, so this
+			// costs no security: it only smooths a legitimate re-click after
+			// the flow already completed.
+			if c, err := r.Cookie(CookieName(id)); err == nil && strings.TrimSpace(c.Value) != "" {
+				if _, ok := s.GetBySession(id, c.Value); ok {
+					target := CleanPath(id, "")
+					if len(parts) == 3 && parts[2] != "" {
+						target = CleanPath(id, parts[2])
+					}
+					http.Redirect(w, r, target, http.StatusFound)
+					return
+				}
 			}
 		}
 

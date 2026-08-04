@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
@@ -29,6 +30,14 @@ type listPreviewItem struct {
 type listPreviewsData struct {
 	ConfiguredCount int               `json:"configured_count"`
 	Previews        []listPreviewItem `json:"previews"`
+	// Limit/usage surface (#871, AC5 "enforced and surfaced"): lets an agent
+	// self-regulate before create_preview refuses it at a cap boundary.
+	// CallerActiveCount is the number of active previews owned by the current
+	// caller (server OS user; see PreviewMaxPerCaller docs on granularity).
+	CallerActiveCount    int   `json:"caller_active_count"`
+	MaxPreviewsPerCaller int   `json:"max_previews_per_caller"`
+	PreviewDiskUsedBytes int64 `json:"preview_disk_used_bytes"`
+	PreviewDiskMaxBytes  int64 `json:"preview_disk_max_bytes"`
 }
 
 type listPreviewsOutput struct {
@@ -63,14 +72,22 @@ func previewAccessSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
-func RegisterPreviewAccessTools(s *mcp.Server, store *previewstore.Store, baseURL string) {
+func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *previewstore.Store, baseURL string) {
 	if s == nil || store == nil {
 		return
+	}
+	maxPerCaller := cfg.PreviewMaxPerCaller
+	if maxPerCaller <= 0 {
+		maxPerCaller = config.DefaultPreviewMaxPerCaller
+	}
+	maxDiskBytes := cfg.PreviewMaxDiskBytes
+	if maxDiskBytes <= 0 {
+		maxDiskBytes = config.DefaultPreviewMaxDiskBytes
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "list_previews",
 		Title:        "List previews",
-		Description:  "List currently active preview sessions with owner and expiry metadata. Returns clean preview URLs without re-emitting the entry token — the entry token is not currently invalidated after first exchange, so it remains valid (like any bearer secret) for the preview's remaining TTL; use revoke_preview if a URL has been exposed and access must be cut off immediately (#853 follow-up: enforce single-use). Requires site.admin.",
+		Description:  "List currently active preview sessions with owner and expiry metadata, plus current usage against the configured caps (caller_active_count/max_previews_per_caller and preview_disk_used_bytes/preview_disk_max_bytes) so an agent can self-regulate before create_preview refuses a new preview at a cap boundary (#871). Returns clean preview URLs without re-emitting the entry token; the entry token is single-use — once its session has fetched content it can no longer mint a new session, so a leaked entry URL that was already opened is inert, but use revoke_preview to cut off access to an active preview immediately. Requires site.admin.",
 		InputSchema:  tools.MustSchema[listPreviewsInput](),
 		OutputSchema: tools.MustSchema[listPreviewsOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -98,8 +115,12 @@ func RegisterPreviewAccessTools(s *mcp.Server, store *previewstore.Store, baseUR
 		}
 		return nil, listPreviewsOutput{
 			ToolResponse: previewAccessSuccessEnvelope(listPreviewsData{
-				ConfiguredCount: len(items),
-				Previews:        items,
+				ConfiguredCount:      len(items),
+				Previews:             items,
+				CallerActiveCount:    store.CountByOwner(currentUserForLog()),
+				MaxPreviewsPerCaller: maxPerCaller,
+				PreviewDiskUsedBytes: store.DiskUsageBytes(),
+				PreviewDiskMaxBytes:  maxDiskBytes,
 			}),
 		}, nil
 	}))

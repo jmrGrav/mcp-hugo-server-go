@@ -117,6 +117,30 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		// an expired preview URL (which is what triggers cleanup in Get).
 		store.Sweep()
 
+		// Enforce the active-preview and preview-disk caps (#871) before doing
+		// any build work. These are soft caps: create_preview runs under only
+		// ContentMu.RLock, so two concurrent creates can both pass these checks
+		// and both Put — acceptable for a low-frequency admin operation, and
+		// not worth reservation plumbing. A breach is surfaced explicitly as a
+		// tool error (never a silent no-op), matching this repo's "clamped-with-
+		// signal, never silent" convention. list_previews reports current usage
+		// against these caps so an agent can self-regulate before hitting them.
+		maxPerCaller := cfg.PreviewMaxPerCaller
+		if maxPerCaller <= 0 {
+			maxPerCaller = config.DefaultPreviewMaxPerCaller
+		}
+		maxDiskBytes := cfg.PreviewMaxDiskBytes
+		if maxDiskBytes <= 0 {
+			maxDiskBytes = config.DefaultPreviewMaxDiskBytes
+		}
+		owner := currentUserForLog()
+		if n := store.CountByOwner(owner); n >= maxPerCaller {
+			return nil, createPreviewOutput{}, fmt.Errorf("preview_limit_exceeded: caller already has %d active preview(s), at the configured limit of %d — revoke one with revoke_preview or wait for expiry before creating another", n, maxPerCaller)
+		}
+		if used := store.DiskUsageBytes(); used >= maxDiskBytes {
+			return nil, createPreviewOutput{}, fmt.Errorf("preview_disk_limit_exceeded: active previews already use %d bytes of the configured %d-byte preview-disk budget — revoke previews or wait for expiry before creating another", used, maxDiskBytes)
+		}
+
 		const lockWait = 10 * time.Second
 		deadline := time.Now().Add(lockWait)
 		for {

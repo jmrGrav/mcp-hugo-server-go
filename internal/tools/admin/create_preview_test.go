@@ -81,7 +81,7 @@ func newCreatePreviewServer(t *testing.T, cfg config.Config) (*mcp.ClientSession
 	store := previewstore.New()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	admin.RegisterCreatePreview(s, cfg, store, "https://mcp.example.test")
-	admin.RegisterPreviewAccessTools(s, store, "https://mcp.example.test")
+	admin.RegisterPreviewAccessTools(s, cfg, store, "https://mcp.example.test")
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -333,6 +333,121 @@ func TestCreatePreviewPassesBaseURLPointedAtOwnMount(t *testing.T) {
 	}
 	if strings.Contains(argvStr, cfg.SiteURL) {
 		t.Fatalf("hugo invocation must not use the public site's baseURL for a preview build; argv = %q", argvStr)
+	}
+}
+
+// TestCreatePreviewRejectsOverPerCallerCountCap proves the #871 per-caller
+// active-preview cap rejects the (N+1)th create with an explicit signal, not a
+// silent no-op.
+func TestCreatePreviewRejectsOverPerCallerCountCap(t *testing.T) {
+	hugoDir := writeMockHugoForPreview(t, "marker")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.PreviewMaxPerCaller = 1
+
+	session, _, done := newCreatePreviewServer(t, cfg)
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("first create_preview should succeed: %s", resultText(res))
+	}
+
+	res, err = session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("second create_preview past the per-caller cap must return an error, not silently succeed")
+	}
+	if !strings.Contains(resultText(res), "preview_limit_exceeded") {
+		t.Fatalf("error must explicitly signal the cap; got %q", resultText(res))
+	}
+}
+
+// TestCreatePreviewRejectsOverDiskCap proves the #871 global preview-disk cap
+// rejects a new create once existing preview builds meet/exceed the budget.
+func TestCreatePreviewRejectsOverDiskCap(t *testing.T) {
+	hugoDir := writeMockHugoForPreview(t, "marker content that occupies some bytes on disk")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.PreviewMaxDiskBytes = 1 // any existing preview usage trips the cap
+
+	session, _, done := newCreatePreviewServer(t, cfg)
+	defer done()
+
+	// First create sees 0 bytes used (0 >= 1 is false) and proceeds.
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("first create_preview should succeed: %s", resultText(res))
+	}
+
+	// Second create sees the first build's bytes on disk and is refused.
+	res, err = session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("create_preview over the disk cap must return an error, not silently succeed")
+	}
+	if !strings.Contains(resultText(res), "preview_disk_limit_exceeded") {
+		t.Fatalf("error must explicitly signal the disk cap; got %q", resultText(res))
+	}
+}
+
+// TestListPreviewsSurfacesCapsAndUsage proves list_previews reports current
+// usage against the caps (#871 AC5 "enforced and surfaced").
+func TestListPreviewsSurfacesCapsAndUsage(t *testing.T) {
+	hugoDir := writeMockHugoForPreview(t, "marker")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.PreviewMaxPerCaller = 7
+
+	session, _, done := newCreatePreviewServer(t, cfg)
+	defer done()
+
+	if res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}}); err != nil || res.IsError {
+		t.Fatalf("create_preview failed: err=%v res=%v", err, res)
+	}
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_previews", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("list_previews returned error: %s", resultText(res))
+	}
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	if got := data["caller_active_count"]; got != float64(1) {
+		t.Fatalf("caller_active_count = %v, want 1", got)
+	}
+	if got := data["max_previews_per_caller"]; got != float64(7) {
+		t.Fatalf("max_previews_per_caller = %v, want 7 (configured cap surfaced)", got)
+	}
+	if got, ok := data["preview_disk_used_bytes"].(float64); !ok || got <= 0 {
+		t.Fatalf("preview_disk_used_bytes = %v, want a positive byte count", data["preview_disk_used_bytes"])
+	}
+	if _, present := data["preview_disk_max_bytes"]; !present {
+		t.Fatal("preview_disk_max_bytes must be surfaced")
 	}
 }
 

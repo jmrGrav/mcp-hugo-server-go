@@ -34,7 +34,7 @@ func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func())
 	}
 	admin.Register(s, cfg, srcIdx)
 	admin.RegisterCreatePreview(s, cfg, previews, "https://mcp.example.test")
-	admin.RegisterPreviewAccessTools(s, previews, "https://mcp.example.test")
+	admin.RegisterPreviewAccessTools(s, cfg, previews, "https://mcp.example.test")
 	read.RegisterInspectPreviewRenderedPage(s, nil, srcIdx, cfg, previews, "https://mcp.example.test")
 
 	ctx := context.Background()
