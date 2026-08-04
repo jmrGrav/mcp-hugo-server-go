@@ -159,19 +159,28 @@ func TestValidationHelpers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewSourceIndex() error = %v", err)
 	}
-	if got, err := sourcePagesForValidation(src, "posts/a"); err != nil || len(got) != 1 {
+	if got, err := sourcePagesForValidation(src, "posts/a", ""); err != nil || len(got) != 1 {
 		t.Fatalf("sourcePagesForValidation(slug) = %#v err=%v", got, err)
 	}
-	if got, err := sourcePagesForValidation(src, "posts/multi"); err != nil || len(got) != 2 {
+	if got, err := sourcePagesForValidation(src, "posts/multi", ""); err != nil || len(got) != 2 {
 		t.Fatalf("sourcePagesForValidation(multilingual slug) = %#v err=%v", got, err)
 	} else if got[0].Lang != "en" || got[1].Lang != "fr" {
 		t.Fatalf("sourcePagesForValidation(multilingual slug) langs = %q, %q want en, fr", got[0].Lang, got[1].Lang)
 	}
-	if got, err := sourcePagesForValidation(src, ""); err != nil || len(got) != 4 {
+	if got, err := sourcePagesForValidation(src, "", ""); err != nil || len(got) != 4 {
 		t.Fatalf("sourcePagesForValidation(all) = %#v err=%v", got, err)
 	}
-	if _, err := sourcePagesForValidation(src, "does-not-exist"); err == nil {
+	if _, err := sourcePagesForValidation(src, "does-not-exist", ""); err == nil {
 		t.Fatal("sourcePagesForValidation(missing): expected error, got nil")
+	}
+	if got, err := sourcePagesForValidation(src, "posts/multi", "fr"); err != nil || len(got) != 1 || got[0].Lang != "fr" {
+		t.Fatalf("sourcePagesForValidation(multilingual slug, fr) = %#v err=%v", got, err)
+	}
+	if got, err := sourcePagesForValidation(src, "/en/posts/multi/", ""); err != nil || len(got) != 2 {
+		t.Fatalf("sourcePagesForValidation(public multilingual slug) = %#v err=%v", got, err)
+	}
+	if got, err := sourcePagesForValidation(src, "/en/posts/multi/", "en"); err != nil || len(got) != 1 || got[0].Lang != "en" {
+		t.Fatalf("sourcePagesForValidation(public multilingual slug, en) = %#v err=%v", got, err)
 	}
 	issues := validateFrontMatterPage(hugosite.SourcePage{Slug: "/broken/", FrontmatterRaw: map[string]any{}}, nil)
 	if len(issues) < 2 {

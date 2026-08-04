@@ -59,20 +59,21 @@ type generateFeaturedImageOutput struct {
 
 type generateFeaturedImageData struct {
 	Path string `json:"path"`
+	// SourceKey is the canonical slug form shared by write tools and by
+	// generated-asset cleanup logic, regardless of whether the caller used a
+	// public slug (/posts/example/) or a source-key slug (posts/example).
+	SourceKey string `json:"source_key"`
 	// PublicPath (#812 follow-up) is Path rewritten from the hugo_root-
 	// relative filesystem form ("static/images/...") to the public URL form
 	// ("/images/...") a page's featuredImage frontmatter field actually
 	// expects — ready to paste into update_page's featured_image parameter
 	// without the caller having to strip the "static" prefix by hand.
 	PublicPath string `json:"public_path"`
-	// SourceKey is the canonical slug form shared by write tools and by
-	// generated-asset cleanup logic, regardless of whether the caller used a
-	// public slug (/posts/example/) or a source-key slug (posts/example).
-	SourceKey string `json:"source_key"`
-	// DeleteScope/DeleteFilename close the generate_hero_image →
-	// delete_page_asset contract gap (#845): callers can feed these straight
-	// back into delete_page_asset without re-deriving a second filename/scope
-	// contract from data.path.
+	// DeleteSlug/DeleteScope/DeleteFilename close the generate_hero_image →
+	// delete_page_asset contract gap (#845, #846): callers can feed these
+	// straight back into delete_page_asset (with SourceKey as the canonical
+	// slug identity) without re-deriving a second filename/scope contract
+	// from data.path.
 	DeleteSlug     string `json:"delete_slug"`
 	DeleteScope    string `json:"delete_scope"`
 	DeleteFilename string `json:"delete_filename"`
@@ -138,6 +139,12 @@ func ResolveHeroImageLocation(hugoRoot, slug string) (HeroImageLocation, error) 
 		LogicalPath: logicalHugoRootPath(hugoRoot, target),
 		Name:        filepath.Base(target),
 	}, nil
+}
+
+// NormalizeHeroImageSlug returns the canonical source-key form accepted by
+// generate_hero_image and related generated-asset cleanup code.
+func NormalizeHeroImageSlug(raw string) (string, error) {
+	return normalizeHeroImageSlug(raw)
 }
 
 // publicImagePathFromLogical rewrites a hugo_root-relative logical path
@@ -223,6 +230,9 @@ func Defs() []tools.ToolDef {
 		{Name: "get_theme_status", RequiredScope: "write"},
 		{Name: "verify_publication", RequiredScope: "write"},
 		{Name: "create_preview", RequiredScope: "write"},
+		{Name: "list_previews", RequiredScope: "write"},
+		{Name: "revoke_preview", RequiredScope: "write"},
+		{Name: "revoke_all_previews", RequiredScope: "write"},
 		{Name: "publish_changes", RequiredScope: "write"},
 	}
 }
@@ -256,7 +266,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {
-		slug, err := normalizeHeroImageSlug(in.Slug)
+		slug, err := NormalizeHeroImageSlug(in.Slug)
 		if err != nil {
 			return nil, generateFeaturedImageOutput{}, err
 		}
@@ -348,7 +358,11 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 		}
 
-		return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: logicalHugoRootPath(cfg.HugoRoot, destPath)}), nil
+		return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{
+			Path:           logicalHugoRootPath(cfg.HugoRoot, destPath),
+			SourceKey:      slug,
+			DeleteFilename: filepath.Base(destPath),
+		}), nil
 	}))
 }
 
@@ -417,7 +431,11 @@ func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedI
 		return nil, generateFeaturedImageOutput{}, imageWriteError(destPath)
 	}
 
-	return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{Path: logicalHugoRootPath(cfg.HugoRoot, destPath)}), nil
+	return nil, newGenerateFeaturedImageOutput(generateFeaturedImageData{
+		Path:           logicalHugoRootPath(cfg.HugoRoot, destPath),
+		SourceKey:      in.Slug,
+		DeleteFilename: filepath.Base(destPath),
+	}), nil
 }
 
 func imageWriteError(destPath string) error {

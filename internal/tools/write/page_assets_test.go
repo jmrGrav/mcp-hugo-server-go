@@ -893,6 +893,43 @@ func TestDeletePageAssetDeletesGeneratedHeroImageWithoutExistingBundle(t *testin
 	}
 }
 
+func TestDeletePageAssetDeletesGeneratedHeroWithoutBundle(t *testing.T) {
+	hugoRoot := t.TempDir()
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "orphan-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heroBytes := []byte("hero-bytes")
+	if err := os.WriteFile(heroPath, heroBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/orphan",
+		"filename":        "orphan-featured.jpg",
+		"scope":           "generated",
+		"expected_sha256": contentmodel.SourceRevisionBytes(heroBytes),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page_asset generated hero without bundle failed: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	if got := data["scope"]; got != "generated" {
+		t.Fatalf("data.scope = %v, want generated", got)
+	}
+	if got := data["path"]; got != "static/images/posts/orphan-featured.jpg" {
+		t.Fatalf("data.path = %v, want static/images/posts/orphan-featured.jpg", got)
+	}
+	if _, err := os.Stat(heroPath); !os.IsNotExist(err) {
+		t.Fatal("delete_page_asset must remove orphaned generated hero image even when no bundle exists")
+	}
+}
+
 func TestDeletePageAssetDryRunPreviewsGeneratedHeroImageWithoutExistingBundle(t *testing.T) {
 	contentRoot := t.TempDir()
 	hugoRoot := t.TempDir()
@@ -924,6 +961,43 @@ func TestDeletePageAssetDryRunPreviewsGeneratedHeroImageWithoutExistingBundle(t 
 	}
 	if _, err := os.Stat(heroPath); err != nil {
 		t.Fatalf("delete_page_asset dry_run without bundle must not delete the generated hero image: %v", err)
+	}
+}
+
+func TestDeletePageAssetGeneratedScopeNormalizesLanguagePrefixedPublicSlug(t *testing.T) {
+	hugoRoot := t.TempDir()
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "demo-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heroBytes := []byte("hero-bytes")
+	if err := os.WriteFile(heroPath, heroBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "/en/posts/demo/",
+		"filename":        "demo-featured.jpg",
+		"scope":           "generated",
+		"expected_sha256": contentmodel.SourceRevisionBytes(heroBytes),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page_asset generated hero with language-prefixed public slug failed: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	if got := data["source_key"]; got != "posts/demo" {
+		t.Fatalf("data.source_key = %v, want posts/demo", got)
+	}
+	if got := data["path"]; got != "static/images/posts/demo-featured.jpg" {
+		t.Fatalf("data.path = %v, want static/images/posts/demo-featured.jpg", got)
+	}
+	if _, err := os.Stat(heroPath); !os.IsNotExist(err) {
+		t.Fatal("delete_page_asset must normalize /en/posts/.../ to the same generated hero path as generate_hero_image")
 	}
 }
 

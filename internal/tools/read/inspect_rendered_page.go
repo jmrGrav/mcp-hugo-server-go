@@ -87,6 +87,8 @@ func newInspectRenderedPageOutput(data inspectRenderedPageData, now time.Time) i
 // display as example content (e.g. a blog post about Hugo templating),
 // because that would be a false positive on legitimate content.
 var hugoRenderErrorRe = regexp.MustCompile(`(?i)error calling |failed to render|html/template:|text/template:|shortcode "[^"]*" not found|partial "[^"]*" not found`)
+var titleMarkupRe = regexp.MustCompile(`(?is)<title[^>]*>[^<]*<[^/!][^>]*>[^<]*</title>`)
+var previewTokenLeakRe = regexp.MustCompile(`(?i)/preview/[0-9a-f]{16}/[0-9a-f]{48}/`)
 
 // RegisterInspectRenderedPage registers inspect_rendered on s. It is
 // called from RegisterWithSourceIndex alongside the other content.read tools
@@ -125,6 +127,10 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				checkInternalLinks(idx, page, doc),
 				checkMissingImages(cfg, page, doc),
 				checkFeaturedImage(cfg, resolved, doc),
+				checkRenderedTitleMarkup(raw),
+				checkRenderedInlineEventHandlers(doc),
+				checkRenderedUnsafeURLs(doc),
+				checkRenderedPreviewTokenLeak(raw),
 				checkRenderErrors(raw),
 			}
 
@@ -468,6 +474,87 @@ func checkRenderErrors(raw []byte) renderCheckResult {
 		return renderCheckResult{Check: "render_errors", Status: "fail", Detail: "rendered output contains a Hugo shortcode/template error marker"}
 	}
 	return renderCheckResult{Check: "render_errors", Status: "pass"}
+}
+
+func checkRenderedTitleMarkup(raw []byte) renderCheckResult {
+	if titleMarkupRe.Match(raw) {
+		return renderCheckResult{Check: "security_title_markup", Status: "fail", Detail: "rendered <title> contains raw markup instead of escaped text"}
+	}
+	return renderCheckResult{Check: "security_title_markup", Status: "pass"}
+}
+
+func checkRenderedInlineEventHandlers(doc *html.Node) renderCheckResult {
+	var findings []string
+	walkNodes(doc, func(n *html.Node) bool {
+		if n.Type != html.ElementNode {
+			return true
+		}
+		for _, attr := range n.Attr {
+			key := strings.ToLower(strings.TrimSpace(attr.Key))
+			if strings.HasPrefix(key, "on") && strings.TrimSpace(attr.Val) != "" {
+				findings = append(findings, fmt.Sprintf("<%s> has inline handler %s", n.Data, key))
+				if len(findings) >= 5 {
+					return false
+				}
+			}
+		}
+		return true
+	})
+	if len(findings) > 0 {
+		return renderCheckResult{Check: "security_inline_event_handlers", Status: "fail", Detail: strings.Join(findings, "; ")}
+	}
+	return renderCheckResult{Check: "security_inline_event_handlers", Status: "pass"}
+}
+
+func checkRenderedUnsafeURLs(doc *html.Node) renderCheckResult {
+	var findings []string
+	walkNodes(doc, func(n *html.Node) bool {
+		if n.Type != html.ElementNode {
+			return true
+		}
+		for _, attr := range n.Attr {
+			key := strings.ToLower(strings.TrimSpace(attr.Key))
+			if !isRenderedURLAttr(key) {
+				continue
+			}
+			val := strings.TrimSpace(attr.Val)
+			lower := strings.ToLower(val)
+			switch {
+			case strings.HasPrefix(lower, "javascript:"):
+				findings = append(findings, fmt.Sprintf("<%s> %s uses javascript: URL", n.Data, key))
+			case strings.HasPrefix(lower, "data:") && !isSafeRenderedDataURL(n.Data, key, lower):
+				findings = append(findings, fmt.Sprintf("<%s> %s uses unsafe data: URL", n.Data, key))
+			}
+			if len(findings) >= 5 {
+				return false
+			}
+		}
+		return true
+	})
+	if len(findings) > 0 {
+		return renderCheckResult{Check: "security_unsafe_urls", Status: "fail", Detail: strings.Join(findings, "; ")}
+	}
+	return renderCheckResult{Check: "security_unsafe_urls", Status: "pass"}
+}
+
+func checkRenderedPreviewTokenLeak(raw []byte) renderCheckResult {
+	if previewTokenLeakRe.Match(raw) {
+		return renderCheckResult{Check: "security_preview_token_leak", Status: "fail", Detail: "rendered output contains a token-bearing /preview/{id}/{token}/ URL"}
+	}
+	return renderCheckResult{Check: "security_preview_token_leak", Status: "pass"}
+}
+
+func isRenderedURLAttr(key string) bool {
+	switch key {
+	case "href", "src", "data-src", "action", "formaction", "poster":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSafeRenderedDataURL(nodeName, attrName, lower string) bool {
+	return (attrName == "src" || attrName == "data-src") && nodeName == "img" && strings.HasPrefix(lower, "data:image/")
 }
 
 // walkNodes runs visit over doc and every descendant in document order,

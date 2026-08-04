@@ -586,7 +586,7 @@ func generatedHeroReferenceID(slug string) string {
 
 func deleteAssetNotFoundErr(scope, filename, slug string) error {
 	if scope == deleteAssetScopeGenerated {
-		return fmt.Errorf("not_found: generated asset %q not found for slug %q", filename, slug)
+		return fmt.Errorf("not_found: generated asset %q not found for source key %q", filename, slug)
 	}
 	return fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug)
 }
@@ -619,7 +619,8 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if cfg.ForceDryRunAll {
 			in.DryRun = true
 		}
-		slug := normalizeInputSlug(in.Slug)
+		rawSlug := strings.TrimSpace(in.Slug)
+		slug := normalizeInputSlug(rawSlug)
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: slug})
 		}
@@ -635,7 +636,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
 			)
 		}
-		if slug == "" {
+		if rawSlug == "" {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
 		filename, err := validateDeleteAssetFilename(in.Filename)
@@ -662,6 +663,15 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			}
 			hasBundleDir = true
 		case deleteAssetScopeGenerated:
+			// Normalize to the canonical hero source key (#867) so a
+			// language-prefixed or public slug resolves to the same generated
+			// path generate_hero_image wrote. The bundle is optional here (#872):
+			// an orphaned hero image can still be deleted even when no page
+			// bundle exists, so only wire dir/hasBundleDir when it does.
+			slug, err = admin.NormalizeHeroImageSlug(rawSlug)
+			if err != nil {
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+			}
 			if err := validateBundleSlug(idx, slug); err == nil {
 				dir, err = pg.SafeJoin(slug)
 				if err != nil {

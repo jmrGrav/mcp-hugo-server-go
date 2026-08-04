@@ -22,6 +22,7 @@ import (
 func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	previews := previewstore.New()
 	var srcIdx *hugosite.SourceIndex
 	if strings.TrimSpace(cfg.ContentRoot) != "" {
 		var err error
@@ -31,7 +32,8 @@ func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func())
 		}
 	}
 	admin.Register(s, cfg, srcIdx)
-	admin.RegisterCreatePreview(s, cfg, previewstore.New(), "https://mcp.example.test")
+	admin.RegisterCreatePreview(s, cfg, previews, "https://mcp.example.test")
+	admin.RegisterPreviewAccessTools(s, previews, "https://mcp.example.test")
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -133,6 +135,15 @@ func TestGenerateFeaturedImage_Success(t *testing.T) {
 	}
 	if got := data["path"]; got != expectedLogicalPath {
 		t.Fatalf("generate_hero_image data.path = %v, want %q", got, expectedLogicalPath)
+	}
+	if got := data["source_key"]; got != "my-post" {
+		t.Fatalf("generate_hero_image data.source_key = %v, want my-post", got)
+	}
+	if got := data["delete_scope"]; got != "generated" {
+		t.Fatalf("generate_hero_image data.delete_scope = %v, want generated", got)
+	}
+	if got := data["delete_filename"]; got != "my-post-featured.jpg" {
+		t.Fatalf("generate_hero_image data.delete_filename = %v, want my-post-featured.jpg", got)
 	}
 	// #573: root-level path must no longer be mirrored alongside data.path.
 	if _, present := out["path"]; present {

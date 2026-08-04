@@ -133,7 +133,7 @@ func TestInspectRenderedPageCleanPagePassesAllChecks(t *testing.T) {
 		t.Fatalf("status = %v, want ok; checks = %v", got, data["checks"])
 	}
 	checks := findChecks(t, data)
-	for _, name := range []string{"title", "meta_description", "canonical", "hreflang", "internal_links", "missing_images", "render_errors"} {
+	for _, name := range []string{"title", "meta_description", "canonical", "hreflang", "internal_links", "missing_images", "security_title_markup", "security_inline_event_handlers", "security_unsafe_urls", "security_preview_token_leak", "render_errors"} {
 		c, ok := checks[name]
 		if !ok {
 			t.Fatalf("missing check %q", name)
@@ -221,6 +221,85 @@ func TestInspectRenderedPageFlagsRenderErrorMarker(t *testing.T) {
 	checks := findChecks(t, data)
 	if checks["render_errors"]["status"] != "fail" {
 		t.Fatalf("render_errors status = %v, want fail", checks["render_errors"]["status"])
+	}
+}
+
+func TestInspectRenderedPageFlagsTitleMarkupInjection(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/title-xss/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Hello <img src=x onerror=alert(1)></title><meta name="description" content="Valid enough description."><link rel="canonical" href="https://example.test/posts/title-xss/"></head>
+<body>Body.</body>
+</html>`)
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/title-xss/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	checks := findChecks(t, decodeContent(t, res))
+	if got := checks["security_title_markup"]["status"]; got != "fail" {
+		t.Fatalf("security_title_markup status = %v, want fail", got)
+	}
+}
+
+func TestInspectRenderedPageFlagsInlineEventHandlersAndUnsafeURLs(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/security/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Security</title><meta name="description" content="Valid enough description."><link rel="canonical" href="https://example.test/posts/security/"></head>
+<body>
+<a href="javascript:alert(1)">boom</a>
+<img src="/images/ok.png" onerror="alert(1)">
+<form action="data:text/html;base64,AAAA"></form>
+</body>
+</html>`)
+	if err := os.MkdirAll(filepath.Join(siteRoot, "images"), 0o755); err != nil {
+		t.Fatalf("mkdir images: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(siteRoot, "images", "ok.png"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/security/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	checks := findChecks(t, decodeContent(t, res))
+	if got := checks["security_inline_event_handlers"]["status"]; got != "fail" {
+		t.Fatalf("security_inline_event_handlers status = %v, want fail", got)
+	}
+	if got := checks["security_unsafe_urls"]["status"]; got != "fail" {
+		t.Fatalf("security_unsafe_urls status = %v, want fail", got)
+	}
+}
+
+func TestInspectRenderedPageFlagsPreviewTokenLeakPattern(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/preview-leak/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Preview leak</title><meta name="description" content="Valid enough description."><link rel="canonical" href="https://example.test/posts/preview-leak/"></head>
+<body><a href="/preview/0123456789abcdef/0123456789abcdef0123456789abcdef0123456789abcdef/">share</a></body>
+</html>`)
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/preview-leak/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	checks := findChecks(t, decodeContent(t, res))
+	if got := checks["security_preview_token_leak"]["status"]; got != "fail" {
+		t.Fatalf("security_preview_token_leak status = %v, want fail", got)
 	}
 }
 
