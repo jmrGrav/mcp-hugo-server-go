@@ -103,6 +103,66 @@ func TestPageResolverPrefersMatchingLanguageVariant(t *testing.T) {
 	}
 }
 
+func TestPageResolverResolveWithLangOverridesImplicitSlugLanguage(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSourcePage(t, contentRoot, "posts/hello/index.fr.md", "---\ntitle: Bonjour\n---\nBonjour FR\n")
+	writeSourcePage(t, contentRoot, "posts/hello/index.en.md", "---\ntitle: Hello\n---\nHello EN\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &Index{
+		entries: []entry{
+			{page: Page{Slug: "/posts/hello/", Lang: "fr", Title: "Rendered FR", RawHTML: "<article>Rendered FR</article>"}},
+			{page: Page{Slug: "/en/posts/hello/", Lang: "en", Title: "Rendered EN", RawHTML: "<article>Rendered EN</article>"}},
+		},
+		bySlug: map[string]int{"/posts/hello/": 0, "/en/posts/hello/": 1},
+		info:   map[string]string{},
+	}
+	resolver := NewPageResolver(idx, srcIdx, config.Config{ContentRoot: contentRoot, DefaultLanguage: "fr"})
+
+	got, ok := resolver.ResolveWithLang("/posts/hello/", "en")
+	if !ok {
+		t.Fatal("ResolveWithLang(/posts/hello/, en) not found")
+	}
+	if got.Source == nil || got.Source.Lang != "en" {
+		t.Fatalf("ResolveWithLang(/posts/hello/, en).Source = %#v, want english source", got.Source)
+	}
+	if got.Public == nil || got.Public.Lang != "en" || got.Public.Slug != "/en/posts/hello/" {
+		t.Fatalf("ResolveWithLang(/posts/hello/, en).Public = %#v, want english public page", got.Public)
+	}
+}
+
+// TestPageResolverResolveWithLangRejectsContradictoryPublicOnlyLang guards
+// against a cross-language leak in ResolveWithLang's resolvePublicForSourceLang
+// branch: unlike its sibling branch (idx.GetBySlug(publicSlug) + explicit
+// pageMatchesExplicitLang gate), that first branch used to accept whatever
+// resolvePublicForSourceLang returned with no language check at all. For a
+// public-only page (no source translation), canonicalPublicSlugForSourceLang
+// doesn't strip a language prefix already present in the slug, so a
+// self-contradictory request — an /en/ URL paired with lang="fr" — resolved
+// straight through to the English page instead of correctly reporting
+// not-found. Asking for a translation that doesn't exist must never silently
+// return a different language's content.
+func TestPageResolverResolveWithLangRejectsContradictoryPublicOnlyLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &Index{
+		entries: []entry{{page: Page{Slug: "/en/posts/hello/", Lang: "en", Title: "Rendered EN", RawHTML: "<article>Rendered EN</article>"}}},
+		bySlug:  map[string]int{"/en/posts/hello/": 0},
+		info:    map[string]string{},
+	}
+	resolver := NewPageResolver(idx, srcIdx, config.Config{ContentRoot: contentRoot, DefaultLanguage: "fr"})
+
+	got, ok := resolver.ResolveWithLang("/en/posts/hello/", "fr")
+	if ok || got.Public != nil {
+		t.Fatalf("ResolveWithLang(/en/posts/hello/, fr) = (%#v, %v), want not found — no fr translation exists, must not leak the en page", got, ok)
+	}
+}
+
 func TestPageResolverResolvesSourceOnlyPageAfterCreateWithoutBuild(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeSourcePage(t, contentRoot, "drafts/fresh/index.md", "---\ntitle: Fresh\n---\nFresh source body\n")

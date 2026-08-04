@@ -612,7 +612,8 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if cfg.ForceDryRunAll {
 			in.DryRun = true
 		}
-		slug := normalizeInputSlug(in.Slug)
+		rawSlug := strings.TrimSpace(in.Slug)
+		slug := normalizeInputSlug(rawSlug)
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: slug})
 		}
@@ -628,7 +629,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
 			)
 		}
-		if slug == "" {
+		if rawSlug == "" {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
 		filename, err := validateDeleteAssetFilename(in.Filename)
@@ -639,8 +640,15 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if err != nil {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 		}
-		if err := validateBundleSlug(idx, slug); err != nil {
-			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+		if scope == deleteAssetScopeGenerated {
+			slug, err = admin.NormalizeHeroImageSlug(rawSlug)
+			if err != nil {
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+			}
+		} else {
+			if err := validateBundleSlug(idx, slug); err != nil {
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+			}
 		}
 		dir, err := pg.SafeJoin(slug)
 		if err != nil {
@@ -657,7 +665,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			data, readErr := os.ReadFile(filePath)
 			if readErr != nil {
 				if os.IsNotExist(readErr) {
-					return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug))
+					return nil, deletePageAssetOutput{}, wrapErrWithLimiter(deletePageAssetNotFoundErr(filename, slug, target.scope))
 				}
 				slog.Error("delete_page_asset: dry-run read failed", "slug", slug, "filename", filename, "error", readErr)
 				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read asset"))
@@ -740,7 +748,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		data, readErr := os.ReadFile(filePath)
 		if readErr != nil {
 			if os.IsNotExist(readErr) {
-				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug))
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(deletePageAssetNotFoundErr(filename, slug, target.scope))
 			}
 			slog.Error("delete_page_asset: read failed", "slug", slug, "filename", filename, "error", readErr)
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read asset"))
@@ -801,4 +809,11 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 		return nil, out, nil
 	}))
+}
+
+func deletePageAssetNotFoundErr(filename, slug, scope string) error {
+	if scope == deleteAssetScopeGenerated {
+		return fmt.Errorf("not_found: generated asset %q not found for source key %q", filename, slug)
+	}
+	return fmt.Errorf("not_found: asset %q not found in bundle %q", filename, slug)
 }
