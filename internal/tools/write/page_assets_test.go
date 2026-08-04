@@ -863,6 +863,70 @@ func TestDeletePageAssetDryRunPreviewsGeneratedHeroImage(t *testing.T) {
 	}
 }
 
+func TestDeletePageAssetDeletesGeneratedHeroImageWithoutExistingBundle(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "article-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heroBytes := []byte("hero-bytes")
+	if err := os.WriteFile(heroPath, heroBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":            "posts/article",
+		"filename":        "article-featured.jpg",
+		"scope":           "generated",
+		"expected_sha256": contentmodel.SourceRevisionBytes(heroBytes),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page_asset generated hero without bundle failed: %s", raw)
+	}
+	if _, err := os.Stat(heroPath); !os.IsNotExist(err) {
+		t.Fatal("delete_page_asset must remove the generated hero image even when the page bundle no longer exists")
+	}
+}
+
+func TestDeletePageAssetDryRunPreviewsGeneratedHeroImageWithoutExistingBundle(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "article-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heroBytes := []byte("hero-bytes")
+	if err := os.WriteFile(heroPath, heroBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug":     "posts/article",
+		"filename": "article-featured.jpg",
+		"scope":    "generated",
+		"dry_run":  true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page_asset generated dry_run without bundle failed: %s", raw)
+	}
+	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["sha256"]; got != contentmodel.SourceRevisionBytes(heroBytes) {
+		t.Fatalf("delete_page_asset dry_run without bundle data.sha256 = %v, want current hero hash", got)
+	}
+	if _, err := os.Stat(heroPath); err != nil {
+		t.Fatalf("delete_page_asset dry_run without bundle must not delete the generated hero image: %v", err)
+	}
+}
+
 // TestDeletePageAssetDryRunDoesNotConsumeDestructiveQuota is a regression
 // test for #575: a live Claude.ai audit observed rate_limit_remaining drop
 // (5→4) on delete_page_asset before the real (non-dry-run) call, suggesting

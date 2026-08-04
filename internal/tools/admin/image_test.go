@@ -306,6 +306,18 @@ func TestGenerateFeaturedImageAdvisesAttachingToPage(t *testing.T) {
 	if got, want := data["public_path"], "/images/my-post-featured.jpg"; got != want {
 		t.Fatalf("data.public_path = %v, want %q", got, want)
 	}
+	if got, want := data["source_key"], "my-post"; got != want {
+		t.Fatalf("data.source_key = %v, want %q", got, want)
+	}
+	if got, want := data["delete_slug"], "my-post"; got != want {
+		t.Fatalf("data.delete_slug = %v, want %q", got, want)
+	}
+	if got, want := data["delete_scope"], "generated"; got != want {
+		t.Fatalf("data.delete_scope = %v, want %q", got, want)
+	}
+	if got, want := data["delete_filename"], "my-post-featured.jpg"; got != want {
+		t.Fatalf("data.delete_filename = %v, want %q", got, want)
+	}
 	warnings, ok := out["warnings"].([]any)
 	if !ok || len(warnings) == 0 {
 		t.Fatalf("warnings = %v, want at least one advisory about attaching the image to a page", out["warnings"])
@@ -363,6 +375,17 @@ func TestGenerateFeaturedImageAcceptsCanonicalPublicSlugForms(t *testing.T) {
 			}
 			if got := data["path"]; got != tc.wantPath {
 				t.Fatalf("generate_hero_image(%q) data.path = %v, want %q", tc.slug, got, tc.wantPath)
+			}
+			wantSourceKey := strings.TrimPrefix(strings.Trim(tc.wantPath, "/"), "static/images/")
+			wantSourceKey = strings.TrimSuffix(wantSourceKey, "-featured.jpg")
+			if got := data["source_key"]; got != wantSourceKey {
+				t.Fatalf("generate_hero_image(%q) data.source_key = %v, want %q", tc.slug, got, wantSourceKey)
+			}
+			if got := data["delete_slug"]; got != wantSourceKey {
+				t.Fatalf("generate_hero_image(%q) data.delete_slug = %v, want %q", tc.slug, got, wantSourceKey)
+			}
+			if got := data["delete_filename"]; got != filepath.Base(tc.wantPath) {
+				t.Fatalf("generate_hero_image(%q) data.delete_filename = %v, want %q", tc.slug, got, filepath.Base(tc.wantPath))
 			}
 			if _, err := os.Stat(filepath.Join(hugoRoot, filepath.FromSlash(tc.wantPath))); err != nil {
 				t.Fatalf("expected generated file at %q: %v", tc.wantPath, err)
