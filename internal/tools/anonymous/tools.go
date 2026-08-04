@@ -176,7 +176,12 @@ type sitemapEntryDTO struct {
 	// SourceKey — see pageDTO.SourceKey (#576).
 	SourceKey string `json:"source_key,omitempty"`
 	URL       string `json:"url"`
-	Date      string `json:"date,omitempty"`
+	// Date is a pointer so an empty date on a dateless row (e.g. a taxonomy
+	// term page, which the default sitemap includes) still serializes as
+	// "date":"" — the pre-#873 contract — while compact mode drops the key
+	// entirely by setting this nil. A plain string+omitempty would silently
+	// drop "date" from every dateless plain-mode row (a shape regression).
+	Date *string `json:"date,omitempty"`
 }
 
 type feedItemDTO struct {
@@ -238,17 +243,21 @@ type listCategoriesData struct {
 }
 
 type getSitemapData struct {
-	Entries        []sitemapEntryDTO `json:"entries,omitempty"`
-	Total          int               `json:"total"`
-	Limit          int               `json:"limit"`
-	Offset         int               `json:"offset"`
-	ReturnedCount  int               `json:"returned_count"`
-	HasMore        bool              `json:"has_more"`
-	NextOffset     *int              `json:"next_offset,omitempty"`
-	ContentPages   int               `json:"content_pages"`
-	TaxonomyPages  int               `json:"taxonomy_pages"`
-	SectionPages   int               `json:"section_pages"`
-	OtherDocuments int               `json:"other_documents"`
+	// Entries is a pointer so summary_only omits the key entirely (nil) while
+	// the plain and offset-past-end paths still emit "entries":[] — a non-nil
+	// pointer to an empty slice is not "empty" for omitempty, unlike a bare
+	// []T which would be dropped, silently changing the empty-page shape.
+	Entries        *[]sitemapEntryDTO `json:"entries,omitempty"`
+	Total          int                `json:"total"`
+	Limit          int                `json:"limit"`
+	Offset         int                `json:"offset"`
+	ReturnedCount  int                `json:"returned_count"`
+	HasMore        bool               `json:"has_more"`
+	NextOffset     *int               `json:"next_offset,omitempty"`
+	ContentPages   int                `json:"content_pages"`
+	TaxonomyPages  int                `json:"taxonomy_pages"`
+	SectionPages   int                `json:"section_pages"`
+	OtherDocuments int                `json:"other_documents"`
 }
 
 type getFeedData struct {
@@ -593,7 +602,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 			if offset >= len(all) {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
 				return nil, newGetSitemapOutput(getSitemapData{
-					Entries:        []sitemapEntryDTO{},
+					Entries:        &[]sitemapEntryDTO{},
 					Total:          meta.Total,
 					Limit:          meta.Limit,
 					Offset:         meta.Offset,
@@ -612,16 +621,17 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 			}
 			entries := make([]sitemapEntryDTO, len(slice))
 			for i, p := range slice {
-				entry := sitemapEntryDTO{Slug: p.Slug, SourceKey: resolveSourceKey(srcIdx, p.Slug), URL: p.URL, Date: p.Date}
+				date := p.Date
+				entry := sitemapEntryDTO{Slug: p.Slug, SourceKey: resolveSourceKey(srcIdx, p.Slug), URL: p.URL, Date: &date}
 				if strings.EqualFold(strings.TrimSpace(in.ResponseMode), string(toolcontract.ResponseModeCompact)) {
 					entry.SourceKey = ""
-					entry.Date = ""
+					entry.Date = nil
 				}
 				entries[i] = entry
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(entries))
 			return nil, newGetSitemapOutput(getSitemapData{
-				Entries:        entries,
+				Entries:        &entries,
 				Total:          meta.Total,
 				Limit:          meta.Limit,
 				Offset:         meta.Offset,

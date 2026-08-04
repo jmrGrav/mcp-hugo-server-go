@@ -1331,6 +1331,67 @@ func TestGetSitemapPaginationMetadata(t *testing.T) {
 	assertPaginationMetadata(t, m, 3, 1, 0, 1, true, 1, true)
 }
 
+// TestGetSitemapOffsetPastEndKeepsEmptyEntriesArray is a regression test for
+// #873: adding summary_only put `entries,omitempty` on getSitemapData, which
+// silently dropped the `entries` key from the offset-past-end (and empty-site)
+// path even though that branch explicitly builds an empty slice to signal
+// "this page has no rows". Pre-fix this returned no `entries` key at all; a
+// naive client iterating data.entries would nil-deref. It must be `[]`.
+func TestGetSitemapOffsetPastEndKeepsEmptyEntriesArray(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_sitemap", map[string]any{"offset": 9999})
+	if res.IsError {
+		t.Fatalf("get_sitemap returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	raw, ok := m["entries"]
+	if !ok {
+		t.Fatal("get_sitemap offset-past-end dropped the entries key; want an empty array")
+	}
+	entries, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("get_sitemap offset-past-end entries = %T, want []any", raw)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("get_sitemap offset-past-end entries = %#v, want empty array", entries)
+	}
+	// summary_only, by contrast, deliberately omits the key entirely.
+	sres := callTool(t, session, "get_sitemap", map[string]any{"summary_only": true})
+	sm := decodeContent(t, sres)
+	if _, ok := sm["entries"]; ok {
+		t.Fatalf("get_sitemap summary_only should omit entries entirely: %#v", sm["entries"])
+	}
+}
+
+// TestGetSitemapPlainRowsKeepDateKey is a regression test for #873: the
+// `date,omitempty` tag added for compact mode must not strip `date` from plain
+// (non-compact) rows. Every plain row carries a date (the entries share the
+// same shape as pre-#873), while compact rows omit it.
+func TestGetSitemapPlainRowsKeepDateKey(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_sitemap", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_sitemap returned error: %v", res.Content)
+	}
+	m := decodeContent(t, res)
+	entries, _ := m["entries"].([]any)
+	if len(entries) == 0 {
+		t.Fatal("get_sitemap: expected at least one plain row")
+	}
+	for i, raw := range entries {
+		row, _ := raw.(map[string]any)
+		if _, ok := row["date"]; !ok {
+			t.Fatalf("get_sitemap plain row %d dropped the date key: %#v", i, row)
+		}
+	}
+}
+
 func TestGetSitemapSummaryOnlyOmitsEntriesAndPreservesCounts(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
