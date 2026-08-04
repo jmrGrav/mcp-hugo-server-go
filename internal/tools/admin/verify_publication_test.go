@@ -193,6 +193,86 @@ func TestVerifyPublicationSourceOnlyReportsNotYetPublished(t *testing.T) {
 	}
 }
 
+func TestVerifyPublicationDraftSourceOnlyReportsIntentionalExclusion(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "draft", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Draft\ndate: 2026-07-14\ndraft: true\n---\nDraft body.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.SiteURL = "https://example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+
+	session, done := newVerifyPublicationServer(t, cfg, srcIdx)
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "verify_publication", Arguments: map[string]any{"slug": "posts/draft"}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("verify_publication returned error: %s", resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+
+	if got := data["status"]; got != "intentionally_unpublished" {
+		t.Fatalf("status = %v, want intentionally_unpublished (data=%v)", got, data)
+	}
+	if got := data["explanation"]; got == nil || !strings.Contains(got.(string), "draft") {
+		t.Fatalf("explanation = %v, want draft-specific explanation", got)
+	}
+}
+
+func TestVerifyPublicationTestContentSourceOnlyReportsIntentionalExclusion(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "draft", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Draft\ndate: 2026-07-14\ndraft: true\ntest_content: true\ntest_content_owner: audit\ntest_content_expires_at: 2026-08-05T00:00:00Z\n---\nDraft body.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.SiteURL = "https://example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+
+	session, done := newVerifyPublicationServer(t, cfg, srcIdx)
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "verify_publication", Arguments: map[string]any{"slug": "posts/draft"}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("verify_publication returned error: %s", resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+
+	if got := data["status"]; got != "intentionally_unpublished" {
+		t.Fatalf("status = %v, want intentionally_unpublished (data=%v)", got, data)
+	}
+	if got := data["explanation"]; got == nil || !strings.Contains(got.(string), "test_content") {
+		t.Fatalf("explanation = %v, want test_content-specific explanation", got)
+	}
+}
+
 func TestVerifyPublicationStalePageDetectsSourceNewerThanPublic(t *testing.T) {
 	contentRoot := t.TempDir()
 	siteRoot := t.TempDir()

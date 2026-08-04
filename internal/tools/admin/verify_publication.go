@@ -67,6 +67,7 @@ type verifyPublicationData struct {
 	SitemapPresent bool   `json:"sitemap_present"`
 	FeedPresent    bool   `json:"feed_present"`
 	Status         string `json:"status"`
+	ReasonCode     string `json:"reason_code,omitempty"`
 	Explanation    string `json:"explanation"`
 	// WaitSeconds echoes the actual (clamped) wait budget that was applied
 	// (#421), so a caller that requested more than the server maximum can
@@ -263,7 +264,7 @@ func checkPublicationOnce(ctx context.Context, idx *site.Index, srcIdx *hugosite
 		data.HTTPError = httpErr
 	}
 
-	data.Status, data.Explanation = summarizePublicationState(data)
+	data.Status, data.ReasonCode, data.Explanation = summarizePublicationState(data, resolved)
 	return data, nil
 }
 
@@ -305,17 +306,45 @@ func joinSiteURL(siteURL, slug string) string {
 // summarizePublicationState derives an overall status and a short
 // human-readable explanation of which stage, if any, is stale or missing —
 // the acceptance criterion "it can explain which stage is stale or missing."
-func summarizePublicationState(data verifyPublicationData) (status, explanation string) {
+func summarizePublicationState(data verifyPublicationData, resolved site.ResolvedPage) (status, reasonCode, explanation string) {
 	switch {
 	case data.Public == "not_yet_available":
-		return "not_yet_published", "source exists but has not been built/published yet (build_state=" + data.Build + ")"
+		if reason, explanation, ok := intentionalUnpublicationReason(resolved); ok {
+			return "intentionally_unpublished", reason, explanation
+		}
+		return "not_yet_published", "", "source exists but has not been built/published yet (build_state=" + data.Build + ")"
 	case data.Build == "pending" || data.Public == "stale" || data.Index == "stale":
-		return "stale", "source is newer than the public build output (build_state=" + data.Build + ", public_state=" + data.Public + ", index_state=" + data.Index + ")"
+		return "stale", "", "source is newer than the public build output (build_state=" + data.Build + ", public_state=" + data.Public + ", index_state=" + data.Index + ")"
 	case data.HTTPChecked && data.HTTPError != "":
-		return "http_unreachable", data.HTTPError
+		return "http_unreachable", "", data.HTTPError
 	case data.HTTPChecked && data.HTTPStatus >= 400:
-		return "http_error", fmt.Sprintf("public URL responded with HTTP %d", data.HTTPStatus)
+		return "http_error", "", fmt.Sprintf("public URL responded with HTTP %d", data.HTTPStatus)
 	default:
-		return "fresh", "source, build, public output, and index all agree on the same revision"
+		return "fresh", "", "source, build, public output, and index all agree on the same revision"
 	}
+}
+
+func intentionalUnpublicationReason(resolved site.ResolvedPage) (reasonCode, explanation string, ok bool) {
+	if resolved.Source == nil {
+		return "", "", false
+	}
+	if frontmatterBool(resolved.Source.FrontmatterRaw, "test_content") {
+		return "test_content_forces_draft", "page carries test_content:true and is intentionally unpublished while draft protection remains active", true
+	}
+	if resolved.Source.Draft {
+		return "draft", "page is draft:true and is intentionally excluded from public output", true
+	}
+	return "", "", false
+}
+
+func frontmatterBool(fm map[string]any, key string) bool {
+	if fm == nil {
+		return false
+	}
+	raw, ok := fm[key]
+	if !ok {
+		return false
+	}
+	v, ok := raw.(bool)
+	return ok && v
 }
