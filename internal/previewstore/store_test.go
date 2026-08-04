@@ -1,6 +1,7 @@
 package previewstore_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -307,4 +308,37 @@ func TestStoreLookupDistinguishesMissingFromExpired(t *testing.T) {
 	if _, err := os.Stat(dir); !os.IsNotExist(err) {
 		t.Fatalf("expired preview directory should have been removed, stat err = %v", err)
 	}
+}
+
+// TestStoreGetBySessionConcurrentWithEstablishNoRace exercises the reachable
+// interleaving where an unauthenticated caller (preview ids are not secret)
+// sends a bogus session cookie to GetBySession at the same time a legitimate
+// first-open EstablishSession lazily writes entry.SessionToken. Reading that
+// field outside the lock would be a data race; this must stay clean under
+// `go test -race`. Regression for the v1.7.7 preview-session change.
+func TestStoreGetBySessionConcurrentWithEstablishNoRace(t *testing.T) {
+	s := previewstore.New()
+	const n = 500
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("id-%d", i)
+		s.Put(id, &previewstore.Entry{
+			Dir:       t.TempDir(),
+			Token:     "entry-token",
+			ExpiresAt: time.Now().Add(time.Hour),
+		})
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("id-%d", i)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			s.EstablishSession(id, "entry-token") // writes SessionToken (first open)
+		}()
+		go func() {
+			defer wg.Done()
+			s.GetBySession(id, "bogus-cookie-value") // reads SessionToken
+		}()
+	}
+	wg.Wait()
 }
