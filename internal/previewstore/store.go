@@ -46,6 +46,14 @@ type Store struct {
 	entries map[string]*Entry
 }
 
+type LookupStatus string
+
+const (
+	LookupActive  LookupStatus = "active"
+	LookupMissing LookupStatus = "missing"
+	LookupExpired LookupStatus = "expired"
+)
+
 func New() *Store {
 	return &Store{entries: make(map[string]*Entry)}
 }
@@ -79,6 +87,26 @@ func (s *Store) Put(id string, entry *Entry) {
 // up lazily on next access rather than requiring a background sweeper.
 func (s *Store) Get(id, token string) (*Entry, bool) {
 	return s.GetByToken(id, token)
+}
+
+// Lookup returns the preview entry by id without validating any bearer or
+// session token, along with a stable status distinguishing a missing preview
+// from one that existed but has expired and was just cleaned up.
+func (s *Store) Lookup(id string) (*Entry, LookupStatus) {
+	s.mu.Lock()
+	entry, ok := s.entries[id]
+	if !ok {
+		s.mu.Unlock()
+		return nil, LookupMissing
+	}
+	if time.Now().After(entry.ExpiresAt) {
+		delete(s.entries, id)
+		s.mu.Unlock()
+		_ = os.RemoveAll(entry.Dir)
+		return nil, LookupExpired
+	}
+	s.mu.Unlock()
+	return entry, LookupActive
 }
 
 // GetByToken returns the preview for id if token matches. Expired previews

@@ -1,6 +1,7 @@
 package previewstore_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -283,6 +284,60 @@ func TestStoreGetBySessionDoesNotRaceEstablishSession(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			s.GetBySession("race-entry", "whatever-the-client-currently-has")
+		}()
+	}
+	wg.Wait()
+}
+
+func TestStoreLookupDistinguishesMissingFromExpired(t *testing.T) {
+	s := previewstore.New()
+	if entry, status := s.Lookup("missing"); entry != nil || status != previewstore.LookupMissing {
+		t.Fatalf("Lookup(missing) = (%v, %v), want (nil, %v)", entry, status, previewstore.LookupMissing)
+	}
+
+	dir := t.TempDir()
+	writePreviewFile(t, dir, "index.html", "expired")
+	s.Put("expired", &previewstore.Entry{
+		Dir:       dir,
+		Token:     "tok",
+		ExpiresAt: time.Now().Add(-time.Minute),
+	})
+	if entry, status := s.Lookup("expired"); entry != nil || status != previewstore.LookupExpired {
+		t.Fatalf("Lookup(expired) = (%v, %v), want (nil, %v)", entry, status, previewstore.LookupExpired)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("expired preview directory should have been removed, stat err = %v", err)
+	}
+}
+
+// TestStoreGetBySessionConcurrentWithEstablishNoRace exercises the reachable
+// interleaving where an unauthenticated caller (preview ids are not secret)
+// sends a bogus session cookie to GetBySession at the same time a legitimate
+// first-open EstablishSession lazily writes entry.SessionToken. Reading that
+// field outside the lock would be a data race; this must stay clean under
+// `go test -race`. Regression for the v1.7.7 preview-session change.
+func TestStoreGetBySessionConcurrentWithEstablishNoRace(t *testing.T) {
+	s := previewstore.New()
+	const n = 500
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("id-%d", i)
+		s.Put(id, &previewstore.Entry{
+			Dir:       t.TempDir(),
+			Token:     "entry-token",
+			ExpiresAt: time.Now().Add(time.Hour),
+		})
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		id := fmt.Sprintf("id-%d", i)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			s.EstablishSession(id, "entry-token") // writes SessionToken (first open)
+		}()
+		go func() {
+			defer wg.Done()
+			s.GetBySession(id, "bogus-cookie-value") // reads SessionToken
 		}()
 	}
 	wg.Wait()

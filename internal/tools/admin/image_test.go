@@ -16,6 +16,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -34,6 +35,7 @@ func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func())
 	admin.Register(s, cfg, srcIdx)
 	admin.RegisterCreatePreview(s, cfg, previews, "https://mcp.example.test")
 	admin.RegisterPreviewAccessTools(s, previews, "https://mcp.example.test")
+	read.RegisterInspectPreviewRenderedPage(s, nil, srcIdx, cfg, previews, "https://mcp.example.test")
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
