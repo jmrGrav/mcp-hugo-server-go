@@ -28,6 +28,14 @@ const (
 	previewTokenBytes = 24 // 192 bits — the sole confidentiality boundary for preview content
 )
 
+// PreviewTTLBoundsSeconds exposes the create_preview TTL bounds (min,
+// default, max) in seconds as a single source of truth for the
+// get_capabilities discovery surface (#859), so it reports the exact bounds
+// create_preview enforces without re-declaring them.
+func PreviewTTLBoundsSeconds() (min, def, max int) {
+	return int(previewMinTTL.Seconds()), int(previewDefaultTTL.Seconds()), int(previewMaxTTL.Seconds())
+}
+
 type createPreviewInput struct {
 	IncludeDrafts bool `json:"include_drafts,omitempty"`
 	TTLSeconds    *int `json:"ttl_seconds,omitempty"`

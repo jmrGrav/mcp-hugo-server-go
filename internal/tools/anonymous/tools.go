@@ -329,7 +329,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	RegisterGetChangelog(s)
 	registerAnonymousBrowseTools(s, idx, srcIdx, resolver, cfg, aliases)
 	registerAnonymousTaxonomyAndFeedTools(s, idx, srcIdx, aliases)
-	registerAnonymousSiteMetadataTools(s, idx)
+	registerAnonymousSiteMetadataTools(s, idx, cfg)
 }
 
 func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config, aliases map[string]string) {
@@ -678,7 +678,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 }
 
-func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index) {
+func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index, cfg config.Config) {
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ getSiteInformationInput) (*mcp.CallToolResult, getSiteInformationOutput, error) {
 			if idx == nil {
@@ -691,6 +691,8 @@ func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index) {
 				Lang: info["lang"],
 			}}), nil
 		})
+
+	registerGetCapabilities(s, idx, cfg)
 }
 
 // schemaOpts, when provided, post-process the inferred input schema (#418) —
@@ -1055,6 +1057,7 @@ func Defs() []tools.ToolDef {
 		{Name: "get_sitemap", RequiredScope: ""},
 		{Name: "get_feed", RequiredScope: ""},
 		{Name: "get_site_information", RequiredScope: ""},
+		{Name: "get_capabilities", RequiredScope: ""},
 		{Name: "get_changelog", RequiredScope: ""},
 	}
 }
