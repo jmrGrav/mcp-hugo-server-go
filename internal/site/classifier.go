@@ -22,6 +22,13 @@ type ContentClassifier struct {
 	taxonomyRoots map[string]struct{}
 }
 
+type PageKindCounts struct {
+	ContentPages   int
+	TaxonomyPages  int
+	SectionPages   int
+	OtherDocuments int
+}
+
 func NewClassifier(idx *Index) *ContentClassifier {
 	var pages []Page
 	if idx != nil {
@@ -112,6 +119,23 @@ func (c *ContentClassifier) IsArticle(p Page) bool {
 
 func (c *ContentClassifier) IsTechnical(p Page) bool {
 	return c.Classify(p) == KindTechnical
+}
+
+func (c *ContentClassifier) CountKinds(pages []Page) PageKindCounts {
+	var counts PageKindCounts
+	for _, p := range pages {
+		switch c.Classify(p) {
+		case KindArticle, KindPage:
+			counts.ContentPages++
+		case KindTaxonomy:
+			counts.TaxonomyPages++
+		case KindSection:
+			counts.SectionPages++
+		default:
+			counts.OtherDocuments++
+		}
+	}
+	return counts
 }
 
 func (idx *Index) classifier() *ContentClassifier {

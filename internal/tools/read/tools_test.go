@@ -4538,6 +4538,37 @@ func TestGetBrokenLinks(t *testing.T) {
 	}
 }
 
+func TestGetBrokenLinksPublishesDocumentsScannedAsCanonicalCount(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_broken_links", map[string]any{"limit": 5, "offset": 0})
+	if res.IsError {
+		t.Fatalf("get_broken_links returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	documentsScanned, ok := data["documents_scanned"]
+	if !ok {
+		t.Fatal("get_broken_links missing documents_scanned")
+	}
+	if got, want := documentsScanned, data["total_pages"]; got != want {
+		t.Fatalf("get_broken_links documents_scanned = %v, want alias-equal total_pages %v", got, want)
+	}
+	if _, ok := data["content_pages"]; !ok {
+		t.Fatal("get_broken_links missing content_pages")
+	}
+	if _, ok := data["taxonomy_pages"]; !ok {
+		t.Fatal("get_broken_links missing taxonomy_pages")
+	}
+	if _, ok := data["section_pages"]; !ok {
+		t.Fatal("get_broken_links missing section_pages")
+	}
+	if _, ok := data["other_documents"]; !ok {
+		t.Fatal("get_broken_links missing other_documents")
+	}
+}
+
 func TestValidateFrontMatterOutputFields(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

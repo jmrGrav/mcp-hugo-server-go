@@ -312,12 +312,17 @@ type brokenLinkDTO struct {
 }
 
 type brokenLinkData struct {
-	TotalPages  int                `json:"total_pages"`
-	BrokenLinks int                `json:"broken_links"`
-	Limit       int                `json:"limit"`
-	Offset      int                `json:"offset"`
-	Links       []brokenLinkDTO    `json:"links"`
-	IndexInfo   *indexStalenessDTO `json:"index_staleness,omitempty"`
+	TotalPages       int                `json:"total_pages"`
+	DocumentsScanned int                `json:"documents_scanned"`
+	BrokenLinks      int                `json:"broken_links"`
+	Limit            int                `json:"limit"`
+	Offset           int                `json:"offset"`
+	Links            []brokenLinkDTO    `json:"links"`
+	ContentPages     int                `json:"content_pages"`
+	TaxonomyPages    int                `json:"taxonomy_pages"`
+	SectionPages     int                `json:"section_pages"`
+	OtherDocuments   int                `json:"other_documents"`
+	IndexInfo        *indexStalenessDTO `json:"index_staleness,omitempty"`
 }
 
 type brokenLinkOutput struct {
@@ -671,7 +676,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), aliases, resolver), nil
 		})
 
-	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets. `index_staleness` (in-memory path only, not the db_path path) is present only when the index is behind on-disk content — its absence means results reflect current source (#583). When present, `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` means this server has a known, expected write awaiting the next build_site/publish_changes; `\"external_or_unknown\"` means the disk changed with no such record on file — most plausibly an edit made outside this server (e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets. `documents_scanned` is the canonical size of the rendered HTML surface this pass checked; the legacy `total_pages` field is kept for backward compatibility and mirrors the same value. `content_pages`/`taxonomy_pages`/`section_pages`/`other_documents` break that scan surface down by document class so agents don't have to guess what `total_pages` counted. `index_staleness` (in-memory path only, not the db_path path) is present only when the index is behind on-disk content — its absence means results reflect current source (#583). When present, `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` means this server has a known, expected write awaiting the next build_site/publish_changes; `\"external_or_unknown\"` means the disk changed with no such record on file — most plausibly an edit made outside this server (e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in brokenLinkInput) (*mcp.CallToolResult, brokenLinkOutput, error) {
 			if idx == nil {
 				return nil, brokenLinkOutput{}, fmt.Errorf("index not initialized")
@@ -684,6 +689,9 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			if offset < 0 {
 				offset = 0
 			}
+
+			sitemap := idx.Sitemap()
+			counts := idx.Classifier().CountKinds(sitemap)
 
 			// DB path: read pre-computed broken links from the links table.
 			if siteDB != nil {
@@ -699,11 +707,16 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 						})
 					}
 					return nil, newBrokenLinkOutput(brokenLinkData{
-						TotalPages:  len(idx.Sitemap()),
-						BrokenLinks: len(issues),
-						Limit:       limit,
-						Offset:      offset,
-						Links:       sliceBrokenLinks(issues, offset, limit),
+						TotalPages:       len(sitemap),
+						DocumentsScanned: len(sitemap),
+						BrokenLinks:      len(issues),
+						Limit:            limit,
+						Offset:           offset,
+						Links:            sliceBrokenLinks(issues, offset, limit),
+						ContentPages:     counts.ContentPages,
+						TaxonomyPages:    counts.TaxonomyPages,
+						SectionPages:     counts.SectionPages,
+						OtherDocuments:   counts.OtherDocuments,
 					}, time.Now().UTC()), nil
 				}
 			}
@@ -711,12 +724,17 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			// In-memory fallback: re-scan HTML on each call.
 			issues := collectBrokenLinks(idx)
 			return nil, newBrokenLinkOutput(brokenLinkData{
-				TotalPages:  len(idx.Sitemap()),
-				BrokenLinks: len(issues),
-				Limit:       limit,
-				Offset:      offset,
-				Links:       sliceBrokenLinks(issues, offset, limit),
-				IndexInfo:   staleness(idx, srcIdx, cfg),
+				TotalPages:       len(sitemap),
+				DocumentsScanned: len(sitemap),
+				BrokenLinks:      len(issues),
+				Limit:            limit,
+				Offset:           offset,
+				Links:            sliceBrokenLinks(issues, offset, limit),
+				ContentPages:     counts.ContentPages,
+				TaxonomyPages:    counts.TaxonomyPages,
+				SectionPages:     counts.SectionPages,
+				OtherDocuments:   counts.OtherDocuments,
+				IndexInfo:        staleness(idx, srcIdx, cfg),
 			}, time.Now().UTC()), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
 }

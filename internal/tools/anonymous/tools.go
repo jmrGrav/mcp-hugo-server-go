@@ -155,6 +155,7 @@ type getSitemapInput struct {
 	Limit             int    `json:"limit,omitempty"`
 	Offset            int    `json:"offset,omitempty"`
 	ExcludeTaxonomies bool   `json:"exclude_taxonomies,omitempty"`
+	SummaryOnly       bool   `json:"summary_only,omitempty"`
 	ResponseMode      string `json:"response_mode,omitempty"`
 }
 
@@ -175,7 +176,12 @@ type sitemapEntryDTO struct {
 	// SourceKey — see pageDTO.SourceKey (#576).
 	SourceKey string `json:"source_key,omitempty"`
 	URL       string `json:"url"`
-	Date      string `json:"date"`
+	// Date is a pointer so an empty date on a dateless row (e.g. a taxonomy
+	// term page, which the default sitemap includes) still serializes as
+	// "date":"" — the pre-#873 contract — while compact mode drops the key
+	// entirely by setting this nil. A plain string+omitempty would silently
+	// drop "date" from every dateless plain-mode row (a shape regression).
+	Date *string `json:"date,omitempty"`
 }
 
 type feedItemDTO struct {
@@ -237,13 +243,21 @@ type listCategoriesData struct {
 }
 
 type getSitemapData struct {
-	Entries       []sitemapEntryDTO `json:"entries"`
-	Total         int               `json:"total"`
-	Limit         int               `json:"limit"`
-	Offset        int               `json:"offset"`
-	ReturnedCount int               `json:"returned_count"`
-	HasMore       bool              `json:"has_more"`
-	NextOffset    *int              `json:"next_offset,omitempty"`
+	// Entries is a pointer so summary_only omits the key entirely (nil) while
+	// the plain and offset-past-end paths still emit "entries":[] — a non-nil
+	// pointer to an empty slice is not "empty" for omitempty, unlike a bare
+	// []T which would be dropped, silently changing the empty-page shape.
+	Entries        *[]sitemapEntryDTO `json:"entries,omitempty"`
+	Total          int                `json:"total"`
+	Limit          int                `json:"limit"`
+	Offset         int                `json:"offset"`
+	ReturnedCount  int                `json:"returned_count"`
+	HasMore        bool               `json:"has_more"`
+	NextOffset     *int               `json:"next_offset,omitempty"`
+	ContentPages   int                `json:"content_pages"`
+	TaxonomyPages  int                `json:"taxonomy_pages"`
+	SectionPages   int                `json:"section_pages"`
+	OtherDocuments int                `json:"other_documents"`
 }
 
 type getFeedData struct {
@@ -546,7 +560,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 
 	addReadOnlyTool(s, "get_sitemap", "Read sitemap",
 		"Return the full published URL inventory (slug, URL, date) including taxonomy list pages (/tags/…, /categories/…). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. "+
-			"Pass exclude_taxonomies=true to restrict to content pages only. For content-page browsing with titles and summaries use list_pages.",
+			"`exclude_taxonomies=true` narrows the scan scope to content pages only. `response_mode:\"compact\"` keeps the same pagination and scope but trims each row down to slug+url only. `summary_only=true` returns counts and scope breakdowns without any `entries`, so callers can inspect inventory size cheaply without paying for a full row list. For content-page browsing with titles and summaries use list_pages.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getSitemapInput) (*mcp.CallToolResult, getSitemapOutput, error) {
 			if idx == nil {
 				return nil, getSitemapOutput{}, fmt.Errorf("index not initialized")
@@ -565,15 +579,41 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 				}
 				all = filtered
 			}
+			counts := site.NewClassifierFromPages(all).CountKinds(all)
 			limit := clampLimit(in.Limit, 200, 200)
 			offset := in.Offset
 			if offset < 0 {
 				offset = 0
 			}
 			total := len(all)
+			if in.SummaryOnly {
+				return nil, newGetSitemapOutput(getSitemapData{
+					Total:          total,
+					Limit:          limit,
+					Offset:         offset,
+					ReturnedCount:  0,
+					HasMore:        false,
+					ContentPages:   counts.ContentPages,
+					TaxonomyPages:  counts.TaxonomyPages,
+					SectionPages:   counts.SectionPages,
+					OtherDocuments: counts.OtherDocuments,
+				}), nil
+			}
 			if offset >= len(all) {
 				meta := toolcontract.ComputePagination(total, limit, offset, 0)
-				return nil, newGetSitemapOutput(getSitemapData{Entries: []sitemapEntryDTO{}, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
+				return nil, newGetSitemapOutput(getSitemapData{
+					Entries:        &[]sitemapEntryDTO{},
+					Total:          meta.Total,
+					Limit:          meta.Limit,
+					Offset:         meta.Offset,
+					ReturnedCount:  meta.ReturnedCount,
+					HasMore:        meta.HasMore,
+					NextOffset:     meta.NextOffset,
+					ContentPages:   counts.ContentPages,
+					TaxonomyPages:  counts.TaxonomyPages,
+					SectionPages:   counts.SectionPages,
+					OtherDocuments: counts.OtherDocuments,
+				}), nil
 			}
 			slice := all[offset:]
 			if len(slice) > limit {
@@ -581,10 +621,28 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 			}
 			entries := make([]sitemapEntryDTO, len(slice))
 			for i, p := range slice {
-				entries[i] = sitemapEntryDTO{Slug: p.Slug, SourceKey: resolveSourceKey(srcIdx, p.Slug), URL: p.URL, Date: p.Date}
+				date := p.Date
+				entry := sitemapEntryDTO{Slug: p.Slug, SourceKey: resolveSourceKey(srcIdx, p.Slug), URL: p.URL, Date: &date}
+				if strings.EqualFold(strings.TrimSpace(in.ResponseMode), string(toolcontract.ResponseModeCompact)) {
+					entry.SourceKey = ""
+					entry.Date = nil
+				}
+				entries[i] = entry
 			}
 			meta := toolcontract.ComputePagination(total, limit, offset, len(entries))
-			return nil, newGetSitemapOutput(getSitemapData{Entries: entries, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
+			return nil, newGetSitemapOutput(getSitemapData{
+				Entries:        &entries,
+				Total:          meta.Total,
+				Limit:          meta.Limit,
+				Offset:         meta.Offset,
+				ReturnedCount:  meta.ReturnedCount,
+				HasMore:        meta.HasMore,
+				NextOffset:     meta.NextOffset,
+				ContentPages:   counts.ContentPages,
+				TaxonomyPages:  counts.TaxonomyPages,
+				SectionPages:   counts.SectionPages,
+				OtherDocuments: counts.OtherDocuments,
+			}), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 200) })
 
 	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want posts only (#570).",
