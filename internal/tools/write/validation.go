@@ -2,10 +2,11 @@ package write
 
 import (
 	"fmt"
-	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/urlpolicy"
 )
 
 // slugPattern is the unified slug format for create_page/update_page,
@@ -20,18 +21,6 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9/_-]*[a-z0-9])?$`)
 // htmlTagPattern matches actual tag-like markup while still allowing plain
 // comparison text such as "3 < 5" in titles.
 var htmlTagPattern = regexp.MustCompile(`(?i)<\s*/?\s*[a-z!][^>]*>`)
-
-// featuredImageCharsetPattern allowlists the character set for a
-// site-root-relative image path. The prefix/scheme/traversal checks in
-// validateFeaturedImagePath reject specific bad shapes, but don't bound the
-// character set itself — this closes that gap. Without it, a value like
-// `/img.jpg" onerror="alert(1)` or `/images/<script>.jpg` passes every
-// existing check (it's a normalized, local, non-traversal path with no
-// disallowed scheme prefix) and is written verbatim to featuredImage
-// frontmatter, which the site theme renders into HTML attributes/CSS url()
-// without re-validating — the same class of stored-injection risk already
-// fixed for page titles in this file.
-var featuredImageCharsetPattern = regexp.MustCompile(`^/[A-Za-z0-9._~/-]+$`)
 
 const (
 	// maxTitleRunes and maxBodyBytes bound create_page/update_page input,
@@ -63,38 +52,20 @@ func validateTitleFormat(title string) error {
 	return nil
 }
 
+// validateFeaturedImagePath validates update_page's featured_image parameter.
+// featured_image is a site-root-relative image path — the theme renders it
+// into HTML attributes / CSS url() without re-validating — so it opts into
+// urlpolicy.LocalOnly, the strictest mode: a single leading "/", no
+// protocol-relative "//", no backslashes, no dot path segments, path.Clean-
+// normalized, and drawn only from the [A-Za-z0-9._~/-] charset (the #835
+// stored-XSS fix). An empty value is accepted and clears the frontmatter key
+// (#825). Delegating to the shared urlpolicy package (#855) replaces the
+// former per-field implementation; the message set is preserved byte-for-byte
+// (see TestValidateFeaturedImagePathCharacterization) so this is not a
+// behavior change for featured_image.
 func validateFeaturedImagePath(v string) error {
-	if err := rejectUnsafeText(v); err != nil {
+	if err := urlpolicy.Validate(v, urlpolicy.LocalOnly); err != nil {
 		return fmt.Errorf("invalid_params: featured_image %w", err)
-	}
-	if v == "" {
-		return nil
-	}
-	if !strings.HasPrefix(v, "/") {
-		return fmt.Errorf("invalid_params: featured_image must be a site-root-relative path starting with /")
-	}
-	if strings.HasPrefix(v, "//") {
-		return fmt.Errorf("invalid_params: featured_image must not be protocol-relative")
-	}
-	if strings.Contains(v, `\`) {
-		return fmt.Errorf("invalid_params: featured_image must not contain backslashes")
-	}
-	lower := strings.ToLower(v)
-	for _, prefix := range []string{"data:", "javascript:", "file:", "http://", "https://"} {
-		if strings.HasPrefix(lower, prefix) {
-			return fmt.Errorf("invalid_params: featured_image must be a local site path, not %q", prefix)
-		}
-	}
-	for _, seg := range strings.Split(strings.TrimPrefix(v, "/"), "/") {
-		if seg == "." || seg == ".." {
-			return fmt.Errorf("invalid_params: featured_image must not contain dot path segments")
-		}
-	}
-	if cleaned := path.Clean(v); cleaned != v {
-		return fmt.Errorf("invalid_params: featured_image must be a normalized local path")
-	}
-	if !featuredImageCharsetPattern.MatchString(v) {
-		return fmt.Errorf("invalid_params: featured_image must contain only letters, digits, and ._~/- characters")
 	}
 	return nil
 }
