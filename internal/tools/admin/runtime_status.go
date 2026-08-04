@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -45,8 +46,29 @@ type gitRuntimeStatus struct {
 	HeadCommit        string `json:"head_commit,omitempty"`
 	Dirty             bool   `json:"dirty"`
 	ChangedFilesCount int    `json:"changed_files_count,omitempty"`
-	Error             string `json:"error,omitempty"`
+	// DirtyClasses (#864) is a coarse, safe classification of WHAT KIND of
+	// resource changed — not WHICH file (paths are never exposed, #775) and
+	// not WHO changed it (mcp-vs-external attribution was deliberately not
+	// shipped, see the comment in probeGitBaseline). Each entry is one of the
+	// stable class labels in the dirtyClass* constants. This answers the
+	// audit's "which resource class caused the baseline delta?" without
+	// leaking file contents or host paths. Sorted, de-duplicated; omitted
+	// when the tree is clean.
+	DirtyClasses []string `json:"dirty_classes,omitempty"`
+	Error        string   `json:"error,omitempty"`
 }
+
+// Stable resource-class labels for gitRuntimeStatus.DirtyClasses (#864).
+// These classify a changed path by KIND, derived from the path shape only;
+// the path itself is never exposed. external_unknown is the safe default for
+// anything not confidently recognized — it is deliberately not a guess at a
+// more specific class.
+const (
+	dirtyClassContentSource   = "content_source"
+	dirtyClassGeneratedAsset  = "generated_asset"
+	dirtyClassPreviewResidue  = "preview_residue"
+	dirtyClassExternalUnknown = "external_unknown"
+)
 
 type siteRuntimeStatus struct {
 	ContentRootConfigured bool                    `json:"content_root_configured"`
@@ -104,7 +126,11 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"(opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public " +
 			"revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` " +
 			"surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) " +
-			"so cleanup does not depend on remembering to run a build first. Read-only; does not expose secrets or arbitrary " +
+			"so cleanup does not depend on remembering to run a build first. When the git baseline is dirty, `data.git.dirty_classes` " +
+			"(#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, " +
+			"`preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the " +
+			"tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` " +
+			"is the honest default for anything not confidently recognized). Read-only; does not expose secrets or arbitrary " +
 			"host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
@@ -251,12 +277,68 @@ func probeGitBaseline(ctx context.Context, cfg config.Config) gitRuntimeStatus {
 		// precise but isn't trustworthy" outcome #775 warns against, so dirty_reason was
 		// deliberately deferred rather than shipped on a shakier guarantee.
 		if status.Dirty {
-			status.ChangedFilesCount = len(strings.Split(porcelainTrimmed, "\n"))
+			lines := strings.Split(porcelainTrimmed, "\n")
+			status.ChangedFilesCount = len(lines)
+			// #864: classify the changed paths by resource class and expose
+			// ONLY the class labels — the paths themselves are parsed here but
+			// never leave this function, preserving #775's no-path guarantee.
+			status.DirtyClasses = classifyDirtyPorcelain(lines)
 		}
 	}
 
 	status.Available = true
 	return status
+}
+
+// classifyDirtyPorcelain turns `git status --porcelain` lines into the sorted,
+// de-duplicated set of resource-class labels present (#864). It parses each
+// path only to classify it by shape and never returns or logs the path. The
+// porcelain line format is "XY <path>" (and "XY <old> -> <new>" for renames);
+// for renames the destination path is what matters for classification.
+func classifyDirtyPorcelain(lines []string) []string {
+	seen := map[string]bool{}
+	for _, line := range lines {
+		if len(line) < 4 {
+			continue
+		}
+		// Drop the 2-char status code and the following space.
+		p := strings.TrimSpace(line[3:])
+		if idx := strings.LastIndex(p, " -> "); idx >= 0 {
+			p = p[idx+len(" -> "):]
+		}
+		p = strings.Trim(p, `"`)
+		if p == "" {
+			continue
+		}
+		seen[classifyDirtyPath(p)] = true
+	}
+	out := make([]string, 0, len(seen))
+	for c := range seen {
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// classifyDirtyPath maps one repo-relative path to a resource class by shape
+// only. Order matters: a generated hero image lives under static/images and
+// would otherwise be swept up by broader rules, so it is checked first.
+func classifyDirtyPath(p string) string {
+	slash := strings.ReplaceAll(p, "\\", "/")
+	base := slash
+	if i := strings.LastIndex(slash, "/"); i >= 0 {
+		base = slash[i+1:]
+	}
+	switch {
+	case strings.Contains(slash, "static/images/") && strings.HasSuffix(base, HeroImageSuffix):
+		return dirtyClassGeneratedAsset
+	case strings.Contains(slash, "mcp-preview-") || strings.Contains(slash, "/preview/"):
+		return dirtyClassPreviewResidue
+	case strings.HasPrefix(slash, "content/") || strings.Contains(slash, "/content/") || strings.HasSuffix(base, ".md"):
+		return dirtyClassContentSource
+	default:
+		return dirtyClassExternalUnknown
+	}
 }
 
 // sanitiseGitError redacts every absolute host path this probe might have
