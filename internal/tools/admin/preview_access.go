@@ -112,7 +112,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, store *previewstore.Store, baseUR
 		OutputSchema: tools.MustSchema[revokePreviewOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: fileutil.BoolPtr(true),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
@@ -141,7 +141,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, store *previewstore.Store, baseUR
 		OutputSchema: tools.MustSchema[revokeAllPreviewsOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,
-			DestructiveHint: fileutil.BoolPtr(true),
+			DestructiveHint: fileutil.BoolPtr(false),
 			IdempotentHint:  true,
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},

@@ -311,12 +311,11 @@ func TestCreatePreviewPassesBaseURLPointedAtOwnMount(t *testing.T) {
 		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
 	returnedURL, _ := data["url"].(string)
-	cleanURL := strings.Replace(returnedURL, "/preview/"+strings.TrimSuffix(strings.TrimPrefix(returnedURL, "https://mcp.example.test/preview/"), "/"), "", 1)
 	parts := strings.Split(strings.TrimPrefix(returnedURL, "https://mcp.example.test/preview/"), "/")
 	if len(parts) < 2 {
 		t.Fatalf("returned preview URL %q did not contain preview id + token", returnedURL)
 	}
-	cleanURL = "https://mcp.example.test/preview/" + parts[0] + "/"
+	cleanURL := "https://mcp.example.test/preview/" + parts[0] + "/"
 
 	argv, err := os.ReadFile(argvFile)
 	if err != nil {
