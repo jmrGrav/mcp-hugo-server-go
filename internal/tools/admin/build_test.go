@@ -171,7 +171,7 @@ func TestBuildSiteConcurrentReject(t *testing.T) {
 	cfg.HugoRoot = t.TempDir()
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg)
+	admin.RegisterBuild(s, cfg, nil)
 
 	ctx := context.Background()
 	t1a, t2a := mcp.NewInMemoryTransports()
@@ -625,7 +625,7 @@ func TestBuildSiteCallbackTimeout(t *testing.T) {
 	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg,
+	admin.RegisterBuild(s, cfg, nil,
 		admin.PostBuildCallback{Name: "slow", Fn: slowCallback},
 		admin.PostBuildCallback{Name: "sentinel", Fn: sentinelCallback},
 	)
@@ -708,7 +708,7 @@ func TestBuildSiteCallbackFailurePartialSuccess(t *testing.T) {
 	errCallback := func() error { return fmt.Errorf("index reload: connection refused") }
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, admin.PostBuildCallback{Name: "index_reload", Fn: errCallback})
+	admin.RegisterBuild(s, cfg, nil, admin.PostBuildCallback{Name: "index_reload", Fn: errCallback})
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

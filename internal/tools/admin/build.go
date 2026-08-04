@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -41,6 +42,44 @@ type buildSiteData struct {
 	OutputRevision string `json:"output_revision,omitempty"`
 	PublishReady   bool   `json:"publish_ready"`
 	Warning        string `json:"warning,omitempty"`
+	// Stages / Pages are additive, stage-aware and page-aware reporting
+	// (#858). Every pre-existing field above is preserved unchanged for
+	// backward compatibility; these are new nested objects consumers may
+	// ignore. Both are always populated (Stages unconditionally; Pages'
+	// slices default to empty, never null).
+	Stages *buildStagesDTO `json:"stages,omitempty"`
+	Pages  *buildPagesDTO  `json:"pages,omitempty"`
+}
+
+// buildStagesDTO breaks a single pass/fail into the distinct internal stages
+// #858 AC2 asks for. A Hugo build failure never reaches this struct (it
+// surfaces as a tool error before post-build), so HugoBuild is "ok" whenever
+// stages are reported at all; it is included for completeness and symmetry.
+// SourceIndexReload / PublicIndexReload are both driven by the single
+// "index_reload" post-build callback (which reloads the public site index and
+// then the source index); when that callback is absent they report "skipped".
+// Callbacks carries every named post-build callback's individual outcome
+// (ok/failed/timeout), and CallbacksStatus summarises them.
+type buildStagesDTO struct {
+	HugoBuild         string            `json:"hugo_build"`
+	OutputSwap        string            `json:"output_swap"`
+	SourceIndexReload string            `json:"source_index_reload"`
+	PublicIndexReload string            `json:"public_index_reload"`
+	Callbacks         map[string]string `json:"callbacks,omitempty"`
+	CallbacksStatus   string            `json:"callbacks_status"`
+}
+
+// buildPagesDTO is the page-aware view of the *changed set* for this build —
+// the source pages an MCP mutation marked pending since the last build, split
+// by whether they were included in the published output or excluded as drafts
+// (#858 AC1/AC3). Identifiers are "slug" or "slug:lang". DeletedOutputs is
+// populated best-effort: Hugo's --cleanDestinationDir removes outputs of
+// deleted sources but does not report which, so per-page deletion tracking is
+// not yet wired and this stays empty (documented scope limit, see PR body).
+type buildPagesDTO struct {
+	Included       []string `json:"included"`
+	ExcludedDrafts []string `json:"excluded_drafts"`
+	DeletedOutputs []string `json:"deleted_outputs"`
 }
 
 type buildSiteOutput struct {
@@ -344,7 +383,7 @@ type PostBuildCallback struct {
 	Fn   func() error
 }
 
-func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...PostBuildCallback) {
+func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...PostBuildCallback) {
 	if s == nil {
 		return
 	}
@@ -352,7 +391,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...PostBuildCall
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "build_site",
 		Title:        "Build website",
-		Description:  "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active.",
+		Description:  "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts) — all additive to the pre-existing fields (#858).",
 		InputSchema:  tools.MustSchema[buildSiteInput](),
 		OutputSchema: tools.MustSchema[buildSiteOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -362,7 +401,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...PostBuildCall
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
-		data, err := runBuild(ctx, cfg, siteReload...)
+		data, err := runBuild(ctx, cfg, srcIdx, siteReload...)
 		if err != nil {
 			return nil, buildSiteOutput{}, err
 		}
@@ -370,12 +409,55 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, siteReload ...PostBuildCall
 	}))
 }
 
+// sourceKeyOf formats a changed-page identifier as "slug" or "slug:lang"
+// (#858 example shape, e.g. "posts/example:fr").
+func sourceKeyOf(slug, lang string) string {
+	if strings.TrimSpace(lang) == "" {
+		return slug
+	}
+	return slug + ":" + lang
+}
+
+// classifyPendingPages splits the pending (changed) source pages into the
+// published set and the draft/test-content-excluded set, sorted and
+// deduplicated. A page is excluded when draft:true or test_content is truthy.
+func classifyPendingPages(pending []hugosite.SourcePage) buildPagesDTO {
+	included := []string{}
+	excluded := []string{}
+	for _, p := range pending {
+		key := sourceKeyOf(p.Slug, p.Lang)
+		if p.Draft || isTruthyFrontmatter(p.FrontmatterRaw["test_content"]) {
+			excluded = append(excluded, key)
+		} else {
+			included = append(included, key)
+		}
+	}
+	sort.Strings(included)
+	sort.Strings(excluded)
+	return buildPagesDTO{
+		Included:       included,
+		ExcludedDrafts: excluded,
+		DeletedOutputs: []string{},
+	}
+}
+
+func isTruthyFrontmatter(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return strings.EqualFold(strings.TrimSpace(x), "true")
+	default:
+		return false
+	}
+}
+
 // runBuild performs an actual Hugo build and its post-build callbacks —
 // the same logic build_site's own handler runs, extracted so publish_changes
 // (#340, #438) can drive a build without going through the MCP tool
 // dispatch layer a second time. Takes and releases hugosite.ContentMu itself,
 // so callers must not already hold it.
-func runBuild(ctx context.Context, cfg config.Config, siteReload ...PostBuildCallback) (buildSiteData, error) {
+func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...PostBuildCallback) (buildSiteData, error) {
 	if cfg.HugoRoot == "" {
 		return buildSiteData{}, fmt.Errorf("config_error: hugo_root is not configured")
 	}
@@ -478,6 +560,11 @@ func runBuild(ctx context.Context, cfg config.Config, siteReload ...PostBuildCal
 	}
 	buildstatus.RecordSuccess(time.Now())
 
+	// Capture the page-aware "changed set" BEFORE the callback loop runs: the
+	// index_reload callback calls ClearAllBuildPending(), so pending pages
+	// must be snapshotted here or they vanish before we can report them (#858).
+	pages := classifyPendingPages(srcIdx.PendingPages())
+
 	// Run post-build callbacks within a bounded deadline (#241). Optional
 	// side-effect callbacks (CDN purge, search indexing) swallow their errors
 	// at the call site in server.go; any error here means a required step
@@ -487,6 +574,11 @@ func runBuild(ctx context.Context, cfg config.Config, siteReload ...PostBuildCal
 	cbCtx, cbCancel := context.WithTimeout(context.Background(), callbackTimeout)
 	defer cbCancel()
 	var cbWarning string
+	// callbackOutcomes records each named callback's individual result for the
+	// stage-aware report (#858 AC2). Any callback not reached (because an
+	// earlier one timed out and broke the loop) is left absent, then filled in
+	// as "skipped" below.
+	callbackOutcomes := map[string]string{}
 cbLoop:
 	for i, cb := range siteReload {
 		if cb.Fn == nil {
@@ -501,15 +593,29 @@ cbLoop:
 		select {
 		case cbErr := <-done:
 			if cbErr != nil {
+				callbackOutcomes[name] = "failed"
 				cbWarning = fmt.Sprintf("post-build callback %q failed: %v", name, cbErr)
 				slog.Warn("build_site: post-build callback failed", "callback", name, "error", cbErr)
+			} else {
+				callbackOutcomes[name] = "ok"
 			}
 		case <-cbCtx.Done():
+			callbackOutcomes[name] = "timeout"
 			cbWarning = fmt.Sprintf("post-build callback %q timed out after %s", name, callbackTimeout)
 			slog.Warn("build_site: post-build callback timed out", "callback", name, "timeout", callbackTimeout)
 			break cbLoop
 		}
 	}
+	// Mark registered-but-not-reached callbacks (post-break) as skipped.
+	for _, cb := range siteReload {
+		if cb.Fn == nil || cb.Name == "" {
+			continue
+		}
+		if _, seen := callbackOutcomes[cb.Name]; !seen {
+			callbackOutcomes[cb.Name] = "skipped"
+		}
+	}
+	stages := buildStages(callbackOutcomes)
 
 	status := "ok"
 	if cbWarning != "" {
@@ -538,6 +644,13 @@ cbLoop:
 		"status", status,
 		"publish_ready", publishReady,
 	)
+	// output_swap reflects whether the built output is in place on disk. Hugo
+	// writes public/ in place with --cleanDestinationDir (there is no separate
+	// atomic swap stage in this deployment); a failure to hash the tree is the
+	// only signal here that the output is not readable, so mirror that.
+	if hashErr != nil {
+		stages.OutputSwap = "degraded"
+	}
 	return buildSiteData{
 		Status:         status,
 		DurationMs:     durationMs,
@@ -545,5 +658,42 @@ cbLoop:
 		OutputRevision: outputRevision,
 		PublishReady:   publishReady,
 		Warning:        cbWarning,
+		Stages:         &stages,
+		Pages:          &pages,
 	}, nil
+}
+
+// buildStages maps the individual post-build callback outcomes onto the
+// stage-aware report (#858 AC2). The "index_reload" callback drives both the
+// source and public index-reload stages (it reloads the public site index
+// then the source index); when absent, both are "skipped". CallbacksStatus
+// summarises every callback: "ok" if all succeeded, "skipped" if none ran,
+// "partial_failure" if any failed or timed out.
+func buildStages(callbackOutcomes map[string]string) buildStagesDTO {
+	indexReload := "skipped"
+	if v, ok := callbackOutcomes["index_reload"]; ok {
+		indexReload = v
+	}
+	callbacksStatus := "skipped"
+	if len(callbackOutcomes) > 0 {
+		callbacksStatus = "ok"
+		for _, outcome := range callbackOutcomes {
+			if outcome == "failed" || outcome == "timeout" {
+				callbacksStatus = "partial_failure"
+				break
+			}
+		}
+	}
+	var callbacks map[string]string
+	if len(callbackOutcomes) > 0 {
+		callbacks = callbackOutcomes
+	}
+	return buildStagesDTO{
+		HugoBuild:         "ok",
+		OutputSwap:        "ok",
+		SourceIndexReload: indexReload,
+		PublicIndexReload: indexReload,
+		Callbacks:         callbacks,
+		CallbacksStatus:   callbacksStatus,
+	}
 }

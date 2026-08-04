@@ -100,7 +100,7 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 			return nil, publishChangesOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 		}
 
-		buildData, err := runBuild(ctx, cfg, siteReload...)
+		buildData, err := runBuild(ctx, cfg, srcIdx, siteReload...)
 		if err != nil {
 			return nil, publishChangesOutput{}, err
 		}

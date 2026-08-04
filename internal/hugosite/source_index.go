@@ -293,6 +293,25 @@ func (idx *SourceIndex) HasPendingBuild() bool {
 	return false
 }
 
+// PendingPages returns copies of every source page currently marked
+// BuildPending — the set of pages an MCP mutation changed since the last
+// build cleared the flags. build_site captures this *before* running its
+// post-build index_reload callback (which calls ClearAllBuildPending), so it
+// can report the page-aware "changed set" for a build (#858): which changed
+// translations were included vs excluded as drafts.
+func (idx *SourceIndex) PendingPages() []SourcePage {
+	if idx == nil {
+		return nil
+	}
+	var out []SourcePage
+	for _, p := range idx.pages {
+		if p.BuildPending {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func SlugFromRel(rel string) string {
 	rel = filepath.ToSlash(rel)
 	// Standard branch bundle: posts/slug/index.md → posts/slug

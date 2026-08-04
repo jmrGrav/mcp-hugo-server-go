@@ -38,7 +38,7 @@ func newCombinedTestServer(t *testing.T, contentRoot, hugoRoot, siteRoot string)
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg, nil)
-	admin.RegisterBuild(s, cfg)
+	admin.RegisterBuild(s, cfg, nil)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

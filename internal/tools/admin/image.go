@@ -204,7 +204,7 @@ func Register(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, si
 	if s == nil {
 		return
 	}
-	RegisterBuild(s, cfg, siteReload...)
+	RegisterBuild(s, cfg, srcIdx, siteReload...)
 	RegisterPreviewBuild(s, cfg)
 	RegisterHooks(s, cfg)
 	registerGenerateFeaturedImage(s, cfg)
