@@ -148,15 +148,33 @@ func isAbsoluteHTTPURL(v string) bool {
 	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
+// externalUnsafeChars are HTML/attribute-breakout metacharacters and raw
+// whitespace that must never appear in an ExternalAllowed URL. LocalOnly's
+// charset allowlist ([A-Za-z0-9._~/-]) already blocks these, but the http(s)
+// branch has no such allowlist, so a value like `https://h/a" onerror="b` or
+// `https://h/"><script>…` — a well-formed http(s) URL that the scheme check
+// accepts — would otherwise be written verbatim into frontmatter the theme
+// renders into an HTML attribute / CSS url() without re-escaping. That is the
+// exact #835 stored-injection class, so it must be closed in this branch too.
+// net/url.Parse is intentionally NOT relied on here: it happily accepts a raw
+// double-quote in the path, so it would not catch the breakout. The \n \r \t
+// that rejectControlChars deliberately exempts are also rejected here — they
+// have no legitimate place in a URL and enable attribute/CSS breakout.
+const externalUnsafeChars = "\"'<>` \t\n\r"
+
 // validateAbsoluteHTTPURL enforces the ExternalAllowed policy for a value
 // already known (by isAbsoluteHTTPURL) to carry an http(s) scheme. It rejects
-// backslashes and requires a non-empty host after the scheme; the scheme
-// itself is the allowlist, so no javascript:/data:/vbscript:/file: value can
-// reach here (they are not http(s) and go to the local check instead). Control
-// characters were already rejected by Validate before this point.
+// backslashes, HTML-unsafe metacharacters/whitespace (see externalUnsafeChars),
+// and requires a non-empty host after the scheme; the scheme itself is the
+// allowlist, so no javascript:/data:/vbscript:/file: value can reach here
+// (they are not http(s) and go to the local check instead). Control characters
+// (other than \n\r\t) were already rejected by Validate before this point.
 func validateAbsoluteHTTPURL(v string) error {
 	if strings.Contains(v, `\`) {
 		return fmt.Errorf("must not contain backslashes")
+	}
+	if strings.ContainsAny(v, externalUnsafeChars) {
+		return fmt.Errorf("must not contain spaces or HTML-unsafe characters")
 	}
 	rest := v[strings.Index(v, "//")+2:]
 	host := rest

@@ -70,6 +70,20 @@ func TestValidateExternalAllowed(t *testing.T) {
 		"http://",             // no host
 		"https://\x01evil",    // embedded control char
 		"mailto:a@b.test",     // not an image/URL scheme we allow
+
+		// #835 attribute-breakout class, in the http(s) branch: these are
+		// well-formed enough that the scheme+host check accepts them, but the
+		// raw quote / angle brackets / whitespace break out of an HTML
+		// attribute the theme renders the value into. LocalOnly blocks these
+		// via its charset allowlist; ExternalAllowed must too. Each of these
+		// returned nil (accepted) before the metacharacter denylist was added.
+		`https://good.example/a" onerror="alert(1)`,   // attribute breakout
+		`https://x.example/"><script>alert(1)</script>`, // tag injection
+		"https://good.example/a b",                    // raw space
+		"https://good.example/a\tb",                   // tab (exempt from control-char check)
+		"https://good.example/a\nb",                   // newline
+		"https://good.example/a'b",                    // single quote
+		"https://good.example/a`b",                    // backtick
 	}
 	for _, s := range rejected {
 		if err := Validate(s, ExternalAllowed); err == nil {
