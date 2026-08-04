@@ -95,9 +95,9 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		Name:  "create_preview",
 		Title: "Create preview",
 		Description: "Build the current source (optionally including drafts) into an isolated, non-public directory and " +
-			"expose it at a temporary, token-gated URL for visual inspection. The URL is opaque (not a raw process ID), " +
+			"expose it at a temporary preview entry URL for visual inspection. The entry URL is opaque (not a raw process ID), " +
 			"non-indexable (X-Robots-Tag: noindex), isolated from the public site (a dedicated build, never cfg.SiteRoot), " +
-			"and expires after ttl_seconds (default 900s, min 60s, max 3600s). Preview builds run Hugo with `--environment preview` so templates can suppress preview-unsafe features such as share links. The response always echoes the actual applied TTL as `data.effective_ttl_seconds`; values outside the allowed range are clamped with a warning. Requires site.admin.",
+			"and expires after ttl_seconds (default 900s, min 60s, max 3600s). On first open, the entry URL exchanges its token for an HttpOnly preview session cookie and redirects the browser to a clean `/preview/{id}/...` URL so internal asset and link requests no longer carry the bearer secret in every path. Preview builds run Hugo with `--environment preview` so templates can suppress preview-unsafe features such as share links. The response always echoes the actual applied TTL as `data.effective_ttl_seconds`; values outside the allowed range are clamped with a warning. Requires site.admin.",
 		InputSchema:  tools.MustSchema[createPreviewInput](),
 		OutputSchema: tools.MustSchema[createPreviewOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -151,7 +151,8 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			_ = os.RemoveAll(destDir)
 			return nil, createPreviewOutput{}, fmt.Errorf("config_error: failed to allocate preview token")
 		}
-		previewURLBase := strings.TrimRight(baseURL, "/") + "/preview/" + previewID + "/" + token + "/"
+		previewAccessURL := strings.TrimRight(baseURL, "/") + "/preview/" + previewID + "/" + token + "/"
+		previewBrowseURL := strings.TrimRight(baseURL, "/") + previewstore.CleanPath(previewID, "")
 
 		tctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 		defer cancel()
@@ -162,7 +163,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			return nil, createPreviewOutput{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
 		}
 
-		args := []string{"--noBuildLock", "--cacheDir", cacheDir, "--destination", destDir, "--baseURL", previewURLBase, "--environment", "preview"}
+		args := []string{"--noBuildLock", "--cacheDir", cacheDir, "--destination", destDir, "--baseURL", previewBrowseURL, "--environment", "preview"}
 		if in.IncludeDrafts {
 			args = append(args, "--buildDrafts")
 		}
@@ -203,6 +204,8 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			Token:       token,
 			ExpiresAt:   expiresAt,
 			BuildStatus: "passed",
+			CreatedAt:   time.Now().UTC(),
+			Owner:       currentUserForLog(),
 		})
 
 		slog.Info("create_preview completed",
@@ -215,7 +218,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 
 		out := newCreatePreviewOutput(createPreviewData{
 			PreviewID:           previewID,
-			URL:                 previewURLBase,
+			URL:                 previewAccessURL,
 			ExpiresAt:           expiresAt.UTC().Format(time.RFC3339),
 			Build:               "passed",
 			EffectiveTTLSeconds: int(ttl.Seconds()),

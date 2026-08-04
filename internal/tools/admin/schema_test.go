@@ -25,7 +25,7 @@ func TestAdminToolSchemasPresent(t *testing.T) {
 	for i := range result.Tools {
 		got[result.Tools[i].Name] = result.Tools[i]
 	}
-	for _, name := range []string{"build_site", "preview_build", "run_post_build_hooks", "generate_hero_image", "check_sri_versions"} {
+	for _, name := range []string{"build_site", "preview_build", "run_post_build_hooks", "generate_hero_image", "check_sri_versions", "list_previews", "revoke_preview", "revoke_all_previews"} {
 		tool, ok := got[name]
 		if !ok {
 			t.Fatalf("missing tool %q", name)
@@ -38,6 +38,10 @@ func TestAdminToolSchemasPresent(t *testing.T) {
 	assertSchemaHasProperties(t, got["run_post_build_hooks"], "inputSchema", "dry_run")
 	assertSchemaHasProperties(t, got["run_post_build_hooks"], "outputSchema.data", "results", "configured_count")
 	assertSchemaHasProperties(t, got["create_preview"], "outputSchema.data", "preview_id", "url", "expires_at", "build", "effective_ttl_seconds")
+	assertSchemaHasProperties(t, got["list_previews"], "outputSchema.data", "configured_count", "previews")
+	assertSchemaHasProperties(t, got["revoke_preview"], "inputSchema", "preview_id")
+	assertSchemaHasProperties(t, got["revoke_preview"], "outputSchema.data", "preview_id", "status")
+	assertSchemaHasProperties(t, got["revoke_all_previews"], "outputSchema.data", "status", "revoked_count")
 }
 
 func TestRunPostBuildHooksSchemaPublishesDryRunBooleanContract(t *testing.T) {

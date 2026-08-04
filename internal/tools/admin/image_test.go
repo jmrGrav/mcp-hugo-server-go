@@ -22,6 +22,7 @@ import (
 func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	previews := previewstore.New()
 	var srcIdx *hugosite.SourceIndex
 	if strings.TrimSpace(cfg.ContentRoot) != "" {
 		var err error
@@ -31,7 +32,8 @@ func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func())
 		}
 	}
 	admin.Register(s, cfg, srcIdx)
-	admin.RegisterCreatePreview(s, cfg, previewstore.New(), "https://mcp.example.test")
+	admin.RegisterCreatePreview(s, cfg, previews, "https://mcp.example.test")
+	admin.RegisterPreviewAccessTools(s, previews, "https://mcp.example.test")
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

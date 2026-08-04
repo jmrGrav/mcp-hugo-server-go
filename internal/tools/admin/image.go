@@ -216,6 +216,9 @@ func Defs() []tools.ToolDef {
 		{Name: "get_theme_status", RequiredScope: "write"},
 		{Name: "verify_publication", RequiredScope: "write"},
 		{Name: "create_preview", RequiredScope: "write"},
+		{Name: "list_previews", RequiredScope: "write"},
+		{Name: "revoke_preview", RequiredScope: "write"},
+		{Name: "revoke_all_previews", RequiredScope: "write"},
 		{Name: "publish_changes", RequiredScope: "write"},
 	}
 }
