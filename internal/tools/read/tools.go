@@ -3,6 +3,7 @@ package read
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -320,13 +321,22 @@ type pageQualityDTO struct {
 // section is omitted from the JSON entirely rather than serialized as a
 // zero value that could be mistaken for real data.
 type pageForEditDTO struct {
-	Slug        string               `json:"slug"`
-	SourceKey   string               `json:"source_key,omitempty"`
-	Revision    string               `json:"revision,omitempty"`
-	Frontmatter *frontmatterDTO      `json:"frontmatter,omitempty"`
-	Markdown    string               `json:"markdown,omitempty"`
-	State       *site.LifecycleState `json:"state,omitempty"`
-	Quality     *pageQualityDTO      `json:"quality,omitempty"`
+	Slug      string `json:"slug"`
+	SourceKey string `json:"source_key,omitempty"`
+	Revision  string `json:"revision,omitempty"`
+	// BundleRevision (#857) is the optimistic-concurrency token for the WHOLE
+	// page bundle (every translation + bundle-local assets) as one unit, not
+	// just this single resolved file that `revision` covers. Use `revision`
+	// when your edit touches only this one file; check `bundle_revision`
+	// before a bundle-aware operation that must be sure no sibling
+	// translation or shared asset changed behind your back. Omitted if the
+	// bundle directory can't be resolved (e.g. a public-only page with no
+	// source file).
+	BundleRevision string               `json:"bundle_revision,omitempty"`
+	Frontmatter    *frontmatterDTO      `json:"frontmatter,omitempty"`
+	Markdown       string               `json:"markdown,omitempty"`
+	State          *site.LifecycleState `json:"state,omitempty"`
+	Quality        *pageQualityDTO      `json:"quality,omitempty"`
 	// Backlinks is opt-in only via include=["backlinks"] (#465) — unlike
 	// the other four sections, it's deliberately NOT part of the default
 	// bundle returned when `include` is omitted, so existing callers see no
@@ -742,6 +752,15 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				Slug:      p.Slug,
 				SourceKey: contentmodel.SourceKeyFromLogicalPath(fileutil.LogicalContentPath(cfg.ContentRoot, resolved.SourcePath)),
 				Revision:  resolvedRevision(resolved),
+			}
+			// bundle_revision (#857) covers the whole bundle directory (all
+			// translations + bundle-local assets), so a bundle-aware caller can
+			// detect a sibling translation or shared asset changing behind its
+			// back — something the single-file `revision` above cannot see.
+			if resolved.SourcePath != "" {
+				if brev, brevErr := contentmodel.BundleRevision(filepath.Dir(resolved.SourcePath)); brevErr == nil {
+					page.BundleRevision = brev
+				}
 			}
 			var warnings []string
 

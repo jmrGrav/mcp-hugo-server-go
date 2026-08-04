@@ -329,7 +329,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	RegisterGetChangelog(s)
 	registerAnonymousBrowseTools(s, idx, srcIdx, resolver, cfg, aliases)
 	registerAnonymousTaxonomyAndFeedTools(s, idx, srcIdx, aliases)
-	registerAnonymousSiteMetadataTools(s, idx)
+	registerAnonymousSiteMetadataTools(s, idx, cfg)
 }
 
 func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config, aliases map[string]string) {
@@ -366,6 +366,7 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 			"Pass allow_source_fallback=true to also return source-index entries for pages not yet built "+
 			"(e.g. immediately after create_page, before the next Hugo build); draft pages are always excluded. "+
 			"`content_only` defaults to true (BREAKING as of this release — previously defaulted to false): the `html` field returns just the article body (prefers the theme's id=\"content\" wrapper when present, excluding title, TOC, post metadata, share buttons, and prev/next navigation; falls back to <article>/<main>/<body>-minus-chrome otherwise) rather than the full rendered page including theme chrome (nav, footer, search widgets, share buttons, scripts) — the old default ran to several thousand tokens for a short article. Pass content_only=false explicitly to opt back into the full-page HTML. "+
+			"Cost note (#865): content_only=true only strips theme chrome — it still returns the page's entire article body, so on a long article the `html` field can still be very large (many thousands of tokens). The name bounds the *shape* (body vs full page), not the *size*. When you need a size-bounded read, prefer get_page_frontmatter (metadata only, no body) or get_page_markdown for the raw source; there is no server-side truncation of the returned body. "+
 			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; with the default content_only=true, the `html` field is returned empty for source-only fallback results). "+
 			"`html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
@@ -499,7 +500,7 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 }
 
 func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) {
-	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication.",
+	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication. Posts-only: this covers the /posts/ section specifically; for a site-wide digest spanning every published section (not only posts) use get_feed instead. get_feed and get_recent_posts overlap deliberately — pick get_recent_posts when you want a posts timeline and get_feed when you want a whole-site recency digest (#570, #865).",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
 			if idx == nil {
 				return nil, getRecentPostsOutput{}, fmt.Errorf("index not initialized")
@@ -645,7 +646,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 			}), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 200) })
 
-	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want posts only (#570).",
+	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want a posts-only timeline. The two tools overlap deliberately; get_feed is the whole-site recency digest, get_recent_posts is the /posts/-scoped timeline (#570, #865).",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getFeedInput) (*mcp.CallToolResult, getFeedOutput, error) {
 			if idx == nil {
 				return nil, getFeedOutput{}, fmt.Errorf("index not initialized")
@@ -677,7 +678,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 }
 
-func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index) {
+func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index, cfg config.Config) {
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ getSiteInformationInput) (*mcp.CallToolResult, getSiteInformationOutput, error) {
 			if idx == nil {
@@ -690,6 +691,8 @@ func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index) {
 				Lang: info["lang"],
 			}}), nil
 		})
+
+	registerGetCapabilities(s, idx, cfg)
 }
 
 // schemaOpts, when provided, post-process the inferred input schema (#418) —
@@ -1054,6 +1057,7 @@ func Defs() []tools.ToolDef {
 		{Name: "get_sitemap", RequiredScope: ""},
 		{Name: "get_feed", RequiredScope: ""},
 		{Name: "get_site_information", RequiredScope: ""},
+		{Name: "get_capabilities", RequiredScope: ""},
 		{Name: "get_changelog", RequiredScope: ""},
 	}
 }

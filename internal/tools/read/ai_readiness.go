@@ -40,7 +40,7 @@ func RegisterAIReadiness(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Source
 		return
 	}
 	addReadOnlyTool(s, "check_ai_readiness", "Validate AI readiness",
-		"Run a deterministic source-structure audit over one Hugo page's front matter and Markdown body. Checks only heading hierarchy, section/paragraph length outliers, metadata presence, internal-link density, and citation structure. This tool is intentionally source-oriented: it does not score SEO, rendered HTML, build freshness, or broken-link correctness. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		"Run a deterministic source-structure audit over one Hugo page's front matter and Markdown body. Checks only heading hierarchy, section/paragraph length outliers, metadata presence, internal-link density, and citation structure. This tool is intentionally source-oriented: it does not score SEO, rendered HTML, build freshness, or broken-link correctness. Scope caveat (#865): the name is broader than the contract — a `pass` means the page is *structurally* well-formed, NOT that it is substantive, complete, or high-quality. Very short content can pass because the checks are structural, not editorial; do not read a `pass` as an editorial go-ahead. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateAIReadinessInput) (*mcp.CallToolResult, validateAIReadinessOutput, error) {
 			if srcIdx == nil {
 				return nil, validateAIReadinessOutput{}, fmt.Errorf("source index not initialized")

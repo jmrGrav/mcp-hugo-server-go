@@ -15,8 +15,8 @@ import (
 
 func TestDefs(t *testing.T) {
 	defs := Defs()
-	if len(defs) != 10 {
-		t.Fatalf("Defs() = %d, want 10", len(defs))
+	if len(defs) != 11 {
+		t.Fatalf("Defs() = %d, want 11", len(defs))
 	}
 	if defs[0].RequiredScope != "" {
 		t.Fatalf("Defs() first scope = %q, want empty", defs[0].RequiredScope)
@@ -51,6 +51,7 @@ func TestRegisterPublishesExpectedToolCatalog(t *testing.T) {
 		"get_sitemap",
 		"get_feed",
 		"get_site_information",
+		"get_capabilities",
 	}
 	slices.Sort(got)
 	slices.Sort(want)

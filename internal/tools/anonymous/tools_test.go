@@ -1869,6 +1869,44 @@ func TestGetPageDescriptionDocumentsSourceFallbackContract(t *testing.T) {
 	t.Fatal("get_page tool not found")
 }
 
+// TestReadToolSemanticDisambiguationDescriptions is the #865 contract test:
+// the overlapping feed/recent tools must cross-reference each other, and
+// get_page's content_only cost model must be spelled out, so the wording
+// fixes that resolve the audit's tool-selection ambiguity cannot silently
+// regress into terse descriptions again.
+func TestReadToolSemanticDisambiguationDescriptions(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	byName := map[string]string{}
+	for i := range tools.Tools {
+		byName[tools.Tools[i].Name] = tools.Tools[i].Description
+	}
+
+	wants := map[string][]string{
+		"get_recent_posts": {"get_feed", "posts-only", "overlap"},
+		"get_feed":         {"get_recent_posts", "whole-site recency digest"},
+		"get_page":         {"content_only=true only strips theme chrome", "size-bounded read"},
+	}
+	for name, subs := range wants {
+		desc, ok := byName[name]
+		if !ok {
+			t.Fatalf("%s tool not found", name)
+		}
+		lower := strings.ToLower(desc)
+		for _, want := range subs {
+			if !strings.Contains(lower, strings.ToLower(want)) {
+				t.Errorf("%s description missing %q:\n%s", name, want, desc)
+			}
+		}
+	}
+}
+
 func assertObjectSchema(t *testing.T, tool *mcp.Tool, field string) {
 	t.Helper()
 	var schema any

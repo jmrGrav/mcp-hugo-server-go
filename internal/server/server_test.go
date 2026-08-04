@@ -730,15 +730,15 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 	}
 }
 
-func TestToolsListAuthenticatedReturnsThirtyOneTools(t *testing.T) {
+func TestToolsListAuthenticatedReturnsThirtyTwoTools(t *testing.T) {
 	// mustOAuthServer includes a read client for http://localhost:9999/cb,
 	// so obtainBearerToken (which DCR-registers with that redirect URI) gets a
 	// read token via resolveRegistrationScope (#249).
 	srv := mustOAuthServer(t)
 	bearer := obtainBearerToken(t, srv)
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 31 {
-		t.Fatalf("authenticated tools/list = %d tools, want 31; got %v", len(names), names)
+	if len(names) != 32 {
+		t.Fatalf("authenticated tools/list = %d tools, want 32; got %v", len(names), names)
 	}
 	for _, name := range []string{"get_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "check_ai_readiness", "search_content", "explain_structure", "get_site_health", "diff_page", "validate_frontmatter", "validate_site", "suggest_links"} {
 		found := false
@@ -762,11 +762,11 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 	addBearerToken(t, storePath, bearer, "read")
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 31 {
-		t.Fatalf("reader tools/list = %d tools, want 31; got %v", len(names), names)
+	if len(names) != 32 {
+		t.Fatalf("reader tools/list = %d tools, want 32; got %v", len(names), names)
 	}
 	for _, name := range []string{
-		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information",
+		"list_pages", "get_page", "search_pages", "get_recent_posts", "list_tags", "list_categories", "get_sitemap", "get_feed", "get_site_information", "get_capabilities",
 		"get_page_markdown", "get_page_frontmatter", "get_related_content", "build_agent_context", "export_agent_context", "check_ai_readiness",
 		"search_content", "explain_structure", "get_site_health", "diff_page", "validate_frontmatter", "validate_site",
 		"get_broken_links", "get_backlinks", "suggest_links",
@@ -1388,8 +1388,8 @@ func TestLegacyMCPBearerBehavesLikeContentReadOverHTTP(t *testing.T) {
 	rewriteTokenScopeToLegacyMCP(t, storePath, bearer)
 
 	names := doMCPToolsList(t, srv, bearer)
-	if len(names) != 31 {
-		t.Fatalf("legacy mcp tools/list = %d tools, want 31; got %v", len(names), names)
+	if len(names) != 32 {
+		t.Fatalf("legacy mcp tools/list = %d tools, want 32; got %v", len(names), names)
 	}
 	for _, bad := range []string{"create_page", "update_page", "delete_page", "build_site"} {
 		for _, n := range names {
@@ -2322,4 +2322,59 @@ func TestBearerlessHTTPCannotReachWriteTools(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "unknown tool") && !strings.Contains(rec.Body.String(), "forbidden_tool") {
 		t.Fatalf("bearerless create_page must be rejected as unknown/forbidden, got: %q", rec.Body.String())
 	}
+}
+
+// TestToolResponseCarriesRequestIDAndDurationMeta is the #860 contract test:
+// every tool response served through the tool-call middleware must carry a
+// meta.request_id and a meta.duration_ms, injected centrally so an agent gets
+// consistent correlation + timing without each tool opting in. Exercised over
+// the real served HTTP path (not a direct handler call), so it also proves the
+// added ResponseMeta fields survive the SDK's outbound schema validation.
+func TestToolResponseCarriesRequestIDAndDurationMeta(t *testing.T) {
+	srv := mustTestServer(t) // bearerless (OAuth disabled): anonymous tools callable directly
+	rec := doMCPCall(t, srv, "", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_capabilities"}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get_capabilities status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	meta := extractResultMeta(t, rec.Body.String())
+	reqID, _ := meta["request_id"].(string)
+	if !strings.HasPrefix(reqID, "req-") {
+		t.Fatalf("meta.request_id = %v, want a req- prefixed id (#860); meta=%v", meta["request_id"], meta)
+	}
+	if _, ok := meta["duration_ms"]; !ok {
+		t.Fatalf("meta.duration_ms missing (#860); meta=%v", meta)
+	}
+	if _, ok := meta["duration_ms"].(float64); !ok {
+		t.Fatalf("meta.duration_ms type = %T, want number", meta["duration_ms"])
+	}
+	// Two calls must get distinct request ids (per-call correlation, not static).
+	rec2 := doMCPCall(t, srv, "", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_capabilities"}}`))
+	meta2 := extractResultMeta(t, rec2.Body.String())
+	if reqID == meta2["request_id"] {
+		t.Fatalf("two calls shared request_id %q, want distinct per-call ids", reqID)
+	}
+}
+
+// extractResultMeta parses an MCP tools/call HTTP response (JSON or SSE
+// framed) and returns result.structuredContent.meta.
+func extractResultMeta(t *testing.T, body string) map[string]any {
+	t.Helper()
+	// SSE framing prefixes JSON with "data: "; strip to the first '{'.
+	payload := body
+	if i := strings.Index(payload, "{"); i > 0 {
+		payload = payload[i:]
+	}
+	var rpc struct {
+		Result struct {
+			StructuredContent map[string]any `json:"structuredContent"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(payload), &rpc); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v\nbody=%q", err, body)
+	}
+	meta, ok := rpc.Result.StructuredContent["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("result.structuredContent.meta missing; body=%q", body)
+	}
+	return meta
 }

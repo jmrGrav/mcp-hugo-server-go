@@ -574,6 +574,7 @@ func buildWriteScopedServer(core *serverCore, cfg config.Config, idx *site.Index
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
 	admin.RegisterCreatePreview(writeServer, cfg, previews, previewBaseURL)
 	admin.RegisterPreviewAccessTools(writeServer, cfg, previews, previewBaseURL)
+	admin.RegisterStorageHealth(writeServer, cfg, core.srcIdx, previews)
 	read.RegisterInspectPreviewRenderedPage(writeServer, idx, core.srcIdx, cfg, previews, previewBaseURL)
 	return writeServer, previews
 }

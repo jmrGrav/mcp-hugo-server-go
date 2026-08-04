@@ -333,6 +333,30 @@ func (s *Store) DiskUsageBytes() int64 {
 	return total
 }
 
+// ActiveDirs returns the on-disk directories of every currently-tracked,
+// non-expired preview, as a set. It is used by get_storage_health (#861) to
+// distinguish a live preview's directory from expired/orphaned mcp-preview-*
+// residue left on disk (e.g. after a process restart, since the store is
+// in-memory and does not survive restarts). Unlike List/Sweep this is a pure
+// read: it never deletes an expired entry or its directory, so an advisory
+// health check can't itself mutate the state it is reporting on.
+func (s *Store) ActiveDirs() map[string]struct{} {
+	now := time.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	dirs := make(map[string]struct{}, len(s.entries))
+	for _, entry := range s.entries {
+		if entry == nil || entry.Dir == "" {
+			continue
+		}
+		if now.After(entry.ExpiresAt) {
+			continue
+		}
+		dirs[entry.Dir] = struct{}{}
+	}
+	return dirs
+}
+
 func (s *Store) Revoke(id string) bool {
 	s.mu.Lock()
 	entry, ok := s.entries[id]

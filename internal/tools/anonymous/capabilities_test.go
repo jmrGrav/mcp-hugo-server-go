@@ -1,0 +1,109 @@
+package anonymous_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	writepkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
+)
+
+// TestGetCapabilitiesReportsLimitsAndFeatureFlags is the #859 contract test:
+// get_capabilities must expose the hard limits (from the write tools' own
+// source of truth, so the two can't drift) and coarse feature flags, and
+// must NOT leak sensitive config (secrets, hook command strings, host paths).
+func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
+	idx := mustTestIndex(t)
+
+	cfg := config.Default()
+	cfg.DefaultLanguage = "en"
+	cfg.BlockedShortcodes = []string{"raw", "script", "style"}
+	cfg.PostBuildHooks = []string{"/usr/local/bin/deploy.sh --prod"} // must NOT appear verbatim
+	cfg.ImageGenURL = "https://images.example/generate"
+	cfg.RateLimit.CreateUpdatePerMin = 42
+	cfg.RateLimit.DestructivePerMin = 7
+
+	session, done := newTestClientWithCfg(t, idx, cfg, nil)
+	defer done()
+
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	data := decodeContent(t, res)
+
+	limits, ok := data["limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("limits missing/wrong type: %#v", data["limits"])
+	}
+	if got, want := int(limits["body_max_bytes"].(float64)), writepkg.BodyMaxBytes(); got != want {
+		t.Errorf("body_max_bytes = %d, want %d (write source of truth)", got, want)
+	}
+	if got, want := int(limits["asset_max_bytes"].(float64)), writepkg.AssetMaxBytes(); got != want {
+		t.Errorf("asset_max_bytes = %d, want %d", got, want)
+	}
+	rl, ok := limits["rate_limits"].(map[string]any)
+	if !ok {
+		t.Fatalf("rate_limits missing: %#v", limits["rate_limits"])
+	}
+	if got := int(rl["create_update_upload_per_min"].(float64)); got != 42 {
+		t.Errorf("create_update_upload_per_min = %d, want 42", got)
+	}
+	if got := int(rl["destructive_per_min"].(float64)); got != 7 {
+		t.Errorf("destructive_per_min = %d, want 7", got)
+	}
+	ttl, ok := limits["preview_ttl"].(map[string]any)
+	if !ok || ttl["min_seconds"] == nil || ttl["max_seconds"] == nil {
+		t.Errorf("preview_ttl bounds missing: %#v", limits["preview_ttl"])
+	}
+
+	formats, ok := data["allowed_image_formats"].([]any)
+	if !ok || len(formats) == 0 {
+		t.Fatalf("allowed_image_formats missing/empty: %#v", data["allowed_image_formats"])
+	}
+
+	features, ok := data["features"].(map[string]any)
+	if !ok {
+		t.Fatalf("features missing: %#v", data["features"])
+	}
+	if features["image_generation_available"] != true {
+		t.Errorf("image_generation_available = %v, want true (ImageGenURL set)", features["image_generation_available"])
+	}
+	if features["post_build_hooks_configured"] != true {
+		t.Errorf("post_build_hooks_configured = %v, want true", features["post_build_hooks_configured"])
+	}
+	if got := int(features["post_build_hooks_count"].(float64)); got != 1 {
+		t.Errorf("post_build_hooks_count = %d, want 1", got)
+	}
+
+	// Security invariant: the actual hook command must never be exposed.
+	env := decodeEnvelope(t, res)
+	if leaks := findStringLeak(env, "deploy.sh"); leaks {
+		t.Errorf("get_capabilities leaked a post-build hook command string")
+	}
+	if leaks := findStringLeak(env, "images.example"); leaks {
+		t.Errorf("get_capabilities leaked the image-generation URL")
+	}
+}
+
+// findStringLeak reports whether needle appears in any string value anywhere
+// in the decoded JSON tree.
+func findStringLeak(v any, needle string) bool {
+	switch t := v.(type) {
+	case string:
+		return strings.Contains(t, needle)
+	case []any:
+		for _, e := range t {
+			if findStringLeak(e, needle) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, e := range t {
+			if findStringLeak(e, needle) {
+				return true
+			}
+		}
+	}
+	return false
+}

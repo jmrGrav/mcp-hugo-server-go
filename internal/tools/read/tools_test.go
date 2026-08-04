@@ -3953,6 +3953,35 @@ func TestGetSiteHealthFrontmatterIssueReducesScore(t *testing.T) {
 	}
 }
 
+// TestCheckAIReadinessDescriptionScopeCaveat is the #865 contract test for
+// aligning check_ai_readiness's name with its actual (structural, not
+// editorial) scope: the description must state that a pass means the page is
+// structurally well-formed, NOT substantive, so an agent does not over-read
+// a positive result. This wording fix must not silently regress.
+func TestCheckAIReadinessDescriptionScopeCaveat(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	for i := range tools.Tools {
+		if tools.Tools[i].Name != "check_ai_readiness" {
+			continue
+		}
+		desc := tools.Tools[i].Description
+		for _, want := range []string{"structurally", "NOT that it is substantive", "not editorial"} {
+			if !strings.Contains(desc, want) {
+				t.Errorf("check_ai_readiness description missing %q:\n%s", want, desc)
+			}
+		}
+		return
+	}
+	t.Fatal("check_ai_readiness tool not found")
+}
+
 func TestExtendedReadAnnotations(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)

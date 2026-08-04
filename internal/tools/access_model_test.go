@@ -21,6 +21,7 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"get_sitemap":          "",
 		"get_feed":             "",
 		"get_site_information": "",
+		"get_capabilities":     "",
 		"get_page_markdown":    "",
 		"get_page_frontmatter": "",
 		"get_related_content":  "",
@@ -67,6 +68,7 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"revoke_preview":       "write",
 		"revoke_all_previews":  "write",
 		"inspect_preview":      "write",
+		"get_storage_health":   "write",
 	}
 
 	got := make(map[string]string, len(want))
@@ -88,8 +90,8 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 }
 
 func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
-	if got := len(anonpkg.Defs()); got != 10 {
-		t.Fatalf("anonymous tool count = %d, want 10", got)
+	if got := len(anonpkg.Defs()); got != 11 {
+		t.Fatalf("anonymous tool count = %d, want 11", got)
 	}
 	if got := len(readpkg.Defs()); got != 21 {
 		t.Fatalf("read tool count = %d, want 21", got)
@@ -97,8 +99,8 @@ func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
 	if got := len(writepkg.Defs()); got != 10 {
 		t.Fatalf("write tool count = %d, want 10", got)
 	}
-	if got := len(adminpkg.Defs()); got != 14 {
-		t.Fatalf("admin (folded into write) tool count = %d, want 14", got)
+	if got := len(adminpkg.Defs()); got != 15 {
+		t.Fatalf("admin (folded into write) tool count = %d, want 15", got)
 	}
 
 	if got := tools.ScopeRank(""); got != 0 {

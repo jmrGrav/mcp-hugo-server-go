@@ -13,9 +13,9 @@ import (
 // Update this constant whenever a tool is added or removed.
 // Current breakdown:
 //
-//	anonymous (no auth): 10  — list_pages, get_page, search_pages, get_recent_posts,
+//	anonymous (no auth): 11  — list_pages, get_page, search_pages, get_recent_posts,
 //	                            list_tags, list_categories, get_sitemap, get_feed, get_site_information,
-//	                            get_changelog
+//	                            get_capabilities, get_changelog
 //	content.read:        21  — get_page_markdown, get_page_frontmatter, get_related_content,
 //	                            build_agent_context, export_agent_context, get_page_for_edit,
 //	                            list_content_types, list_page_assets, search_content, check_ai_readiness,
@@ -26,12 +26,12 @@ import (
 //	                            delete_page_asset, get_mutation_status, get_rate_limits,
 //	                            plan_content_change (no scope gate — see #450), apply_content_plan,
 //	                            rollback_change
-//	site.admin:          14  — build_site, preview_build, run_post_build_hooks,
+//	site.admin:          15  — build_site, preview_build, run_post_build_hooks,
 //	                            generate_hero_image, check_sri_versions, get_runtime_status,
 //	                            get_theme_status, verify_publication, create_preview,
 //	                            publish_changes, list_previews, revoke_preview,
-//	                            revoke_all_previews, inspect_preview
-const expectedToolCount = 55
+//	                            revoke_all_previews, inspect_preview, get_storage_health
+const expectedToolCount = 57
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())
