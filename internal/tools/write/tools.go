@@ -147,13 +147,13 @@ type updatePageOutput struct {
 }
 
 type updatePageData struct {
-	Status             string               `json:"status,omitempty"`
-	Slug               string               `json:"slug,omitempty"`
-	SourceKey          string               `json:"source_key,omitempty"`
-	ResolvedLang       *string              `json:"resolved_lang,omitempty"`
-	ResolvedSourcePath *string              `json:"resolved_source_path,omitempty"`
-	DryRun             bool                 `json:"dry_run,omitempty"`
-	Diff               string               `json:"diff,omitempty"`
+	Status             string  `json:"status,omitempty"`
+	Slug               string  `json:"slug,omitempty"`
+	SourceKey          string  `json:"source_key,omitempty"`
+	ResolvedLang       *string `json:"resolved_lang,omitempty"`
+	ResolvedSourcePath *string `json:"resolved_source_path,omitempty"`
+	DryRun             bool    `json:"dry_run,omitempty"`
+	Diff               string  `json:"diff,omitempty"`
 	// Changed (#860) makes a no-op update explicit: false when the resulting
 	// content is byte-identical to what was already on disk (nothing to
 	// write), true when the call actually changed the page. A pointer so the
@@ -161,11 +161,11 @@ type updatePageData struct {
 	// the false case) rather than being elided by omitempty — an agent must
 	// be able to tell "succeeded, no change" apart from "succeeded, changed"
 	// without diffing revisions itself.
-	Changed            *bool                `json:"changed,omitempty"`
-	Warning            string               `json:"warning,omitempty"`
-	NewRevision        string               `json:"new_revision,omitempty"`
-	State              *site.LifecycleState `json:"state,omitempty"`
-	RateLimit          *rateLimitBucket     `json:"rate_limit,omitempty"`
+	Changed     *bool                `json:"changed,omitempty"`
+	Warning     string               `json:"warning,omitempty"`
+	NewRevision string               `json:"new_revision,omitempty"`
+	State       *site.LifecycleState `json:"state,omitempty"`
+	RateLimit   *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// TaxonomyCasingNormalized lists tags/categories rewritten to match a
 	// casing already present elsewhere in the index (#589), populated only
 	// when the caller opted in via normalize_taxonomy_casing. Present only

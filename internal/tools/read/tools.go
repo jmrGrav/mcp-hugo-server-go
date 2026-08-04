@@ -332,11 +332,11 @@ type pageForEditDTO struct {
 	// translation or shared asset changed behind your back. Omitted if the
 	// bundle directory can't be resolved (e.g. a public-only page with no
 	// source file).
-	BundleRevision string `json:"bundle_revision,omitempty"`
-	Frontmatter *frontmatterDTO      `json:"frontmatter,omitempty"`
-	Markdown    string               `json:"markdown,omitempty"`
-	State       *site.LifecycleState `json:"state,omitempty"`
-	Quality     *pageQualityDTO      `json:"quality,omitempty"`
+	BundleRevision string               `json:"bundle_revision,omitempty"`
+	Frontmatter    *frontmatterDTO      `json:"frontmatter,omitempty"`
+	Markdown       string               `json:"markdown,omitempty"`
+	State          *site.LifecycleState `json:"state,omitempty"`
+	Quality        *pageQualityDTO      `json:"quality,omitempty"`
 	// Backlinks is opt-in only via include=["backlinks"] (#465) — unlike
 	// the other four sections, it's deliberately NOT part of the default
 	// bundle returned when `include` is omitted, so existing callers see no
