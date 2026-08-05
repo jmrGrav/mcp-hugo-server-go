@@ -1,0 +1,1730 @@
+[
+  {
+    "name": "apply_bundle_plan",
+    "required_scope": "write",
+    "description": "Write every translation a prior plan_bundle_change previewed, atomically as one editorial unit. Fails whole with `bundle_conflict` if the bundle changed since the plan (BundleRevision mismatch), `plan_not_found` if unknown/expired/consumed, or a validation error on ANY translation — in all cases nothing is written. A write interrupted partway through is rolled back in-process so the bundle never lands partially (see rollback_bundle for crash recovery). Returns per-translation outcomes plus one `bundle_status`. Single-use; `idempotency_key` safely replays; `dry_run` re-verifies without writing. Writes source only — call publish_changes to build/deploy.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "apply_content_plan",
+    "required_scope": "write",
+    "description": "Write exactly what a prior plan_content_change call previewed — no body/tags/title are resent, apply executes the plan's frozen content verbatim. Fails with `plan_not_found` if `plan_id` is unknown, already applied, or its 5-minute TTL expired (call plan_content_change again); fails with `revision_conflict` if the page changed since the plan was created. `test_content` remains an ongoing safety invariant here too: content whose frontmatter still carries `test_content: true` cannot be applied in a `draft:false` state, even if an older or externally-crafted plan attempts it (#728). A plan is single-use: this call consumes it whether the write succeeds or fails. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run apply after a timeout or uncertain delivery. `dry_run` re-verifies the plan without writing or consuming it. Deliberately writes source only — no build/publish/index-freshness fields in the response; that is publish_changes's layer, a separate, later, explicitly-confirmed step. `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "plan_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan_id"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "build_agent_context",
+    "required_scope": "",
+    "description": "Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or discussing a page. If you're about to mutate this page instead, prefer get_page_for_edit — it adds `revision` and `quality` (needed for create_page/update_page/delete_page) but omits translations/related_pages. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode, N must be greater than 0 when provided). `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. Omitting both preserves the full default shape. `lang` is now populated immediately for a source-only page read back before the next Hugo build — it no longer lags behind `resolved_lang` until the page is built. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include_terms": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "lang": {
+          "type": "string"
+        },
+        "max_body_chars": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "build_site",
+    "required_scope": "write",
+    "description": "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts) — all additive to the pre-existing fields (#858).",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "check_ai_readiness",
+    "required_scope": "",
+    "description": "Run a deterministic source-structure audit over one Hugo page's front matter and Markdown body. Checks only heading hierarchy, section/paragraph length outliers, metadata presence, internal-link density, and citation structure. This tool is intentionally source-oriented: it does not score SEO, rendered HTML, build freshness, or broken-link correctness. Scope caveat (#865): the name is broader than the contract — a `pass` means the page is *structurally* well-formed, NOT that it is substantive, complete, or high-quality. Very short content can pass because the checks are structural, not editorial; do not read a `pass` as an editorial go-ahead. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "check_sri_versions",
+    "required_scope": "write",
+    "description": "Scan Hugo layouts for CDN integrity attributes and verify each URL's current SHA-384 hash matches the template.",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "create_page",
+    "required_scope": "write",
+    "description": "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "lang": {
+          "type": "string"
+        },
+        "normalize_taxonomy_casing": {
+          "type": "boolean"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "test_content": {
+          "additionalProperties": false,
+          "properties": {
+            "owner": {
+              "type": "string"
+            },
+            "ttl_hours": {
+              "type": [
+                "null",
+                "integer"
+              ]
+            }
+          },
+          "type": [
+            "null",
+            "object"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "title",
+        "body",
+        "tags",
+        "categories"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "create_preview",
+    "required_scope": "write",
+    "description": "Build the current source (optionally including drafts) into an isolated, non-public directory and expose it at a temporary preview entry URL for visual inspection. The entry URL is opaque (not a raw process ID), non-indexable (X-Robots-Tag: noindex), isolated from the public site (a dedicated build, never cfg.SiteRoot), and expires after ttl_seconds (default 900s, min 60s, max 3600s). On first open, the entry URL exchanges its token for an HttpOnly preview session cookie and redirects the browser to a clean `/preview/{id}/...` URL so internal asset and link requests no longer carry the bearer secret in every path. Preview builds run Hugo with `--environment preview` so templates can suppress preview-unsafe features such as share links. The response always echoes the actual applied TTL as `data.effective_ttl_seconds`; values outside the allowed range are clamped with a warning. Requires site.admin.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include_drafts": {
+          "type": "boolean"
+        },
+        "ttl_seconds": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "delete_page",
+    "required_scope": "write",
+    "description": "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "expected_revision": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "lang": {
+          "type": "string"
+        },
+        "response_mode": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "delete_page_asset",
+    "required_scope": "write",
+    "description": "Delete a file previously written into a Hugo page bundle directory by upload_page_asset. By default this targets bundle-local files only; set `scope:\"generated\"` to explicitly target the generated hero image at {HugoRoot}/static/images/{slug}-featured.jpg instead of the bundle directory. Non-dry-run calls require expected_sha256 (from upload_page_asset/list_page_assets) or expected_revision (the page bundle's own revision) as a concurrency guard; a mismatch fails with revision_conflict, telling the agent to re-check the current hash/revision via list_page_assets and retry. Before deleting, the asset reference is checked against every index.\u003clang\u003e.md file in the bundle: if referenced, the call fails with asset_referenced unless force=true is passed, so a still-linked image isn't silently broken. dry_run previews the asset's sha256 and whether it's referenced, without requiring expected_sha256/expected_revision and without deleting anything. Callers may provide idempotency_key to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. This only removes the source asset, not any built public copy or CDN cache — unlike delete_page, it does not purge; the asset stays reachable at its old URL until the next build. rate_limit_remaining reports the caller's remaining budget on delete_page's own destructive quota (#466), separate from create_page/update_page/upload_page_asset's shared quota. Requires content.write.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "expected_revision": {
+          "type": "string"
+        },
+        "expected_sha256": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "filename"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "diff_page",
+    "required_scope": "",
+    "description": "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository and a configured content root. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. `response_mode:\"compact\"` omits the full raw diff (and any full source fallback) in favor of a short `diff_summary`, so selection/audit passes can see that changes exist without paying for the unified diff unless they explicitly ask for standard mode. Use this before editing or reviewing a page.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "explain_structure",
+    "required_scope": "",
+    "description": "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. `response_mode:\"compact\"` keeps only the structural summary (summary, section counts, languages, taxonomy counts) and omits the heavier `recent_pages` examples and long `notes` list used for deeper onboarding. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "export_agent_context",
+    "required_scope": "",
+    "description": "Paginated export of page context bundles filtered by tag or category. Each page includes front matter, reading time, and lifecycle `state`. By default also includes full Markdown content, which caps `limit` at 10 pages to keep the response within MCP message size limits; set `include_body=false` to fetch metadata only (frontmatter + state, no Markdown) at a higher cap of 50 pages. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. Use this for bulk analysis or migration work across many pages; for a single page use build_agent_context instead, which additionally includes translations and related pages. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "include_body": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "include_terms": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "limit": {
+          "maximum": 50,
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "generate_hero_image",
+    "required_scope": "write",
+    "description": "Generate a hero/featured image for a page and save it to {HugoRoot}/static/images/{slug}-featured.jpg. `slug` accepts either the canonical public form (`/posts/example/`) or the source-key form (`posts/example`); language-prefixed public slugs are normalized to the same source key before writing. Uses local Go rendering (1200×675 JPEG, Unsplash photo background selected by title hash, dark gradient overlay, title, tags). Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo). This tool only writes the image file — it never touches page frontmatter. `data.public_path` is the ready-to-use featuredImage value; call update_page with featured_image=data.public_path afterwards to attach it (per language, for a bundle with translations), or the image will exist but never appear on the site's card/list views. `data.source_key` is the canonical page identifier after slug normalization, and `data.delete_slug` + `data.delete_scope` + `data.delete_filename` can be passed straight to delete_page_asset later to remove this generated file without re-deriving the cleanup contract.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "accent": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "style": {
+          "enum": [
+            "",
+            "tech",
+            "geo"
+          ],
+          "type": "string"
+        },
+        "subtitle": {
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_backlinks",
+    "required_scope": "",
+    "description": "Return all published pages that contain an internal link to the specified slug. Use this before delete_page (impact analysis) or when writing new content (find existing references). This is the same backlinks data get_related_content returns alongside related_pages/suggested_links/translations in one call — use this standalone version when you only need backlinks and want to avoid the cost of the other three facets. `index_staleness` is present only when the in-memory index is behind on-disk content (e.g. a manual Hugo build outside this server) — its absence means the index reflects current source; when present, treat the backlinks list as possibly outdated until the next build_site (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_broken_links",
+    "required_scope": "",
+    "description": "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets. `documents_scanned` is the canonical size of the rendered HTML surface this pass checked; the legacy `total_pages` field is kept for backward compatibility and mirrors the same value. `content_pages`/`taxonomy_pages`/`section_pages`/`other_documents` break that scan surface down by document class so agents don't have to guess what `total_pages` counted. `index_staleness` (in-memory path only, not the db_path path) is present only when the index is behind on-disk content — its absence means results reflect current source (#583). When present, `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` means this server has a known, expected write awaiting the next build_site/publish_changes; `\"external_or_unknown\"` means the disk changed with no such record on file — most plausibly an edit made outside this server (e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 100,
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_capabilities",
+    "required_scope": "",
+    "description": "Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): `server` (release version, commit, build channel, schema version); `languages` (default plus the languages present in the index); `limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); `allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (image generation, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). `features` reports only booleans/counts, never secrets, hook command strings, or host paths. Anonymous: no authentication needed, so capabilities can be discovered before obtaining a token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_changelog",
+    "required_scope": "",
+    "description": "Return CHANGELOG.md entries — the exact content embedded in this running binary at build time, so it always matches the deployed version with zero drift. Without arguments, returns the 5 most recent versioned releases (bounded by default rather than dumping the entire file). Pass `since_version` (e.g. \"v1.5.9\", with or without the leading \"v\") to get every release strictly newer than that version instead — an agent that last audited at v1.5.9 can request exactly what changed since then rather than re-testing the full tool surface. `limit` caps how many entries are returned either way (default 5, max 20). `response_mode:\"compact\"` is audit-oriented: when `limit` is omitted it defaults to 1 entry instead of 5, and omits each entry's raw Markdown `body`. Standard mode keeps each entry's `body` as the release section's raw Markdown (its own `###` subsections like Added/Fixed/Security, verbatim) rather than further parsed into structured fields — CHANGELOG.md's own formatting is the source of truth. Fails with `invalid_params` if `since_version` doesn't match any release heading in the file. Usable without authentication.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 20,
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "since_version": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_feed",
+    "required_scope": "",
+    "description": "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want a posts-only timeline. The two tools overlap deliberately; get_feed is the whole-site recency digest, get_recent_posts is the /posts/-scoped timeline (#570, #865).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 50,
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_mutation_status",
+    "required_scope": "write",
+    "description": "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change call that used idempotency_key actually succeeded — for recovering from a timeout or otherwise ambiguous response without resending the original mutation payload. `status: \"succeeded\"` means that exact call completed and `result` is its entire original response envelope (success/data/errors/warnings/meta, not just data), byte-identical to what a same-key/same-payload retry of the mutation tool itself would replay. `status: \"unknown\"` means there is no confirmed success on record for this tool+key right now — this does NOT mean the call failed: it equally covers still-in-flight, genuinely failed, expired (entries are retained 15 minutes on this server — a deployment-level setting, shared with the underlying idempotency cache), or never attempted with this key. Only successful calls are ever recorded here (failures are safe to simply retry). When in doubt, retrying the original mutation call with the same idempotency_key and payload is always safe regardless of what this tool reports — it will either replay the already-completed result or execute for the first time. Requires content.write.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "idempotency_key"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_page",
+    "required_scope": "",
+    "description": "Read a Hugo page by slug. Returns metadata, rendered HTML, and a short summary. By default only published pages are returned. Pass allow_source_fallback=true to also return source-index entries for pages not yet built (e.g. immediately after create_page, before the next Hugo build); draft pages are always excluded. `content_only` defaults to true (BREAKING as of this release — previously defaulted to false): the `html` field returns just the article body (prefers the theme's id=\"content\" wrapper when present, excluding title, TOC, post metadata, share buttons, and prev/next navigation; falls back to \u003carticle\u003e/\u003cmain\u003e/\u003cbody\u003e-minus-chrome otherwise) rather than the full rendered page including theme chrome (nav, footer, search widgets, share buttons, scripts) — the old default ran to several thousand tokens for a short article. Pass content_only=false explicitly to opt back into the full-page HTML. Cost note (#865): content_only=true only strips theme chrome — it still returns the page's entire article body, so on a long article the `html` field can still be very large (many thousands of tokens). The name bounds the *shape* (body vs full page), not the *size*. When you need a size-bounded read, prefer get_page_frontmatter (metadata only, no body) or get_page_markdown for the raw source; there is no server-side truncation of the returned body. (source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; with the default content_only=true, the `html` field is returned empty for source-only fallback results). `html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. For the raw Markdown source, use get_page_markdown (reader token on OAuth-enabled deployments); for metadata only (no body), use get_page_frontmatter; if you're about to edit or delete this page, use get_page_for_edit instead — it bundles frontmatter, markdown, revision, and quality signals in one call. `include_terms` defaults to true: `tag_terms`/`category_terms` are richer `{label,slug,source}` objects returned alongside the plainer `tags`/`categories` string arrays — the same information at 3-4x the size (#618). Pass include_terms=false to omit them when you only need the plain names. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "allow_source_fallback": {
+          "type": "boolean"
+        },
+        "content_only": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "include_terms": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_page_for_edit",
+    "required_scope": "",
+    "description": "Compact edit-oriented read: returns the core bundle an agent needs before modifying a page (frontmatter, markdown, lifecycle `state`, quality signals, and a stable `revision`) in a single call instead of chaining get_page_frontmatter + get_page_markdown + build_agent_context. `include: [...]` (subset of frontmatter, markdown, state, quality, backlinks, impact, preview, readiness; default still only the original four) and `max_body_chars` (rune-aware truncation of the markdown body; must be greater than 0 when provided) shape the response down. `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. `quality.valid`/`quality.broken_links` are omitted when quality wasn't requested or the caller's profile has no source access. `frontmatter.lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. immediately after create_page) — it no longer lags behind `frontmatter.resolved_lang` until the page is built. `frontmatter.featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated when set in source frontmatter, matching update_page's write parameter names for direct round-tripping. `page.backlinks` is identical to get_backlinks, `page.impact` is identical to get_related_content(include=[\"impact\"]), `page.preview` is identical to inspect_rendered(include_preview=true) when rendered output exists, and `page.readiness` is identical to check_ai_readiness's own check result for this slug — combining it with `preview`/`quality`/`backlinks` in one call covers the full pre-publish check (SEO/rendered validity, broken links, and source-structure quality) without three separate round-trips (#621). All four are opt-in only and never part of the default four-section bundle when `include` is omitted. Source-only pages omit `preview` with a warning instead of failing the whole bundle; a page with no matching source omits `readiness` the same way. Lower-level tools remain available; this is an addition, not a replacement. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "include_terms": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "lang": {
+          "type": "string"
+        },
+        "max_body_chars": {
+          "type": [
+            "null",
+            "integer"
+          ]
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_page_frontmatter",
+    "required_scope": "",
+    "description": "Read structured metadata for a published page, including title, tags, categories, date, URL, estimated reading time, and a `state` object describing source/build/public/index freshness. `featured_image`/`featured_image_preview`/`description`/`draft` (#817) are populated from source frontmatter when available and omitted (not a zero value) when unset or when only public output is resolvable — `featured_image`'s name matches update_page's `featured_image` write parameter for direct read-then-write round-tripping. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. `lang` is now populated immediately for a source-only page read back before the next Hugo build (e.g. right after create_page) — it no longer lags behind `resolved_lang` until the page is built. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same metadata alongside markdown, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include_terms": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "lang": {
+          "type": "string"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_page_markdown",
+    "required_scope": "",
+    "description": "Read the full Markdown-formatted content of a published page. Use this when you need the raw article body rather than rendered HTML. The response includes a `state` object so agents can tell whether they are reading built public content, source-only content, or stale source ahead of the last build. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. If you're about to edit or delete this page, prefer get_page_for_edit instead — it bundles this same Markdown body alongside frontmatter, revision, and quality signals in one call. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include_terms": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "lang": {
+          "type": "string"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_rate_limits",
+    "required_scope": "write",
+    "description": "Check your remaining per-caller mutation quota before acting, instead of only discovering it after a create_page/update_page/delete_page/... call already reports rate_limit_remaining. Reports both independent quotas: `create_update_upload` (shared by create_page/update_page/upload_page_asset/apply_content_plan/rollback_change) and `destructive` (shared by delete_page/delete_page_asset). Each bucket's `remaining`/`limit` are call counts; `retry_after_seconds` is 0 if a call would succeed right now, otherwise how long to wait. Calling this tool never itself consumes any quota. Requires content.write (this reports the same per-caller identity and budget the mutation tools themselves use, which isn't meaningful for a pure reader).",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_recent_posts",
+    "required_scope": "",
+    "description": "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication. Posts-only: this covers the /posts/ section specifically; for a site-wide digest spanning every published section (not only posts) use get_feed instead. get_feed and get_recent_posts overlap deliberately — pick get_recent_posts when you want a posts timeline and get_feed when you want a whole-site recency digest (#570, #865).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 50,
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_related_content",
+    "required_scope": "",
+    "description": "Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Pass `include: [\"impact\"]` for a pre-mutation impact summary (`impact.taxonomy_orphans`, `impact.sitemap_present`, `impact.feed_present`, `impact.aliases`) answering \"what does changing this page affect?\" before a risky edit/delete — advisory only, never blocks a mutation, same posture as get_broken_links (#434). `index_staleness` is present only when the underlying index (backing related_pages/backlinks) is behind on-disk content — its absence means it's current (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "limit": {
+          "maximum": 20,
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_runtime_status",
+    "required_scope": "write",
+    "description": "Report the actual runtime/build/git/site status of this server in one compact structured surface: server version and build commit, whether the hugo and git binaries are usable, the outcome of the most recent build_site attempt (last_build, omitted until build_site has been called at least once), and (opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) so cleanup does not depend on remembering to run a build first. When the git baseline is dirty, `data.git.dirty_classes` (#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, `preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` is the honest default for anything not confidently recognized). Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include_revisions": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_site_health",
+    "required_scope": "",
+    "description": "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `status` on an otherwise healthy site, while a `warning`-severity taxonomy finding still promotes `status` to `healthy_with_advisories` without moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own `git_untracked` status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_site_information",
+    "required_scope": "",
+    "description": "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_sitemap",
+    "required_scope": "",
+    "description": "Return the full published URL inventory (slug, URL, date) including taxonomy list pages (/tags/…, /categories/…). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. `exclude_taxonomies=true` narrows the scan scope to content pages only. `response_mode:\"compact\"` keeps the same pagination and scope but trims each row down to slug+url only. `summary_only=true` returns counts and scope breakdowns without any `entries`, so callers can inspect inventory size cheaply without paying for a full row list. For content-page browsing with titles and summaries use list_pages.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "exclude_taxonomies": {
+          "type": "boolean"
+        },
+        "limit": {
+          "maximum": 200,
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "summary_only": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_storage_health",
+    "required_scope": "write",
+    "description": "Advisory-only storage/integrity health check (#861). Returns machine-readable findings — each with a stable `code`, `severity`, and `resource_class` — for residue that accumulates outside a page's own content bundle: `orphaned_generated_asset` (a generate_hero_image `{slug}-featured.jpg` under static/images whose owning page no longer exists in the index) and `expired_preview_residue` (an mcp-preview-* directory still on disk with no live preview backing it, e.g. after a restart). NEVER deletes anything: `data.auto_delete` is always false; use delete_page_asset (scope=generated) or revoke_preview to act on a finding. Host-safe: generated assets report a hugo_root-relative logical path, preview residue reports only an opaque directory basename — never an absolute host path. Requires site.admin.",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "get_theme_status",
+    "required_scope": "write",
+    "description": "Report the active Hugo theme(s) or module imports, whether their on-disk source is present, and (for classic themes/ directory installs) the pinned Git commit and dirty/local-override state. Read-only — never installs, updates, or fetches theme code from a URL.",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "inspect_preview",
+    "required_scope": "write",
+    "description": "Inspect rendered HTML/SEO/security checks against an isolated preview build for an unpublished or draft page. Requires preview_id from create_preview and a page slug/source key. Returns explicit preview-scoped context so callers do not confuse preview inspection with public availability. Requires site.admin.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "preview_id": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "preview_id"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "inspect_rendered",
+    "required_scope": "",
+    "description": "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `\u003cimg\u003e` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `\u003cimg\u003e` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered \u003clink\u003e tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include_preview": {
+          "type": "boolean"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_categories",
+    "required_scope": "",
+    "description": "List the categories discovered from the index. Returns a sorted category list and does not require authentication.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_content_types",
+    "required_scope": "",
+    "description": "Discover the site's Hugo content types/sections: which archetype template (if any) governs new pages of each type, what front matter fields are expected (union of the archetype's declared fields and fields observed on existing pages of that type), and how many source pages of each type currently exist. Use this before create_page on an unfamiliar site instead of guessing section/front matter conventions. `page_count` and observed-page-derived fields are omitted for the reader profile; archetype-derived fields (site configuration, not page content) remain visible. Hugo section-index files (`_index.md`/`_index.\u003clang\u003e.md`, including the site's homepage) are never listed in `content_types` — they're structural, not a creatable content type — but remain discoverable under `special_files`, where `section: \"\"` specifically means the site's root/home index (not a missing value). A root-level single-file page (e.g. `content/some-slug.md`, directly under the content root rather than under a section directory) is listed as its own one-off content type named after its own slug, with `page_count: 1` — this is by design (top-level sections are derived from page slugs, #642), not a bug, but means a single stray or throwaway root-level page will show up as a distinct \"type\" alongside real, established sections. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_page_assets",
+    "required_scope": "",
+    "description": "List the sibling files (images, etc.) stored alongside a Hugo page bundle's index.md, e.g. cover.webp next to content/posts/article/index.md. Only leaf page bundles have an asset directory; single-file pages (slug.md, no per-page directory) fail with not_a_bundle. Responses also surface generated hero images separately under data.generated_assets when {HugoRoot}/static/images/{slug}-featured.jpg exists, so agents can distinguish bundle-local files from globally generated static assets. Use before upload_page_asset to check what already exists, or before delete_page_asset to get the current sha256/revision for its expected_sha256/expected_revision concurrency guard. The on-disk bundle directory is a source-derived signal unavailable to the reader profile even when the page itself is public; readers receive an empty assets list instead of an error. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_page_revisions",
+    "required_scope": "",
+    "description": "List the prior git commits that touched a page's source file, most recent first — the read-side \"what could I revert to\" answer, independently useful (e.g. to compare diff_page against an older revision, not just HEAD) and a smaller, lower-risk first step before any write-path rollback tool. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 100,
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_pages",
+    "required_scope": "",
+    "description": "Browse published content pages (articles and pages, not taxonomy list pages) with pagination. Returns slug, title, summary, tags, categories, date, URL. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. For the full URL inventory including taxonomy pages use get_sitemap.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "maximum": 50,
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_previews",
+    "required_scope": "write",
+    "description": "List currently active preview sessions with owner and expiry metadata, plus current usage against the configured caps (caller_active_count/max_previews_per_caller and preview_disk_used_bytes/preview_disk_max_bytes) so an agent can self-regulate before create_preview refuses a new preview at a cap boundary (#871). Returns clean preview URLs without re-emitting the entry token; the entry token is single-use — once its session has fetched content it can no longer mint a new session, so a leaked entry URL that was already opened is inert, but use revoke_preview to cut off access to an active preview immediately. Requires site.admin.",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "list_tags",
+    "required_scope": "",
+    "description": "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "plan_bundle_change",
+    "required_scope": "",
+    "description": "Preview a multi-translation edit to a whole page bundle (content/\u003cslug\u003e/) as one editorial unit, without writing anything. Provide per-translation `operations` (same vocabulary as plan_content_change) keyed by `lang` (\"\" = default index.md). Returns a single `bundle_revision` anchor over the entire bundle directory plus per-translation diffs, and a `plan_id` (single-use, 5-minute TTL) to pass to apply_bundle_plan. Rejects `not_a_bundle` for leaf multilingual pages (slug.\u003clang\u003e.md with no directory) — use plan_content_change per translation for those. Requires no scope — planning never writes (mirrors plan_content_change, #450).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "slug": {
+          "type": "string"
+        },
+        "translations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "lang": {
+                "type": "string"
+              },
+              "operations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "body": {
+                      "type": "string"
+                    },
+                    "draft_value": {
+                      "type": [
+                        "null",
+                        "boolean"
+                      ]
+                    },
+                    "field": {
+                      "type": "string"
+                    },
+                    "op": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "op"
+                  ],
+                  "type": "object"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              }
+            },
+            "required": [
+              "lang",
+              "operations"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "required": [
+        "slug",
+        "translations"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "plan_content_change",
+    "required_scope": "",
+    "description": "Preview a set of discrete edits to an existing page — update_body, set_title, add_tag/remove_tag, add_category/remove_category, set_draft, set_field (field: \"description\" only) — without writing anything. add_tag/remove_tag/add_category/remove_category compute a delta against the page's current tags/categories, so you only send what's changing, not the full list. Operations that don't apply cleanly (e.g. remove_tag for a tag the page doesn't have) are reported in `data.operations_rejected` without failing the whole plan. If the page still carries `test_content: true`, any planned `set_draft:false` is rejected during validation — test content must remain non-publishable while that marker is present (#728). Returns `data.plan_id`, a server-held, single-use preview that expires after 5 minutes (`data.plan_expires_at`); pass it to apply_content_plan to write exactly what was previewed, nothing re-derived. `data.diff`/`data.estimated_diff` show exactly what would change, computed the same way update_page's dry_run does. Requires no scope — planning never writes (#450).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "lang": {
+          "type": "string"
+        },
+        "operations": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "draft_value": {
+                "type": [
+                  "null",
+                  "boolean"
+                ]
+              },
+              "field": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "op"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "operations"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "plan_page",
+    "required_scope": "",
+    "description": "Pre-writing scaffold bundling three calls into one, before you write the first line of a new article: `content_types`/`special_files` (identical to list_content_types — the expected archetype and front matter fields for the site's content types), `relevant_tags`/`relevant_categories` (the subset of the site's existing tag/category vocabulary matching `topic` or any of the submitted `tags`/`categories`, via a case-insensitive substring match in either direction — this also surfaces an existing differently-cased spelling for a tag/category you're about to introduce, e.g. submitting `tags: [\"Debug\"]` when the index already has \"debug\" returns \"debug\" in `relevant_tags\"`). This vocabulary now comes from the same source as `list_tags`/`list_categories`: source index when available to a write-capable caller, otherwise the public index, with taxonomy aliases folded to their canonical form first. `suggested_links` remains identical to suggest_links — internal-linking candidates scored by shared tags/categories, using `topic` as the body-mention text — and is returned when at least one of `tags`/`categories` is provided (omitted with `empty_links_reason` when neither is set, since suggest_links itself requires at least one to score anything). `language` filters suggestions to one language and `one_per_source_key=true` collapses translation siblings to one conceptual recommendation while preserving the default backward-compatible ungrouped behavior — both are applied against the full scored candidate pool, not a pre-truncated one, so a matching lower-ranked candidate is never lost to `suggestion_limit` before the filter runs; `suggestion_limit` narrows only the final suggestion list. `response_mode:\"compact\"` keeps planning guidance but trims heavyweight content-type detail. All three facets are read-only and reuse the exact same underlying logic as their standalone tools — nothing here is a new heuristic beyond the tag/category substring match and optional translation grouping. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "language": {
+          "type": "string"
+        },
+        "one_per_source_key": {
+          "type": "boolean"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "suggestion_limit": {
+          "type": "integer"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "topic": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "preview_build",
+    "required_scope": "write",
+    "description": "Run a non-destructive Hugo preview build with render-to-memory semantics. Use this to validate the site without writing build artifacts.",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "publish_changes",
+    "required_scope": "write",
+    "description": "Build the site and confirm a page is actually live — bundles build_site + verify_publication into one explicit, separately-confirmed step. Never auto-chained onto apply_content_plan/update_page; publishing is always its own deliberate call (#340). `data.status` is \"published\" only when the build succeeds cleanly (no failed post-build callback — e.g. a CDN purge failure could leave stale bytes cached at the edge even though local files are fresh) and verify_publication's own check comes back \"fresh\" (source/build/public/index all agree and, if `site_url` is configured, the live HTTP response confirms it). If verify_publication reports an intentional exclusion (for example a `draft:true` or protected `test_content` page), `data.status` is `intentionally_unpublished` and `data.reason_code` mirrors the publication reason. Any other non-fresh publication result reports \"build_succeeded_unverified\" — the build did not fail outright, but publication isn't confirmed clean yet (see `data.build.warning` for a callback failure and `data.publication.status`/`data.publication.explanation` for which publication stage is behind). A failed build surfaces as a tool error (`build_error`/`build_in_progress`), identical to `build_site`'s own behavior — it never reaches `data.status`. Optional `wait_seconds` is forwarded to verify_publication's own local settle-then-check wait (bounded server-side). Writes only build output and derived indexes — never touches page source; that's `apply_content_plan`/`update_page`'s layer.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "slug": {
+          "type": "string"
+        },
+        "wait_seconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "revoke_all_previews",
+    "required_scope": "write",
+    "description": "Revoke every active preview and delete all isolated preview directories. Requires site.admin.",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    }
+  },
+  {
+    "name": "revoke_preview",
+    "required_scope": "write",
+    "description": "Revoke one active preview by preview_id and delete its isolated build directory. Requires site.admin.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "preview_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "preview_id"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "rollback_bundle",
+    "required_scope": "write",
+    "description": "Restore every translation of a page bundle to a prior bundle revision a previous apply_bundle_plan produced, atomically. `to_bundle_revision` must be a revision apply_bundle_plan snapshotted (24-hour retention); otherwise `snapshot_not_found`. Non-dry-run calls require `expected_bundle_revision` (the bundle's current revision) — a stale value fails `bundle_conflict`, so this can never silently undo a newer change. All translations restore together or none do. `idempotency_key` safely replays; `dry_run` previews. Writes source only. Named rollback_bundle (not rollback_bundle_change) to stay within the 20-char connector tool-name budget (#329).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "expected_bundle_revision": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "to_bundle_revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "to_bundle_revision"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "rollback_change",
+    "required_scope": "write",
+    "description": "Restore a page's source to a prior revision this server's own apply_content_plan produced. `to_revision` must be a revision apply_content_plan previously wrote — not arbitrary git history (this deployment has no controlled git-commit capability; see #379). Fails with `snapshot_not_found` if no snapshot was captured for that revision of this page (only revisions produced by apply_content_plan are ever snapshotted, with a 24-hour retention) or the resolved file/language doesn't match what the snapshot was captured for. Non-dry-run calls require `expected_revision`, the page's *current* revision — a stale value fails with `revision_conflict`, the same optimistic-concurrency guard every other write tool uses, so this can never silently undo a newer, unrelated change. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run rollback after a timeout or uncertain delivery. `dry_run` previews the diff without writing. Writes source only — like apply_content_plan, does not build/publish; call publish_changes afterward. `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "expected_revision": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "lang": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "to_revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "to_revision"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "run_post_build_hooks",
+    "required_scope": "write",
+    "description": "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Set `dry_run:true` to inspect the configured hook targets without contacting them; this returns the same `results[]` URL list plus `configured_count`, making `no hooks configured` distinguishable from `hooks configured but intentionally not executed`. `data.status` is `no_hooks_configured` when zero hooks are configured, `dry_run` when hooks are configured but intentionally not contacted, and `completed` when one or more hooks were actually attempted. Only configured URLs are ever reported or contacted.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_content",
+    "required_scope": "",
+    "description": "Filtered search across published content with type, tag, category, language, sort, and pagination. Returns a structured envelope with total count. When db_path is configured, uses FTS5 full-text search with ranked results and snippets. Also matches body text, unlike search_pages. `include_terms` defaults to true: pass `include_terms=false` to omit `tag_terms`/`category_terms` and keep only the plainer `tags`/`categories` arrays; `response_mode:\"compact\"` implies the same omission. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Prefer this tool over search_pages whenever you already have a reader token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "include_terms": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "language": {
+          "type": "string"
+        },
+        "limit": {
+          "maximum": 100,
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "order": {
+          "type": "string"
+        },
+        "query": {
+          "type": "string"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "sort": {
+          "type": "string"
+        },
+        "tag": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "search_pages",
+    "required_scope": "",
+    "description": "Keyword search across published pages (title, summary, tags, categories, URL). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Published-content alternative to search_content — if you already have a reader token, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Matching is intentionally broad: any page containing at least one query term in any indexed field is returned, ranked by `score` (count of matching terms, highest first) — it is not an exact-match search. Each result's `score` field indicates match strength; a low score means a loose/partial match. Use `match: \"title_exact\"` for a strict case-insensitive full-title match instead (e.g. to verify whether a specific page still exists after deleting it), which returns zero results rather than loosely related hits when there's no exact title match. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "limit": {
+          "maximum": 50,
+          "type": "integer"
+        },
+        "match": {
+          "enum": [
+            "",
+            "any",
+            "title_exact"
+          ],
+          "type": "string"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "query": {
+          "type": "string"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "suggest_links",
+    "required_scope": "",
+    "description": "Recommend existing published pages to link from a draft or existing page, based on shared tags and categories. Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. Optionally include body to detect pages whose titles already appear in the text (body_mention: true). Returns ranked suggestions with anchor_text and shared taxonomy context. Use this specifically for a draft not yet indexed (via tags/categories/body); for an already-published page, get_related_content's suggested_links field covers the same case alongside backlinks/related_pages/translations in one call. When suggested_links comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "limit": {
+          "maximum": 20,
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "update_page",
+    "required_scope": "write",
+    "description": "Update an existing Hugo content page while preserving unspecified front matter fields. Use title/body to revise content. Use tags/categories/draft/description/featured_image to update front matter fields. `data.changed` (#860) is an explicit no-op signal: it is `false` when the resulting content is byte-identical to what was already on disk (the call succeeded but changed nothing) and `true` when the page was actually modified — present on both `dry_run` and real writes, so a caller never has to diff revisions itself to tell a no-op apart from a real edit. `featured_image` sets the theme's `featuredImage` frontmatter key to a local public path — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); sending `featured_image:\"\"` explicitly clears that frontmatter key, while omitting the field leaves it unchanged (#825, #835). `tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` (including on `dry_run`) if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "categories": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "description": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "draft": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "expected_revision": {
+          "type": "string"
+        },
+        "featured_image": {
+          "type": [
+            "null",
+            "string"
+          ]
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "lang": {
+          "type": "string"
+        },
+        "normalize_taxonomy_casing": {
+          "type": "boolean"
+        },
+        "slug": {
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "upload_page_asset",
+    "required_scope": "write",
+    "description": "Write a new file (image, etc.) into an existing Hugo page bundle directory, alongside its index.md. Only leaf page bundles (content/\u003cslug\u003e/index.md) have an asset directory; single-file pages (content/\u003cslug\u003e.md) fail with not_a_bundle. Allowed types: png, jpg, jpeg, gif, webp, svg. Content is provided as base64 in content_base64 (max 10MB decoded); for png/jpg/jpeg/gif/webp the bytes are sniffed to confirm they actually match the declared extension, never trusting a caller-supplied content type. svg uploads are validated by a strict structural parser instead (byte-sniffing can't distinguish SVG from arbitrary XML/text): only an allowlisted set of shape/text/gradient elements and attributes is accepted, event-handler attributes (onload, etc.), \u003cscript\u003e, \u003cforeignObject\u003e, \u003cstyle\u003e, \u003cimage\u003e, external href/xlink:href references (only a local \"#id\" fragment reference is allowed), and DOCTYPE/entity declarations are all rejected outright with invalid_svg — never silently stripped and written as a modified file. This is intentionally strict enough that a typical design-tool export (Figma/Illustrator/Inkscape \u003cstyle\u003e blocks, \u003cmetadata\u003e, editor-namespace attributes) will likely fail invalid_svg; optimize/minify the SVG first if that happens. This tool never overwrites: fails with already_exists if filename is already taken in this bundle. If identical content already exists under a different filename in the same bundle, the response includes duplicate_of as an advisory only — the file is still written under the requested name. Callers may provide idempotency_key to safely replay the exact same upload after a timeout or uncertain delivery. rate_limit_remaining reports the caller's remaining budget on the shared create_page/update_page/upload_page_asset quota (#466); if exceeded, the error's resolution.retry_after_seconds gives a concrete wait time instead of forcing you to guess a safe pacing. Requires content.write.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "content_base64": {
+          "type": "string"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "filename",
+        "content_base64"
+      ],
+      "type": "object"
+    }
+  },
+  {
+    "name": "validate_frontmatter",
+    "required_scope": "",
+    "description": "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. When a slug maps to a multilingual bundle, the default is bundle-wide validation across every translation sharing that source key; pass `lang` to restrict validation to one translation explicitly. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "lang": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "validate_site",
+    "required_scope": "",
+    "description": "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "include_valid": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "invalid_only": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "limit": {
+          "type": "integer"
+        },
+        "offset": {
+          "type": "integer"
+        },
+        "response_mode": {
+          "enum": [
+            "",
+            "standard",
+            "compact"
+          ],
+          "type": "string"
+        }
+      },
+      "type": "object"
+    }
+  },
+  {
+    "name": "verify_publication",
+    "required_scope": "write",
+    "description": "Prove that a page's source, build, public HTML output, and in-memory index all correspond to the same intended revision, and that the public HTTP surface is actually serving it. Answers 'is the public site actually serving the intended change?' without requiring SSH access to the host. Optional `wait_seconds` polls the local source/build/public/index state (bounded server-side to a small maximum, echoed back in the response if your request was clamped) and returns as soon as it settles, instead of always checking once and leaving you to poll it yourself across multiple calls; it only smooths a page the index already knows about catching up after an edit — a brand-new page the index hasn't picked up yet will not resolve mid-wait no matter how long you wait. Omit `wait_seconds` to preserve the original single point-in-time check. Requires site.admin because it makes one outbound HTTP request to the configured site_url.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "slug": {
+          "type": "string"
+        },
+        "wait_seconds": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  }
+]
