@@ -63,6 +63,41 @@ func TestUpdatePageStaleBundleRevisionRejects(t *testing.T) {
 	}
 }
 
+// TestUpdatePageBundleRevisionOnLeafPageRejected — the guard is only meaningful
+// on a multi-file bundle. Supplying expected_bundle_revision on a LEAF page
+// (a single content/<...>.md file, no bundle directory) must fail loudly with
+// invalid_params, not silently no-op or crash, and must NOT modify the file.
+func TestUpdatePageBundleRevisionOnLeafPageRejected(t *testing.T) {
+	contentRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	leafPath := filepath.Join(contentRoot, "posts", "leaf.md")
+	if err := os.WriteFile(leafPath,
+		[]byte("---\ntitle: Leaf\n---\nOriginal leaf body.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	before := readFileString(t, contentRoot, "posts/leaf.md")
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":                     "posts/leaf",
+		"body":                     "Rewritten leaf body.",
+		"expected_revision":        currentRevision(t, leafPath),
+		"expected_bundle_revision": "sha256:deadbeef",
+	})
+	if !res.IsError {
+		t.Fatalf("expected_bundle_revision on a leaf page should fail, got: %s", marshalContent(t, res))
+	}
+	if body := marshalContent(t, res); !strings.Contains(body, "invalid_params") {
+		t.Fatalf("leaf-page bundle guard error should be invalid_params, got: %s", body)
+	}
+	if after := readFileString(t, contentRoot, "posts/leaf.md"); after != before {
+		t.Fatalf("leaf file must not be modified on invalid_params; before=%q after=%q", before, after)
+	}
+}
+
 // TestUpdatePageMatchingBundleRevisionSucceeds — AC3 case (c): a current,
 // matching expected_bundle_revision succeeds normally and writes the file.
 func TestUpdatePageMatchingBundleRevisionSucceeds(t *testing.T) {
