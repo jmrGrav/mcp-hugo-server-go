@@ -49,7 +49,14 @@ detail matters for runtime setup.
 | **Build (publish changes)** | `build_site` | Required after write ops |
 | Preview the build output | `preview_build` | Dry-run build |
 | Run post-build hooks (CDN purge, etc.) | `run_post_build_hooks` | After `build_site` |
-| Generate a featured image | `generate_hero_image` | write scope |
+| Generate a featured image | `generate_hero_image` | write scope; response feeds directly into `delete_page_asset` for cleanup |
+| **Preview a draft/unpublished page before it's public** | `create_preview` | Isolated build behind a single-use, token-gated URL |
+| Audit rendered output of an unpublished preview | `inspect_preview` | Same checks as `inspect_rendered`, run against a `preview_id` |
+| Check/manage currently active previews | `list_previews`, `revoke_preview`, `revoke_all_previews` | Revoke immediately if a preview URL leaked |
+| **Edit both translations of a bilingual page atomically** | `plan_bundle_change` → `apply_bundle_plan` | All-or-nothing across every translation in a bundle; `rollback_bundle` to undo |
+| Check for orphaned assets / preview residue | `get_storage_health` | Advisory-only, never deletes |
+| Discover runtime limits/features before acting | `get_capabilities` | No auth |
+| Check remaining mutation quota before a write | `get_rate_limits` | Never itself consumes quota |
 
 ---
 
