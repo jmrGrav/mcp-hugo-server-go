@@ -3,6 +3,7 @@ package read_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -128,6 +129,89 @@ func TestValidateAIReadinessRejectsBlankSlug(t *testing.T) {
 	}
 	if got := errors[0].(map[string]any)["code"]; got != "missing_required_parameter" {
 		t.Fatalf("error code = %v, want missing_required_parameter", got)
+	}
+}
+
+// TestValidateAIReadinessLangSelectsTranslation is the #866-item-6 / #850
+// regression: check_ai_readiness must honour an explicit `lang` and audit the
+// requested translation of a bilingual bundle, not implicitly resolve the same
+// one regardless. This is the resolution path the cross-language leak #867
+// lived in, so the test asserts en and fr resolve to *genuinely different*
+// translation files (resolved_lang + resolved_source_path both diverge). It
+// fails red against the pre-fix implicit-only resolver.Resolve(slug) call,
+// which ignored `lang` and returned one translation for both requests.
+func TestValidateAIReadinessLangSelectsTranslation(t *testing.T) {
+	contentRoot := t.TempDir()
+	writePage(t, contentRoot, "posts/bilingual/index.en.md", `---
+title: English Title
+date: 2026-07-19
+summary: English summary structured for agents.
+tags: [mcp]
+categories: [docs]
+---
+
+## Context
+
+English body with a [reference](/posts/other/).
+
+## Details
+
+English details, kept short.
+`)
+	writePage(t, contentRoot, "posts/bilingual/index.fr.md", `---
+title: Titre Français
+date: 2026-07-19
+summary: Résumé français structuré pour les agents.
+tags: [mcp]
+categories: [docs]
+---
+
+## Contexte
+
+Corps français avec une [référence](/posts/other/).
+
+## Détails
+
+Détails français, gardés courts.
+`)
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+
+	session, done := newTestClientWithCfg(t, nil, cfg, srcIdx)
+	defer done()
+
+	enRes := callTool(t, session, "check_ai_readiness", map[string]any{"slug": "posts/bilingual", "lang": "en"})
+	if enRes.IsError {
+		t.Fatalf("check_ai_readiness(lang=en) returned error: %v", enRes.Content)
+	}
+	frRes := callTool(t, session, "check_ai_readiness", map[string]any{"slug": "posts/bilingual", "lang": "fr"})
+	if frRes.IsError {
+		t.Fatalf("check_ai_readiness(lang=fr) returned error: %v", frRes.Content)
+	}
+	enData := decodeContent(t, enRes)
+	frData := decodeContent(t, frRes)
+
+	if enData["resolved_lang"] != "en" {
+		t.Fatalf("en resolved_lang = %v, want en", enData["resolved_lang"])
+	}
+	if frData["resolved_lang"] != "fr" {
+		t.Fatalf("fr resolved_lang = %v, want fr", frData["resolved_lang"])
+	}
+	if enData["resolved_lang"] == frData["resolved_lang"] {
+		t.Fatalf("lang was ignored: en and fr resolved to the same translation %v", enData["resolved_lang"])
+	}
+	enPath, _ := enData["resolved_source_path"].(string)
+	frPath, _ := frData["resolved_source_path"].(string)
+	if !strings.HasSuffix(enPath, "index.en.md") {
+		t.Fatalf("en resolved_source_path = %q, want suffix index.en.md", enPath)
+	}
+	if !strings.HasSuffix(frPath, "index.fr.md") {
+		t.Fatalf("fr resolved_source_path = %q, want suffix index.fr.md", frPath)
 	}
 }
 
