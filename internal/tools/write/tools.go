@@ -973,14 +973,14 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		idemHash := ""
 		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
 			hash, hashErr := requestHash(struct {
-				Slug             string   `json:"slug"`
-				Lang             string   `json:"lang,omitempty"`
-				Title            string   `json:"title,omitempty"`
-				Body             string   `json:"body,omitempty"`
-				Tags             []string `json:"tags,omitempty"`
-				Categories       []string `json:"categories,omitempty"`
-				Draft            *bool    `json:"draft,omitempty"`
-				Description      *string  `json:"description,omitempty"`
+				Slug                   string   `json:"slug"`
+				Lang                   string   `json:"lang,omitempty"`
+				Title                  string   `json:"title,omitempty"`
+				Body                   string   `json:"body,omitempty"`
+				Tags                   []string `json:"tags,omitempty"`
+				Categories             []string `json:"categories,omitempty"`
+				Draft                  *bool    `json:"draft,omitempty"`
+				Description            *string  `json:"description,omitempty"`
 				FeaturedImage          *string  `json:"featured_image,omitempty"`
 				ExpectedRevision       string   `json:"expected_revision,omitempty"`
 				ExpectedBundleRevision string   `json:"expected_bundle_revision,omitempty"`
