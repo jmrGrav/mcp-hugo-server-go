@@ -2,6 +2,36 @@
 
 All notable changes to this project are documented here.
 
+## [v1.7.7] - 2026-08-05
+
+Full security + agent-ergonomics hardening pass (16-item cycle, #866), delivered as 9 independently-reviewed PRs (#867-879). Every PR was reviewed by a separate agent with no access to the implementer's reasoning before merge; several real bugs were caught and fixed in review rather than shipped — see notes below.
+
+### Security
+- **Cross-language content leak in `ResolveWithLang`** (#867): a self-contradictory request (e.g. an `/en/` URL paired with `lang="fr"`) resolved straight through to the English page instead of correctly reporting not-found, leaking wrong-language content through `get_page_markdown`/`get_page_frontmatter`/`build_agent_context`/`get_page_for_edit`.
+- **Shared URL/path validator for URL-like frontmatter** (#855): generalizes the `featured_image` charset-allowlist fix from v1.7.6 into one `internal/urlpolicy` package (`LocalOnly`/`ExternalAllowed` policies), rejecting `javascript:`/`data:`/`vbscript:`/`file:`/protocol-relative URLs and HTML metacharacters consistently rather than per-field. Caught in review: the `ExternalAllowed` branch initially had no metacharacter guard at all — closed before merge, though not yet reachable from any live caller.
+- **Preview session hardening — single-use entry tokens + per-caller/disk limits** (#853/#871): the preview entry token is now retired once its session is confirmed in active use (activation-gated, not naively invalidated on first exchange, so legitimate reload/second-tab/retry still work), and `create_preview` now enforces a configurable per-caller active-preview cap and global disk-usage cap, both with explicit rejection signals rather than silent limits.
+- **Rendered-output security checks now flag `vbscript:` URLs** (CodeQL alert #11), closing an incomplete-URL-scheme-check finding alongside the existing `javascript:`/`data:` checks shared by `inspect_rendered` and the new `inspect_preview`.
+- **Data race in `previewstore.Store.GetBySession`** (found independently twice, in #868 and again in a stale-based #870/#871): `SessionToken`/`sessionActivated` were read outside the mutex while `EstablishSession` mutates them under lock — fixed with a snapshot-under-lock pattern, verified clean under `go test -race -count=30`.
+- **CI contract snapshots + adversarial integration matrix** (#862): a golden-file snapshot of every published tool's name/scope/description/schema now fails CI on unintended drift; new adversarial tests exercise title-XSS, malicious `featured_image`, bilingual mutation isolation, and early-error rate-limit accuracy through the real MCP `tools/call` boundary. Caught in review: one adversarial test asserted only `IsError=true`, so it stayed green even with its target validator fully neutered — tightened to assert on the specific rejection reason.
+- **`update_page` gains an optional `expected_bundle_revision` guard** (#857 AC3): rejects a mutation if a sibling translation or bundle-local asset changed since the caller last read the bundle, reusing the `contentmodel.BundleRevision` primitive. Purely additive — omitting the field is a byte-for-byte no-op versus the previous behavior.
+
+### Agent ergonomics / observability
+- **`bundle_revision`** exposed on `get_page_for_edit`, covering an entire page bundle (all translations + bundle-local assets) as one optimistic-concurrency unit (#857).
+- **Bundle-level transactional mutations** — `plan_bundle_change`/`apply_bundle_plan`/`rollback_bundle` update a multilingual bundle atomically: validates every translation before writing any, rolls back already-written files on a mid-apply failure (#854). Documented as runtime, not crash, atomicity — no POSIX multi-file rename guarantee.
+- **`build_site` reports stage- and page-aware detail**: `data.stages` (Hugo build, output swap, source/public index reload, per-callback outcomes) and `data.pages` (included/excluded_drafts/deleted_outputs), purely additive to the existing response (#858).
+- **`get_capabilities`** — machine-readable runtime limits and feature discovery (#859).
+- **`get_storage_health`** — advisory-only detection of orphaned generated assets, expired preview residue, and source/index/public inconsistencies (#861).
+- **Contract observability**: `request_id`/`duration_ms` on every response envelope, explicit `changed:false` no-op signal on `update_page` (#860).
+- **`rate_limit_remaining`** converged on one canonical source of truth between the root scalar and the structured bucket (#852); a review-added regression test closed a gap where only the error path, not the success path, was pinned.
+- **Git dirty-state classified by safe resource class** with a conservative catch-all bucket, so an unrecognized path can never be mislabeled safe (#864).
+- **`check_ai_readiness`** gains an explicit `lang` parameter, matching the other multilingual read tools (#850, closed via #879).
+- **`inspect_preview`** (formerly scoped as `inspect_rendered_page` for previews) — rendered-inspection for draft/test-content pages via their isolated preview build, without needing to publish first (#863).
+- **Generated hero-image delete contract**: `generate_hero_image`'s response now feeds directly into `delete_page_asset`'s arguments (`source_key`/`delete_slug`/`delete_scope`/`delete_filename`), closing a previously-manual cleanup gap (#845).
+- Sharpened feed/recent/readiness/get_page semantics and cost-signaling documentation (#865); clarified sitemap/broken-link scan contracts with typed document-class counters (#848/#849); explicit `intentionally_unpublished`/`no_hooks_configured` lifecycle states (#847/#851).
+
+### Internal
+- Every PR in this cycle went through an independent review pass (separate agent, no access to implementer reasoning) before merge, in addition to the required CI gates.
+
 ## [v1.7.6] - 2026-08-03
 
 Batch of five hardening/correctness fixes from independent live-agent audits (Sol/OpenAI, cross-checked by Claude sessions) against production, all reviewed and, where the audit's own proposed fix fell short, corrected before merge — see #830/#831 for the two issues resolved earlier in this cycle without a Go change (stored XSS and preview-token/security-header leak, the latter partly closed here too via #844).
