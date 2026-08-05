@@ -48,6 +48,7 @@ package contracttests
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -99,6 +100,16 @@ func TestAdversarialMaliciousFeaturedImageRejectedAtToolBoundary(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatalf("update_page with malicious featured_image succeeded, want rejection: %s", marshalAny(t, res.Content))
+	}
+	// The rejection must come from featured_image validation (the #855 urlpolicy
+	// validator wired into update_page) — not from an unrelated precondition.
+	// update_page validates featured_image *before* the expected_revision check,
+	// so this call (which omits expected_revision) would also error with
+	// missing_required_parameter if the validator were removed; asserting only
+	// res.IsError would pass either way and silently stop testing #855. Pin the
+	// error to the featured_image field so a neutered validator goes red here.
+	if body := marshalAny(t, res.Content); !strings.Contains(body, "featured_image") {
+		t.Fatalf("update_page rejected the payload, but not via featured_image validation (contract regression — #855 may be unwired): %s", body)
 	}
 	after, err := os.ReadFile(pagePath)
 	if err != nil {
