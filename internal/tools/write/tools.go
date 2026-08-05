@@ -134,8 +134,16 @@ type updatePageInput struct {
 	FeaturedImage           *string `json:"featured_image,omitempty"`
 	NormalizeTaxonomyCasing bool    `json:"normalize_taxonomy_casing,omitempty"`
 	ExpectedRevision        string  `json:"expected_revision,omitempty"`
-	IdempotencyKey          string  `json:"idempotency_key,omitempty"`
-	DryRun                  bool    `json:"dry_run,omitempty"`
+	// ExpectedBundleRevision (#857 AC3) is an OPTIONAL, additive whole-bundle
+	// guard on top of the per-file ExpectedRevision. When supplied on a page
+	// bundle (content/<slug>/), the write is rejected with bundle_conflict if
+	// ANY sibling translation or bundle-local asset changed since the caller
+	// last read the bundle (the contentmodel.BundleRevision anchor). When
+	// omitted, behavior is 100% unchanged — every existing caller sees zero
+	// difference.
+	ExpectedBundleRevision string `json:"expected_bundle_revision,omitempty"`
+	IdempotencyKey         string `json:"idempotency_key,omitempty"`
+	DryRun                 bool   `json:"dry_run,omitempty"`
 }
 
 type updatePageOutput struct {
@@ -842,6 +850,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
 			"Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); " +
 			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. " +
+			"Optionally, on a page bundle (content/<slug>/), also pass `expected_bundle_revision` (the `bundle_revision` from a prior get_page_for_edit) to additionally guard against a *sibling* translation or bundle-local asset changing since you read the bundle — a stale value fails with `bundle_conflict`, distinct from `revision_conflict` so a caller passing both tokens can tell which one tripped; omitting it is fully backward-compatible and leaves behavior unchanged (#857). " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. " +
 			"If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). " +
@@ -964,27 +973,29 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		idemHash := ""
 		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
 			hash, hashErr := requestHash(struct {
-				Slug             string   `json:"slug"`
-				Lang             string   `json:"lang,omitempty"`
-				Title            string   `json:"title,omitempty"`
-				Body             string   `json:"body,omitempty"`
-				Tags             []string `json:"tags,omitempty"`
-				Categories       []string `json:"categories,omitempty"`
-				Draft            *bool    `json:"draft,omitempty"`
-				Description      *string  `json:"description,omitempty"`
-				FeaturedImage    *string  `json:"featured_image,omitempty"`
-				ExpectedRevision string   `json:"expected_revision,omitempty"`
+				Slug                   string   `json:"slug"`
+				Lang                   string   `json:"lang,omitempty"`
+				Title                  string   `json:"title,omitempty"`
+				Body                   string   `json:"body,omitempty"`
+				Tags                   []string `json:"tags,omitempty"`
+				Categories             []string `json:"categories,omitempty"`
+				Draft                  *bool    `json:"draft,omitempty"`
+				Description            *string  `json:"description,omitempty"`
+				FeaturedImage          *string  `json:"featured_image,omitempty"`
+				ExpectedRevision       string   `json:"expected_revision,omitempty"`
+				ExpectedBundleRevision string   `json:"expected_bundle_revision,omitempty"`
 			}{
-				Slug:             in.Slug,
-				Lang:             lang,
-				Title:            in.Title,
-				Body:             in.Body,
-				Tags:             in.Tags,
-				Categories:       in.Categories,
-				Draft:            in.Draft,
-				Description:      in.Description,
-				FeaturedImage:    in.FeaturedImage,
-				ExpectedRevision: in.ExpectedRevision,
+				Slug:                   in.Slug,
+				Lang:                   lang,
+				Title:                  in.Title,
+				Body:                   in.Body,
+				Tags:                   in.Tags,
+				Categories:             in.Categories,
+				Draft:                  in.Draft,
+				Description:            in.Description,
+				FeaturedImage:          in.FeaturedImage,
+				ExpectedRevision:       in.ExpectedRevision,
+				ExpectedBundleRevision: in.ExpectedBundleRevision,
 			})
 			if hashErr != nil {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
@@ -1012,6 +1023,27 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			}
 			if in.ExpectedRevision != currentRevision {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
+			}
+			// Optional additive whole-bundle guard (#857 AC3): when the caller
+			// supplies expected_bundle_revision, reject the write if ANY sibling
+			// translation or bundle-local asset changed since they read the
+			// bundle. This is the same BundleRevision optimistic-concurrency
+			// anchor apply_bundle_plan uses; recomputed here under the held
+			// content lock. Reported as bundle_conflict (not revision_conflict)
+			// so a caller passing both tokens can tell which one is stale.
+			// Omitting the field leaves behavior 100% unchanged.
+			if strings.TrimSpace(in.ExpectedBundleRevision) != "" {
+				bundleDir, _, bundleErr := resolveBundleDir(pg, cfg.ContentRoot, in.Slug)
+				if bundleErr != nil {
+					return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_bundle_revision was supplied but %q is not a page bundle (content/<slug>/ with index.* files); use expected_revision alone for leaf pages", in.Slug))
+				}
+				currentBundleRevision, revErr := contentmodel.BundleRevision(bundleDir)
+				if revErr != nil {
+					return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to compute bundle revision"))
+				}
+				if in.ExpectedBundleRevision != currentBundleRevision {
+					return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("bundle_conflict: a sibling translation or bundle-local asset changed since the bundle was read; re-read bundle_revision (get_page_for_edit) and replan"))
+				}
 			}
 		}
 		// normalize_taxonomy_casing (#589) — see the comment on the identical
