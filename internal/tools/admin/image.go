@@ -47,6 +47,13 @@ type generateFeaturedImageInput struct {
 	Accent   string   `json:"accent,omitempty"`
 	Style    string   `json:"style,omitempty"`
 	Prompt   string   `json:"prompt,omitempty"`
+	// DryRun (#897) previews the full output contract (path/public_path/
+	// source_key/delete_slug/delete_scope/delete_filename) that a real call
+	// would return, WITHOUT rendering or writing the image file — bringing
+	// generate_hero_image in line with every other write tool. Input
+	// validation still runs, so a dry run surfaces the same invalid_params
+	// errors a real call would.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 // generateFeaturedImageOutput's payload lives only under data.* as of
@@ -77,6 +84,11 @@ type generateFeaturedImageData struct {
 	DeleteSlug     string `json:"delete_slug"`
 	DeleteScope    string `json:"delete_scope"`
 	DeleteFilename string `json:"delete_filename"`
+	// DryRun (#897) is true when this response previews a generation that was
+	// NOT written to disk. All other fields carry the exact contract a real
+	// call would return, so a caller can validate the resulting path/filename
+	// before committing.
+	DryRun bool `json:"dry_run,omitempty"`
 }
 
 type imageWriteErrorPayload struct {
@@ -172,6 +184,23 @@ func publicImagePathFromLogical(logicalPath string) string {
 // writing frontmatter from here would mean either duplicating that locking
 // or silently bypassing it.
 func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeaturedImageOutput {
+	data = fillGeneratedImageContract(data)
+	out := generateFeaturedImageOutput{
+		ToolResponse: imageSuccessEnvelope(data),
+	}
+	if data.PublicPath != "" {
+		out.Warnings = append(out.Warnings, fmt.Sprintf(
+			"image generated but not attached to any page yet — call update_page with featured_image=%q to use it in card/list views (set it again per language if the page has translations)",
+			data.PublicPath,
+		))
+	}
+	return out
+}
+
+// fillGeneratedImageContract derives the public path and delete_* cleanup
+// contract fields from data.Path/SourceKey, so both the real-write output and
+// the dry-run preview (#897) return an identical contract.
+func fillGeneratedImageContract(data generateFeaturedImageData) generateFeaturedImageData {
 	data.PublicPath = publicImagePathFromLogical(data.Path)
 	if data.SourceKey == "" && strings.HasPrefix(data.Path, "static/images/") {
 		data.SourceKey = strings.TrimSuffix(strings.TrimPrefix(data.Path, "static/images/"), HeroImageSuffix)
@@ -185,13 +214,23 @@ func newGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeat
 	if data.DeleteFilename == "" {
 		data.DeleteFilename = filepath.Base(data.Path)
 	}
+	return data
+}
+
+// newDryRunGenerateFeaturedImageOutput builds the #897 dry-run preview: the
+// same output contract as a real call, but with no file written to disk. The
+// "not attached to any page" warning is replaced with an explicit dry-run
+// notice so a caller never mistakes a preview for an actual generation.
+func newDryRunGenerateFeaturedImageOutput(data generateFeaturedImageData) generateFeaturedImageOutput {
+	data.DryRun = true
+	data = fillGeneratedImageContract(data)
 	out := generateFeaturedImageOutput{
 		ToolResponse: imageSuccessEnvelope(data),
 	}
 	if data.PublicPath != "" {
 		out.Warnings = append(out.Warnings, fmt.Sprintf(
-			"image generated but not attached to any page yet — call update_page with featured_image=%q to use it in card/list views (set it again per language if the page has translations)",
-			data.PublicPath,
+			"dry_run: no file written — a real call would generate this image at %q; then call update_page with featured_image=%q to attach it (per language if the page has translations)",
+			data.Path, data.PublicPath,
 		))
 	}
 	return out
@@ -252,7 +291,8 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			"featuredImage value; call update_page with featured_image=data.public_path afterwards to attach it (per language, " +
 			"for a bundle with translations), or the image will exist but never appear on the site's card/list views. " +
 			"`data.source_key` is the canonical page identifier after slug normalization, and `data.delete_slug` + `data.delete_scope` + `data.delete_filename` " +
-			"can be passed straight to delete_page_asset later to remove this generated file without re-deriving the cleanup contract.",
+			"can be passed straight to delete_page_asset later to remove this generated file without re-deriving the cleanup contract. " +
+			"Set `dry_run:true` to preview the full output contract (path/public_path/source_key/delete_slug/delete_scope/delete_filename, plus `data.dry_run:true`) that a real call would return WITHOUT rendering or writing any file — input validation still runs, so you get the same invalid_params errors up front, and no image (and, in external-API mode, no network call) is produced (#897). Use it to confirm the resulting path/filename before committing, avoiding orphaned generated images.",
 		// style/accent are validated in the handler below (structured
 		// invalid_params errors), not as a published JSON-Schema enum: an
 		// enum constraint is enforced by the SDK's argument validation
@@ -312,6 +352,24 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		}
 		if len(in.Tags) > 6 {
 			in.Tags = in.Tags[:6]
+		}
+
+		// #897 dry_run: after all input validation but BEFORE any filesystem
+		// side effect (MkdirAll / writability probe / render), return the full
+		// output contract derived from the validated slug without touching disk.
+		// ResolveHeroImageLocation re-derives the exact path the real write path
+		// uses, with zero side effects.
+		if in.DryRun {
+			loc, err := ResolveHeroImageLocation(cfg.HugoRoot, in.Slug)
+			if err != nil {
+				slog.Warn("generate_hero_image: dry_run path validation failed", "slug", in.Slug, "error", err)
+				return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
+			}
+			return nil, newDryRunGenerateFeaturedImageOutput(generateFeaturedImageData{
+				Path:           loc.LogicalPath,
+				SourceKey:      slug,
+				DeleteFilename: loc.Name,
+			}), nil
 		}
 
 		// Use a guard anchored at HugoRoot with symlink rejection always on,
@@ -401,6 +459,20 @@ func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedI
 	relPath := filepath.Join("static", "images", in.Slug+HeroImageSuffix)
 	if _, err := outerPg.SafeJoin(relPath); err != nil {
 		return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
+	}
+	// #897 dry_run (API mode): return the contract before any filesystem side
+	// effect AND before the external image API is called — a preview must be
+	// free of both disk writes and network calls.
+	if in.DryRun {
+		loc, err := ResolveHeroImageLocation(cfg.HugoRoot, in.Slug)
+		if err != nil {
+			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: path validation failed")
+		}
+		return nil, newDryRunGenerateFeaturedImageOutput(generateFeaturedImageData{
+			Path:           loc.LogicalPath,
+			SourceKey:      in.Slug,
+			DeleteFilename: loc.Name,
+		}), nil
 	}
 	// Create images directory and narrow-scoped guard for the actual write.
 	imagesRoot := filepath.Join(cfg.HugoRoot, "static", "images")
