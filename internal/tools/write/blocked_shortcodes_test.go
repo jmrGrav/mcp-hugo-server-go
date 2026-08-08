@@ -122,3 +122,33 @@ func TestCreatePageRejectsBlockedStyleShortcode(t *testing.T) {
 		t.Fatal("create_page with a body invoking the blocked \"style\" shortcode should fail")
 	}
 }
+
+// TestCreatePageRejectsOverLongTaxonomyTerm is a regression test for #886: a
+// single tag or category value exceeding the length bound was silently
+// accepted, polluting taxonomy listing/archive pages. It must now be
+// rejected with invalid_params, not truncated.
+func TestCreatePageRejectsOverLongTaxonomyTerm(t *testing.T) {
+	longTerm := strings.Repeat("a", 300)
+
+	for _, field := range []string{"tags", "categories"} {
+		contentRoot := t.TempDir()
+		session, _, done := newTestServer(t, contentRoot)
+		args := map[string]any{
+			"slug":       "posts/taxonomy-len",
+			"title":      "Taxonomy length",
+			"body":       "Body.",
+			"tags":       []any{},
+			"categories": []any{},
+		}
+		args[field] = []any{longTerm}
+		res := callTool(t, session, "create_page", args)
+		if !res.IsError {
+			t.Fatalf("create_page with a 300-char %s value should fail", field)
+		}
+		raw := marshalContent(t, res)
+		if !strings.Contains(raw, "invalid_params") {
+			t.Fatalf("create_page over-long %s error = %s, want invalid_params", field, raw)
+		}
+		done()
+	}
+}

@@ -686,6 +686,12 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
+		if err := validateTaxonomyTerms("tag", in.Tags); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateTaxonomyTerms("category", in.Categories); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
 		if in.TestContent != nil && in.TestContent.TTLHours != nil {
 			ttl := *in.TestContent.TTLHours
 			if ttl <= 0 || ttl > testContentMaxTTLHours {
@@ -984,6 +990,12 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			if err := validateFeaturedImagePath(*in.FeaturedImage); err != nil {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 			}
+		}
+		if err := validateTaxonomyTerms("tag", in.Tags); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateTaxonomyTerms("category", in.Categories); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 		}
 		// #887: Allow() is NOT consumed here anymore. Under the unified quota
 		// rule (see quotaConsumptionRule) it now sits below, after the target's

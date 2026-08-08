@@ -1,6 +1,9 @@
 package write
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRejectUnsafeTextRejectsNullBytes(t *testing.T) {
 	if err := rejectUnsafeText("hello\x00world"); err == nil {
@@ -64,6 +67,24 @@ func TestValidateTitleFormatAllowsMaxLength(t *testing.T) {
 	}
 	if err := validateTitleFormat(string(exact)); err != nil {
 		t.Fatalf("validateTitleFormat: want nil at exactly max length, got %v", err)
+	}
+}
+
+func TestValidateTaxonomyTermsBoundary(t *testing.T) {
+	max := strings.Repeat("a", maxTaxonomyTermRunes)
+	over := strings.Repeat("a", maxTaxonomyTermRunes+1)
+
+	for _, kind := range []string{"tag", "category"} {
+		if err := validateTaxonomyTerms(kind, []string{max}); err != nil {
+			t.Errorf("validateTaxonomyTerms(%q, max-length) = %v, want nil", kind, err)
+		}
+		if err := validateTaxonomyTerms(kind, []string{"ok", over}); err == nil {
+			t.Errorf("validateTaxonomyTerms(%q, over-length) = nil, want error", kind)
+		}
+	}
+	// Empty slice (the "leave unchanged" shape) is always valid.
+	if err := validateTaxonomyTerms("tag", nil); err != nil {
+		t.Errorf("validateTaxonomyTerms(nil) = %v, want nil", err)
 	}
 }
 
