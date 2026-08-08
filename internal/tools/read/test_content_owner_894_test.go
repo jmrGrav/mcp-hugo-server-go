@@ -106,6 +106,88 @@ func TestValidateSiteExposesTestContentOwner(t *testing.T) {
 	}
 }
 
+// TestValidateSiteOwnerFilterDoesNotMaskDetailRows guards against the owner
+// filter leaking out of the advisory test-content lists into the validation
+// detail rows / counts. A test page owned by another agent that ALSO has a
+// validation issue must still be counted in `invalid` AND still appear in the
+// paginated `pages` detail rows under an owner filter — the filter narrows only
+// test_content/test_content_slugs, never the scan scope. Fails red against the
+// pre-fix `continue`, which dropped non-matching test pages from allResults.
+func TestValidateSiteOwnerFilterDoesNotMaskDetailRows(t *testing.T) {
+	contentRoot := t.TempDir()
+	write := func(slug, frontmatter string) {
+		dir := filepath.Join(contentRoot, "posts", slug)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte(frontmatter), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	// agent-a's test residue: valid.
+	write("owned-by-a", "---\ntitle: A residue\ndate: 2026-08-07\ntest_content: true\ntest_content_owner: agent-a\n---\nBody.\n")
+	// agent-b's test residue: INVALID (missing title). Under owner=agent-a this
+	// must NOT vanish from the invalid count or the detail rows.
+	write("owned-by-b-invalid", "---\ndate: 2026-08-07\ntest_content: true\ntest_content_owner: agent-b\n---\nBody.\n")
+
+	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg := config.Default()
+	cfg.SiteRoot = root
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex() error = %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex() error = %v", err)
+	}
+
+	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "validate_site", map[string]any{"include_valid": true, "owner": "agent-a"})
+	if res.IsError {
+		t.Fatalf("validate_site returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+
+	// Advisory list is correctly narrowed to agent-a only.
+	owners := testContentOwnerMap(t, data)
+	if len(owners) != 1 || owners["/posts/owned-by-a/"] != "agent-a" {
+		t.Fatalf("test_content should list only agent-a, got %#v", owners)
+	}
+
+	// Counts describe the FULL scan scope regardless of the owner filter:
+	// both pages are checked, agent-b's page is still invalid.
+	if got := data["pages_checked"]; got != float64(2) {
+		t.Fatalf("pages_checked = %v, want 2 (owner filter must not shrink scan scope)", got)
+	}
+	if got := data["invalid"]; got != float64(1) {
+		t.Fatalf("invalid = %v, want 1 (agent-b's invalid page must still count under owner filter)", got)
+	}
+
+	// The invalid, non-matching-owner page must still be present in the detail
+	// rows — an owner filter must never mask an invalid page from `pages`.
+	pages, ok := data["pages"].([]any)
+	if !ok {
+		t.Fatalf("data.pages = %#v, want array", data["pages"])
+	}
+	var sawInvalidOther bool
+	for _, p := range pages {
+		row, _ := p.(map[string]any)
+		if row["slug"] == "/posts/owned-by-b-invalid/" {
+			sawInvalidOther = true
+		}
+	}
+	if !sawInvalidOther {
+		t.Fatalf("owner=agent-a filter masked agent-b's INVALID page from detail rows; pages=%#v", pages)
+	}
+}
+
 func TestValidateSiteOwnerFilterNarrowsToCaller(t *testing.T) {
 	idx, srcIdx := setupOwnerFilterSite(t)
 	session, done := newTestClientWithSourceIndex(t, idx, srcIdx)

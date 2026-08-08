@@ -1346,12 +1346,16 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 			// recorded owner matches — reserved-prefix legacy content and any
 			// ownerless test content are excluded so an agent enumerating its
 			// own residue never sees another agent's (or unattributed) pages.
-			if ownerFilter != "" && owner != ownerFilter {
-				continue
+			// The filter narrows ONLY the advisory test-content lists; it must
+			// never drop the page from allResults / the validation detail rows
+			// or from the invalid count (those describe the full scan scope,
+			// gated solely by invalid_only), otherwise an owner filter could
+			// silently mask an *invalid* page owned by another agent.
+			if ownerFilter == "" || owner == ownerFilter {
+				seenTestContentSlugs[slug] = true
+				testContentSlugs = append(testContentSlugs, slug)
+				testContent = append(testContent, testContentEntryDTO{Slug: slug, Owner: owner})
 			}
-			seenTestContentSlugs[slug] = true
-			testContentSlugs = append(testContentSlugs, slug)
-			testContent = append(testContent, testContentEntryDTO{Slug: slug, Owner: owner})
 		}
 		allResults = append(allResults, frontMatterIssueDTO{Slug: slug, Lang: p.Lang, Issues: issues})
 	}
