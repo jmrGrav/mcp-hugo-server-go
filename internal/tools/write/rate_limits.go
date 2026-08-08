@@ -34,6 +34,51 @@ const (
 	rateLimitWindowSeconds           = 60
 )
 
+// The unified quota-consumption rule (#887) governs which
+// failure classes consume a caller's per-caller mutation quota, applied
+// identically across create_page / update_page / delete_page /
+// upload_page_asset / delete_page_asset. Before #887 each handler placed its
+// limiter.Allow() call ad hoc, so semantically identical failures cost quota
+// on one tool but were free on another (a not_found rejection consumed the
+// destructive quota on delete_page_asset but not on delete_page; not_a_bundle
+// consumed on upload_page_asset but not on delete_page_asset; a missing
+// expected_revision consumed on update_page but not on delete_page). That
+// penalized the "check before you act" pattern this server's own tools
+// (get_rate_limits, dry_run) exist to encourage.
+//
+// The rule (variant (b) from the issue — "consumed once identity/existence is
+// confirmed, before content/state validation"), chosen because delete_page —
+// the most carefully audited destructive path — already implemented exactly
+// it, and #836 had already moved the limiter *lookup* early for accurate
+// reporting without changing consumption:
+//
+//	FREE (never spends a token): malformed/invalid input (invalid_params,
+//	bad slug/lang/title/filename/scope, a blocked shortcode), an absent or
+//	ineligible target (not_found, not_a_bundle, ambiguous_language,
+//	source_file_not_found), a missing required guard (expected_revision /
+//	expected_sha256 not supplied), and a genuine idempotency replay.
+//
+//	CONSUMES (spends one token): a valid request against a confirmed-eligible
+//	target that makes a genuine mutation attempt — including its state-conflict
+//	rejections: revision_conflict, already_exists (the create/upload write-time
+//	collision), asset_referenced, security/write/delete errors, and success.
+//
+// Mechanically: limiter.Allow() is invoked only after every free gate above
+// has passed, immediately before the state-conflict check / atomic mutation.
+// For create/upload there is no cheap pre-write existence gate — eligibility
+// IS the atomic write — so Allow() sits just before it and already_exists
+// consumes (this also keeps the pre-existing, tested contract that a
+// second, colliding upload costs a token). Deliberately NOT loosening
+// revision_conflict / already_exists to "free" is intentional: those are real
+// state-conflict rejections, and a strict anti-abuse control is never relaxed
+// for mere consistency.
+//
+// Out of scope: build_in_progress (a transient content-lock timeout) reflects
+// momentary server state, not a classification of the caller's request, and
+// its quota treatment depends on incidental lock/decode ordering per tool
+// (upload_page_asset meters its base64 decode behind Allow() as a DoS guard,
+// which necessarily places its lock wait after Allow); it is not governed by
+// this rule. dry_run never consumes on any tool (#588).
 func newRateLimitBucket(l *rate.Limiter, limit int, scope string, now time.Time) rateLimitBucket {
 	retryAfter := rateLimitRetryAfterSeconds(l)
 	resetAt := now.UTC()

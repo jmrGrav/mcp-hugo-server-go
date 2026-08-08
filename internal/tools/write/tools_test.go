@@ -1212,7 +1212,12 @@ func TestUpdatePageRequiresExpectedRevisionForWrite(t *testing.T) {
 		t.Fatalf("update_page missing expected_revision error = %s", raw)
 	}
 	m := decodeWriteErrorEnvelope(t, res)
-	wantRemaining := float64(config.Default().RateLimit.CreateUpdatePerMin - 2) // create_page + failed update_page each consume one token
+	// #887: a missing expected_revision is a pure invalid_params input-shape
+	// rejection — it never reaches a mutation attempt, so it is FREE, exactly
+	// like delete_page's own missing-expected_revision (see
+	// TestDeletePageRequiresExpectedRevisionForWrite). Only the setup
+	// create_page consumed a token here.
+	wantRemaining := float64(config.Default().RateLimit.CreateUpdatePerMin - 1) // only create_page consumed; missing-guard rejection is free
 	if got := m["rate_limit_remaining"]; got != wantRemaining {
 		t.Fatalf("update_page missing expected_revision rate_limit_remaining = %v, want %v", got, wantRemaining)
 	}
