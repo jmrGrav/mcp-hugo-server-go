@@ -253,13 +253,13 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			"for a bundle with translations), or the image will exist but never appear on the site's card/list views. " +
 			"`data.source_key` is the canonical page identifier after slug normalization, and `data.delete_slug` + `data.delete_scope` + `data.delete_filename` " +
 			"can be passed straight to delete_page_asset later to remove this generated file without re-deriving the cleanup contract.",
-		InputSchema: tools.WithEnum(
-			tools.MustSchema[generateFeaturedImageInput](),
-			"style",
-			"",
-			"tech",
-			"geo",
-		),
+		// style/accent are validated in the handler below (structured
+		// invalid_params errors), not as a published JSON-Schema enum: an
+		// enum constraint is enforced by the SDK's argument validation
+		// *before* our handler/WrapTool pipeline runs, so a violating value
+		// would surface as a bare text error with no StructuredContent/code
+		// (#892). Runtime rejection is unchanged.
+		InputSchema:  tools.MustSchema[generateFeaturedImageInput](),
 		OutputSchema: tools.MustSchema[generateFeaturedImageOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,

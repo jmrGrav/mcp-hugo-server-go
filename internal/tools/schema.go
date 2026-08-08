@@ -29,14 +29,21 @@ func MustSchema[T any]() any {
 // the constraint rather than fail loudly at registration time.
 //
 // Once a field carries an enum, the MCP SDK's own request validation (via
-// jsonschema-go) rejects out-of-enum values before the tool handler runs,
-// returning a plain-text validation error rather than this server's
-// structured error envelope. That is an intentional, accepted tradeoff: a
-// well-behaved client reads the published enum and never sends an invalid
-// value in the first place (the whole point of this issue); a
-// non-conforming client that ignores the schema anyway gets a less
-// structured, but still clearly rejected, response. Runtime validation in
-// the handler is unchanged and still applies to any value that reaches it.
+// jsonschema-go) rejects out-of-enum values *before* the tool handler runs,
+// returning a plain-text validation error (only Content, no
+// StructuredContent/code) rather than this server's structured error
+// envelope.
+//
+// #892: that tradeoff turned out to be the wrong default. Every enum field
+// this server shipped (response_mode, search_pages.match,
+// generate_hero_image.style) already had an equivalent handler-level check
+// that produced a proper structured invalid_params error — the published
+// enum only served to shadow it, so an out-of-enum value got the bare text
+// error instead of the structured one. Those fields were migrated to
+// handler/WrapTool validation and no longer call WithEnum. Prefer that
+// pattern for new fields. WithEnum remains available for a genuinely
+// schema-only constraint that has no handler equivalent, but be aware
+// violations of it will NOT carry a structured error code.
 func WithEnum(s any, field string, values ...string) any {
 	schema := s.(*jsonschema.Schema)
 	prop, ok := schema.Properties[field]
