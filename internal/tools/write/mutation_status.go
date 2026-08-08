@@ -23,6 +23,8 @@ var mutationStatusLookupTools = map[string]bool{
 	"delete_page_asset":  true,
 	"apply_content_plan": true,
 	"rollback_change":    true,
+	"apply_bundle_plan":  true,
+	"rollback_bundle":    true,
 }
 
 type getMutationStatusInput struct {
@@ -73,7 +75,7 @@ func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "get_mutation_status",
 		Title: "Get mutation status",
-		Description: "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change call " +
+		Description: "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change/apply_bundle_plan/rollback_bundle call " +
 			"that used idempotency_key actually succeeded — for recovering from a timeout or otherwise ambiguous response " +
 			"without resending the original mutation payload. `status: \"succeeded\"` means that exact call completed and " +
 			"`result` is its entire original response envelope (success/data/errors/warnings/meta, not just data), byte-identical " +
@@ -93,7 +95,7 @@ func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in getMutationStatusInput) (*mcp.CallToolResult, getMutationStatusOutput, error) {
 		if !mutationStatusLookupTools[in.Tool] {
-			return nil, getMutationStatusOutput{}, fmt.Errorf("invalid_params: tool must be one of create_page, update_page, delete_page, upload_page_asset, delete_page_asset, apply_content_plan, rollback_change")
+			return nil, getMutationStatusOutput{}, fmt.Errorf("invalid_params: tool must be one of create_page, update_page, delete_page, upload_page_asset, delete_page_asset, apply_content_plan, rollback_change, apply_bundle_plan, rollback_bundle")
 		}
 		if in.IdempotencyKey == "" {
 			return nil, getMutationStatusOutput{}, fmt.Errorf("invalid_params: idempotency_key must not be empty")

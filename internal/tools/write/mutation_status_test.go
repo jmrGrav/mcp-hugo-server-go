@@ -260,6 +260,142 @@ func TestGetMutationStatusSucceededAfterApplyContentPlan(t *testing.T) {
 	}
 }
 
+// TestGetMutationStatusSucceededAfterApplyBundlePlan is the regression test for
+// #880: apply_bundle_plan (#854) writes its success result to the same
+// idempotency store the single-page tools use, but get_mutation_status never
+// listed it in its lookup vocabulary — so a caller recovering from a timeout
+// on a bundle apply got a bogus invalid_params "unknown tool" rejection. After
+// this fix, get_mutation_status(apply_bundle_plan, key) replays the cached
+// applied result, exactly as it already does for apply_content_plan.
+func TestGetMutationStatusSucceededAfterApplyBundlePlan(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/mutation-status-bundle")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/mutation-status-bundle",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Nouveau corps FR.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("New body EN.")}},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_bundle_change failed: %s", marshalContent(t, planRes))
+	}
+	planData := decodeWriteData(t, planRes)
+	planID, _ := planData["plan_id"].(string)
+	if planID == "" {
+		t.Fatalf("plan_bundle_change did not return plan_id: %#v", planData)
+	}
+
+	applyRes := callTool(t, session, "apply_bundle_plan", map[string]any{
+		"plan_id":         planID,
+		"idempotency_key": "mutation-status-bundle-1",
+	})
+	if applyRes.IsError {
+		t.Fatalf("apply_bundle_plan failed: %s", marshalContent(t, applyRes))
+	}
+	applyData := decodeWriteData(t, applyRes)
+
+	status := callTool(t, session, "get_mutation_status", map[string]any{
+		"tool":            "apply_bundle_plan",
+		"idempotency_key": "mutation-status-bundle-1",
+	})
+	if status.IsError {
+		t.Fatalf("get_mutation_status returned error: %s", marshalContent(t, status))
+	}
+	statusData := decodeWriteData(t, status)
+	if statusData["status"] != "succeeded" {
+		t.Fatalf("get_mutation_status data.status = %v, want succeeded", statusData["status"])
+	}
+	if statusData["tool"] != "apply_bundle_plan" {
+		t.Fatalf("get_mutation_status data.tool = %v, want apply_bundle_plan", statusData["tool"])
+	}
+	result, ok := statusData["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_mutation_status data.result = %#v, want object", statusData["result"])
+	}
+	resultData, ok := result["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_mutation_status data.result.data = %#v, want object", result["data"])
+	}
+	if resultData["after_revision"] != applyData["after_revision"] {
+		t.Fatalf("get_mutation_status apply_bundle_plan after_revision = %v, want %v", resultData["after_revision"], applyData["after_revision"])
+	}
+}
+
+// TestGetMutationStatusSucceededAfterRollbackBundle is the rollback_bundle half
+// of #880's coverage: a rollback_bundle call with an idempotency_key must be
+// recoverable through get_mutation_status the same way rollback_change is.
+func TestGetMutationStatusSucceededAfterRollbackBundle(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/mutation-status-rollback-bundle")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/mutation-status-rollback-bundle",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Nouveau corps FR.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("New body EN.")}},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_bundle_change failed: %s", marshalContent(t, planRes))
+	}
+	planData := decodeWriteData(t, planRes)
+	planID, _ := planData["plan_id"].(string)
+	if planID == "" {
+		t.Fatalf("plan_bundle_change did not return plan_id: %#v", planData)
+	}
+	preApplyRev, _ := planData["bundle_revision"].(string)
+
+	applyRes := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_bundle_plan failed: %s", marshalContent(t, applyRes))
+	}
+	applyData := decodeWriteData(t, applyRes)
+	postApplyRev, _ := applyData["after_revision"].(string)
+
+	rollbackRes := callTool(t, session, "rollback_bundle", map[string]any{
+		"slug":                     "posts/mutation-status-rollback-bundle",
+		"to_bundle_revision":       preApplyRev,
+		"expected_bundle_revision": postApplyRev,
+		"idempotency_key":          "mutation-status-rollback-bundle-1",
+	})
+	if rollbackRes.IsError {
+		t.Fatalf("rollback_bundle failed: %s", marshalContent(t, rollbackRes))
+	}
+	rollbackData := decodeWriteData(t, rollbackRes)
+
+	status := callTool(t, session, "get_mutation_status", map[string]any{
+		"tool":            "rollback_bundle",
+		"idempotency_key": "mutation-status-rollback-bundle-1",
+	})
+	if status.IsError {
+		t.Fatalf("get_mutation_status returned error: %s", marshalContent(t, status))
+	}
+	statusData := decodeWriteData(t, status)
+	if statusData["status"] != "succeeded" {
+		t.Fatalf("get_mutation_status data.status = %v, want succeeded", statusData["status"])
+	}
+	if statusData["tool"] != "rollback_bundle" {
+		t.Fatalf("get_mutation_status data.tool = %v, want rollback_bundle", statusData["tool"])
+	}
+	result, ok := statusData["result"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_mutation_status data.result = %#v, want object", statusData["result"])
+	}
+	resultData, ok := result["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_mutation_status data.result.data = %#v, want object", result["data"])
+	}
+	if resultData["after_revision"] != rollbackData["after_revision"] {
+		t.Fatalf("get_mutation_status rollback_bundle after_revision = %v, want %v", resultData["after_revision"], rollbackData["after_revision"])
+	}
+}
+
 func TestGetMutationStatusSucceededAfterRollbackChange(t *testing.T) {
 	contentRoot := t.TempDir()
 	session, _, done := newTestServer(t, contentRoot)
