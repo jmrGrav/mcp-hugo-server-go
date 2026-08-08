@@ -637,6 +637,9 @@ func registerContentPlanTools(
 		if strings.TrimSpace(in.PlanID) == "" {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: plan_id must not be empty"))
 		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
+		}
 		if !in.DryRun && !limiter.Allow() {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(rateLimitExceededErr("apply_content_plan", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}

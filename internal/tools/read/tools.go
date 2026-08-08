@@ -611,6 +611,9 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 			if err := negativeLimitError(in.Limit); err != nil {
 				return nil, exportAgentContextOutput{}, err
 			}
+			if err := negativeOffsetError(in.Offset); err != nil {
+				return nil, exportAgentContextOutput{}, err
+			}
 			readerSafe := site.IsReaderProfile(ctx)
 			includeBody := true
 			if in.IncludeBody != nil {
@@ -1207,6 +1210,20 @@ func clampLimit(v, defaultVal, maxVal int) int {
 func negativeLimitError(v int) error {
 	if v < 0 {
 		return fmt.Errorf("invalid_params: limit must not be negative")
+	}
+	return nil
+}
+
+// negativeOffsetError rejects a negative offset (#885), closing the
+// asymmetry with negativeLimitError (#641): a negative offset was previously
+// silently clamped to 0, hiding a likely caller-side pagination-arithmetic
+// bug behind a first-page response instead of surfacing it. Unlike limit, an
+// offset of 0 is a fully valid request (the first page), so only strictly
+// negative values are rejected; the downstream `offset < 0 -> 0` clamps stay
+// in place as defense in depth.
+func negativeOffsetError(v int) error {
+	if v < 0 {
+		return fmt.Errorf("invalid_params: offset must not be negative")
 	}
 	return nil
 }

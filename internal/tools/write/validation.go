@@ -30,6 +30,16 @@ const (
 	// file write.
 	maxTitleRunes = 255
 	maxBodyBytes  = 1 << 20
+	// maxTaxonomyTermRunes bounds a single tag/category value on
+	// create_page/update_page (#886). A taxonomy term is a short label — a
+	// word or a few words — that becomes a taxonomy listing/archive page;
+	// 100 runes is generous for any legitimate term while rejecting the
+	// pathological ~300-character value the audit found silently accepted,
+	// which would pollute list_tags/list_categories and the archive pages.
+	// Rejected explicitly rather than truncated, per this codebase's
+	// "explicit rejection over silent coercion" convention (#833/#836/#837/
+	// #838) and matching maxTitleRunes' own rune-count bound.
+	maxTaxonomyTermRunes = 100
 )
 
 func validateSlugFormat(slug string) error {
@@ -48,6 +58,19 @@ func validateTitleFormat(title string) error {
 	}
 	if n := utf8.RuneCountInString(title); n > maxTitleRunes {
 		return fmt.Errorf("invalid_params: title exceeds %d characters (got %d)", maxTitleRunes, n)
+	}
+	return nil
+}
+
+// validateTaxonomyTerms rejects any tag/category value exceeding
+// maxTaxonomyTermRunes (#886). kind is "tag" or "category" and names the
+// offending field in the error. An empty slice (the common "leave taxonomy
+// unchanged" shape on update_page) validates trivially.
+func validateTaxonomyTerms(kind string, terms []string) error {
+	for _, t := range terms {
+		if n := utf8.RuneCountInString(t); n > maxTaxonomyTermRunes {
+			return fmt.Errorf("invalid_params: %s value exceeds %d characters (got %d)", kind, maxTaxonomyTermRunes, n)
+		}
 	}
 	return nil
 }

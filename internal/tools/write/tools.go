@@ -427,9 +427,35 @@ func canonicalPublicSlug(sourceSlug string) string {
 	return "/" + slug + "/"
 }
 
+// reservedSlugs are Hugo-reserved content names that must never appear as a
+// path segment of a create_page slug (#890). `404` builds the site's 404
+// page; `index`/`_index` are Hugo's special bundle/section index filenames.
+// Creating a (non-draft) page whose slug shadows one of these silently masks
+// the site's real 404 page or section index. #37's broader case/unicode
+// slug-collision scope stays deferred — this is only the concrete
+// reserved-name denylist.
 var reservedSlugs = map[string]bool{
 	"_index": true,
 	"index":  true,
+	"404":    true,
+}
+
+// reservedSlugConflict reports the first path segment of slug that collides
+// with a Hugo-reserved name, if any. Matching is per exact segment, not
+// substring: "posts/404-explained" is fine (its segment is
+// "404-explained", not "404"), while "posts/404" or "404" is rejected. slug
+// is expected already normalized (normalizeInputSlug strips surrounding
+// slashes) so empty segments from a stray "//" are skipped defensively.
+func reservedSlugConflict(slug string) (string, bool) {
+	for _, seg := range strings.Split(slug, "/") {
+		if seg == "" {
+			continue
+		}
+		if reservedSlugs[seg] {
+			return seg, true
+		}
+	}
+	return "", false
 }
 
 var validLangPattern = regexp.MustCompile(`^[A-Za-z0-9-]{2,5}$`)
@@ -674,8 +700,8 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if in.Title == "" {
 			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: title must not be empty"))
 		}
-		if reservedSlugs[in.Slug] {
-			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug is reserved"))
+		if seg, ok := reservedSlugConflict(in.Slug); ok {
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug segment %q is a Hugo-reserved name (404, index, _index) and would shadow the site's own page", seg))
 		}
 		if err := validateSlugFormat(in.Slug); err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
@@ -684,6 +710,15 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
 		if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateTaxonomyTerms("tag", in.Tags); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateTaxonomyTerms("category", in.Categories); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
 		if in.TestContent != nil && in.TestContent.TTLHours != nil {
@@ -984,6 +1019,15 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			if err := validateFeaturedImagePath(*in.FeaturedImage); err != nil {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 			}
+		}
+		if err := validateTaxonomyTerms("tag", in.Tags); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateTaxonomyTerms("category", in.Categories); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 		}
 		// #887: Allow() is NOT consumed here anymore. Under the unified quota
 		// rule (see quotaConsumptionRule) it now sits below, after the target's
@@ -1354,6 +1398,9 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 		if err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
 

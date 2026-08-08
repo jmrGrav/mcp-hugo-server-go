@@ -2034,3 +2034,54 @@ func TestNegativeLimitRejectedAcrossTools(t *testing.T) {
 		}
 	}
 }
+
+// TestNegativeOffsetRejectedAcrossTools is a regression test for #885: a
+// negative offset was silently clamped to 0 (the first page) instead of
+// surfacing the caller's likely pagination-arithmetic bug -- asymmetric with
+// limit, which #641 already rejects. Unlike limit, offset: 0 is a fully valid
+// request (the first page), so only strictly negative values are rejected.
+func TestNegativeOffsetRejectedAcrossTools(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	cases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_pages", map[string]any{"offset": -1}},
+		{"search_pages", map[string]any{"query": "hello", "offset": -1}},
+		{"get_recent_posts", map[string]any{"offset": -1}},
+		{"get_sitemap", map[string]any{"offset": -1}},
+		{"get_feed", map[string]any{"offset": -1}},
+	}
+	for _, tc := range cases {
+		res := callTool(t, session, tc.tool, tc.args)
+		if !res.IsError {
+			t.Errorf("%s offset=-1: expected invalid_params error, got success", tc.tool)
+			continue
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "invalid_params") {
+			t.Errorf("%s offset=-1 error = %s, want invalid_params", tc.tool, raw)
+		}
+	}
+
+	// offset: 0 must be unaffected -- it is the first page, a valid request.
+	zeroCases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_pages", map[string]any{"offset": 0}},
+		{"search_pages", map[string]any{"query": "hello", "offset": 0}},
+		{"get_recent_posts", map[string]any{"offset": 0}},
+		{"get_sitemap", map[string]any{"offset": 0}},
+		{"get_feed", map[string]any{"offset": 0}},
+	}
+	for _, tc := range zeroCases {
+		res := callTool(t, session, tc.tool, tc.args)
+		if res.IsError {
+			t.Errorf("%s offset=0: expected success (first page), got error: %v", tc.tool, res.Content)
+		}
+	}
+}

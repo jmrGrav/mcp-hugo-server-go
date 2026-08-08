@@ -5,11 +5,47 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 )
+
+// maxIdempotencyKeyLen and idempotencyKeyPattern bound a caller-supplied
+// idempotency_key (#888). The key is currently just a lookup key into an
+// in-memory, client-scoped store (#627), so an unvalidated value is inert
+// today — this is defense in depth: a caller-controlled string with
+// path-traversal shapes, embedded whitespace, Unicode, or emoji has no
+// legitimate place in a mutation-tool contract and is cheap to reject now,
+// before the key could ever reach a filesystem path, log correlation ID, or
+// external system in some future change. The charset mirrors how other
+// opaque IDs in this codebase are generated (e.g. previewstore.NewID's
+// hex-only IDs): alphanumeric plus '-' and '_'.
+const maxIdempotencyKeyLen = 128
+
+var idempotencyKeyPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+
+// validateIdempotencyKey enforces the defensive charset/length bound on a
+// caller-supplied idempotency_key (#888). A blank (empty or all-whitespace)
+// key is accepted and means "idempotency not requested" — matching the
+// existing `strings.TrimSpace(in.IdempotencyKey) != ""` gating every tool
+// already uses to decide whether to consult the store — so this can be
+// called unconditionally at handler entry without changing behavior for
+// callers that omit the key. Any non-blank key must match the safe format.
+func validateIdempotencyKey(key string) error {
+	if strings.TrimSpace(key) == "" {
+		return nil
+	}
+	if len(key) > maxIdempotencyKeyLen {
+		return fmt.Errorf("invalid_params: idempotency_key exceeds %d characters (got %d)", maxIdempotencyKeyLen, len(key))
+	}
+	if !idempotencyKeyPattern.MatchString(key) {
+		return fmt.Errorf("invalid_params: idempotency_key must contain only alphanumeric characters, '-', or '_'")
+	}
+	return nil
+}
 
 // defaultIdempotencyTTL is used when a caller constructs the write package's
 // Register() with a config.Config whose IdempotencyTTLSeconds is unset or
