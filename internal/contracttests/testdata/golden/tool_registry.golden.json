@@ -68,11 +68,6 @@
           ]
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -297,11 +292,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -322,11 +312,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -363,11 +348,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "tag": {
@@ -394,11 +374,6 @@
           "type": "string"
         },
         "style": {
-          "enum": [
-            "",
-            "tech",
-            "geo"
-          ],
           "type": "string"
         },
         "subtitle": {
@@ -431,11 +406,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -463,11 +433,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -495,11 +460,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "since_version": {
@@ -524,11 +484,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -579,11 +534,6 @@
           ]
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -628,11 +578,6 @@
           ]
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -662,11 +607,6 @@
           "type": "string"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -696,11 +636,6 @@
           "type": "string"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -737,11 +672,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -769,11 +699,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -808,11 +733,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -827,11 +747,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -856,11 +771,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "summary_only": {
@@ -920,11 +830,6 @@
           "type": "boolean"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -945,11 +850,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -964,11 +864,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -983,11 +878,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -1012,11 +902,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -1044,11 +929,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -1072,11 +952,6 @@
       "additionalProperties": false,
       "properties": {
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -1230,11 +1105,6 @@
           "type": "boolean"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "suggestion_limit": {
@@ -1421,11 +1291,6 @@
           "type": "string"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "sort": {
@@ -1462,11 +1327,6 @@
           "type": "integer"
         },
         "match": {
-          "enum": [
-            "",
-            "any",
-            "title_exact"
-          ],
           "type": "string"
         },
         "offset": {
@@ -1476,11 +1336,6 @@
           "type": "string"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },
@@ -1514,11 +1369,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -1662,11 +1512,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         },
         "slug": {
@@ -1702,11 +1547,6 @@
           "type": "integer"
         },
         "response_mode": {
-          "enum": [
-            "",
-            "standard",
-            "compact"
-          ],
           "type": "string"
         }
       },

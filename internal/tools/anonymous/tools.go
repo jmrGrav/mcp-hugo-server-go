@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -489,12 +488,13 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 			shaped := shapeSearchPages(dtos, mode, in.Fields)
 			return nil, newSearchPagesOutput(searchPagesData{Pages: shaped, Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		},
-		func(s any) any {
-			return tools.WithEnum(s, "match", "", "any", "title_exact")
-		},
-		func(s any) any {
-			return tools.WithEnum(s, "response_mode", "", string(toolcontract.ResponseModeStandard), string(toolcontract.ResponseModeCompact))
-		},
+		// match/response_mode are validated in the handler (resolveSearchMatch)
+		// and WrapTool (ResolveResponseMode) respectively — not published as
+		// JSON-Schema enums (#892), since the SDK enforces enum constraints
+		// before our structured-error pipeline runs, producing a bare text
+		// error with no code. limit keeps its published ceiling: it is
+		// clamped (not rejected) at runtime, so there is no handler rejection
+		// to migrate to.
 		func(s any) any { return tools.WithMaxLimit(s, "limit", 50) },
 	)
 }
@@ -696,11 +696,17 @@ func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index, cfg conf
 }
 
 // schemaOpts, when provided, post-process the inferred input schema (#418) —
-// e.g. tools.WithEnum/tools.WithRange to publish a real enum/range constraint
-// that jsonschema-go's struct-tag inference can't express directly.
+// e.g. tools.WithMaxLimit to publish a real range constraint that
+// jsonschema-go's struct-tag inference can't express directly.
+//
+// response_mode is deliberately NOT published as a JSON-Schema enum (#892):
+// the SDK enforces enum constraints in its argument-validation step *before*
+// our WrapTool pipeline runs, so an out-of-enum value would surface as a bare
+// text error with no StructuredContent/code. Validation lives in
+// toolcontract.WrapTool (ResolveResponseMode), which yields a structured
+// invalid_params error listing the accepted values instead.
 func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out], schemaOpts ...func(any) any) {
 	inputSchema := tools.MustSchema[In]()
-	inputSchema = addResponseModeEnum(inputSchema)
 	for _, opt := range schemaOpts {
 		inputSchema = opt(inputSchema)
 	}
@@ -720,17 +726,6 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 }
 
 func boolPtr(v bool) *bool { return &v }
-
-func addResponseModeEnum(inputSchema any) any {
-	schema, ok := inputSchema.(*jsonschema.Schema)
-	if !ok {
-		return inputSchema
-	}
-	if _, ok := schema.Properties["response_mode"]; !ok {
-		return inputSchema
-	}
-	return tools.WithEnum(inputSchema, "response_mode", "", string(toolcontract.ResponseModeStandard), string(toolcontract.ResponseModeCompact))
-}
 
 func success[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))

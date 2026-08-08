@@ -40,34 +40,34 @@ func toolInputSchemaProperty(t *testing.T, session *mcp.ClientSession, tool, fie
 	return nil
 }
 
-func stringSetEqual(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	counts := make(map[string]int, len(a))
-	for _, s := range a {
-		counts[s]++
-	}
-	for _, s := range b {
-		counts[s]--
-	}
-	for _, n := range counts {
-		if n != 0 {
-			return false
-		}
-	}
-	return true
-}
+// TestContractInvalidEnumInputsReturnStructuredError is the #892 anti-drift
+// guard, and the most important piece of that fix.
+//
+// Fields that accept only a fixed set of string values (response_mode across
+// most tools, search_pages.match) are validated in the handler / WrapTool
+// layer and are deliberately NOT published as a JSON-Schema enum. The reason
+// is the exact bug #892 fixes: the go-sdk validates arguments against the
+// published schema (server.go, toolForErr → applySchema) *before* our handler
+// runs, and on failure calls CallToolResult.SetError, which populates only
+// flat Content and IsError — never StructuredContent. So a published enum
+// makes an out-of-enum value bypass our entire toolcontract pipeline and
+// return a bare text error with no machine-readable code/resolution.
+//
+// This test drives a known-invalid value at every such field and asserts the
+// contract that matters to an agent: the result is a *structured* error —
+// non-nil StructuredContent carrying a recognized error code — not merely
+// IsError with a text blob. It also guards against regression by asserting the
+// field is not (re-)published as a schema enum, since doing so would silently
+// reintroduce the schema-layer bypass.
+//
+// Fail-red/pass-green: against the pre-#892 code (WithEnum published on these
+// fields) the schema layer rejects the value and StructuredContent is nil, so
+// every case fails; after the migration to handler/WrapTool validation every
+// case produces the structured invalid_params envelope and passes.
+func TestContractInvalidEnumInputsReturnStructuredError(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
 
-// TestContractPublishedEnumsMatchRuntimeAcceptedValues covers #418: for each
-// tool/field pair known to accept only a fixed set of string values, the
-// schema published via tools/list must carry the exact same enum the
-// handler runtime accepts — not a superset (which would let a well-behaved
-// client send a value the server actually rejects) and not a subset (which
-// would block a value the server accepts). A drift here means the schema
-// and the runtime silently disagree, defeating the whole point of
-// publishing the constraint.
-func TestContractPublishedEnumsMatchRuntimeAcceptedValues(t *testing.T) {
 	idx := mustFixtureIndex(t)
 	srcIdx := mustFixtureSourceIndex(t)
 	cfg := fixtureConfig()
@@ -78,53 +78,87 @@ func TestContractPublishedEnumsMatchRuntimeAcceptedValues(t *testing.T) {
 	defer readDone()
 
 	tests := []struct {
-		session  *mcp.ClientSession
-		tool     string
-		field    string
-		wantEnum []string
+		session *mcp.ClientSession
+		tool    string
+		field   string
+		args    map[string]any
 	}{
-		{anonSession, "list_pages", "response_mode", []string{"", "standard", "compact"}},
-		{anonSession, "get_page", "response_mode", []string{"", "standard", "compact"}},
-		{anonSession, "search_pages", "match", []string{"", "any", "title_exact"}},
-		{anonSession, "search_pages", "response_mode", []string{"", "standard", "compact"}},
-		{anonSession, "get_recent_posts", "response_mode", []string{"", "standard", "compact"}},
-		{anonSession, "list_tags", "response_mode", []string{"", "standard", "compact"}},
-		{anonSession, "list_categories", "response_mode", []string{"", "standard", "compact"}},
-		{anonSession, "get_sitemap", "response_mode", []string{"", "standard", "compact"}},
-		{anonSession, "get_feed", "response_mode", []string{"", "standard", "compact"}},
-		{anonSession, "get_site_information", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "get_page_markdown", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "get_page_frontmatter", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "get_related_content", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "build_agent_context", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "export_agent_context", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "get_page_for_edit", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "search_content", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "explain_structure", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "get_site_health", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "validate_frontmatter", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "validate_site", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "get_broken_links", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "get_backlinks", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "suggest_links", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "inspect_rendered", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "list_content_types", "response_mode", []string{"", "standard", "compact"}},
-		{readSession, "list_page_assets", "response_mode", []string{"", "standard", "compact"}},
+		// response_mode across a representative spread of anonymous- and
+		// read-scoped tools (param-free where possible so the invalid enum
+		// value is the sole reason for rejection).
+		{anonSession, "list_pages", "response_mode", map[string]any{"response_mode": "ultra_compact"}},
+		{anonSession, "get_recent_posts", "response_mode", map[string]any{"response_mode": "verbose"}},
+		{anonSession, "list_tags", "response_mode", map[string]any{"response_mode": "full"}},
+		{anonSession, "list_categories", "response_mode", map[string]any{"response_mode": "ids_only"}},
+		{anonSession, "get_sitemap", "response_mode", map[string]any{"response_mode": "tiny"}},
+		{anonSession, "get_feed", "response_mode", map[string]any{"response_mode": "nope"}},
+		{anonSession, "get_site_information", "response_mode", map[string]any{"response_mode": "COMPACT"}},
+		{anonSession, "search_pages", "response_mode", map[string]any{"query": "hello", "response_mode": "ultra"}},
+		{readSession, "get_site_health", "response_mode", map[string]any{"response_mode": "brief"}},
+		{readSession, "validate_site", "response_mode", map[string]any{"response_mode": "loud"}},
+		{readSession, "get_broken_links", "response_mode", map[string]any{"response_mode": "xxx"}},
+		{readSession, "list_content_types", "response_mode", map[string]any{"response_mode": "standardish"}},
+		{readSession, "search_content", "response_mode", map[string]any{"query": "hello", "response_mode": "verbose"}},
+		// search_pages.match — the other schema-only enum migrated in #892.
+		{anonSession, "search_pages", "match", map[string]any{"query": "hello", "match": "fuzzy"}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.tool+"."+tc.field, func(t *testing.T) {
+			// Regression guard: the field must not carry a published enum,
+			// or the schema layer would reject before our pipeline runs.
 			schema := toolInputSchemaProperty(t, tc.session, tc.tool, tc.field)
-			enumRaw, ok := schema["enum"].([]any)
-			if !ok {
-				t.Fatalf("%s.%s: schema has no published enum, want %v", tc.tool, tc.field, tc.wantEnum)
+			if _, hasEnum := schema["enum"]; hasEnum {
+				t.Fatalf("%s.%s: field re-published as JSON-Schema enum; out-of-enum values "+
+					"would be rejected by the SDK before the handler and lose StructuredContent (#892)",
+					tc.tool, tc.field)
 			}
-			got := make([]string, len(enumRaw))
-			for i, v := range enumRaw {
-				got[i] = v.(string)
+
+			res := callTool(t, tc.session, tc.tool, tc.args)
+			if !res.IsError {
+				t.Fatalf("%s: invalid %s=%v did not produce an error result", tc.tool, tc.field, tc.args[tc.field])
 			}
-			if !stringSetEqual(got, tc.wantEnum) {
-				t.Fatalf("%s.%s: published enum = %v, want %v", tc.tool, tc.field, got, tc.wantEnum)
+			// The crux of #892: a schema-layer rejection leaves this nil.
+			if res.StructuredContent == nil {
+				t.Fatalf("%s: invalid %s=%v produced IsError but nil StructuredContent — "+
+					"error bypassed the toolcontract pipeline (#892)", tc.tool, tc.field, tc.args[tc.field])
+			}
+			m := decodeContent(t, res)
+			assertToolErrorEnvelope(t, tc.tool, m, "invalid_params")
+		})
+	}
+}
+
+// TestContractEnumFieldsStillAcceptValidValues preserves the runtime
+// acceptance half of #418's coverage after the published enums were removed
+// in #892: the migrated fields must still accept every value they document.
+func TestContractEnumFieldsStillAcceptValidValues(t *testing.T) {
+	restoreBuildInfo := setContractBuildInfo(t)
+	defer restoreBuildInfo()
+
+	idx := mustFixtureIndex(t)
+	srcIdx := mustFixtureSourceIndex(t)
+	cfg := fixtureConfig()
+
+	anonSession, anonDone := newAnonymousSession(t, idx, cfg, srcIdx)
+	defer anonDone()
+
+	tests := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"list_pages", map[string]any{"response_mode": "standard"}},
+		{"list_pages", map[string]any{"response_mode": "compact"}},
+		{"list_pages", map[string]any{}}, // omitted == standard
+		{"search_pages", map[string]any{"query": "hello", "match": "any"}},
+		{"search_pages", map[string]any{"query": "hello", "match": "title_exact"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.tool, func(t *testing.T) {
+			res := callTool(t, anonSession, tc.tool, tc.args)
+			if res.IsError {
+				t.Fatalf("%s with valid args %v returned error: %s", tc.tool, tc.args, marshalAny(t, res.Content))
 			}
 		})
 	}

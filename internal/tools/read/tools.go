@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/aireadiness"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -601,13 +600,6 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				warnings = append(warnings, fmt.Sprintf("markdown truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", *in.MaxBodyChars))
 			}
 			return nil, newBuildAgentContextOutput(buildAgentContextData{Context: ac}, warnings, time.Now().UTC()), nil
-		}, func(s any) any {
-			// "" is included because ResolveResponseMode treats an omitted
-			// or explicitly empty value the same as "standard" — the enum
-			// must not reject a value runtime already accepts. "full" and
-			// "ids_only" are deliberately excluded: they're reserved
-			// vocabulary rejected at runtime (#337), not yet implemented.
-			return tools.WithEnum(s, "response_mode", "", string(toolcontract.ResponseModeStandard), string(toolcontract.ResponseModeCompact))
 		})
 
 	addReadOnlyTool(s, "export_agent_context", "Export agent context",
@@ -1167,11 +1159,17 @@ func readingTimeMinutes(md string) int {
 }
 
 // schemaOpts, when provided, post-process the inferred input schema (#418) —
-// e.g. tools.WithEnum/tools.WithRange to publish a real enum/range constraint
-// that jsonschema-go's struct-tag inference can't express directly.
+// e.g. tools.WithMaxLimit to publish a real range constraint that
+// jsonschema-go's struct-tag inference can't express directly.
+//
+// response_mode is deliberately NOT published as a JSON-Schema enum (#892):
+// the SDK enforces enum constraints in its argument-validation step *before*
+// our WrapTool pipeline runs, so an out-of-enum value would surface as a bare
+// text error with no StructuredContent/code. Validation lives in
+// toolcontract.WrapTool (ResolveResponseMode), which yields a structured
+// invalid_params error listing the accepted values instead.
 func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string, handler mcp.ToolHandlerFor[In, Out], schemaOpts ...func(any) any) {
 	inputSchema := tools.MustSchema[In]()
-	inputSchema = addResponseModeEnum(inputSchema)
 	for _, opt := range schemaOpts {
 		inputSchema = opt(inputSchema)
 	}
@@ -1191,17 +1189,6 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 }
 
 func boolPtr(v bool) *bool { return &v }
-
-func addResponseModeEnum(inputSchema any) any {
-	schema, ok := inputSchema.(*jsonschema.Schema)
-	if !ok {
-		return inputSchema
-	}
-	if _, ok := schema.Properties["response_mode"]; !ok {
-		return inputSchema
-	}
-	return tools.WithEnum(inputSchema, "response_mode", "", string(toolcontract.ResponseModeStandard), string(toolcontract.ResponseModeCompact))
-}
 
 func clampLimit(v, defaultVal, maxVal int) int {
 	if v <= 0 {
