@@ -27,6 +27,16 @@ import (
 // assets use the hugo_root-relative logical path, and preview residue reports
 // only the opaque directory basename (mcp-preview-<hex>), never an absolute
 // host temp path.
+//
+// #894 note: this tool deliberately does NOT expose test_content_owner. Its
+// two finding classes are `orphaned_generated_asset` (a generated hero image
+// whose owning page is, by definition, gone from the index — so its frontmatter
+// and any test_content_owner are unrecoverable) and `expired_preview_residue`
+// (a preview directory with no page association at all). There is no finding
+// here whose owner could be read from a live page, so an owner field/filter
+// would be a permanently-empty footgun. test_content_owner exposure and the
+// optional owner filter therefore live only on validate_site/validate_frontmatter
+// (where the pages still exist); see internal/tools/read/extended.go.
 
 const (
 	storageFindingOrphanedGeneratedAsset = "orphaned_generated_asset"

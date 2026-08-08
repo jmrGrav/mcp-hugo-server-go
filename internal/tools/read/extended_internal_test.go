@@ -186,7 +186,7 @@ func TestValidationHelpers(t *testing.T) {
 	if len(issues) < 2 {
 		t.Fatalf("validateFrontMatterPage() = %#v", issues)
 	}
-	out := validatePagesWithIssues(src.ListPages(0, 0), 0, 1, nil, site.NewPageResolver(&site.Index{}, src, config.Config{}))
+	out := validatePagesWithIssues(src.ListPages(0, 0), 0, 1, "", nil, site.NewPageResolver(&site.Index{}, src, config.Config{}))
 	if !out.Success || out.Data.PagesChecked != 4 || len(out.Data.Pages) != 1 {
 		t.Fatalf("validatePagesWithIssues() = %#v", out)
 	}
