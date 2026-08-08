@@ -207,6 +207,13 @@ type validateFrontMatterInput struct {
 	Limit        int    `json:"limit,omitempty"`
 	Offset       int    `json:"offset,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
+	// Owner (#894) optionally filters the test-content advisory
+	// (test_content_slugs / test_content) to only entries whose
+	// test_content_owner frontmatter matches — so a multi-agent caller can
+	// safely enumerate just its own disposable residue. Omitting it lists all
+	// test content (backward-compatible). Reserved-prefix legacy content has
+	// no owner, so it is excluded whenever a non-empty owner filter is set.
+	Owner string `json:"owner,omitempty"`
 }
 
 // validateSiteInput's InvalidOnly/IncludeValid are pointers so the handler
@@ -220,6 +227,8 @@ type validateSiteInput struct {
 	InvalidOnly  *bool  `json:"invalid_only,omitempty"`
 	IncludeValid *bool  `json:"include_valid,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
+	// Owner (#894) — see validateFrontMatterInput.Owner.
+	Owner string `json:"owner,omitempty"`
 }
 
 // effectiveInvalidOnly resolves validateSiteInput's default-flip precedence
@@ -292,6 +301,22 @@ type validateOutputData struct {
 	// "confirm this isn't leftover throwaway content before publishing,"
 	// not "this page's frontmatter is broken."
 	TestContentSlugs []string `json:"test_content_slugs,omitempty"`
+	// TestContent (#894) is the structured companion to TestContentSlugs: the
+	// same disposable-test-content entries, but each carrying the page's
+	// test_content_owner (already written to frontmatter by create_page's
+	// test_content option) when present. Kept as a parallel, additive field so
+	// test_content_slugs stays a plain []string for existing callers. Ordering
+	// mirrors test_content_slugs. When the caller passes an owner filter, both
+	// fields are narrowed to that owner.
+	TestContent []testContentEntryDTO `json:"test_content,omitempty"`
+}
+
+// testContentEntryDTO is one disposable-test-content advisory entry with its
+// owner (#894). Owner is omitempty because reserved-prefix legacy content and
+// pre-#661 explicit test content have no recorded owner.
+type testContentEntryDTO struct {
+	Slug  string `json:"slug"`
+	Owner string `json:"owner,omitempty"`
 }
 
 type validateOutput struct {
@@ -650,7 +675,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			}, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. When a slug maps to a multilingual bundle, the default is bundle-wide validation across every translation sharing that source key; pass `lang` to restrict validation to one translation explicitly. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "validate_frontmatter", "Validate front matter", "Validate Hugo front matter for missing titles, dates, or malformed metadata. Optionally target one slug. When a slug maps to a multilingual bundle, the default is bundle-wide validation across every translation sharing that source key; pass `lang` to restrict validation to one translation explicitly. `pages_checked`/`pages_passed`/`invalid` always describe the full matched scan scope, regardless of `limit`/`offset` — every matched page is validated. `pages` is a separate paginated view of the per-page detail rows; use `returned_count`/`has_more`/`next_offset` to page through it. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). `test_content` is the structured companion to `test_content_slugs`: the same entries, each also carrying the page's `test_content_owner` (written to frontmatter by create_page's `test_content` option) when present (#894). Pass `owner` to narrow both lists to only test content whose recorded owner matches — so a multi-agent caller can safely enumerate just its own residue; reserved-prefix legacy content and ownerless test content are excluded when a non-empty `owner` filter is set (#894). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateFrontMatterInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -666,10 +691,10 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				return nil, validateOutput{}, err
 			}
 			resolver := site.NewPageResolver(idx, srcIdx, cfg)
-			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, aliases, resolver), nil
+			return nil, validatePagesWithIssues(pages, in.Offset, in.Limit, in.Owner, aliases, resolver), nil
 		})
 
-	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "validate_site", "Validate site", "Run a validation pass over all Hugo source pages and report front matter issues. Equivalent to validate_frontmatter with no slug filter. `pages_checked`/`pages_passed`/`invalid` always describe the full site regardless of `limit`/`offset`/`invalid_only`/`include_valid`. `pages` is a separate paginated view of the per-page detail rows; use `limit`/`offset` and `returned_count`/`has_more`/`next_offset` to page through it. By default (no arguments) `pages` contains only invalid pages — on a large, mostly-valid site this avoids paying full response cost to confirm nothing is wrong. Set `include_valid=true` (or `invalid_only=false`) to get every page's detail row back, including passing ones. `test_content_slugs` separately lists disposable test content — first from explicit `test_content: true` frontmatter, then (for older content) from reserved test/audit prefixes such as `mcp-audit-`, `test-audit-`, `codex-` — advisory only, never affects `invalid`/`status`; confirm it isn't leftover throwaway content before publishing (#584, #832). `test_content` is the structured companion to `test_content_slugs`: the same entries, each also carrying the page's `test_content_owner` (written to frontmatter by create_page's `test_content` option) when present (#894). Pass `owner` to narrow both lists to only test content whose recorded owner matches — so a multi-agent caller can safely enumerate just its own residue; reserved-prefix legacy content and ownerless test content are excluded when a non-empty `owner` filter is set (#894). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in validateSiteInput) (*mcp.CallToolResult, validateOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, validateOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source validation diagnostics")
@@ -682,7 +707,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			}
 			pages := srcIdx.ListPages(0, 0)
 			resolver := site.NewPageResolver(idx, srcIdx, cfg)
-			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), aliases, resolver), nil
+			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), in.Owner, aliases, resolver), nil
 		})
 
 	addReadOnlyTool(s, "get_broken_links", "Get broken links", "Audit internal links against the current Hugo index without making any external network calls. When db_path is configured, reads from a pre-computed link graph (O(1)); otherwise re-scans HTML on each call. Returns a limited sample of missing internal targets. `documents_scanned` is the canonical size of the rendered HTML surface this pass checked; the legacy `total_pages` field is kept for backward compatibility and mirrors the same value. `content_pages`/`taxonomy_pages`/`section_pages`/`other_documents` break that scan surface down by document class so agents don't have to guess what `total_pages` counted. `index_staleness` (in-memory path only, not the db_path path) is present only when the index is behind on-disk content — its absence means results reflect current source (#583). When present, `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` means this server has a known, expected write awaiting the next build_site/publish_changes; `\"external_or_unknown\"` means the disk changed with no such record on file — most plausibly an edit made outside this server (e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
@@ -1284,8 +1309,8 @@ func sliceBrokenLinks(issues []brokenLinkDTO, offset, limit int) []brokenLinkDTO
 	return out
 }
 
-func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, aliases map[string]string, resolver *site.PageResolver) validateOutput {
-	return validatePagesWithIssuesFiltered(pages, offset, limit, false, aliases, resolver)
+func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ownerFilter string, aliases map[string]string, resolver *site.PageResolver) validateOutput {
+	return validatePagesWithIssuesFiltered(pages, offset, limit, false, ownerFilter, aliases, resolver)
 }
 
 // validatePagesWithIssuesFiltered is validatePagesWithIssues plus an
@@ -1293,7 +1318,8 @@ func validatePagesWithIssues(pages []hugosite.SourcePage, offset, limit int, ali
 // describe the full scan scope regardless of invalidOnly — only the
 // paginated `pages` detail rows (and the has_more/next_offset pagination
 // built from them) are affected by the filter.
-func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit int, invalidOnly bool, aliases map[string]string, resolver *site.PageResolver) validateOutput {
+func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit int, invalidOnly bool, ownerFilter string, aliases map[string]string, resolver *site.PageResolver) validateOutput {
+	ownerFilter = strings.TrimSpace(ownerFilter)
 	total := len(pages)
 	if offset < 0 {
 		offset = 0
@@ -1307,6 +1333,7 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 	// canonical slug to testContentSlugs twice.
 	seenTestContentSlugs := make(map[string]bool)
 	var testContentSlugs []string
+	var testContent []testContentEntryDTO
 	for _, p := range pages {
 		issues := validateFrontMatterPage(p, aliases)
 		if len(issues) > 0 {
@@ -1314,8 +1341,17 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 		}
 		slug := canonicalValidationSlug(p, resolver)
 		if isTestContentPage(p) && !seenTestContentSlugs[slug] {
+			owner := testContentOwner(p)
+			// #894: when an owner filter is set, only surface entries whose
+			// recorded owner matches — reserved-prefix legacy content and any
+			// ownerless test content are excluded so an agent enumerating its
+			// own residue never sees another agent's (or unattributed) pages.
+			if ownerFilter != "" && owner != ownerFilter {
+				continue
+			}
 			seenTestContentSlugs[slug] = true
 			testContentSlugs = append(testContentSlugs, slug)
+			testContent = append(testContent, testContentEntryDTO{Slug: slug, Owner: owner})
 		}
 		allResults = append(allResults, frontMatterIssueDTO{Slug: slug, Lang: p.Lang, Issues: issues})
 	}
@@ -1360,6 +1396,7 @@ func validatePagesWithIssuesFiltered(pages []hugosite.SourcePage, offset, limit 
 		NextOffset:       meta.NextOffset,
 		Pages:            results,
 		TestContentSlugs: testContentSlugs,
+		TestContent:      testContent,
 	}, time.Now().UTC())
 }
 
@@ -1436,6 +1473,22 @@ func isTestContentPage(p hugosite.SourcePage) bool {
 		return true
 	}
 	return hasReservedTestSlugPrefix(p.Slug)
+}
+
+// testContentOwner returns the test_content_owner recorded in a page's
+// frontmatter (#894, written by create_page's test_content option), or "" when
+// the page has none — reserved-prefix legacy content and pre-#661 explicit test
+// content never carried an owner.
+func testContentOwner(p hugosite.SourcePage) string {
+	if p.FrontmatterRaw == nil {
+		return ""
+	}
+	if raw, ok := p.FrontmatterRaw["test_content_owner"]; ok {
+		if s, ok := raw.(string); ok {
+			return strings.TrimSpace(s)
+		}
+	}
+	return ""
 }
 
 func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) []string {
