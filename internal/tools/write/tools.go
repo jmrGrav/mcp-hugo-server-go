@@ -645,18 +645,20 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: test_content.ttl_hours must be between 1 and %d hours when provided", testContentMaxTTLHours))
 			}
 		}
-		// Allow() is skipped for dry-run (#588) but otherwise stays at its
-		// original position, so every non-dry-run failure path below
-		// (already_exists, build_in_progress, etc.) keeps consuming quota
-		// exactly as it did before — only the dry-run path changes here.
-		if !in.DryRun && !limiter.Allow() {
-			return nil, createPageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("create_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
-		}
-
+		// #887: Allow() is deliberately NOT consumed here. Under the unified
+		// quota rule (see the package-level comment on quotaConsumptionRule),
+		// quota is spent only once a call is a valid request against an
+		// eligible target and is about to make a genuine mutation attempt —
+		// so every free pre-flight gate above (input validation) and below
+		// (build_in_progress lock wait, idempotency replay) never spends it.
+		// For a create the eligibility gate IS the atomic write itself, so the
+		// Allow() below sits immediately before it: already_exists (the
+		// write-time collision) legitimately consumes, matching delete_page's
+		// existence-gated placement.
 		dir, err := pg.SafeJoin(in.Slug)
 		if err != nil {
 			slog.Warn("create_page: path validation failed", "slug", in.Slug, "error", err)
-			return nil, createPageOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
 		}
 
 		filePath := filepath.Join(dir, "index.md")
@@ -684,7 +686,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 
 		// Round-trip guard: verify the generated content parses correctly.
 		if err := validateFrontmatterRoundTrip(content); err != nil {
-			return nil, createPageOutput{}, wrapErr(fmt.Errorf("validation_error: %w", err))
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("validation_error: %w", err))
 		}
 
 		if in.DryRun {
@@ -763,6 +765,16 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			if hit {
 				return nil, cached, nil
 			}
+		}
+
+		// #887 quota-consumption boundary: this create has a valid request and
+		// (via the idempotency miss above) is a genuine, non-replayed mutation
+		// attempt about to write. Consume the create/update/upload quota now, so
+		// already_exists below — discovered at the atomic write — costs a token
+		// while every earlier rejection (validation, build_in_progress,
+		// idempotency replay) stays free.
+		if !limiter.Allow() {
+			return nil, createPageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("create_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
 
 		if err := pg.RevalidateForWrite(filePath); err != nil {
@@ -915,17 +927,13 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 			}
 		}
-		// Allow() is skipped for dry-run (#588) but otherwise stays at its
-		// original position — before the missing/stale expected_revision
-		// checks further down, which is existing, tested behavior: a real
-		// (non-dry-run) update_page attempt that fails revision validation
-		// still consumes 1 token (TestUpdatePageRequiresExpectedRevisionForWrite/
-		// TestUpdatePageRejectsStaleExpectedRevision). Only the dry-run path
-		// changes here.
-		if !in.DryRun && !limiter.Allow() {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
-		}
-
+		// #887: Allow() is NOT consumed here anymore. Under the unified quota
+		// rule (see quotaConsumptionRule) it now sits below, after the target's
+		// existence is confirmed (not_found is free) and after the missing
+		// expected_revision input-shape check (also free), immediately before
+		// the stale-revision conflict check — so update_page matches
+		// delete_page: not_found and a missing required guard are free, while a
+		// genuine stale-revision conflict against the confirmed page consumes.
 		const lockWait = 10 * time.Second
 		deadline := time.Now().Add(lockWait)
 		for {
@@ -1020,6 +1028,15 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if !in.DryRun {
 			if strings.TrimSpace(in.ExpectedRevision) == "" {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run update_page"))
+			}
+			// #887 quota-consumption boundary: existence is confirmed and the
+			// caller supplied the required guard, so this is a genuine mutation
+			// attempt against the target page. Consume now, so the stale
+			// revision_conflict below costs a token (matching delete_page and
+			// the pre-existing TestUpdatePageRejectsStaleExpectedRevision) while
+			// not_found / missing-guard above stay free.
+			if !limiter.Allow() {
+				return nil, updatePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 			}
 			if in.ExpectedRevision != currentRevision {
 				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
@@ -1451,6 +1468,10 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
 		}
 
+		// #887: Allow() fires here — after not_found and the missing-guard
+		// check above (both free), immediately before the revision_conflict
+		// check below (which consumes). This is the reference placement the
+		// whole #887 fix aligns the other tools to.
 		if !limiter.Allow() {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
 		}
