@@ -179,6 +179,31 @@ func (idx *SourceIndex) ListPages(limit, offset int) []SourcePage {
 	return result
 }
 
+// Languages returns the distinct non-empty language codes that currently have
+// source content, sorted. The default/unlabelled bucket (Lang == "") is not
+// listed. This is the write tools' signal for "which non-default languages
+// already exist in this site" when deciding whether a caller-supplied lang on
+// a create looks like a typo (#891); it is intentionally derived from source
+// content rather than a configured list, because the server does not parse
+// Hugo's own [languages] config.
+func (idx *SourceIndex) Languages() []string {
+	if idx == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, p := range idx.pages {
+		if l := strings.TrimSpace(p.Lang); l != "" {
+			seen[l] = true
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for l := range seen {
+		out = append(out, l)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (idx *SourceIndex) AllTags() []string {
 	if idx == nil {
 		return nil

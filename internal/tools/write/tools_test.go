@@ -2618,6 +2618,118 @@ func TestCreatePageRejectsInvalidLang(t *testing.T) {
 	}
 }
 
+// TestCreatePageWarnsOnUnknownLanguage is the regression test for #891: a
+// well-shaped but unrecognized language (here "zz", not the default and with no
+// existing content) must not be silently accepted. create_page still writes the
+// page (warn, not reject — see unknownLangWarning for why rejection is
+// impossible without a configured-language set the server does not have), but it
+// must surface an explicit warning naming the offending lang and the known
+// languages so a typo like "zz"/"de"-for-"en" no longer produces a zero-signal
+// orphan. Pre-fix, create_page returned no such warning: this asserts the
+// warning is present, so it fails red against the pre-fix handler.
+func TestCreatePageWarnsOnUnknownLanguage(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/zz-orphan",
+		"lang":       "zz",
+		"title":      "Orphan",
+		"body":       "Contenu orphelin",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page with unknown lang must succeed with a warning, not error: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	warning, _ := data["warning"].(string)
+	if !strings.Contains(warning, "zz") {
+		t.Fatalf("create_page unknown-lang warning must name the offending lang, got warning=%q", warning)
+	}
+	if !strings.Contains(warning, "no existing content") {
+		t.Fatalf("create_page unknown-lang warning must explain the orphan risk, got warning=%q", warning)
+	}
+	if !strings.Contains(warning, "en") {
+		t.Fatalf("create_page unknown-lang warning must list known languages (default en), got warning=%q", warning)
+	}
+	if !strings.Contains(warning, "get_capabilities") {
+		t.Fatalf("create_page unknown-lang warning must point at get_capabilities, got warning=%q", warning)
+	}
+	// Non-silent: the file IS written (warn, not reject) so the caller can act
+	// on the warning; it is not lost, unlike a rejected write.
+	zzPath := filepath.Join(contentRoot, "posts", "zz-orphan", "index.zz.md")
+	if _, err := os.Stat(zzPath); err != nil {
+		t.Fatalf("expected written file at %s (warn, not reject): %v", zzPath, err)
+	}
+}
+
+// TestCreatePageDoesNotWarnOnKnownLanguage guards the false-positive edge of
+// #891: neither the site default (en) nor a language that already has content
+// (fr, after its first page exists) may trip the unknown-language warning.
+// The first fr page legitimately warns (fr is not yet known on a fresh site —
+// the documented add-a-new-language tension); the second fr page must not, and
+// a default-language create must never warn. This proves the warning is scoped
+// to genuinely-unrecognized languages, not every non-default one.
+func TestCreatePageDoesNotWarnOnKnownLanguage(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// Default language: never warns.
+	enRes := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/en-page",
+		"lang":       "en",
+		"title":      "English",
+		"body":       "Body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if enRes.IsError {
+		raw, _ := json.Marshal(enRes.Content)
+		t.Fatalf("create_page default lang failed: %s", raw)
+	}
+	if w, _ := decodeWriteData(t, enRes)["warning"].(string); strings.Contains(w, "no existing content") {
+		t.Fatalf("default-language create_page must not emit unknown-language warning, got warning=%q", w)
+	}
+
+	// First fr page: fr is not yet known, so it legitimately warns.
+	firstFr := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/fr-first",
+		"lang":       "fr",
+		"title":      "Premier",
+		"body":       "Contenu",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if firstFr.IsError {
+		raw, _ := json.Marshal(firstFr.Content)
+		t.Fatalf("create_page first fr page failed: %s", raw)
+	}
+	if w, _ := decodeWriteData(t, firstFr)["warning"].(string); !strings.Contains(w, "no existing content") {
+		t.Fatalf("first fr page (no prior fr content) should warn, got warning=%q", w)
+	}
+
+	// Second fr page: fr now has content, so it must NOT warn.
+	secondFr := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/fr-second",
+		"lang":       "fr",
+		"title":      "Deuxième",
+		"body":       "Contenu",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if secondFr.IsError {
+		raw, _ := json.Marshal(secondFr.Content)
+		t.Fatalf("create_page second fr page failed: %s", raw)
+	}
+	if w, _ := decodeWriteData(t, secondFr)["warning"].(string); strings.Contains(w, "no existing content") {
+		t.Fatalf("second fr page (fr content now exists) must not warn, got warning=%q", w)
+	}
+}
+
 // TestDeletePageMultilingualBundleWithoutLangIsAmbiguous is the core
 // regression test for #682: previously, omitting lang on a bilingual bundle
 // silently resolved to one language file (via the alphabetically-first-pick
