@@ -123,6 +123,48 @@ func TestRollbackChangeRevisionConflict(t *testing.T) {
 	}
 }
 
+// TestRollbackChangeRejectsMalformedIdempotencyKey is a regression test for
+// a gap in #888: rollback_change accepts and stores/replays idempotency_key
+// exactly like the other eight mutation tools (create_page, update_page,
+// delete_page, upload_page_asset, delete_page_asset, apply_content_plan,
+// apply_bundle_plan, rollback_bundle) that #888 patched, but was missed from
+// that sweep -- it had no validateIdempotencyKey call at handler entry, so a
+// path-traversal-shaped key sailed straight into the idempotency store.
+func TestRollbackChangeRejectsMalformedIdempotencyKey(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug":       "posts/article",
+		"operations": []any{map[string]any{"op": "update_body", "body": "Changed body."}},
+	})
+	planData := decodeWriteData(t, planRes)
+	planID := planData["plan_id"].(string)
+	beforeRevision := planData["target"].(map[string]any)["revision"].(string)
+
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
+	}
+	afterApplyRevision := decodeWriteData(t, applyRes)["after_revision"].(string)
+
+	res := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/article",
+		"to_revision":       beforeRevision,
+		"expected_revision": afterApplyRevision,
+		"idempotency_key":   "../../etc/passwd",
+	})
+	if !res.IsError {
+		t.Fatal("rollback_change with a path-traversal-shaped idempotency_key should fail")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "invalid_params") || !strings.Contains(raw, "idempotency_key") {
+		t.Fatalf("rollback_change malformed idempotency_key error = %s, want invalid_params mentioning idempotency_key", raw)
+	}
+}
+
 // TestRollbackChangeDryRunDoesNotWrite verifies dry_run previews the diff
 // without touching disk or requiring expected_revision.
 func TestRollbackChangeDryRunDoesNotWrite(t *testing.T) {

@@ -215,6 +215,9 @@ func registerRollbackChange(
 		if strings.TrimSpace(in.ToRevision) == "" {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: to_revision must not be empty"))
 		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
+		}
 		if !in.DryRun && !limiter.Allow() {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(rateLimitExceededErr("rollback_change", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
