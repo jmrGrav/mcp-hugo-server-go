@@ -265,36 +265,33 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
 		}
 		// #887: not_a_bundle (the parent bundle doesn't exist / isn't a leaf
-		// bundle) and path validation are target-eligibility gates — the
-		// upload analog of not_found on delete — so this CHEAP pre-lock
-		// eligibility check runs BEFORE Allow() and is free (it reads only the
-		// in-memory index and does pure path math, exactly like
-		// delete_page_asset's own pre-lock validateBundleSlug). This is a
-		// fast-path reject for a genuinely wrong slug; it is NOT the
-		// authoritative gate — a concurrent delete_page could remove the bundle
-		// after this passes, so an identical re-check runs under the content
-		// lock below before the write.
-		if err := validateBundleSlug(idx, slug); err != nil {
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, filename), filename)
+		// bundle) is a target-eligibility gate — the upload analog of
+		// not_found on delete — so it stays free (checked before Allow()
+		// below). SourceIndex has no internal synchronization: every access
+		// must be guarded by the caller holding hugosite.ContentMu (see its
+		// doc comment). This eligibility check therefore takes a brief
+		// RLock — race-free, and cheap relative to the write-lock loop below
+		// — rather than reading the index unsynchronized, which is what
+		// CI's -race run caught here before this fix (racing a concurrent
+		// delete_page's write, which holds the full write lock). It is
+		// still NOT the authoritative gate: a concurrent delete_page can
+		// remove the bundle between this RUnlock and the write-lock
+		// acquisition below, so an identical check re-runs under the write
+		// lock immediately before the write.
+		hugosite.ContentMu.RLock()
+		preLockErr := validateBundleSlug(idx, slug)
+		hugosite.ContentMu.RUnlock()
+		if preLockErr != nil {
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(preLockErr, filename), filename)
 		}
-		dir, err := pg.SafeJoin(slug)
-		if err != nil {
-			slog.Warn("upload_page_asset: path validation failed", "slug", slug, "error", err)
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("invalid_params: path validation failed"), filename), filename)
-		}
-		filePath := filepath.Join(dir, filename)
 
-		// #887 quota-consumption boundary: a valid request against an eligible
-		// bundle. Allow() fires here (skipped for dry_run, #588) — still BEFORE
-		// the potentially expensive base64 decode below, deliberately keeping
-		// that up-to-10MB decode metered against the quota as a DoS guard —
-		// while not_a_bundle / path validation above stay free. already_exists
-		// at the atomic write is the create-collision that legitimately
-		// consumes. NOTE: for a keyed replay the idempotency check sits after
-		// the decode (it needs the content hash), so an upload replay does
-		// spend a token — the decode+hash is unavoidable real per-request work;
-		// this is the one create/upload-specific deviation from "replays are
-		// free," accepted to preserve the decode-metering guard.
+		// #887 quota-consumption boundary: a valid request against an
+		// eligible bundle. Allow() fires here (skipped for dry_run, #588) —
+		// still BEFORE the potentially expensive base64 decode below,
+		// deliberately keeping that up-to-10MB decode metered against the
+		// quota as a DoS guard — while not_a_bundle above stays free.
+		// already_exists at the atomic write is the create-collision that
+		// legitimately consumes.
 		if !in.DryRun && !limiter.Allow() {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(rateLimitExceededErr("upload_page_asset", cfg.RateLimit.CreateUpdatePerMin, limiter), filename), filename)
 		}
@@ -321,20 +318,28 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			slog.Debug("upload_page_asset: lock_released")
 		}()
 
-		// Authoritative existence re-check under the content lock: the pre-lock
-		// eligibility check above is advisory only. A concurrent delete_page
-		// that won the lock race removes the bundle (and its index entry) while
-		// holding this same lock, so re-validating here guarantees the upload
-		// loser of an upload/delete race deterministically returns not_found
-		// rather than resurrecting the bundle directory or failing with an
-		// opaque write_error (TestConcurrentUploadAssetAndDeleteSameBundle...).
-		// This runs after Allow(): the loser passed eligibility at request time
-		// and reached a genuine mutation attempt, so spending its token here is
-		// consistent with the #887 rule, and a fresh wrong-slug request is
-		// still caught (free) by the pre-lock check above.
+		// Authoritative existence re-check under the write lock: the
+		// RLock-protected eligibility check above is race-free but not
+		// authoritative — a concurrent delete_page that won the lock race
+		// removes the bundle (and its index entry) while holding this same
+		// lock, so re-validating here guarantees the upload loser of an
+		// upload/delete race deterministically returns not_found rather
+		// than resurrecting the bundle directory or failing with an opaque
+		// write_error (TestConcurrentUploadAssetAndDeleteSameBundle...).
+		// This runs after Allow(): the loser passed eligibility at request
+		// time and reached a genuine mutation attempt, so spending its
+		// token here is consistent with the #887 rule, and a fresh
+		// wrong-slug request is still caught (free) by the RLock check
+		// above.
 		if err := validateBundleSlug(idx, slug); err != nil {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, filename), filename)
 		}
+		dir, err := pg.SafeJoin(slug)
+		if err != nil {
+			slog.Warn("upload_page_asset: path validation failed", "slug", slug, "error", err)
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("invalid_params: path validation failed"), filename), filename)
+		}
+		filePath := filepath.Join(dir, filename)
 
 		hash := contentmodel.SourceRevisionBytes(data)
 		duplicateOf, dupErr := findDuplicateAsset(dir, data)
