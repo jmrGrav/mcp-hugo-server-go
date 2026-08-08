@@ -260,6 +260,9 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if slug == "" {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("invalid_params: slug must not be empty"), strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
 		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
+		}
 		filename, ext, wantMIME, err := validateAssetFilename(in.Filename)
 		if err != nil {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
@@ -673,6 +676,9 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 		if rawSlug == "" {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
+		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 		}
 		filename, err := validateDeleteAssetFilename(in.Filename)
 		if err != nil {

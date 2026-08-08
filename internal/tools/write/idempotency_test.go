@@ -1,6 +1,7 @@
 package write
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -191,5 +192,41 @@ func TestIdempotencyStorePruneAndTrimLocked(t *testing.T) {
 	}
 	if _, ok := store.entries["newest"]; !ok {
 		t.Fatal("trimLocked() dropped newest entry, want it retained")
+	}
+}
+
+// TestValidateIdempotencyKey is a regression test for #888: a caller-supplied
+// idempotency_key must be bounded to a safe charset (alphanumeric, '-', '_')
+// and length. Path-traversal shapes, embedded whitespace, Unicode, and emoji
+// are rejected; a blank key (idempotency not requested) and a valid
+// boundary-length key are accepted.
+func TestValidateIdempotencyKey(t *testing.T) {
+	valid := []string{
+		"",          // absent: idempotency not requested
+		"   ",       // all-whitespace: treated as absent
+		"abc123",    // plain
+		"a-b_c-123", // with allowed separators
+		strings.Repeat("k", maxIdempotencyKeyLen), // boundary length
+	}
+	for _, k := range valid {
+		if err := validateIdempotencyKey(k); err != nil {
+			t.Errorf("validateIdempotencyKey(%q) = %v, want nil", k, err)
+		}
+	}
+
+	invalid := []string{
+		"../../etc/passwd", // path-traversal shape
+		"..\\..\\windows",  // backslash traversal
+		"abc def",          // embedded whitespace
+		"key/with/slash",   // slash
+		"café",             // unicode
+		"key\U0001F389",    // emoji
+		"key.with.dots",    // dots
+		strings.Repeat("k", maxIdempotencyKeyLen+1), // over length
+	}
+	for _, k := range invalid {
+		if err := validateIdempotencyKey(k); err == nil {
+			t.Errorf("validateIdempotencyKey(%q) = nil, want error", k)
+		}
 	}
 }

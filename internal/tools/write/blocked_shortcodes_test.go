@@ -152,3 +152,29 @@ func TestCreatePageRejectsOverLongTaxonomyTerm(t *testing.T) {
 		done()
 	}
 }
+
+// TestCreatePageRejectsMalformedIdempotencyKey is a regression test for #888:
+// a caller-supplied idempotency_key with a path-traversal shape (or any value
+// outside the alphanumeric/'-'/'_' charset) must be rejected with
+// invalid_params rather than silently accepted as a cache key.
+func TestCreatePageRejectsMalformedIdempotencyKey(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":            "posts/idem-key",
+		"title":           "Idem",
+		"body":            "Body.",
+		"tags":            []any{},
+		"categories":      []any{},
+		"idempotency_key": "../../etc/passwd",
+	})
+	if !res.IsError {
+		t.Fatal("create_page with a path-traversal-shaped idempotency_key should fail")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "invalid_params") || !strings.Contains(raw, "idempotency_key") {
+		t.Fatalf("create_page malformed idempotency_key error = %s, want invalid_params mentioning idempotency_key", raw)
+	}
+}

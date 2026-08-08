@@ -692,6 +692,9 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := validateTaxonomyTerms("category", in.Categories); err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
 		if in.TestContent != nil && in.TestContent.TTLHours != nil {
 			ttl := *in.TestContent.TTLHours
 			if ttl <= 0 || ttl > testContentMaxTTLHours {
@@ -995,6 +998,9 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 		}
 		if err := validateTaxonomyTerms("category", in.Categories); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 		}
 		// #887: Allow() is NOT consumed here anymore. Under the unified quota
@@ -1366,6 +1372,9 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 		if err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
 

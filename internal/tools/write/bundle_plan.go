@@ -649,6 +649,9 @@ func registerApplyBundlePlan(
 		if strings.TrimSpace(in.PlanID) == "" {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: plan_id must not be empty"))
 		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(err)
+		}
 		if !in.DryRun && !limiter.Allow() {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(rateLimitExceededErr("apply_bundle_plan", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
@@ -822,6 +825,9 @@ func registerRollbackBundle(
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
 		if err := validateSlugFormat(in.Slug); err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(err)
 		}
 		if strings.TrimSpace(in.ToBundleRevision) == "" {
