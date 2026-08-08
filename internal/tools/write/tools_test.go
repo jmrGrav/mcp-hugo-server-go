@@ -3179,6 +3179,140 @@ func TestDeletePageWithoutHeroImageSucceeds(t *testing.T) {
 	}
 }
 
+// TestDeletePageRemovesHeroImageForPublicFormSlug proves delete_page's hero
+// cleanup (#606) closes the loop for EVERY slug form that resolves a bundle,
+// not just the clean source-key form TestDeletePageRemovesOrphanedHeroImage
+// already covers (#881). generate_hero_image accepts both the source key
+// ("posts/x") and the canonical public form ("/posts/x/") and normalizes both
+// to the same on-disk hero path via NormalizeHeroImageSlug. delete_page runs
+// its input through a *different* normalizer (normalizeInputSlug) before
+// re-deriving the hero path in removeHeroImage; this test pins that the two
+// still converge, so a caller deleting via the public form can't silently
+// leave the hero behind as a new orphan. If they ever diverged, the hero at
+// the source-key path would survive this delete and the assertion would fail.
+func TestDeletePageRemovesHeroImageForPublicFormSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug":       "posts/hero-pub",
+		"title":      "Hero Public Form",
+		"body":       "body",
+		"tags":       []any{},
+		"categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page failed: %s", raw)
+	}
+
+	// Fake the hero image at the exact path generate_hero_image derives for
+	// this slug (source-key form) via NormalizeHeroImageSlug.
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "hero-pub-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll hero image parent dir: %v", err)
+	}
+	if err := os.WriteFile(heroPath, []byte("fake-jpeg-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile hero image: %v", err)
+	}
+
+	// Delete via the canonical PUBLIC form ("/posts/hero-pub/"), not the
+	// source key — the cross-form path that would regress if the two
+	// normalizers desynced.
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "/posts/hero-pub/",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "hero-pub", "index.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page failed: %s", raw)
+	}
+
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "hero-pub")); !os.IsNotExist(err) {
+		t.Error("source directory must be removed")
+	}
+	if _, err := os.Stat(heroPath); !os.IsNotExist(err) {
+		t.Error("hero image must be removed even when delete_page is called with the public-form slug — otherwise the public/source-key form divergence forms a new orphan (#881, #606)")
+	}
+}
+
+// TestDeletePageKeepsSharedHeroWhenTranslationSurvives pins the correct SCOPE
+// of delete_page's hero cleanup (#606, #682, #881): the {slug}-featured.jpg
+// hero is a whole-page-level asset shared across a bundle's translations, so
+// deleting one language of a bilingual bundle must NOT remove it while another
+// translation still references it. Only when the LAST language is deleted (the
+// whole bundle goes away) may the hero be cleaned up. This is the invariant
+// that makes "delete_page closes the orphan loop" safe rather than a
+// destructive surprise: it never force-deletes a still-referenced shared
+// asset, matching this codebase's refusal to silently delete something a
+// caller didn't explicitly target.
+func TestDeletePageKeepsSharedHeroWhenTranslationSurvives(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{HugoRoot: hugoRoot})
+	defer done()
+
+	for _, lang := range []string{"fr", "en"} {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug":       "posts/shared-hero",
+			"lang":       lang,
+			"title":      "Shared Hero " + lang,
+			"body":       "body " + lang,
+			"tags":       []any{},
+			"categories": []any{},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page (%s) failed: %s", lang, raw)
+		}
+	}
+
+	heroPath := filepath.Join(hugoRoot, "static", "images", "posts", "shared-hero-featured.jpg")
+	if err := os.MkdirAll(filepath.Dir(heroPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll hero image parent dir: %v", err)
+	}
+	if err := os.WriteFile(heroPath, []byte("fake-jpeg-bytes"), 0o644); err != nil {
+		t.Fatalf("WriteFile hero image: %v", err)
+	}
+
+	// Delete only the French translation — the bundle (and index.en.md)
+	// survives, so the shared hero MUST remain.
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/shared-hero",
+		"lang":              "fr",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "shared-hero", "index.fr.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page (fr) failed: %s", raw)
+	}
+	if _, err := os.Stat(heroPath); err != nil {
+		t.Fatalf("shared hero image must survive while another translation still exists (#682/#881): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "shared-hero", "index.en.md")); err != nil {
+		t.Fatalf("surviving translation index.en.md must remain: %v", err)
+	}
+
+	// Delete the last (English) translation — the whole bundle is now gone,
+	// so the hero may finally be cleaned up.
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug":              "posts/shared-hero",
+		"lang":              "en",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "shared-hero", "index.en.md")),
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page (en) failed: %s", raw)
+	}
+	if _, err := os.Stat(heroPath); !os.IsNotExist(err) {
+		t.Error("hero image must be removed once the last translation (whole bundle) is deleted (#606)")
+	}
+}
+
 // TestCreatePageSlugNormalization verifies that create_page strips leading and
 // trailing slashes from the slug so agents that pass /posts/foo/ and posts/foo
 // both reach the same content directory (#265).

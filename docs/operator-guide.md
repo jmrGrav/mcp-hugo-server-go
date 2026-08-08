@@ -565,6 +565,65 @@ When OAuth is disabled, `write` tools are rejected with a `not_authorized` error
 
 ## Monitoring and Debugging
 
+### Storage Health and One-Time Orphan Cleanup
+
+`get_storage_health` (site.admin, #861) is an **advisory-only** integrity
+surface: it reports residue that accumulates *outside* a page's own content
+bundle and **never deletes anything** (`data.auto_delete` is always `false`).
+Each finding carries a stable `code`, `severity`, and `resource_class`.
+
+There are two independent classes of `orphaned_generated_asset` finding
+(a `generate_hero_image` `{slug}-featured.jpg` under `static/images` whose
+slug has no owning page in the index). Understanding which class you are
+looking at tells you whether it is a historical backlog or a live gap:
+
+- **Deleted-page residue (historical only).** Before `delete_page` learned to
+  cascade-clean the hero image (#606), deleting a page left its generated hero
+  behind. As of #606, `delete_page` removes the `{slug}-featured.jpg` hero as a
+  best-effort, non-fatal step whenever the whole bundle is removed (a hero
+  shared across surviving translations is deliberately preserved until the last
+  translation is deleted). **No new orphans of this class can form** — this
+  path is closed and regression-tested
+  (`TestDeletePageRemovesOrphanedHeroImage`,
+  `TestDeletePageRemovesHeroImageForPublicFormSlug`,
+  `TestDeletePageKeepsSharedHeroWhenTranslationSurvives`). Any findings of this
+  class on a site that predates #606 are a **one-time backlog**; clean them up
+  once with the procedure below.
+- **Generated-but-never-attached (inherent, expected).** `generate_hero_image`
+  only writes the image file — it never touches page frontmatter, by design
+  (it has no language/locking awareness), and its own response warns you to
+  call `update_page` with `featured_image=data.public_path` afterward. If you
+  generate an image and never create/attach the owning page, that image is an
+  orphan until you either attach a page for that slug or delete it. This is not
+  a bug to fix in code; it is the advisory gap `get_storage_health` exists to
+  surface.
+
+**One-time cleanup procedure** (per `orphaned_generated_asset` finding). The
+finding already gives you `slug` and `logical_path`; the filename to pass is
+the basename of `logical_path` (e.g. `static/images/posts/x-featured.jpg` →
+`x-featured.jpg`). For a *genuine* orphan the owning page is gone, so there is
+no bundle to scan for references — `force` is **not** needed. A non-dry-run
+delete still requires a concurrency guard, so read the current hash with a
+`dry_run` first:
+
+```jsonc
+// 1. Read the sha256 (dry_run needs no guard, deletes nothing):
+delete_page_asset { "slug": "posts/x", "filename": "x-featured.jpg",
+                    "scope": "generated", "dry_run": true }
+// -> data.sha256 = "<hash>"
+
+// 2. Delete it, passing that hash as the expected_sha256 guard:
+delete_page_asset { "slug": "posts/x", "filename": "x-featured.jpg",
+                    "scope": "generated", "expected_sha256": "<hash>" }
+```
+
+`scope: "generated"` targets `{HugoRoot}/static/images/{slug}-featured.jpg`
+directly (not the page bundle). `delete_page_asset` removes only the source
+file, not any already-built public copy or CDN cache, so run `build_site` /
+`publish_changes` afterward if the site was already built with the stale
+reference. `expired_preview_residue` findings (leftover `mcp-preview-*`
+directories after a restart) are handled separately via `revoke_preview`.
+
 ### View Service Status
 
 ```bash
