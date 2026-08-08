@@ -207,6 +207,17 @@ type updatePageData struct {
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
+	// CurrentRevision / CurrentBundleRevision (#893) are error-only fields
+	// declared here so the additive WithDataFields injection on a
+	// revision_conflict / bundle_conflict survives the typed error-output
+	// round-trip (errorOutput unmarshals the failure payload back into this
+	// struct; an undeclared data field would be dropped, exactly as
+	// rate_limit_remaining is declared for the same reason). On a
+	// revision_conflict the fresh per-file revision is echoed here; on a
+	// bundle_conflict the fresh whole-bundle revision — so a caller can retry
+	// immediately without an extra read round-trip. Never set on success.
+	CurrentRevision       string `json:"current_revision,omitempty"`
+	CurrentBundleRevision string `json:"current_bundle_revision,omitempty"`
 }
 
 // taxonomyDeltaDTO reports which tags/categories a whole-list-replacement
@@ -954,8 +965,8 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			"For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; " +
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
 			"Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); " +
-			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan. " +
-			"Optionally, on a page bundle (content/<slug>/), also pass `expected_bundle_revision` (the `bundle_revision` from a prior get_page_for_edit) to additionally guard against a *sibling* translation or bundle-local asset changing since you read the bundle — a stale value fails with `bundle_conflict`, distinct from `revision_conflict` so a caller passing both tokens can tell which one tripped; omitting it is fully backward-compatible and leaves behavior unchanged (#857). " +
+			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan; the `revision_conflict` error's `data.current_revision` carries the fresh revision so you can retry immediately without an extra read (#893). " +
+			"Optionally, on a page bundle (content/<slug>/), also pass `expected_bundle_revision` (the `bundle_revision` from a prior get_page_for_edit) to additionally guard against a *sibling* translation or bundle-local asset changing since you read the bundle — a stale value fails with `bundle_conflict`, distinct from `revision_conflict` so a caller passing both tokens can tell which one tripped; that error's `data.current_bundle_revision` likewise carries the fresh bundle revision for immediate retry (#893); omitting it is fully backward-compatible and leaves behavior unchanged (#857). " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. " +
 			"If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). " +
@@ -1141,7 +1152,14 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				return nil, updatePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 			}
 			if in.ExpectedRevision != currentRevision {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
+				// #893: attach the current revision to the error's structured
+				// data so a caller reading the JSON can retry immediately with
+				// the fresh token instead of paying an extra read round-trip.
+				// The revision is not a secret (it's in every read response).
+				return nil, updatePageOutput{}, toolcontract.WithDataFields(
+					wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")),
+					map[string]any{"current_revision": currentRevision},
+				)
 			}
 			// Optional additive whole-bundle guard (#857 AC3): when the caller
 			// supplies expected_bundle_revision, reject the write if ANY sibling
@@ -1161,7 +1179,12 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 					return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to compute bundle revision"))
 				}
 				if in.ExpectedBundleRevision != currentBundleRevision {
-					return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("bundle_conflict: a sibling translation or bundle-local asset changed since the bundle was read; re-read bundle_revision (get_page_for_edit) and replan"))
+					// #893: attach the current bundle revision so a caller can
+					// retry the whole-bundle guard without an extra read.
+					return nil, updatePageOutput{}, toolcontract.WithDataFields(
+						wrapErrWithLimiter(fmt.Errorf("bundle_conflict: a sibling translation or bundle-local asset changed since the bundle was read; re-read bundle_revision (get_page_for_edit) and replan")),
+						map[string]any{"current_bundle_revision": currentBundleRevision},
+					)
 				}
 			}
 		}
