@@ -340,6 +340,9 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 			if err := negativeLimitError(in.Limit); err != nil {
 				return nil, listPagesOutput{}, err
 			}
+			if err := negativeOffsetError(in.Offset); err != nil {
+				return nil, listPagesOutput{}, err
+			}
 			limit := clampLimit(in.Limit, 50, 50)
 			all := idx.ContentPages()
 			offset := in.Offset
@@ -448,6 +451,9 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 			if err := negativeLimitError(in.Limit); err != nil {
 				return nil, searchPagesOutput{}, err
 			}
+			if err := negativeOffsetError(in.Offset); err != nil {
+				return nil, searchPagesOutput{}, err
+			}
 			limit := clampLimit(in.Limit, 50, 50)
 			offset := in.Offset
 			if offset < 0 {
@@ -506,6 +512,9 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 				return nil, getRecentPostsOutput{}, fmt.Errorf("index not initialized")
 			}
 			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, getRecentPostsOutput{}, err
+			}
+			if err := negativeOffsetError(in.Offset); err != nil {
 				return nil, getRecentPostsOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 10, 50)
@@ -567,6 +576,9 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 				return nil, getSitemapOutput{}, fmt.Errorf("index not initialized")
 			}
 			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, getSitemapOutput{}, err
+			}
+			if err := negativeOffsetError(in.Offset); err != nil {
 				return nil, getSitemapOutput{}, err
 			}
 			all := idx.Sitemap()
@@ -652,6 +664,9 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 				return nil, getFeedOutput{}, fmt.Errorf("index not initialized")
 			}
 			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, getFeedOutput{}, err
+			}
+			if err := negativeOffsetError(in.Offset); err != nil {
 				return nil, getFeedOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 20, 50)
@@ -787,6 +802,17 @@ func clampLimit(v, defaultVal, maxVal int) int {
 func negativeLimitError(v int) error {
 	if v < 0 {
 		return fmt.Errorf("invalid_params: limit must not be negative")
+	}
+	return nil
+}
+
+// negativeOffsetError rejects a negative offset (#885) — see the identical
+// helper's comment in internal/tools/read/tools.go. A negative offset was
+// silently clamped to 0, asymmetric with negativeLimitError; offset 0 stays
+// valid (first page), only strictly negative values are rejected.
+func negativeOffsetError(v int) error {
+	if v < 0 {
+		return fmt.Errorf("invalid_params: offset must not be negative")
 	}
 	return nil
 }

@@ -480,6 +480,9 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			if err := negativeLimitError(in.Limit); err != nil {
 				return nil, searchContentEnvelope{}, err
 			}
+			if err := negativeOffsetError(in.Offset); err != nil {
+				return nil, searchContentEnvelope{}, err
+			}
 
 			// FTS5 path: use SQLite full-text search for ranked, snippet-annotated results.
 			q := strings.TrimSpace(in.Query)
@@ -655,6 +658,9 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			if srcIdx == nil {
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
+			if err := negativeOffsetError(in.Offset); err != nil {
+				return nil, validateOutput{}, err
+			}
 			pages, err := sourcePagesForValidation(srcIdx, in.Slug, in.Lang)
 			if err != nil {
 				return nil, validateOutput{}, err
@@ -671,6 +677,9 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			if srcIdx == nil {
 				return nil, validateOutput{}, fmt.Errorf("source index not initialized")
 			}
+			if err := negativeOffsetError(in.Offset); err != nil {
+				return nil, validateOutput{}, err
+			}
 			pages := srcIdx.ListPages(0, 0)
 			resolver := site.NewPageResolver(idx, srcIdx, cfg)
 			return nil, validatePagesWithIssuesFiltered(pages, in.Offset, in.Limit, in.effectiveInvalidOnly(), aliases, resolver), nil
@@ -682,6 +691,9 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				return nil, brokenLinkOutput{}, fmt.Errorf("index not initialized")
 			}
 			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, brokenLinkOutput{}, err
+			}
+			if err := negativeOffsetError(in.Offset); err != nil {
 				return nil, brokenLinkOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 25, 100)

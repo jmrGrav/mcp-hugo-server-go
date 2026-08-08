@@ -4768,3 +4768,52 @@ func TestNegativeLimitRejectedAcrossReadTools(t *testing.T) {
 		}
 	}
 }
+
+// TestNegativeOffsetRejectedAcrossReadTools is the offset counterpart (#885)
+// of TestNegativeLimitRejectedAcrossReadTools: a negative offset was silently
+// clamped to the first page instead of surfacing the caller's likely
+// pagination-arithmetic bug. offset: 0 stays valid (it is the first page).
+func TestNegativeOffsetRejectedAcrossReadTools(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	cases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"export_agent_context", map[string]any{"offset": -1}},
+		{"search_content", map[string]any{"query": "hello", "offset": -1}},
+		{"get_broken_links", map[string]any{"offset": -1}},
+		{"validate_frontmatter", map[string]any{"offset": -1}},
+		{"validate_site", map[string]any{"offset": -1}},
+	}
+	for _, tc := range cases {
+		res := callTool(t, session, tc.tool, tc.args)
+		if !res.IsError {
+			t.Errorf("%s offset=-1: expected invalid_params error, got success", tc.tool)
+			continue
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "invalid_params") {
+			t.Errorf("%s offset=-1 error = %s, want invalid_params", tc.tool, raw)
+		}
+	}
+
+	zeroCases := []struct {
+		tool string
+		args map[string]any
+	}{
+		{"export_agent_context", map[string]any{"offset": 0}},
+		{"search_content", map[string]any{"query": "hello", "offset": 0}},
+		{"get_broken_links", map[string]any{"offset": 0}},
+		{"validate_frontmatter", map[string]any{"offset": 0}},
+		{"validate_site", map[string]any{"offset": 0}},
+	}
+	for _, tc := range zeroCases {
+		res := callTool(t, session, tc.tool, tc.args)
+		if res.IsError {
+			t.Errorf("%s offset=0: expected success (first page), got error: %v", tc.tool, res.Content)
+		}
+	}
+}
