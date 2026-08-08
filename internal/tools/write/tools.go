@@ -541,6 +541,53 @@ func validateLangParam(lang string) (string, error) {
 	return lang, nil
 }
 
+// unknownLangWarning returns a non-empty warning when create_page is asked to
+// mint content in a well-shaped but unrecognized language, so a caller that
+// typoed a language code (e.g. "de" for "en", or "zz") gets an explicit signal
+// instead of a silent orphan: index.<lang>.md that Hugo never builds and that
+// no read tool distinguishes from real content (#891). Returns "" (no warning)
+// when the language is recognized or is the default (empty lang).
+//
+// This deliberately warns rather than rejects. Rejection would need the site's
+// *configured* language set to avoid false positives, but the server has no
+// such set at runtime: config.Config carries only DefaultLanguage and nothing
+// parses Hugo's own [languages] config. The only runtime signal is which
+// languages already have content — a strict subset of the configured set — so a
+// reject-if-unobserved rule would block the first page of every legitimately
+// new language (the core bilingual-site workflow), a deadlock proven by the
+// existing create-explicit-lang tests. The issue's suggested fix pre-authorized
+// this tiebreaker: "emit an explicit warning if outright rejection risks being
+// too strict for some legitimate future-language-prep workflow." Warn delivers
+// the signal the issue wants (its complaint was "zero signal" on a typo)
+// without the deadlock. Only create_page mints new files; update/delete/plan/
+// rollback resolve an existing file and already fail not_found for an unknown
+// lang, so they need no check here.
+//
+// The known set is derived from source content (defaultLang plus every lang
+// with an existing source page), so an existing translation never triggers a
+// false warning even when the public build index is stale or absent.
+func unknownLangWarning(lang string, idx *hugosite.SourceIndex, defaultLang string) string {
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return ""
+	}
+	if lang == strings.TrimSpace(defaultLang) {
+		return ""
+	}
+	known := idx.Languages()
+	for _, k := range known {
+		if k == lang {
+			return ""
+		}
+	}
+	knownSet := known
+	if d := strings.TrimSpace(defaultLang); d != "" {
+		knownSet = append([]string{d}, known...)
+		sort.Strings(knownSet)
+	}
+	return fmt.Sprintf("lang %q has no existing content and is not this site's default language (known languages: %s); if this is a typo the page will become an orphan Hugo never builds, if it is a deliberately new language it must be added to the Hugo site config to build — call get_capabilities to see recognized languages", lang, strings.Join(knownSet, ", "))
+}
+
 func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) {
 	if s == nil {
 		return
@@ -810,6 +857,10 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			FrontmatterRaw: frontmatterRaw,
 			BuildPending:   true,
 		}
+		// Compute the unknown-language warning against the index state *before*
+		// inserting this page, so the page's own lang doesn't mask the signal
+		// (#891). This is under hugosite.ContentMu, so the read is race-safe.
+		langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage)
 		idx.Upsert(created)
 		// Do NOT insert into the public site index — the page is source-only until
 		// Hugo builds it. UpsertPage here would break allow_source_fallback detection.
@@ -820,6 +871,13 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				slog.Warn("create_page: db sync failed", "slug", in.Slug, "error", err)
 				status = "partial_success"
 				warning = fmt.Sprintf("source created but derived DB could not be updated: %v", err)
+			}
+		}
+		if langWarning != "" {
+			if warning != "" {
+				warning = langWarning + "; " + warning
+			} else {
+				warning = langWarning
 			}
 		}
 
