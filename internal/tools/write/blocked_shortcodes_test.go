@@ -178,3 +178,51 @@ func TestCreatePageRejectsMalformedIdempotencyKey(t *testing.T) {
 		t.Fatalf("create_page malformed idempotency_key error = %s, want invalid_params mentioning idempotency_key", raw)
 	}
 }
+
+// TestCreatePageRejectsReservedSlugs is a regression test for #890:
+// create_page must reject Hugo-reserved slugs (404, index, _index) per exact
+// path segment, so a page can no longer silently shadow the site's own 404
+// page or a section index. A slug that merely contains a reserved name as a
+// substring (posts/404-not-found-explained) must NOT be falsely rejected.
+func TestCreatePageRejectsReservedSlugs(t *testing.T) {
+	rejected := []string{"404", "index", "_index", "posts/404", "guides/_index", "a/index/b"}
+	for _, slug := range rejected {
+		contentRoot := t.TempDir()
+		session, _, done := newTestServer(t, contentRoot)
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug":       slug,
+			"title":      "Reserved",
+			"body":       "Body.",
+			"tags":       []any{},
+			"categories": []any{},
+		})
+		if !res.IsError {
+			t.Errorf("create_page(slug=%q): expected invalid_params rejection, got success", slug)
+		} else {
+			raw := marshalContent(t, res)
+			if !strings.Contains(raw, "invalid_params") {
+				t.Errorf("create_page(slug=%q) error = %s, want invalid_params", slug, raw)
+			}
+		}
+		done()
+	}
+
+	// Reserved names as substrings of a segment must be allowed.
+	allowed := []string{"posts/404-not-found-explained", "the-index", "index-of-terms", "notes/reindex"}
+	for _, slug := range allowed {
+		contentRoot := t.TempDir()
+		session, _, done := newTestServer(t, contentRoot)
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug":       slug,
+			"title":      "Fine",
+			"body":       "Body.",
+			"tags":       []any{},
+			"categories": []any{},
+		})
+		if res.IsError {
+			raw := marshalContent(t, res)
+			t.Errorf("create_page(slug=%q): expected success, got error %s", slug, raw)
+		}
+		done()
+	}
+}
