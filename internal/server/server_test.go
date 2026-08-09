@@ -912,7 +912,7 @@ func TestReaderTokenGetPageRejectsSourceOnlyFallback(t *testing.T) {
 	}
 }
 
-func TestReaderTokenListPagesUsesPublicMetadataOnly(t *testing.T) {
+func TestReaderTokenListPagesExposeSourceDerivedMetadata(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -972,7 +972,7 @@ func TestReaderTokenListPagesUsesPublicMetadataOnly(t *testing.T) {
 	}
 }
 
-func TestReaderTokenGetFullPageMarkdownUsesPublicContentOnly(t *testing.T) {
+func TestReaderTokenGetFullPageMarkdownExposesFullSourceContent(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -1031,13 +1031,13 @@ func TestReaderTokenGetFullPageMarkdownUsesPublicContentOnly(t *testing.T) {
 	}
 }
 
-func TestReaderTokenGetPageForEditUsesPublicContentAndOmitsQuality(t *testing.T) {
+func TestReaderTokenGetPageForEditExposesFullSourceContentAndQuality(t *testing.T) {
 	// #339: get_page_for_edit's quality section needs raw source access
 	// (front matter validation via sourcePagesForValidation), the same
 	// class of source-derived signal as #324's taxonomy details. Confirm
-	// end-to-end that a reader gets public-only frontmatter/markdown and
-	// no quality section, rather than trusting sourceIndexForProfile's
-	// nil-for-readers behavior by inspection alone.
+	// end-to-end that a read-scoped caller gets the full source-aware edit
+	// bundle, including quality, rather than relying on older public-safe
+	// reader assumptions by inspection alone.
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -1100,13 +1100,11 @@ func TestReaderTokenGetPageForEditUsesPublicContentAndOmitsQuality(t *testing.T)
 	}
 }
 
-func TestReaderTokenListPageAssetsOmitsBundleDirectoryForPublicPage(t *testing.T) {
+func TestReaderTokenListPageAssetsExposeBundleDirectoryForPublicPage(t *testing.T) {
 	// #348: list_page_assets' payload is entirely source-derived (it lists a
-	// filesystem directory under content root). Even for a page that is
-	// publicly available, site.ReaderSafeResolvedPage strips SourcePath for
-	// readers, so there is no directory to list. Confirm end-to-end that
-	// this degrades to an empty assets list rather than leaking a path or
-	// erroring in a way that suggests the page doesn't exist.
+	// filesystem directory under content root). Under the live #450 model,
+	// read-scoped callers have full source-aware visibility, so the bundle
+	// directory contents are expected to be visible here.
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -1161,7 +1159,7 @@ func TestReaderTokenListPageAssetsOmitsBundleDirectoryForPublicPage(t *testing.T
 	}
 }
 
-func TestReaderTokenListPageAssetsRejectsSourceOnlyPage(t *testing.T) {
+func TestReaderTokenListPageAssetsAllowsSourceOnlyPage(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -1204,11 +1202,11 @@ func TestReaderTokenListPageAssetsRejectsSourceOnlyPage(t *testing.T) {
 	}
 }
 
-func TestReaderTokenListContentTypesOmitsPageCounts(t *testing.T) {
+func TestReaderTokenListContentTypesIncludesPageCounts(t *testing.T) {
 	// #347: page_count is derived from source pages (including drafts),
 	// the same class of source-derived signal as #324/#339. Archetype
-	// metadata (filesystem templates, not page content) should remain
-	// visible; only the observed/counted side must be reader-safe.
+	// metadata (filesystem templates, not page content) remains visible, and
+	// under the live #450 model the observed/counted side is visible too.
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -1261,13 +1259,12 @@ func TestReaderTokenListContentTypesOmitsPageCounts(t *testing.T) {
 	}
 }
 
-func TestReaderTokenGetSiteHealthOmitsTaxonomyInconsistencyDetails(t *testing.T) {
+func TestReaderTokenGetSiteHealthExposesTaxonomyInconsistencyDetails(t *testing.T) {
 	// #324: taxonomy_inconsistency_details carries source-page slugs
-	// (including draft/source-only pages). get_site_health has no
-	// content_not_public reader guard the way validate_* tools do —
-	// it silently delegates source-safety to sourceIndexForProfile,
-	// which returns nil for the reader profile. Confirm that holds
-	// end-to-end rather than trusting it by inspection alone.
+	// (including draft/source-only pages). Under the live #450 model those
+	// source-derived details are visible to read-scoped callers, so verify
+	// the end-to-end payload rather than relying on older public-safe-reader
+	// assumptions by inspection alone.
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")
@@ -1317,7 +1314,7 @@ func TestReaderTokenGetSiteHealthOmitsTaxonomyInconsistencyDetails(t *testing.T)
 	}
 }
 
-func TestReaderTokenGetFullPageMarkdownRejectsSourceOnlyPage(t *testing.T) {
+func TestReaderTokenGetFullPageMarkdownAllowsSourceOnlyPage(t *testing.T) {
 	root := t.TempDir()
 	contentRoot := filepath.Join(root, "content")
 	publicRoot := filepath.Join(root, "public")

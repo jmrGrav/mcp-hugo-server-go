@@ -163,7 +163,8 @@ The server card and OAuth discovery advertise canonical internal scopes only:
 They also publish additive `reader` / `operator` access-profile metadata so
 clients can understand the simplified external contract without treating those
 profile names as direct OAuth scope strings. (`reader`'s `internal_scopes` is
-now `["read"]` and `operator`'s is `["read", "write"]`.)
+`["read"]` and `operator`'s is `["write"]` — `write` implies `read`, so no
+second entry is needed.)
 
 Public compatibility discovery for external scanners lives on the website
 surface as well:
