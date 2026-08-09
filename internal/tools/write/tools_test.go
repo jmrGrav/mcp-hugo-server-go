@@ -2952,6 +2952,36 @@ func TestCreatePageStillWarnsWithoutConfiguredLanguages(t *testing.T) {
 	}
 }
 
+// TestUpdatePageCannotMintUnconfiguredLangTranslation is a confirmation test
+// for #899's acceptance criterion naming update_page alongside create_page:
+// update_page never mints a new file — resolveExistingSource fails
+// not_found for a lang with no existing translation, regardless of
+// ConfiguredLanguages — so there is no path by which update_page could
+// bypass rejectUnconfiguredLang's guard (which is therefore only needed on
+// create_page, the sole file-minting tool). Uses a lang ("de") that IS in
+// configured_languages to isolate "no translation exists yet" from "lang is
+// unconfigured" as the reason for the not_found.
+func TestUpdatePageCannotMintUnconfiguredLangTranslation(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/no-de-yet")
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{ConfiguredLanguages: []string{"en", "fr", "de"}})
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/no-de-yet", "lang": "de", "title": "New Title",
+	})
+	if !res.IsError {
+		t.Fatal("update_page: want not_found for a configured-but-untranslated lang, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "not_found") {
+		t.Fatalf("update_page missing-translation error = %s, want not_found (proving update_page cannot mint a new file, so #899's guard is create_page-only by necessity)", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "no-de-yet", "index.de.md")); !os.IsNotExist(err) {
+		t.Fatal("update_page must not have written index.de.md")
+	}
+}
+
 // TestDeletePageMultilingualBundleWithoutLangIsAmbiguous is the core
 // regression test for #682: previously, omitting lang on a bilingual bundle
 // silently resolved to one language file (via the alphabetically-first-pick
