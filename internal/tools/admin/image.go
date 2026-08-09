@@ -286,7 +286,8 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			"`slug` accepts either the canonical public form (`/posts/example/`) or the source-key form (`posts/example`); " +
 			"language-prefixed public slugs are normalized to the same source key before writing. " +
 			"Uses local Go rendering (1200×675 JPEG, Unsplash photo background selected by title hash, dark gradient overlay, title, tags). " +
-			"Required: slug, title. Optional: subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo). " +
+			"Required: slug. Optional: title, subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo). " +
+			"If title is omitted, the renderer falls back to prompt text (API mode) or a humanized slug segment (local mode), so the contract stays usable for dry-runs and structural validation paths that only care about the resulting file contract. " +
 			"This tool only writes the image file — it never touches page frontmatter. `data.public_path` is the ready-to-use " +
 			"featuredImage value; call update_page with featured_image=data.public_path afterwards to attach it (per language, " +
 			"for a bundle with translations), or the image will exist but never appear on the site's card/list views. " +
@@ -329,9 +330,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		if cfg.HugoRoot == "" {
 			return nil, generateFeaturedImageOutput{}, fmt.Errorf("config_error: hugo_root is not configured")
 		}
-		if in.Title == "" {
-			return nil, generateFeaturedImageOutput{}, fmt.Errorf("invalid_params: title must not be empty")
-		}
+		in.Title = fallbackHeroImageTitle(in.Slug, in.Title, in.Prompt)
 		style := strings.TrimSpace(in.Style)
 		if style == "" {
 			style = "tech"
@@ -424,6 +423,36 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			DeleteFilename: filepath.Base(destPath),
 		}), nil
 	}))
+}
+
+func fallbackHeroImageTitle(slug, title, prompt string) string {
+	title = strings.TrimSpace(title)
+	if title != "" {
+		return title
+	}
+	if prompt = strings.TrimSpace(prompt); prompt != "" {
+		return prompt
+	}
+	slug = strings.Trim(strings.TrimSpace(slug), "/")
+	if slug == "" {
+		return "Untitled"
+	}
+	parts := strings.Split(slug, "/")
+	last := parts[len(parts)-1]
+	last = strings.ReplaceAll(last, "-", " ")
+	last = strings.ReplaceAll(last, "_", " ")
+	last = strings.TrimSpace(last)
+	if last == "" {
+		return "Untitled"
+	}
+	words := strings.Fields(last)
+	for i, word := range words {
+		if word == "" {
+			continue
+		}
+		words[i] = strings.ToUpper(word[:1]) + word[1:]
+	}
+	return strings.Join(words, " ")
 }
 
 func normalizeHeroImageSlug(raw string) (string, error) {

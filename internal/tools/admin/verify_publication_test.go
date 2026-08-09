@@ -231,6 +231,12 @@ func TestVerifyPublicationDraftSourceOnlyReportsIntentionalExclusion(t *testing.
 	if got := data["explanation"]; got == nil || !strings.Contains(got.(string), "draft") {
 		t.Fatalf("explanation = %v, want draft-specific explanation", got)
 	}
+	if got := data["sitemap_present"]; got != false {
+		t.Fatalf("sitemap_present = %v, want false for intentionally unpublished draft", got)
+	}
+	if got := data["feed_present"]; got != false {
+		t.Fatalf("feed_present = %v, want false for intentionally unpublished draft", got)
+	}
 }
 
 func TestVerifyPublicationTestContentSourceOnlyReportsIntentionalExclusion(t *testing.T) {
@@ -270,6 +276,12 @@ func TestVerifyPublicationTestContentSourceOnlyReportsIntentionalExclusion(t *te
 	}
 	if got := data["explanation"]; got == nil || !strings.Contains(got.(string), "test_content") {
 		t.Fatalf("explanation = %v, want test_content-specific explanation", got)
+	}
+	if got := data["sitemap_present"]; got != false {
+		t.Fatalf("sitemap_present = %v, want false for intentionally unpublished test_content", got)
+	}
+	if got := data["feed_present"]; got != false {
+		t.Fatalf("feed_present = %v, want false for intentionally unpublished test_content", got)
 	}
 }
 

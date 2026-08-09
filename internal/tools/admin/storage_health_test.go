@@ -211,3 +211,61 @@ func TestStorageHealthDoesNotFlagLegacyFlatHeroImageAsOrphaned(t *testing.T) {
 		t.Errorf("expected orphaned_generated_asset finding for legacy-gone; findings=%v", findings)
 	}
 }
+
+// Regression for #912's remaining scope: a hero file whose basename no longer
+// matches its owning slug (historical rename / manual asset attachment) must
+// still be treated as live when a page explicitly references it via
+// featuredImage, and png variants must be scanned by the same logic.
+func TestStorageHealthHonorsExplicitFrontmatterHeroReferenceIncludingPNG(t *testing.T) {
+	hugoRoot := t.TempDir()
+	imagesRoot := filepath.Join(hugoRoot, "static", "images")
+	if err := os.MkdirAll(imagesRoot, 0o755); err != nil {
+		t.Fatalf("mkdir images: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(imagesRoot, "chatgpt-job-featured.png"), []byte("png"), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	srcIdx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	srcIdx.Upsert(hugosite.SourcePage{
+		Slug:     "posts/chatgpt-took-the-lead",
+		Title:    "ChatGPT Took The Lead",
+		FilePath: filepath.Join(t.TempDir(), "unused.md"),
+		FrontmatterRaw: map[string]any{
+			"featuredImage": "/images/chatgpt-job-featured.png",
+		},
+	})
+
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+	session, done := newStorageHealthServer(t, cfg, srcIdx, previewstore.New())
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_storage_health", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("get_storage_health returned error")
+	}
+
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	data, _ := env["data"].(map[string]any)
+	findings, _ := data["findings"].([]any)
+	for _, f := range findings {
+		fm, _ := f.(map[string]any)
+		if fm["logical_path"] == "static/images/chatgpt-job-featured.png" {
+			t.Fatalf("explicitly referenced png hero image must not be flagged orphaned; findings=%v", findings)
+		}
+	}
+}

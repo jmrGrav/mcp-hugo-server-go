@@ -2291,6 +2291,35 @@ func TestRichReadToolsSupportExplicitLangSelection(t *testing.T) {
 	})
 }
 
+func TestReadToolsRejectContradictorySlugAndLang(t *testing.T) {
+	session, done := newMultilingualHelloReadSession(t)
+	defer done()
+
+	cases := []struct {
+		name string
+		tool string
+		args map[string]any
+	}{
+		{"frontmatter", "get_page_frontmatter", map[string]any{"slug": "/en/posts/hello/", "lang": "fr"}},
+		{"markdown", "get_page_markdown", map[string]any{"slug": "/en/posts/hello/", "lang": "fr"}},
+		{"context", "build_agent_context", map[string]any{"slug": "/en/posts/hello/", "lang": "fr"}},
+		{"for_edit", "get_page_for_edit", map[string]any{"slug": "/en/posts/hello/", "lang": "fr"}},
+		{"readiness", "check_ai_readiness", map[string]any{"slug": "/en/posts/hello/", "lang": "fr"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := callTool(t, session, tc.tool, tc.args)
+			if !res.IsError {
+				t.Fatalf("%s: contradictory slug/lang must fail", tc.tool)
+			}
+			raw, _ := json.Marshal(res.Content)
+			if !strings.Contains(string(raw), "invalid_params") || !strings.Contains(string(raw), "lang") {
+				t.Fatalf("%s contradictory slug/lang error = %s, want invalid_params naming lang", tc.tool, raw)
+			}
+		})
+	}
+}
+
 func TestReadToolsPreferDefaultLanguageForSourceOnlyMultilingualPage(t *testing.T) {
 	session, done := newSourceOnlyBilingualDefaultLangReadSession(t)
 	defer done()

@@ -200,3 +200,8 @@ func languagePrefixFromSlug(slug string) string {
 	}
 	return parts[0]
 }
+
+func LanguagePrefixFromSlug(raw string) string {
+	publicSlug, _ := normalizeResolverSlugs(raw)
+	return languagePrefixFromSlug(publicSlug)
+}

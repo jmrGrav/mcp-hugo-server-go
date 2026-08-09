@@ -2902,6 +2902,27 @@ func TestCreatePageRejectsUnconfiguredLangWhenConfiguredLanguagesSet(t *testing.
 	}
 }
 
+func TestCreatePageDryRunRejectsUnconfiguredLangWhenConfiguredLanguagesSet(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{ConfiguredLanguages: []string{"en", "fr"}})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/zz-rejected-dry", "lang": "zz", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{}, "dry_run": true,
+	})
+	if !res.IsError {
+		t.Fatal("create_page dry_run: want error for unconfigured lang when configured_languages is set, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") || !strings.Contains(string(raw), "configured_languages") {
+		t.Fatalf("create_page dry_run unconfigured-lang error = %s, want invalid_params naming configured_languages", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "zz-rejected-dry")); !os.IsNotExist(err) {
+		t.Fatal("create_page dry_run must not write any file when the lang is rejected")
+	}
+}
+
 // TestCreatePageAcceptsConfiguredButEmptyLang is a regression test for
 // #899's "no chicken-and-egg" acceptance criterion: a language declared in
 // configured_languages but with no existing content yet must still be
