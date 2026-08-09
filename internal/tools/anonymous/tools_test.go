@@ -1703,6 +1703,86 @@ func TestGetPageIncludeTermsFalseOmitsTerms(t *testing.T) {
 	}
 }
 
+// TestGetPageOmitsMaxBodyCharsReturnsFullContent is a regression test for
+// #896: omitting max_body_chars entirely must not truncate the html field —
+// existing (pre-#896) behavior stays unchanged.
+func TestGetPageOmitsMaxBodyCharsReturnsFullContent(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello"})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	envelope := decodeEnvelope(t, res)
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page: 'page' is %T, want map", m["page"])
+	}
+	html, _ := page["html"].(string)
+	if html == "" {
+		t.Fatal("get_page: html must be non-empty when max_body_chars is omitted")
+	}
+	if len(html) < 20 {
+		t.Fatalf("get_page: html unexpectedly short (%d chars) with max_body_chars omitted, want full untruncated body", len(html))
+	}
+	if warnings, _ := envelope["warnings"].([]any); len(warnings) != 0 {
+		t.Fatalf("get_page: expected no warnings when max_body_chars is omitted, got %v", warnings)
+	}
+}
+
+// TestGetPageMaxBodyCharsTruncatesAndWarns is a regression test for #896:
+// an explicit max_body_chars below the content length truncates the html
+// field to that many characters with an explicit warning, matching
+// build_agent_context's/get_page_for_edit's established pattern.
+func TestGetPageMaxBodyCharsTruncatesAndWarns(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello", "max_body_chars": 10})
+	if res.IsError {
+		t.Fatalf("get_page returned error: %v", res.Content)
+	}
+	envelope := decodeEnvelope(t, res)
+	m := decodeContent(t, res)
+	page, ok := m["page"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page: 'page' is %T, want map", m["page"])
+	}
+	html, _ := page["html"].(string)
+	if len(html) != 10 {
+		t.Fatalf("get_page max_body_chars=10: html length = %d, want 10", len(html))
+	}
+	warnings, _ := envelope["warnings"].([]any)
+	if len(warnings) == 0 {
+		t.Fatal("get_page max_body_chars=10: expected a truncation warning")
+	}
+}
+
+// TestGetPageRejectsNonPositiveMaxBodyChars is a regression test for #896
+// (matching #837's established convention): an explicit non-positive
+// max_body_chars (0 or negative) is rejected with invalid_params rather
+// than silently treated as "no limit".
+func TestGetPageRejectsNonPositiveMaxBodyChars(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	for _, v := range []int{0, -1} {
+		res := callTool(t, session, "get_page", map[string]any{"slug": "/posts/hello", "max_body_chars": v})
+		if !res.IsError {
+			t.Fatalf("get_page max_body_chars=%d: expected error", v)
+		}
+		raw, _ := json.Marshal(res.Content)
+		if !strings.Contains(string(raw), "max_body_chars must be greater than 0") {
+			t.Fatalf("get_page max_body_chars=%d error = %s", v, raw)
+		}
+	}
+}
+
 // TestGetPageCompactOmitsRenderedHTMLAndTermPayloads is a regression test for
 // #687: response_mode=compact must not ship the full rendered HTML payload
 // for a long page-selection step, and it should also drop the richer term
