@@ -3016,6 +3016,63 @@ func TestSearchContentInvalidTypeStructuredError(t *testing.T) {
 	}
 }
 
+func TestSearchContentRejectsInvalidSortOrderLanguageAndLimit(t *testing.T) {
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.DefaultLanguage = "en"
+	cfg.ConfiguredLanguages = []string{"en", "fr"}
+	session, done := newTestClientWithCfg(t, idx, cfg, nil)
+	defer done()
+
+	cases := []struct {
+		name          string
+		args          map[string]any
+		wantFieldHint string
+		wantSnippet   string
+	}{
+		{
+			name:          "invalid sort",
+			args:          map[string]any{"query": "hello", "sort": "nonsense"},
+			wantFieldHint: "sort",
+			wantSnippet:   "invalid_params",
+		},
+		{
+			name:          "invalid order",
+			args:          map[string]any{"query": "hello", "order": "sideways"},
+			wantFieldHint: "order",
+			wantSnippet:   "invalid_params",
+		},
+		{
+			name:          "invalid language",
+			args:          map[string]any{"query": "hello", "language": "zz"},
+			wantFieldHint: "language",
+			wantSnippet:   "invalid_params",
+		},
+		{
+			name:          "limit too high",
+			args:          map[string]any{"query": "hello", "limit": 101},
+			wantFieldHint: "limit",
+			wantSnippet:   "invalid_params",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := callTool(t, session, "search_content", tc.args)
+			if !res.IsError {
+				t.Fatalf("search_content(%s): expected invalid_params error, got success", tc.name)
+			}
+			raw, _ := json.Marshal(res.Content)
+			if !strings.Contains(string(raw), tc.wantSnippet) {
+				t.Fatalf("search_content(%s) error = %s, want snippet %q", tc.name, raw, tc.wantSnippet)
+			}
+			if !strings.Contains(strings.ToLower(string(raw)), tc.wantFieldHint) {
+				t.Fatalf("search_content(%s) error = %s, want field hint %q", tc.name, raw, tc.wantFieldHint)
+			}
+		})
+	}
+}
+
 // TestSearchContentCategoriesMatchGetPageFrontmatter is a regression test for
 // #463: search_content previously risked returning empty categories for a
 // page whose public/rendered HTML carries no category metadata (Hugo never

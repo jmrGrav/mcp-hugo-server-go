@@ -1214,6 +1214,13 @@ func negativeLimitError(v int) error {
 	return nil
 }
 
+func maxLimitError(v, max int) error {
+	if v > max {
+		return fmt.Errorf("invalid_params: limit must not exceed %d", max)
+	}
+	return nil
+}
+
 // negativeOffsetError rejects a negative offset (#885), closing the
 // asymmetry with negativeLimitError (#641): a negative offset was previously
 // silently clamped to 0, hiding a likely caller-side pagination-arithmetic
