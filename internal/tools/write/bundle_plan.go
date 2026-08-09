@@ -91,6 +91,7 @@ type bundleTranslationPlan struct {
 }
 
 type bundlePlanEntry struct {
+	CallerKey      string
 	Slug           string
 	BundleDir      string
 	BundleRevision string // whole-directory anchor recomputed at apply time
@@ -119,19 +120,25 @@ func (s *bundlePlanStore) put(id string, entry bundlePlanEntry) {
 	s.trimLocked()
 }
 
-func (s *bundlePlanStore) get(id string) (bundlePlanEntry, bool) {
+func (s *bundlePlanStore) get(id, callerKey string) (bundlePlanEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
+		return bundlePlanEntry{}, false
+	}
 	return entry, ok
 }
 
-func (s *bundlePlanStore) consume(id string) (bundlePlanEntry, bool) {
+func (s *bundlePlanStore) consume(id, callerKey string) (bundlePlanEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
+		return bundlePlanEntry{}, false
+	}
 	if ok {
 		delete(s.entries, id)
 	}
@@ -179,6 +186,7 @@ func newBundlePlanID() (string, error) {
 // stop being — so rollback_bundle can restore the whole editorial unit to
 // exactly that prior state. Mirrors snapshotStore's lifetime (24h / 512).
 type bundleSnapshot struct {
+	CallerKey string
 	Files     map[string]string // filePath -> content
 	CreatedAt time.Time
 }
@@ -196,21 +204,24 @@ func newBundleSnapshotStore(ttl time.Duration, maxEntries int) *bundleSnapshotSt
 
 func bundleSnapshotKey(dir, revision string) string { return dir + "\x00" + revision }
 
-func (s *bundleSnapshotStore) put(dir, revision string, files map[string]string) {
+func (s *bundleSnapshotStore) put(dir, revision, callerKey string, files map[string]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	s.pruneLocked(now)
-	s.entries[bundleSnapshotKey(dir, revision)] = bundleSnapshot{Files: files, CreatedAt: now}
+	s.entries[bundleSnapshotKey(dir, revision)] = bundleSnapshot{CallerKey: callerKey, Files: files, CreatedAt: now}
 	s.trimLocked()
 }
 
-func (s *bundleSnapshotStore) get(dir, revision string) (map[string]string, bool) {
+func (s *bundleSnapshotStore) get(dir, revision, callerKey string) (map[string]string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[bundleSnapshotKey(dir, revision)]
 	if !ok {
+		return nil, false
+	}
+	if entry.CallerKey != "" && entry.CallerKey != callerKey {
 		return nil, false
 	}
 	return entry.Files, true
@@ -512,7 +523,7 @@ func registerPlanBundleChange(
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, toolcontract.WrapTool(func(_ context.Context, _ *mcp.CallToolRequest, in planBundleChangeInput) (*mcp.CallToolResult, planBundleChangeOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in planBundleChangeInput) (*mcp.CallToolResult, planBundleChangeOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		wrapErr := func(err error) error {
 			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug})
@@ -593,7 +604,8 @@ func registerPlanBundleChange(
 		}
 		now := time.Now().UTC()
 		plans.put(planID, bundlePlanEntry{
-			Slug: in.Slug, BundleDir: dir, BundleRevision: bundleRev,
+			CallerKey: principalCallerKey(ctx),
+			Slug:      in.Slug, BundleDir: dir, BundleRevision: bundleRev,
 			Translations: planTranslations, CreatedAt: now,
 		})
 		_ = siteIdx // state derivation intentionally deferred to apply
@@ -678,9 +690,9 @@ func registerApplyBundlePlan(
 		var entry bundlePlanEntry
 		var ok bool
 		if in.DryRun {
-			entry, ok = plans.get(in.PlanID)
+			entry, ok = plans.get(in.PlanID, principalCallerKey(ctx))
 		} else {
-			entry, ok = plans.consume(in.PlanID)
+			entry, ok = plans.consume(in.PlanID, principalCallerKey(ctx))
 		}
 		if !ok {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_bundle_change again"))
@@ -738,7 +750,7 @@ func registerApplyBundlePlan(
 		}
 		// Snapshot the whole pre-apply bundle, keyed by the revision it is
 		// about to stop being, so rollback_bundle can restore it (#854 AC).
-		snapshots.put(entry.BundleDir, entry.BundleRevision, priorContent)
+		snapshots.put(entry.BundleDir, entry.BundleRevision, principalCallerKey(ctx), priorContent)
 
 		var warnings []string
 		outcomes := make([]bundleTranslationOutcomeDTO, 0, len(entry.Translations))
@@ -880,7 +892,7 @@ func registerRollbackBundle(
 			}
 		}
 
-		restore, ok := snapshots.get(dir, in.ToBundleRevision)
+		restore, ok := snapshots.get(dir, in.ToBundleRevision, principalCallerKey(ctx))
 		if !ok {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no bundle snapshot recorded for revision %q — only revisions produced by a prior apply_bundle_plan (last 24h) can be rolled back to", in.ToBundleRevision))
 		}

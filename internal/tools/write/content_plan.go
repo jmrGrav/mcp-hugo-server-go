@@ -47,6 +47,7 @@ const planMaxEntries = 128
 // plans and idempotency results have different lifetimes and replay
 // semantics.
 type planEntry struct {
+	CallerKey  string
 	Slug       string
 	Lang       string
 	FilePath   string
@@ -84,11 +85,14 @@ func (s *planStore) put(id string, entry planEntry) {
 
 // get looks up a plan without consuming it (used for a dry-run apply, which
 // re-verifies but must not remove the plan).
-func (s *planStore) get(id string) (planEntry, bool) {
+func (s *planStore) get(id, callerKey string) (planEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
+		return planEntry{}, false
+	}
 	return entry, ok
 }
 
@@ -96,11 +100,14 @@ func (s *planStore) get(id string) (planEntry, bool) {
 // is single-use: applying it (successfully or not) removes it from the
 // store, so it can never be replayed against a page that has since changed
 // without a fresh plan_content_change call.
-func (s *planStore) consume(id string) (planEntry, bool) {
+func (s *planStore) consume(id, callerKey string) (planEntry, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
+		return planEntry{}, false
+	}
 	if ok {
 		delete(s.entries, id)
 	}
@@ -629,6 +636,7 @@ func registerContentPlanTools(
 		}
 		now := time.Now().UTC()
 		plans.put(planID, planEntry{
+			CallerKey:  principalCallerKey(ctx),
 			Slug:       in.Slug,
 			Lang:       resolvedSource.Lang,
 			FilePath:   filePath,
@@ -733,9 +741,9 @@ func registerContentPlanTools(
 		var entry planEntry
 		var ok bool
 		if in.DryRun {
-			entry, ok = plans.get(in.PlanID)
+			entry, ok = plans.get(in.PlanID, principalCallerKey(ctx))
 		} else {
-			entry, ok = plans.consume(in.PlanID)
+			entry, ok = plans.consume(in.PlanID, principalCallerKey(ctx))
 		}
 		if !ok {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_content_change again"))
@@ -806,7 +814,7 @@ func registerContentPlanTools(
 		// design.md §4). Only captured on a successful write: a failed
 		// write never changed the file, so there's nothing new to roll
 		// back from.
-		snapshots.put(entry.FilePath, entry.Revision, string(raw))
+		snapshots.put(entry.FilePath, entry.Revision, principalCallerKey(ctx), string(raw))
 
 		var updated hugosite.SourcePage
 		if existing, hasExisting := idx.GetBySlug(entry.Slug); hasExisting {

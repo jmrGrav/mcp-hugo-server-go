@@ -97,8 +97,8 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ listPreviewsInput) (*mcp.CallToolResult, listPreviewsOutput, error) {
-		_ = ctx
-		snaps := store.List()
+		callerKey := previewCallerKey(ctx)
+		snaps := store.ListOwned(callerKey)
 		slices.SortFunc(snaps, func(a, b previewstore.Snapshot) int {
 			return a.CreatedAt.Compare(b.CreatedAt)
 		})
@@ -117,7 +117,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 			ToolResponse: previewAccessSuccessEnvelope(listPreviewsData{
 				ConfiguredCount:      len(items),
 				Previews:             items,
-				CallerActiveCount:    store.CountByOwner(currentUserForLog()),
+				CallerActiveCount:    store.CountByOwner(callerKey),
 				MaxPreviewsPerCaller: maxPerCaller,
 				PreviewDiskUsedBytes: store.DiskUsageBytes(),
 				PreviewDiskMaxBytes:  maxDiskBytes,
@@ -138,12 +138,11 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in revokePreviewInput) (*mcp.CallToolResult, revokePreviewOutput, error) {
-		_ = ctx
 		id := strings.TrimSpace(in.PreviewID)
 		if id == "" {
 			return nil, revokePreviewOutput{}, fmt.Errorf("invalid_params: preview_id must not be empty")
 		}
-		if !store.Revoke(id) {
+		if !store.RevokeOwned(id, previewCallerKey(ctx)) {
 			return nil, revokePreviewOutput{}, fmt.Errorf("preview_not_found: preview %q not found or already expired", id)
 		}
 		return nil, revokePreviewOutput{
@@ -167,8 +166,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ revokeAllPreviewsInput) (*mcp.CallToolResult, revokeAllPreviewsOutput, error) {
-		_ = ctx
-		count := store.RevokeAll()
+		count := store.RevokeAllOwned(previewCallerKey(ctx))
 		return nil, revokeAllPreviewsOutput{
 			ToolResponse: previewAccessSuccessEnvelope(revokeAllPreviewsData{
 				Status:       "revoked",

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/caller"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -65,7 +66,6 @@ func RegisterInspectPreviewRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in inspectPreviewRenderedInput) (*mcp.CallToolResult, inspectPreviewRenderedOutput, error) {
-		_ = ctx
 		slug := strings.TrimSpace(in.Slug)
 		if slug == "" {
 			return nil, inspectPreviewRenderedOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
@@ -81,6 +81,9 @@ func RegisterInspectPreviewRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *
 			return nil, inspectPreviewRenderedOutput{}, fmt.Errorf("preview_not_found: preview %q not found", previewID)
 		case previewstore.LookupExpired:
 			return nil, inspectPreviewRenderedOutput{}, fmt.Errorf("preview_expired: preview %q has expired", previewID)
+		}
+		if ownerKey := caller.Key(ctx); ownerKey != "" && entry.Owner != "" && entry.Owner != ownerKey {
+			return nil, inspectPreviewRenderedOutput{}, fmt.Errorf("preview_not_found: preview %q not found", previewID)
 		}
 
 		resolver := site.NewPageResolver(idx, srcIdx, cfg)

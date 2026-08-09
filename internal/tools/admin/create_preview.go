@@ -141,7 +141,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		if maxDiskBytes <= 0 {
 			maxDiskBytes = config.DefaultPreviewMaxDiskBytes
 		}
-		owner := currentUserForLog()
+		owner := previewCallerKey(ctx)
 		if n := store.CountByOwner(owner); n >= maxPerCaller {
 			return nil, createPreviewOutput{}, fmt.Errorf("preview_limit_exceeded: caller already has %d active preview(s), at the configured limit of %d — revoke one with revoke_preview or wait for expiry before creating another", n, maxPerCaller)
 		}
@@ -237,7 +237,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			ExpiresAt:   expiresAt,
 			BuildStatus: "passed",
 			CreatedAt:   time.Now().UTC(),
-			Owner:       currentUserForLog(),
+			Owner:       owner,
 		})
 
 		slog.Info("create_preview completed",
