@@ -95,12 +95,30 @@ func newGetCapabilitiesOutput(data getCapabilitiesData) getCapabilitiesOutput {
 // availableLanguages returns the distinct non-empty language codes present in
 // the built index plus the configured default, sorted. Empty-string (the
 // default/unlabelled bucket) is folded into the default, not listed as "".
-func availableLanguages(idx *site.Index, defaultLang string) []string {
+//
+// configuredLangs (#899), when non-empty, means the operator has declared an
+// authoritative language set via config's configured_languages — the same
+// set write.rejectUnconfiguredLang enforces create_page's lang param
+// against. In that case this returns exactly that set (deduped, default
+// folded in, sorted) instead of the derived-from-content one, so
+// "advertised == enforced" holds per #899's acceptance criteria: an agent
+// checking get_capabilities before calling create_page sees precisely the
+// langs that will be accepted, including a configured-but-still-empty one
+// that wouldn't otherwise appear until it had content. Empty
+// configuredLangs (the default for every operator who hasn't set the field)
+// preserves the original derived-from-content behavior unchanged.
+func availableLanguages(idx *site.Index, defaultLang string, configuredLangs []string) []string {
 	seen := map[string]bool{}
 	if d := strings.TrimSpace(defaultLang); d != "" {
 		seen[d] = true
 	}
-	if idx != nil {
+	if len(configuredLangs) > 0 {
+		for _, c := range configuredLangs {
+			if c = strings.TrimSpace(c); c != "" {
+				seen[c] = true
+			}
+		}
+	} else if idx != nil {
 		for _, p := range idx.ContentPages() {
 			if l := strings.TrimSpace(p.Lang); l != "" {
 				seen[l] = true
@@ -118,7 +136,7 @@ func availableLanguages(idx *site.Index, defaultLang string) []string {
 func registerGetCapabilities(s *mcp.Server, idx *site.Index, cfg config.Config) {
 	addReadOnlyTool(s, "get_capabilities", "Get capabilities",
 		"Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): "+
-			"`server` (release version, commit, build channel, schema version); `languages` (default plus the languages present in the index); "+
+			"`server` (release version, commit, build channel, schema version); `languages` (default plus, when the operator has set configured_languages, exactly that authoritative set — otherwise the languages present in the index, #899); "+
 			"`limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (image generation, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
 			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. Anonymous: no authentication needed, so capabilities can be discovered before obtaining a token.",
@@ -133,7 +151,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, cfg config.Config) 
 				},
 				Languages: capabilitiesLanguages{
 					Default:   strings.TrimSpace(cfg.DefaultLanguage),
-					Available: availableLanguages(idx, cfg.DefaultLanguage),
+					Available: availableLanguages(idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages),
 				},
 				Limits: capabilitiesLimits{
 					BodyMaxBytes:           writepkg.BodyMaxBytes(),

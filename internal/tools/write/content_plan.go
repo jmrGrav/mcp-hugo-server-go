@@ -360,6 +360,15 @@ func resolvePlanOperations(existingTags, existingCategories []string, ops []plan
 			if op.Value == "" {
 				return out, fmt.Errorf("invalid_params: add_tag operation requires value")
 			}
+			// #904: create_page/update_page reject an overlong tag via
+			// validateTaxonomyTerms (#886); plan_content_change/
+			// apply_content_plan and plan_bundle_change/apply_bundle_plan
+			// (both funnel through this shared function) bypassed it
+			// entirely, so a plan could still write an arbitrary-length tag.
+			// Checked at plan time (fail-fast), not deferred to apply.
+			if err := validateTaxonomyTerms("tag", []string{op.Value}); err != nil {
+				return out, err
+			}
 			if slices.Contains(tags, op.Value) {
 				out.Rejected = append(out.Rejected, planRejectedOperationDTO{Op: "add_tag:" + op.Value, Reason: "tag already present"})
 			} else {
@@ -381,6 +390,10 @@ func resolvePlanOperations(existingTags, existingCategories []string, ops []plan
 		case "add_category":
 			if op.Value == "" {
 				return out, fmt.Errorf("invalid_params: add_category operation requires value")
+			}
+			// #904 — see the identical add_tag comment above.
+			if err := validateTaxonomyTerms("category", []string{op.Value}); err != nil {
+				return out, err
 			}
 			if slices.Contains(categories, op.Value) {
 				out.Rejected = append(out.Rejected, planRejectedOperationDTO{Op: "add_category:" + op.Value, Reason: "category already present"})

@@ -676,13 +676,24 @@ func validateLangParam(lang string) (string, error) {
 // The known set is derived from source content (defaultLang plus every lang
 // with an existing source page), so an existing translation never triggers a
 // false warning even when the public build index is stale or absent.
-func unknownLangWarning(lang string, idx *hugosite.SourceIndex, defaultLang string) string {
+// configuredLangs, when non-empty (#899), means the lang already survived
+// rejectUnconfiguredLang's authoritative check — the operator has
+// deliberately declared it, even if it has no content yet, so warning about
+// it here would be a redundant false alarm on every legitimate first page
+// of that language. Pass cfg.ConfiguredLanguages; nil/empty preserves the
+// original derived-from-content warning for every operator who hasn't set it.
+func unknownLangWarning(lang string, idx *hugosite.SourceIndex, defaultLang string, configuredLangs []string) string {
 	lang = strings.TrimSpace(lang)
 	if lang == "" {
 		return ""
 	}
 	if lang == strings.TrimSpace(defaultLang) {
 		return ""
+	}
+	for _, c := range configuredLangs {
+		if strings.TrimSpace(c) == lang {
+			return ""
+		}
 	}
 	known := idx.Languages()
 	for _, k := range known {
@@ -696,6 +707,38 @@ func unknownLangWarning(lang string, idx *hugosite.SourceIndex, defaultLang stri
 		sort.Strings(knownSet)
 	}
 	return fmt.Sprintf("lang %q has no existing content and is not this site's default language (known languages: %s); if this is a typo the page will become an orphan Hugo never builds, if it is a deliberately new language it must be added to the Hugo site config to build — call get_capabilities to see recognized languages", lang, strings.Join(knownSet, ", "))
+}
+
+// rejectUnconfiguredLang is #899's true reject, layered on top of (not
+// replacing) unknownLangWarning's warn-not-reject default. It only fires
+// when the operator has explicitly set cfg.ConfiguredLanguages — the
+// authoritative set unknownLangWarning's own doc comment explains the
+// server otherwise has no way to obtain (observed content is a strict
+// subset of configured languages, so a reject-from-content rule would
+// deadlock the first page of every legitimately new language). When
+// ConfiguredLanguages is unset (the default for every existing deployment),
+// this is always a no-op — the field is opt-in specifically so it can never
+// break an operator who hasn't configured it.
+//
+// Checked before any file is written (create_page's only mint path), so a
+// rejection here writes nothing, matching #899's acceptance criteria.
+// update_page/delete_page/plan/rollback need no equivalent check: they only
+// ever resolve an *existing* file, and a lang with no existing translation
+// already fails not_found there regardless of ConfiguredLanguages.
+func rejectUnconfiguredLang(lang string, cfg config.Config) error {
+	lang = strings.TrimSpace(lang)
+	if lang == "" || len(cfg.ConfiguredLanguages) == 0 {
+		return nil
+	}
+	if lang == strings.TrimSpace(cfg.DefaultLanguage) {
+		return nil
+	}
+	for _, c := range cfg.ConfiguredLanguages {
+		if strings.TrimSpace(c) == lang {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid_params: lang %q is not in this site's configured_languages (%s); call get_capabilities to see the authoritative list", lang, strings.Join(cfg.ConfiguredLanguages, ", "))
 }
 
 func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) {
@@ -749,7 +792,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. `lang` for a language the site does not recognize: if the operator has set `configured_languages`, an unrecognized `lang` is rejected with `invalid_params` and nothing is written (#899); otherwise (the default) it is only a warning — the page is still written, since the server can't tell a typo from a deliberately new language without that operator-declared set. Either way, call get_capabilities first to see the authoritative/known language list.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -779,6 +822,9 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 		resolvedLang, err := validateLangParam(in.Lang)
 		if err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := rejectUnconfiguredLang(resolvedLang, cfg); err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
 		if in.Title == "" {
@@ -979,7 +1025,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// Compute the unknown-language warning against the index state *before*
 		// inserting this page, so the page's own lang doesn't mask the signal
 		// (#891). This is under hugosite.ContentMu, so the read is race-safe.
-		langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage)
+		langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages)
 		idx.Upsert(created)
 		// Do NOT insert into the public site index — the page is source-only until
 		// Hugo builds it. UpsertPage here would break allow_source_fallback detection.

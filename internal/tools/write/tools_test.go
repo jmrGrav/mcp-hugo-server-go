@@ -38,6 +38,10 @@ type testServerOpts struct {
 	// mutation tool call in the test session behaves as if dry_run: true
 	// were passed, regardless of what the test actually sends.
 	ForceDryRunAll bool
+	// ConfiguredLanguages, when non-nil, overrides cfg.ConfiguredLanguages
+	// (#899) so tests can exercise create_page's authoritative lang-reject
+	// path without needing a full config.Load fixture.
+	ConfiguredLanguages []string
 }
 
 // newTestServer builds a write-tool MCP server over an in-memory transport and
@@ -65,6 +69,9 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 		cfg.RateLimit = *o.RateLimit
 	}
 	cfg.ForceDryRunAll = o.ForceDryRunAll
+	if o.ConfiguredLanguages != nil {
+		cfg.ConfiguredLanguages = o.ConfiguredLanguages
+	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg, o.SiteDB, o.SiteIdx)
@@ -2863,6 +2870,85 @@ func TestCreatePageDoesNotWarnOnKnownLanguage(t *testing.T) {
 	}
 	if w, _ := decodeWriteData(t, secondFr)["warning"].(string); strings.Contains(w, "no existing content") {
 		t.Fatalf("second fr page (fr content now exists) must not warn, got warning=%q", w)
+	}
+}
+
+// TestCreatePageRejectsUnconfiguredLangWhenConfiguredLanguagesSet is a
+// regression test for #899: when the operator has set
+// config.ConfiguredLanguages, an unrecognized lang is rejected outright
+// (invalid_params) and no file is written — the true reject #891 could not
+// safely provide without this operator-declared authoritative set.
+func TestCreatePageRejectsUnconfiguredLangWhenConfiguredLanguagesSet(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{ConfiguredLanguages: []string{"en", "fr"}})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/zz-rejected", "lang": "zz", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{},
+	})
+	if !res.IsError {
+		t.Fatal("create_page: want error for unconfigured lang when configured_languages is set, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("create_page unconfigured-lang error = %s, want invalid_params", raw)
+	}
+	if !strings.Contains(string(raw), "configured_languages") {
+		t.Fatalf("create_page unconfigured-lang error = %s, want to name configured_languages", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "zz-rejected")); !os.IsNotExist(err) {
+		t.Fatal("create_page must not write any file when the lang is rejected")
+	}
+}
+
+// TestCreatePageAcceptsConfiguredButEmptyLang is a regression test for
+// #899's "no chicken-and-egg" acceptance criterion: a language declared in
+// configured_languages but with no existing content yet must still be
+// accepted (and must not even carry the unknown-language warning, since the
+// operator has explicitly vouched for it) — otherwise the first page of
+// every legitimately new language would deadlock.
+func TestCreatePageAcceptsConfiguredButEmptyLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{ConfiguredLanguages: []string{"en", "de"}})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/de-first", "lang": "de", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page with configured-but-empty lang must succeed, got error: %s", raw)
+	}
+	if w, _ := decodeWriteData(t, res)["warning"].(string); strings.Contains(w, "no existing content") {
+		t.Fatalf("create_page must not warn on a lang the operator has explicitly configured, got warning=%q", w)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "de-first", "index.de.md")); err != nil {
+		t.Fatalf("expected written file for configured-but-empty lang: %v", err)
+	}
+}
+
+// TestCreatePageStillWarnsWithoutConfiguredLanguages confirms #899 is purely
+// additive: when ConfiguredLanguages is unset (every existing deployment's
+// default), create_page's behavior is byte-for-byte the pre-#899 warn path —
+// see TestCreatePageWarnsOnUnknownLanguage, which this repeats without the
+// new opt-in field to prove the default path is unaffected.
+func TestCreatePageStillWarnsWithoutConfiguredLanguages(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/zz-still-warns", "lang": "zz", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page without configured_languages must still warn (not reject): %s", raw)
+	}
+	if w, _ := decodeWriteData(t, res)["warning"].(string); !strings.Contains(w, "zz") {
+		t.Fatalf("create_page without configured_languages must still emit the unknown-lang warning, got warning=%q", w)
 	}
 }
 

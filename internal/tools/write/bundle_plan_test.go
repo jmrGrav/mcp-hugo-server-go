@@ -103,6 +103,59 @@ func TestBundlePlanValidationFailureRejectsWholeBundle(t *testing.T) {
 	}
 }
 
+// TestPlanBundleChangeRejectsOverlongTag is a regression test for #904:
+// plan_bundle_change shares resolvePlanOperations with plan_content_change,
+// so the same fix (validateTaxonomyTerms on add_tag/add_category) covers
+// both in one place. Confirms the whole bundle is rejected, not just the
+// offending translation.
+func TestPlanBundleChangeRejectsOverlongTag(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/example")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	over := strings.Repeat("a", 101)
+	res := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/example",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{map[string]any{"op": "add_tag", "value": over}}},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("plan_bundle_change: want error for overlong tag, got success")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "invalid_params") {
+		t.Fatalf("plan_bundle_change overlong-tag error = %s, want invalid_params", raw)
+	}
+}
+
+// TestPlanBundleChangeCannotCreateReservedSlug mirrors
+// TestPlanContentChangeCannotCreateReservedSlug (#904): plan_bundle_change
+// rejects a nonexistent bundle slug with not_a_bundle/not_found before any
+// operation runs, so — like plan_content_change — it has no path to create
+// a brand-new page at a reserved slug the way create_page's #890 denylist
+// guards against.
+func TestPlanBundleChangeCannotCreateReservedSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "404",
+		"translations": []any{
+			map[string]any{"lang": "en", "operations": []any{map[string]any{"op": "add_tag", "value": "x"}}},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("plan_bundle_change: want error targeting nonexistent reserved-looking slug, got success")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "not_a_bundle") {
+		t.Fatalf("plan_bundle_change on nonexistent slug %q = %s, want not_a_bundle (proving no slug-creation surface exists to bypass #890's denylist)", "404", raw)
+	}
+}
+
 // TestBundleApplyInterruptionRollsBack — AC5 case 3: an interruption partway
 // through the apply (simulated write failure at the second translation) leaves
 // NO partial state — the first, already-written translation is rolled back.

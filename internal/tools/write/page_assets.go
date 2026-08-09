@@ -700,10 +700,24 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			dir          string
 			hasBundleDir bool
 		)
+		// #901: SourceIndex has no internal synchronization — every access
+		// must be guarded by the caller holding hugosite.ContentMu (see its
+		// doc comment). This is the pre-lock eligibility check, the
+		// delete_page_asset counterpart of #887's upload_page_asset hotfix:
+		// it takes a brief RLock rather than reading the index unsynchronized
+		// (which would race a concurrent delete_page's/create_page's write,
+		// held under the full write lock below). It is still NOT the
+		// authoritative gate — the os.ReadFile under the write lock further
+		// down is what actually decides existence; a concurrent delete_page
+		// removing the bundle between this RUnlock and the write-lock
+		// acquisition just produces a not_found there instead.
 		switch scope {
 		case deleteAssetScopeBundle:
-			if err := validateBundleSlug(idx, slug); err != nil {
-				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+			hugosite.ContentMu.RLock()
+			preLockErr := validateBundleSlug(idx, slug)
+			hugosite.ContentMu.RUnlock()
+			if preLockErr != nil {
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(preLockErr)
 			}
 			dir, err = pg.SafeJoin(slug)
 			if err != nil {
@@ -721,7 +735,10 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			if err != nil {
 				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 			}
-			if err := validateBundleSlug(idx, slug); err == nil {
+			hugosite.ContentMu.RLock()
+			preLockErr := validateBundleSlug(idx, slug)
+			hugosite.ContentMu.RUnlock()
+			if preLockErr == nil {
 				dir, err = pg.SafeJoin(slug)
 				if err != nil {
 					slog.Warn("delete_page_asset: path validation failed", "slug", slug, "error", err)
