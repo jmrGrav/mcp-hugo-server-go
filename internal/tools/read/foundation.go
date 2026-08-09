@@ -28,6 +28,14 @@ func successEnvelope[T any](data T, now time.Time) toolcontract.ToolResponse[T] 
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, now))
 }
 
+const contentProvenanceSiteSourceUntrusted = "site_source_untrusted"
+
+func successEnvelopeWithContentProvenance[T any](data T, now time.Time, provenance string) toolcontract.ToolResponse[T] {
+	meta := toolcontract.NewMeta(buildinfo.Version, now)
+	meta.ContentProvenance = provenance
+	return toolcontract.Success(data, meta)
+}
+
 // toContentmodelTerms converts site-package taxonomy terms to the contentmodel
 // equivalent. The two types are structurally identical; the conversion exists
 // to keep contentmodel free of site-package imports during the migration.

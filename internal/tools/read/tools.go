@@ -427,7 +427,7 @@ func resolveEditInclude(raw []string) (map[string]bool, error) {
 }
 
 func newGetPageForEditOutput(data getPageForEditData, warnings []string, now time.Time) getPageForEditOutput {
-	resp := successEnvelope(data, now)
+	resp := successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
@@ -845,11 +845,11 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 }
 
 func newGetFullPageMarkdownOutput(data getFullPageMarkdownData, now time.Time) getFullPageMarkdownOutput {
-	return getFullPageMarkdownOutput{ToolResponse: successEnvelope(data, now)}
+	return getFullPageMarkdownOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
 }
 
 func newGetPageFrontmatterOutput(data getPageFrontmatterData, now time.Time) getPageFrontmatterOutput {
-	return getPageFrontmatterOutput{ToolResponse: successEnvelope(data, now)}
+	return getPageFrontmatterOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
 }
 
 func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRelatedContentOutput {
@@ -857,7 +857,7 @@ func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRe
 }
 
 func newBuildAgentContextOutput(data buildAgentContextData, warnings []string, now time.Time) buildAgentContextOutput {
-	resp := successEnvelope(data, now)
+	resp := successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
@@ -865,7 +865,7 @@ func newBuildAgentContextOutput(data buildAgentContextData, warnings []string, n
 }
 
 func newExportAgentContextOutput(data exportAgentContextData, warnings []string, now time.Time) exportAgentContextOutput {
-	resp := successEnvelope(data, now)
+	resp := successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}

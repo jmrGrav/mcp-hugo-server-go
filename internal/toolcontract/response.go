@@ -53,6 +53,10 @@ type ResponseMeta struct {
 	// the whole-call timing; it is distinct from any tool-specific timing a
 	// data payload may already carry (e.g. build_site's data.duration_ms).
 	DurationMs *int64 `json:"duration_ms,omitempty"`
+	// ContentProvenance marks responses whose payload includes site/user-
+	// controlled content that must be treated as untrusted data rather than
+	// instruction-like authority.
+	ContentProvenance string `json:"content_provenance,omitempty"`
 }
 
 type ErrorResolution struct {
@@ -160,12 +164,16 @@ func Success[T any](data T, meta ResponseMeta) ToolResponse[T] {
 // "keep everything except generated_at" rule — a future new ResponseMeta
 // field silently disappears in compact mode unless it's added here too.
 func compactMetaMap(meta map[string]any) map[string]any {
-	return map[string]any{
+	out := map[string]any{
 		"schema_version":  meta["schema_version"],
 		"release_version": meta["release_version"],
 		"commit":          meta["commit"],
 		"build_channel":   meta["build_channel"],
 	}
+	if provenance, ok := meta["content_provenance"].(string); ok && strings.TrimSpace(provenance) != "" {
+		out["content_provenance"] = provenance
+	}
+	return out
 }
 
 // ShapeSuccessOutput trims the success-envelope meta object for compact mode
