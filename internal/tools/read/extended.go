@@ -502,7 +502,19 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			if t := strings.ToLower(strings.TrimSpace(in.Type)); t != "" && t != "all" && t != "post" && t != "posts" && t != "page" && t != "pages" {
 				return nil, searchContentEnvelope{}, fmt.Errorf("invalid_params: type must be one of: all, post, posts, page, pages (got %q)", in.Type)
 			}
+			if err := validateSearchContentSort(in.Sort); err != nil {
+				return nil, searchContentEnvelope{}, err
+			}
+			if err := validateSearchContentOrder(in.Order); err != nil {
+				return nil, searchContentEnvelope{}, err
+			}
+			if err := validateSearchContentLanguage(in.Language, idx, cfg); err != nil {
+				return nil, searchContentEnvelope{}, err
+			}
 			if err := negativeLimitError(in.Limit); err != nil {
+				return nil, searchContentEnvelope{}, err
+			}
+			if err := maxLimitError(in.Limit, 100); err != nil {
 				return nil, searchContentEnvelope{}, err
 			}
 			if err := negativeOffsetError(in.Offset); err != nil {
@@ -601,7 +613,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				Category:      strings.TrimSpace(in.Category),
 				Language:      strings.TrimSpace(in.Language),
 			}, time.Now().UTC()), nil
-		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 100) })
+		})
 
 	addReadOnlyTool(s, "explain_structure", "Explain site structure", "Summarize how the Hugo site is organized, including sections, taxonomies, languages, and recent content. Useful for onboarding or content planning. `response_mode:\"compact\"` keeps only the structural summary (summary, section counts, languages, taxonomy counts) and omits the heavier `recent_pages` examples and long `notes` list used for deeper onboarding. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
@@ -1171,6 +1183,64 @@ func canonicalOrder(order string) string {
 		return "asc"
 	}
 	return "desc"
+}
+
+func validateSearchContentSort(sortBy string) error {
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "", "date", "title", "slug", "relevance":
+		return nil
+	default:
+		return fmt.Errorf("invalid_params: sort must be one of: date, title, slug, relevance (got %q)", sortBy)
+	}
+}
+
+func validateSearchContentOrder(order string) error {
+	switch strings.ToLower(strings.TrimSpace(order)) {
+	case "", "asc", "desc":
+		return nil
+	default:
+		return fmt.Errorf("invalid_params: order must be one of: asc, desc (got %q)", order)
+	}
+}
+
+func validateSearchContentLanguage(lang string, idx *site.Index, cfg config.Config) error {
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return nil
+	}
+	known := availableSearchLanguages(idx, cfg)
+	for _, candidate := range known {
+		if strings.EqualFold(candidate, lang) {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid_params: language must be one of: %s (got %q)", strings.Join(known, ", "), lang)
+}
+
+func availableSearchLanguages(idx *site.Index, cfg config.Config) []string {
+	seen := map[string]bool{}
+	if d := strings.TrimSpace(cfg.DefaultLanguage); d != "" {
+		seen[d] = true
+	}
+	if len(cfg.ConfiguredLanguages) > 0 {
+		for _, lang := range cfg.ConfiguredLanguages {
+			if lang = strings.TrimSpace(lang); lang != "" {
+				seen[lang] = true
+			}
+		}
+	} else if idx != nil {
+		for _, page := range idx.ContentPages() {
+			if lang := strings.TrimSpace(page.Lang); lang != "" {
+				seen[lang] = true
+			}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for lang := range seen {
+		out = append(out, lang)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func sliceContentPages(pages []site.Page, offset, limit int) []site.Page {
