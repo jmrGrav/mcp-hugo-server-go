@@ -273,6 +273,52 @@ func parseFrontmatterMap(raw []byte) map[string]any {
 	return fm
 }
 
+// frontmatterString, frontmatterBool, and frontmatterTime mirror
+// hugosite.NewSourceIndex's own raw-frontmatter-value coercion (see
+// stringVal/boolVal/timeVal in internal/hugosite/source_index.go) so a
+// handler that rebuilds a hugosite.SourcePage from a parseFrontmatterMap
+// result — rollback_change, specifically — can resync SourcePage's typed
+// Date/Draft/PublishDate/ExpiryDate fields the same way NewSourceIndex
+// populates them at initial parse time, instead of leaving them at whatever
+// value the base entry the rebuild started from happened to hold. Kept
+// package-local rather than exported from hugosite: this coercion has
+// exactly one caller today, and hugosite is a package the whole server
+// depends on.
+func frontmatterString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case time.Time:
+		return x.UTC().Format(time.RFC3339)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+func frontmatterBool(v any) bool {
+	b, _ := v.(bool)
+	return b
+}
+
+func frontmatterTime(v any) time.Time {
+	switch x := v.(type) {
+	case time.Time:
+		return x
+	case string:
+		if x == "" {
+			return time.Time{}
+		}
+		for _, layout := range []string{time.RFC3339, "2006-01-02T15:04:05", "2006-01-02"} {
+			if t, err := time.Parse(layout, x); err == nil {
+				return t
+			}
+		}
+	}
+	return time.Time{}
+}
+
 // bodyFromRaw extracts the Markdown body from a source file's raw bytes,
 // matching hugosite.splitFrontmatter's own convention exactly
 // (strings.TrimSpace of everything after the second "---" delimiter) since

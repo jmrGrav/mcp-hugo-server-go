@@ -369,6 +369,26 @@ func registerRollbackChange(
 		// held from before the rollback until the next full reindex.
 		if restoredFM != nil {
 			updated.FrontmatterRaw = restoredFM
+			// #911 follow-up: FrontmatterRaw above fixes callers that read
+			// the raw map, but SourcePage also carries typed Date/Draft/
+			// PublishDate/ExpiryDate fields (consumed directly by e.g.
+			// search_content's date sort and draft filtering — see
+			// internal/tools/read/extended.go) that were never resynced
+			// here. Left alone, they keep whatever value `updated` started
+			// from — the exact mechanism this rollback fix exists to close
+			// for Title, just on different fields. This resync is now the
+			// mechanism that actually makes the rebuild correct regardless
+			// of which base entry `updated` started from above: every
+			// SourcePage field ends up explicitly reassigned from either
+			// resolvedSource or this restored snapshot by the end of this
+			// function, so the language-scoped lookup above is defense in
+			// depth against a future field being added to SourcePage and
+			// missed here — not, on its own, what a caller can currently
+			// observe through get_page_frontmatter/get_page_for_edit.
+			updated.Date = frontmatterString(restoredFM["date"])
+			updated.Draft = frontmatterBool(restoredFM["draft"])
+			updated.PublishDate = frontmatterTime(restoredFM["publishDate"])
+			updated.ExpiryDate = frontmatterTime(restoredFM["expiryDate"])
 		}
 		updated.Tags = restoredTags
 		updated.Categories = restoredCategories

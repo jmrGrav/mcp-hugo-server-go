@@ -511,6 +511,98 @@ func decodeNestedMap(t *testing.T, res *mcp.CallToolResult, path ...string) map[
 	return m
 }
 
+// TestRollbackChangeBilingualIndexDateSurvivesCrossLanguageRebuild is a
+// tighter #911 regression than TestRollbackChangeBilingualReadToolsMatchRestoredLanguage
+// above. That test seeds both translations as pre-existing files parsed by a
+// single NewSourceIndex walk, where FR happens to land at a higher pages[]
+// index than EN — so the pre-fix lang-blind idx.GetBySlug(slug) already
+// resolved to FR by accident, and the test passes identically whether or not
+// the language-scoped lookup fix is applied (verified: reverting just that
+// switch back to GetBySlug(in.Slug) and rerunning that test still passes).
+//
+// This test forces the trigger condition directly instead: EN is upserted
+// into the index after FR is already present, so EN occupies the higher
+// index and a lang-blind idx.GetBySlug("posts/date-probe") resolves to EN.
+// It asserts on Date rather than Title, because Title is patched
+// unconditionally from the restored snapshot regardless of which entry
+// rollback started from (see restoredTitle below) and can't distinguish
+// correct from corrupted either way — Date was the field the original audit
+// actually observed leaking cross-language.
+//
+// Note on what this test currently proves: rollback_change.go now resyncs
+// every SourcePage field (Date/Draft/PublishDate/ExpiryDate included) from
+// the restored snapshot's own frontmatter, which alone is now sufficient to
+// keep this test green — verified by reverting only the language-scoped
+// lookup switch back to bare GetBySlug(in.Slug) while keeping that resync,
+// and confirming the test still passes. So this test guards the resync (the
+// mechanism that currently prevents the #911 symptom observably), not the
+// language-scoped lookup in isolation; the lookup fix is kept as defense in
+// depth against a future SourcePage field that isn't part of the resync.
+func TestRollbackChangeBilingualIndexDateSurvivesCrossLanguageRebuild(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "date-probe")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	frFile := filepath.Join(pageDir, "index.fr.md")
+	frContent := "---\ntitle: Titre FR\ndate: 2026-01-01T00:00:00Z\n---\nContenu original FR.\n"
+	if err := os.WriteFile(frFile, []byte(frContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	beforeRevision := contentmodel.SourceRevisionBytes([]byte(frContent))
+
+	session, idx, done := newReadWriteTestServer(t, contentRoot)
+	defer done()
+
+	// EN is upserted after FR is already indexed, matching real chronological
+	// creation order (FR created, then EN created later) — this is what
+	// gives EN the higher pages[] index and makes it win the lang-blind
+	// bySlug lookup the pre-fix code used.
+	enFile := filepath.Join(pageDir, "index.en.md")
+	enContent := "---\ntitle: Title EN\ndate: 2026-06-15T00:00:00Z\n---\nOriginal content EN.\n"
+	if err := os.WriteFile(enFile, []byte(enContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	idx.Upsert(hugosite.SourcePage{
+		Slug: "posts/date-probe", Lang: "en", FilePath: enFile,
+		Title: "Title EN", Date: "2026-06-15T00:00:00Z",
+	})
+
+	if bare, ok := idx.GetBySlug("posts/date-probe"); !ok || bare.Lang != "en" {
+		t.Fatalf("test setup invalid: bare GetBySlug must resolve to the EN entry to reproduce the #911 trigger condition, got lang=%q ok=%v", bare.Lang, ok)
+	}
+
+	updateRes := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/date-probe",
+		"lang":              "fr",
+		"description":       "Description FR modifiee",
+		"expected_revision": beforeRevision,
+	})
+	if updateRes.IsError {
+		t.Fatalf("update_page failed: %s", marshalContent(t, updateRes))
+	}
+	afterUpdateRevision := decodeWriteData(t, updateRes)["new_revision"].(string)
+
+	rollbackRes := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/date-probe",
+		"lang":              "fr",
+		"to_revision":       beforeRevision,
+		"expected_revision": afterUpdateRevision,
+	})
+	if rollbackRes.IsError {
+		t.Fatalf("rollback_change failed: %s", marshalContent(t, rollbackRes))
+	}
+
+	frEntry, ok := idx.GetBySlugLang("posts/date-probe", "fr")
+	if !ok {
+		t.Fatal("fr entry missing from source index after rollback_change")
+	}
+	if frEntry.Date != "2026-01-01T00:00:00Z" {
+		t.Errorf("source index fr date = %q after rollback, want restored FR date %q (EN date is %q — a match here means the index rebuild pulled from the wrong language)",
+			frEntry.Date, "2026-01-01T00:00:00Z", "2026-06-15T00:00:00Z")
+	}
+}
+
 // TestRollbackChangeRestoresUpdatePageSnapshot is a regression test for #629:
 // before this fix, only apply_content_plan captured a snapshot, so a
 // revision produced solely by update_page (with no plan_content_change /
