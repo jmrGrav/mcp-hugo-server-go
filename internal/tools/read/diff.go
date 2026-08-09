@@ -188,6 +188,9 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 }
 
 func newDiffPageOutput(data diffPageData, now time.Time) diffPageOutput {
+	if data.SourceContent != "" {
+		return diffPageOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
+	}
 	return diffPageOutput{ToolResponse: successEnvelope(data, now)}
 }
 

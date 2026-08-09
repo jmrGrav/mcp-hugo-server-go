@@ -67,3 +67,11 @@ func TestSuccessEnvelopePopulatesCompatibilityFields(t *testing.T) {
 		t.Fatalf("successEnvelope().Errors = %#v, want empty", got.Errors)
 	}
 }
+
+func TestSuccessEnvelopeWithContentProvenance(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	got := successEnvelopeWithContentProvenance(getBacklinksData{Slug: "/posts/hello/"}, now, contentProvenanceSiteSourceUntrusted)
+	if got.Meta.ContentProvenance != contentProvenanceSiteSourceUntrusted {
+		t.Fatalf("successEnvelopeWithContentProvenance().Meta.ContentProvenance = %q, want %q", got.Meta.ContentProvenance, contentProvenanceSiteSourceUntrusted)
+	}
+}

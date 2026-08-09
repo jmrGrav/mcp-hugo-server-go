@@ -133,6 +133,18 @@ func decodeContent(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	return data
 }
 
+func assertEnvelopeContentProvenance(t *testing.T, res *mcp.CallToolResult, want string) {
+	t.Helper()
+	envelope := decodeEnvelope(t, res)
+	meta, ok := envelope["meta"].(map[string]any)
+	if !ok {
+		t.Fatalf("meta type = %T, want map[string]any", envelope["meta"])
+	}
+	if got := meta["content_provenance"]; got != want {
+		t.Fatalf("meta.content_provenance = %v, want %q", got, want)
+	}
+}
+
 func decodeErrorEnvelope(t *testing.T, res *mcp.CallToolResult) map[string]any {
 	t.Helper()
 	if res.StructuredContent != nil {
@@ -179,6 +191,7 @@ func TestGetFullPageMarkdown(t *testing.T) {
 		t.Fatalf("get_page_markdown resolved_source_path = %v, want content/posts/hello.md", got)
 	}
 	assertReadPageState(t, page["state"], "present", "built", "available", "fresh")
+	assertEnvelopeContentProvenance(t, res, "site_source_untrusted")
 }
 
 func TestGetFullPageMarkdownIncludeTermsFalseOmitsTerms(t *testing.T) {
@@ -265,6 +278,7 @@ func TestGetPageFrontmatter(t *testing.T) {
 		t.Fatalf("category term = %#v, want source/slug/label for tutorials", term)
 	}
 	assertReadPageState(t, fm["state"], "present", "built", "available", "fresh")
+	assertEnvelopeContentProvenance(t, res, "site_source_untrusted")
 }
 
 func TestGetPageFrontmatterExposesStableMetadataContract(t *testing.T) {
@@ -956,6 +970,7 @@ func TestGetPageForEditDefaultReturnsFullBundle(t *testing.T) {
 	if _, present := quality["broken_links"]; !present {
 		t.Error("get_page_for_edit: quality.broken_links missing")
 	}
+	assertEnvelopeContentProvenance(t, res, "site_source_untrusted")
 }
 
 func TestGetPageFrontmatterIncludesSourceKey(t *testing.T) {
@@ -1711,6 +1726,7 @@ func TestBuildAgentContext(t *testing.T) {
 	if _, ok := ctx["related_pages"]; !ok {
 		t.Fatal("build_agent_context: missing 'related_pages' in context")
 	}
+	assertEnvelopeContentProvenance(t, res, "site_source_untrusted")
 }
 
 func TestBuildAgentContextResponseModeCompact(t *testing.T) {
@@ -1819,6 +1835,7 @@ func TestExportAgentContext(t *testing.T) {
 	if len(pages0) != 1 {
 		t.Fatalf("export_agent_context limit=1 offset=0: expected 1 page, got %d", len(pages0))
 	}
+	assertEnvelopeContentProvenance(t, res0, "site_source_untrusted")
 
 	res1 := callTool(t, session, "export_agent_context", map[string]any{"limit": 1, "offset": 1})
 	if res1.IsError {
@@ -4127,7 +4144,7 @@ func TestExtendedReadAnnotations(t *testing.T) {
 			t.Fatalf("missing tool %q", tc.tool)
 		}
 		assertSchemaHasProperties(t, tool, "outputSchema", tc.keys...)
-		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "release_version")
+		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "release_version", "content_provenance")
 		assertSchemaLacksProperties(t, tool, "outputSchema", tc.noTopLevel...)
 	}
 }
