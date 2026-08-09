@@ -86,6 +86,45 @@ func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
 	}
 }
 
+// TestGetCapabilitiesAdvertisesConfiguredLanguagesWhenSet is a regression
+// test for #899: when the operator sets cfg.ConfiguredLanguages,
+// get_capabilities.languages.available must report exactly that
+// authoritative set — including a configured-but-still-content-empty
+// language — rather than the derived-from-index set, so "advertised ==
+// enforced" holds against create_page's rejectUnconfiguredLang.
+func TestGetCapabilitiesAdvertisesConfiguredLanguagesWhenSet(t *testing.T) {
+	idx := mustTestIndex(t)
+
+	cfg := config.Default()
+	cfg.DefaultLanguage = "en"
+	cfg.ConfiguredLanguages = []string{"en", "fr", "de"}
+
+	session, done := newTestClientWithCfg(t, idx, cfg, nil)
+	defer done()
+
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	data := decodeContent(t, res)
+	languages, ok := data["languages"].(map[string]any)
+	if !ok {
+		t.Fatalf("languages missing/wrong type: %#v", data["languages"])
+	}
+	available, ok := languages["available"].([]any)
+	if !ok {
+		t.Fatalf("languages.available missing/wrong type: %#v", languages["available"])
+	}
+	got := make([]string, len(available))
+	for i, v := range available {
+		got[i], _ = v.(string)
+	}
+	want := []string{"de", "en", "fr"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("languages.available = %v, want exactly configured_languages %v (including the configured-but-content-empty \"de\")", got, want)
+	}
+}
+
 // findStringLeak reports whether needle appears in any string value anywhere
 // in the decoded JSON tree.
 func findStringLeak(v any, needle string) bool {

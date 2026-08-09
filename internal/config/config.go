@@ -17,13 +17,28 @@ type Config struct {
 	// theme's raw .html layout templates under {HugoRoot}/themes/ would get
 	// walked and mis-parsed as content pages (see index.go's project-root
 	// warning).
-	SiteRoot            string            `yaml:"site_root"`
-	HugoRoot            string            `yaml:"hugo_root"`
-	ContentRoot         string            `yaml:"content_root"`
-	GitBaseline         GitBaselineConfig `yaml:"git_baseline"`
-	SiteURL             string            `yaml:"site_url"`
-	SiteName            string            `yaml:"site_name"`
-	DefaultLanguage     string            `yaml:"language_default"`
+	SiteRoot        string            `yaml:"site_root"`
+	HugoRoot        string            `yaml:"hugo_root"`
+	ContentRoot     string            `yaml:"content_root"`
+	GitBaseline     GitBaselineConfig `yaml:"git_baseline"`
+	SiteURL         string            `yaml:"site_url"`
+	SiteName        string            `yaml:"site_name"`
+	DefaultLanguage string            `yaml:"language_default"`
+	// ConfiguredLanguages (#899) is an explicit, operator-declared list of
+	// language codes the site supports — e.g. ["en", "fr"]. When set, it is
+	// the authoritative source create_page uses to *reject* (not just warn
+	// about) a lang value outside it, and get_capabilities.languages.available
+	// reports exactly this set instead of the derived-from-content one, so
+	// "advertised == enforced" holds. When unset/empty (the default), nothing
+	// changes: create_page keeps its existing warn-not-reject behavior (#891)
+	// and get_capabilities keeps deriving availability from indexed content —
+	// this field is opt-in specifically so it never breaks an operator who
+	// hasn't configured it. See unknownLangWarning's doc comment in
+	// internal/tools/write/tools.go for why a reject rule needs this
+	// operator-supplied set: the server has no other way to distinguish "not
+	// configured" from "configured but has no content yet" (the latter must
+	// still be accepted, or the first page of every new language deadlocks).
+	ConfiguredLanguages []string          `yaml:"configured_languages"`
 	Transport           string            `yaml:"transport"`
 	HTTPBindAddr        string            `yaml:"http_bind_addr"`
 	HTTPBindPort        int               `yaml:"http_bind_port"`

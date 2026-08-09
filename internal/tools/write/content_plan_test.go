@@ -66,6 +66,84 @@ func TestPlanContentChangeAndApplyRoundTrip(t *testing.T) {
 	}
 }
 
+// TestPlanContentChangeRejectsOverlongTag is a regression test for #904:
+// create_page/update_page reject a tag exceeding maxTaxonomyTermRunes
+// (#886), but plan_content_change's add_tag operation bypassed that check
+// entirely. Rejected at plan time (fail-fast), not deferred to apply.
+func TestPlanContentChangeRejectsOverlongTag(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	over := strings.Repeat("a", 101)
+	res := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/article",
+		"operations": []any{
+			map[string]any{"op": "add_tag", "value": over},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("plan_content_change: want error for overlong tag, got success")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "invalid_params") {
+		t.Fatalf("plan_content_change overlong-tag error = %s, want invalid_params", raw)
+	}
+}
+
+// TestPlanContentChangeRejectsOverlongCategory mirrors
+// TestPlanContentChangeRejectsOverlongTag for add_category (#904).
+func TestPlanContentChangeRejectsOverlongCategory(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	over := strings.Repeat("a", 101)
+	res := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/article",
+		"operations": []any{
+			map[string]any{"op": "add_category", "value": over},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("plan_content_change: want error for overlong category, got success")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "invalid_params") {
+		t.Fatalf("plan_content_change overlong-category error = %s, want invalid_params", raw)
+	}
+}
+
+// TestPlanContentChangeCannotCreateReservedSlug is a regression/confirmation
+// test for #904's second acceptance criterion: plan_content_change can only
+// target an *existing* page (resolveExistingSource), so there is no path by
+// which a plan could create a brand-new page at a reserved slug like `404`
+// or `_index` the way create_page's reservedSlugConflict check (#890)
+// guards against. This documents that the reserved-slug half of #904's
+// original claim does not reproduce (confirmed during PR4's review) —
+// plan_content_change simply has no slug-creation surface to bypass.
+func TestPlanContentChangeCannotCreateReservedSlug(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "404",
+		"operations": []any{
+			map[string]any{"op": "add_tag", "value": "x"},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("plan_content_change: want error targeting nonexistent reserved-looking slug, got success")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "not_found") {
+		t.Fatalf("plan_content_change on nonexistent slug %q = %s, want not_found (proving no slug-creation surface exists to bypass #890's denylist)", "404", raw)
+	}
+}
+
 // TestApplyContentPlanSetFieldDescriptionRefreshesInMemoryIndex (#810) is a
 // regression test for the exact scenario that surfaced this bug in
 // production: plan_content_change + apply_content_plan's set_field

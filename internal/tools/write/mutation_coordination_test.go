@@ -399,6 +399,89 @@ func TestConcurrentUploadAssetAndDeleteSameBundleDeterministicOutcome(t *testing
 	}
 }
 
+// TestConcurrentDeleteAssetAndDeletePageSameBundleDeterministicOutcome is a
+// regression test for #901: delete_page_asset's pre-lock validateBundleSlug
+// eligibility check reads hugosite.SourceIndex, which has no internal
+// synchronization — the same pattern #887 fixed in upload_page_asset after
+// CI's -race run caught it racing a concurrent delete_page. This mirrors
+// TestConcurrentUploadAssetAndDeleteSameBundleDeterministicOutcome's shape:
+// under `-race`, an unguarded read here would be flagged as a data race
+// against delete_page's write-locked SourceIndex mutation, regardless of
+// which goroutine happens to win.
+func TestConcurrentDeleteAssetAndDeletePageSameBundleDeterministicOutcome(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	const slug = "posts/coord-asset-delete-page"
+	create := callTool(t, session, "create_page", map[string]any{
+		"slug": slug, "title": "Original", "body": "Body v0",
+		"tags": []any{}, "categories": []any{},
+	})
+	if create.IsError {
+		t.Fatalf("create_page failed: %s", marshalContent(t, create))
+	}
+	upload := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug": slug, "filename": "cover.png", "content_base64": b64(minimalPNG),
+	})
+	if upload.IsError {
+		t.Fatalf("upload_page_asset failed: %s", marshalContent(t, upload))
+	}
+	sha256 := decodeWriteData(t, upload)["sha256"].(string)
+	rev := currentRevision(t, filepath.Join(contentRoot, slug, "index.md"))
+
+	hugosite.ContentMu.Lock()
+	results := make(chan namedCallResult, 2)
+	started := make(chan struct{}, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		results <- namedCallResult{op: "delete_asset", res: callTool(t, session, "delete_page_asset", map[string]any{
+			"slug": slug, "filename": "cover.png", "expected_sha256": sha256,
+		})}
+	}()
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		results <- namedCallResult{op: "delete_page", res: callTool(t, session, "delete_page", map[string]any{
+			"slug": slug, "expected_revision": rev,
+		})}
+	}()
+	waitForStarts(t, started, 2)
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	close(results)
+
+	seen := map[string]*mcp.CallToolResult{}
+	for r := range results {
+		seen[r.op] = r.res
+	}
+	deleteAssetRes, deletePageRes := seen["delete_asset"], seen["delete_page"]
+	if deleteAssetRes == nil || deletePageRes == nil {
+		t.Fatalf("missing race results: %#v", seen)
+	}
+
+	if deletePageRes.IsError {
+		t.Fatalf("delete_page must be the final winner in delete-asset/delete-page bundle race, got error: %s", marshalContent(t, deletePageRes))
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, slug)); !os.IsNotExist(err) {
+		t.Fatalf("bundle must be gone after delete_page winner, stat err = %v", err)
+	}
+	// The loser (delete_page_asset) must fail cleanly — either it lost the
+	// race to delete_page (not_found, since the bundle/asset is already
+	// gone) or it won and deleted the asset before delete_page removed the
+	// whole bundle (in which case it succeeds). Either outcome is valid;
+	// the point of this test is the absence of a data race, proven by `-race`
+	// staying silent, not which goroutine wins.
+	if deleteAssetRes.IsError {
+		if code := firstErrorCode(t, decodeWriteErrorEnvelope(t, deleteAssetRes)); code != "not_found" {
+			t.Fatalf("delete_page_asset loser code = %q, want not_found", code)
+		}
+	}
+}
+
 // TestConcurrentBundleLanguageWritesBothSucceed proves the same-bundle race:
 // two concurrent creates of different language variants in the same bundle
 // directory (index.fr.md, index.es.md alongside an existing index.md) do not

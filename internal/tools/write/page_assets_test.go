@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 )
 
 // minimalPNG is enough leading bytes for http.DetectContentType to sniff
@@ -1051,6 +1052,157 @@ func TestDeletePageAssetDryRunDoesNotConsumeDestructiveQuota(t *testing.T) {
 	}
 	if remaining[0] != float64(rl.DestructivePerMin) {
 		t.Fatalf("delete_page_asset dry_run rate_limit_remaining = %v, want full fresh budget %d", remaining[0], rl.DestructivePerMin)
+	}
+}
+
+// TestDeletePageAssetOwnedTestContentExemptFromDestructiveQuota is a
+// regression test for #895: deleting assets that belong to the caller's own
+// test_content bundle must not consume the destructive quota, matching
+// delete_page's own exemption — a bilingual test bundle's cleanup often
+// deletes both the pages and their assets in the same pass.
+func TestDeletePageAssetOwnedTestContentExemptFromDestructiveQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	const owner = "agent-895"
+	if res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/owned-asset-test", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{},
+		"test_content": map[string]any{"owner": owner},
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page expected success, got error: %s", raw)
+	}
+	for _, name := range []string{"cover.png", "cover2.png"} {
+		if res := callTool(t, session, "upload_page_asset", map[string]any{
+			"slug": "posts/owned-asset-test", "filename": name, "content_base64": b64(minimalPNG),
+		}); res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("upload_page_asset %s expected success, got error: %s", name, raw)
+		}
+	}
+
+	// Both asset deletes must succeed despite DestructivePerMin=1, since
+	// both are exempt (owning bundle is test_content owned by this caller).
+	for _, name := range []string{"cover.png", "cover2.png"} {
+		res := callTool(t, session, "delete_page_asset", map[string]any{
+			"slug": "posts/owned-asset-test", "filename": name,
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "owned-asset-test", "index.md")),
+			"owner":             owner,
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("delete_page_asset %s (owned test_content) expected exemption from quota, got error: %s", name, raw)
+		}
+	}
+}
+
+// TestDeletePageAssetMismatchedOwnerStillConsumesQuota is a regression test
+// for #895 proving the delete_page_asset exemption cannot be used to bypass
+// the destructive quota on someone else's test content, or on a
+// scope:"generated" asset with no owning bundle at all.
+func TestDeletePageAssetMismatchedOwnerStillConsumesQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	if res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/other-owner-asset-test", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{},
+		"test_content": map[string]any{"owner": "someone-else"},
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page expected success, got error: %s", raw)
+	}
+	for _, name := range []string{"cover.png", "cover2.png"} {
+		if res := callTool(t, session, "upload_page_asset", map[string]any{
+			"slug": "posts/other-owner-asset-test", "filename": name, "content_base64": b64(minimalPNG),
+		}); res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("upload_page_asset %s expected success, got error: %s", name, raw)
+		}
+	}
+
+	// First delete with a non-matching owner consumes the (size-1) quota.
+	if res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug": "posts/other-owner-asset-test", "filename": "cover.png",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "other-owner-asset-test", "index.md")),
+		"owner":             "not-the-recorded-owner",
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page_asset expected success, got error: %s", raw)
+	}
+
+	// Second delete (also mismatched owner) must be blocked.
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug": "posts/other-owner-asset-test", "filename": "cover2.png",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "other-owner-asset-test", "index.md")),
+		"owner":             "not-the-recorded-owner",
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete_page_asset with mismatched owner, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
+	}
+}
+
+// TestDeletePageAssetGeneratedScopeWithoutBundleIgnoresOwnerStillConsumesQuota
+// is a regression test for #895: a scope:"generated" delete on an orphaned
+// hero image with no owning page bundle has no frontmatter to check, so it
+// must never be exempt regardless of the `owner` param passed — it always
+// falls through to the normal quota consumption.
+func TestDeletePageAssetGeneratedScopeWithoutBundleIgnoresOwnerStillConsumesQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	hugoRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl, HugoRoot: hugoRoot})
+	defer done()
+
+	slug := "posts/orphan-hero-895"
+	loc, err := admin.ResolveHeroImageLocation(hugoRoot, slug)
+	if err != nil {
+		t.Fatalf("ResolveHeroImageLocation: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(loc.AbsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(loc.AbsPath, minimalPNG, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug": slug, "filename": loc.Name, "scope": "generated",
+		"expected_sha256": contentmodel.SourceRevisionBytes(minimalPNG),
+		"owner":           "agent-895",
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page_asset (orphan hero) expected success, got error: %s", raw)
+	}
+
+	// Recreate the orphaned asset and delete again — must be blocked, since
+	// the owner param has no bundle frontmatter to match against.
+	if err := os.WriteFile(loc.AbsPath, minimalPNG, 0o644); err != nil {
+		t.Fatalf("WriteFile (recreate): %v", err)
+	}
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug": slug, "filename": loc.Name, "scope": "generated",
+		"expected_sha256": contentmodel.SourceRevisionBytes(minimalPNG),
+		"owner":           "agent-895",
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd orphan-hero delete (owner must not exempt a bundle-less asset), got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
 	}
 }
 

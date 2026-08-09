@@ -38,6 +38,10 @@ type testServerOpts struct {
 	// mutation tool call in the test session behaves as if dry_run: true
 	// were passed, regardless of what the test actually sends.
 	ForceDryRunAll bool
+	// ConfiguredLanguages, when non-nil, overrides cfg.ConfiguredLanguages
+	// (#899) so tests can exercise create_page's authoritative lang-reject
+	// path without needing a full config.Load fixture.
+	ConfiguredLanguages []string
 }
 
 // newTestServer builds a write-tool MCP server over an in-memory transport and
@@ -65,6 +69,9 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 		cfg.RateLimit = *o.RateLimit
 	}
 	cfg.ForceDryRunAll = o.ForceDryRunAll
+	if o.ConfiguredLanguages != nil {
+		cfg.ConfiguredLanguages = o.ConfiguredLanguages
+	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg, o.SiteDB, o.SiteIdx)
@@ -636,6 +643,142 @@ func TestDeletePageRateLimit(t *testing.T) {
 	})
 	if !res.IsError {
 		t.Fatal("expected rate_limit_exceeded on 6th delete, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
+	}
+}
+
+// TestDeletePageOwnedTestContentExemptFromDestructiveQuota is a regression
+// test for #895: deleting the caller's own test_content pages (test_content:
+// true, test_content_owner matching the `owner` param) must not consume the
+// destructive quota at all, so a bilingual bundle cleanup needing more than
+// DestructivePerMin calls doesn't get throttled mid-cleanup.
+func TestDeletePageOwnedTestContentExemptFromDestructiveQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	const owner = "agent-895"
+	for i := 0; i < 3; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("owned-test-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+			"test_content": map[string]any{"owner": owner},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	// All 3 deletes must succeed despite DestructivePerMin=1, since every
+	// one is exempt (test_content owned by the matching caller).
+	for i := 0; i < 3; i++ {
+		slug := fmt.Sprintf("owned-test-%d", i)
+		res := callTool(t, session, "delete_page", map[string]any{
+			"slug":              slug,
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, slug, "index.md")),
+			"owner":             owner,
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("delete_page %d (owned test_content) expected exemption from quota, got error: %s", i, raw)
+		}
+	}
+}
+
+// TestDeletePageMismatchedOwnerTestContentStillConsumesQuota is a regression
+// test for #895 proving the exemption cannot be used to bypass the
+// destructive quota on someone else's test content: an owner string that
+// does not match the page's recorded test_content_owner is treated exactly
+// like real content — the quota is consumed and exhausted normally.
+func TestDeletePageMismatchedOwnerTestContentStillConsumesQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	for i := 0; i < 2; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("other-owner-test-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+			"test_content": map[string]any{"owner": "someone-else"},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	// First delete with a non-matching owner consumes the (size-1) quota.
+	if res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "other-owner-test-0",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "other-owner-test-0", "index.md")),
+		"owner":             "not-the-recorded-owner",
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page expected success, got error: %s", raw)
+	}
+
+	// Second delete (also mismatched owner) must be blocked — no exemption,
+	// so it hits the same DestructivePerMin=1 budget the first call spent.
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "other-owner-test-1",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "other-owner-test-1", "index.md")),
+		"owner":             "not-the-recorded-owner",
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete with mismatched owner, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
+	}
+}
+
+// TestDeletePageRealContentIgnoresOwnerParamStillConsumesQuota is a
+// regression test for #895: passing `owner` on a delete against real
+// (non-test_content) content must have no effect — the deletion still
+// consumes the destructive quota exactly as before the exemption existed.
+func TestDeletePageRealContentIgnoresOwnerParamStillConsumesQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	for i := 0; i < 2; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("real-post-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	if res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "real-post-0",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "real-post-0", "index.md")),
+		"owner":             "agent-895",
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page expected success, got error: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "real-post-1",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "real-post-1", "index.md")),
+		"owner":             "agent-895",
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete of real content (owner param must not exempt it), got success")
 	}
 	raw, _ := json.Marshal(res.Content)
 	if !strings.Contains(string(raw), "rate_limit_exceeded") {
@@ -2727,6 +2870,115 @@ func TestCreatePageDoesNotWarnOnKnownLanguage(t *testing.T) {
 	}
 	if w, _ := decodeWriteData(t, secondFr)["warning"].(string); strings.Contains(w, "no existing content") {
 		t.Fatalf("second fr page (fr content now exists) must not warn, got warning=%q", w)
+	}
+}
+
+// TestCreatePageRejectsUnconfiguredLangWhenConfiguredLanguagesSet is a
+// regression test for #899: when the operator has set
+// config.ConfiguredLanguages, an unrecognized lang is rejected outright
+// (invalid_params) and no file is written — the true reject #891 could not
+// safely provide without this operator-declared authoritative set.
+func TestCreatePageRejectsUnconfiguredLangWhenConfiguredLanguagesSet(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{ConfiguredLanguages: []string{"en", "fr"}})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/zz-rejected", "lang": "zz", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{},
+	})
+	if !res.IsError {
+		t.Fatal("create_page: want error for unconfigured lang when configured_languages is set, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "invalid_params") {
+		t.Fatalf("create_page unconfigured-lang error = %s, want invalid_params", raw)
+	}
+	if !strings.Contains(string(raw), "configured_languages") {
+		t.Fatalf("create_page unconfigured-lang error = %s, want to name configured_languages", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "zz-rejected")); !os.IsNotExist(err) {
+		t.Fatal("create_page must not write any file when the lang is rejected")
+	}
+}
+
+// TestCreatePageAcceptsConfiguredButEmptyLang is a regression test for
+// #899's "no chicken-and-egg" acceptance criterion: a language declared in
+// configured_languages but with no existing content yet must still be
+// accepted (and must not even carry the unknown-language warning, since the
+// operator has explicitly vouched for it) — otherwise the first page of
+// every legitimately new language would deadlock.
+func TestCreatePageAcceptsConfiguredButEmptyLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{ConfiguredLanguages: []string{"en", "de"}})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/de-first", "lang": "de", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page with configured-but-empty lang must succeed, got error: %s", raw)
+	}
+	if w, _ := decodeWriteData(t, res)["warning"].(string); strings.Contains(w, "no existing content") {
+		t.Fatalf("create_page must not warn on a lang the operator has explicitly configured, got warning=%q", w)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "de-first", "index.de.md")); err != nil {
+		t.Fatalf("expected written file for configured-but-empty lang: %v", err)
+	}
+}
+
+// TestCreatePageStillWarnsWithoutConfiguredLanguages confirms #899 is purely
+// additive: when ConfiguredLanguages is unset (every existing deployment's
+// default), create_page's behavior is byte-for-byte the pre-#899 warn path —
+// see TestCreatePageWarnsOnUnknownLanguage, which this repeats without the
+// new opt-in field to prove the default path is unaffected.
+func TestCreatePageStillWarnsWithoutConfiguredLanguages(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/zz-still-warns", "lang": "zz", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page without configured_languages must still warn (not reject): %s", raw)
+	}
+	if w, _ := decodeWriteData(t, res)["warning"].(string); !strings.Contains(w, "zz") {
+		t.Fatalf("create_page without configured_languages must still emit the unknown-lang warning, got warning=%q", w)
+	}
+}
+
+// TestUpdatePageCannotMintUnconfiguredLangTranslation is a confirmation test
+// for #899's acceptance criterion naming update_page alongside create_page:
+// update_page never mints a new file — resolveExistingSource fails
+// not_found for a lang with no existing translation, regardless of
+// ConfiguredLanguages — so there is no path by which update_page could
+// bypass rejectUnconfiguredLang's guard (which is therefore only needed on
+// create_page, the sole file-minting tool). Uses a lang ("de") that IS in
+// configured_languages to isolate "no translation exists yet" from "lang is
+// unconfigured" as the reason for the not_found.
+func TestUpdatePageCannotMintUnconfiguredLangTranslation(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/no-de-yet")
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{ConfiguredLanguages: []string{"en", "fr", "de"}})
+	defer done()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/no-de-yet", "lang": "de", "title": "New Title",
+	})
+	if !res.IsError {
+		t.Fatal("update_page: want not_found for a configured-but-untranslated lang, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "not_found") {
+		t.Fatalf("update_page missing-translation error = %s, want not_found (proving update_page cannot mint a new file, so #899's guard is create_page-only by necessity)", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "no-de-yet", "index.de.md")); !os.IsNotExist(err) {
+		t.Fatal("update_page must not have written index.de.md")
 	}
 }
 

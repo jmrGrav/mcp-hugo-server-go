@@ -275,6 +275,18 @@ type deletePageInput struct {
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	DryRun           bool   `json:"dry_run,omitempty"`
 	ResponseMode     string `json:"response_mode,omitempty"`
+	// Owner (#895) is a deliberate, explicit opt-in identifying the calling
+	// agent for the destructive-quota exemption below — the same
+	// caller-supplied free-text label create_page's test_content.owner
+	// writes to frontmatter (#661) and validate_frontmatter/validate_site's
+	// owner filter compares against (#894). It is never inferred from
+	// context (IP/token): those identity signals are shared infrastructure
+	// concerns (per-caller rate limiting, idempotency isolation), not the
+	// same "owner" a multi-agent deployment's callers choose to stamp on
+	// their own disposable content, so comparing them would silently never
+	// match in practice. Only used to compare against the target page's own
+	// test_content_owner; has no effect on real (non-test) content.
+	Owner string `json:"owner,omitempty"`
 }
 
 type deletePageBacklinkDTO struct {
@@ -520,6 +532,67 @@ func callerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string, perMi
 	return l
 }
 
+// deleteQuotaExemptForTestContent reports whether delete_page's destructive
+// quota should be skipped for this deletion (#895): the page at sourcePath
+// is disposable test content (frontmatter `test_content: true`, written by
+// create_page's test_content option, #661) AND its recorded
+// `test_content_owner` exactly matches the caller-supplied owner. This is
+// the exemption the issue chose over simply raising the global
+// DestructivePerMin limit — it preserves the anti-mass-deletion guard
+// exactly where it has value (real/published content, which is never
+// test_content) while removing friction exactly where the risk is zero
+// (content already scoped to the caller that created it).
+//
+// Both conditions are required, never either alone: an owner match on
+// non-test content or a test_content page with no/mismatched owner still
+// consumes the quota exactly as before, closing the obvious bypass (a
+// caller can't free-delete arbitrary content just by guessing/echoing an
+// owner string, and can't get a free pass on someone else's disposable
+// test content by omitting or misreporting an owner). Fails closed: a
+// missing source file, empty owner, unreadable/unparsable frontmatter, or
+// any lookup error is NOT exempt (quota still consumes) — this only ever
+// narrows an existing charge, never invents a new one.
+//
+// owner is a caller-supplied free-text label, not derived from ctx
+// (IP/token) — see deletePageInput.Owner's comment for why that's the
+// correct comparison value: it's the same label create_page's
+// test_content.owner writes to frontmatter and validate_frontmatter/
+// validate_site's owner filter compares against with the same exact `==`
+// semantics (#894), so this stays apples-to-apples with how the owner was
+// recorded in the first place.
+func deleteQuotaExemptForTestContent(sourcePath, owner string) bool {
+	owner = strings.TrimSpace(owner)
+	if sourcePath == "" || owner == "" {
+		return false
+	}
+	fm, err := hugosite.ParseFrontmatterFile(sourcePath)
+	if err != nil || fm == nil {
+		return false
+	}
+	if !isTruthyFrontmatterValue(fm["test_content"]) {
+		return false
+	}
+	recordedOwner, _ := fm["test_content_owner"].(string)
+	return strings.TrimSpace(recordedOwner) != "" && strings.TrimSpace(recordedOwner) == owner
+}
+
+// isTruthyFrontmatterValue mirrors the same bool-or-"true"-string leniency
+// admin.isTruthyFrontmatter and read.isExplicitTestContent already apply to
+// this exact field elsewhere — a freshly create_page'd entry still only in
+// the in-memory index carries test_content as a native Go bool, while the
+// same value round-tripped through on-disk YAML can come back either way
+// depending on how it was authored.
+func isTruthyFrontmatterValue(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return strings.EqualFold(strings.TrimSpace(x), "true")
+	default:
+		return false
+	}
+}
+
 // rateLimitRemaining reports the caller's current available quota on l,
 // rounded down to a whole call (#466) — surfaced directly in tool responses
 // so an agent can self-regulate pacing instead of inferring a safe rate from
@@ -603,13 +676,24 @@ func validateLangParam(lang string) (string, error) {
 // The known set is derived from source content (defaultLang plus every lang
 // with an existing source page), so an existing translation never triggers a
 // false warning even when the public build index is stale or absent.
-func unknownLangWarning(lang string, idx *hugosite.SourceIndex, defaultLang string) string {
+// configuredLangs, when non-empty (#899), means the lang already survived
+// rejectUnconfiguredLang's authoritative check — the operator has
+// deliberately declared it, even if it has no content yet, so warning about
+// it here would be a redundant false alarm on every legitimate first page
+// of that language. Pass cfg.ConfiguredLanguages; nil/empty preserves the
+// original derived-from-content warning for every operator who hasn't set it.
+func unknownLangWarning(lang string, idx *hugosite.SourceIndex, defaultLang string, configuredLangs []string) string {
 	lang = strings.TrimSpace(lang)
 	if lang == "" {
 		return ""
 	}
 	if lang == strings.TrimSpace(defaultLang) {
 		return ""
+	}
+	for _, c := range configuredLangs {
+		if strings.TrimSpace(c) == lang {
+			return ""
+		}
 	}
 	known := idx.Languages()
 	for _, k := range known {
@@ -623,6 +707,38 @@ func unknownLangWarning(lang string, idx *hugosite.SourceIndex, defaultLang stri
 		sort.Strings(knownSet)
 	}
 	return fmt.Sprintf("lang %q has no existing content and is not this site's default language (known languages: %s); if this is a typo the page will become an orphan Hugo never builds, if it is a deliberately new language it must be added to the Hugo site config to build — call get_capabilities to see recognized languages", lang, strings.Join(knownSet, ", "))
+}
+
+// rejectUnconfiguredLang is #899's true reject, layered on top of (not
+// replacing) unknownLangWarning's warn-not-reject default. It only fires
+// when the operator has explicitly set cfg.ConfiguredLanguages — the
+// authoritative set unknownLangWarning's own doc comment explains the
+// server otherwise has no way to obtain (observed content is a strict
+// subset of configured languages, so a reject-from-content rule would
+// deadlock the first page of every legitimately new language). When
+// ConfiguredLanguages is unset (the default for every existing deployment),
+// this is always a no-op — the field is opt-in specifically so it can never
+// break an operator who hasn't configured it.
+//
+// Checked before any file is written (create_page's only mint path), so a
+// rejection here writes nothing, matching #899's acceptance criteria.
+// update_page/delete_page/plan/rollback need no equivalent check: they only
+// ever resolve an *existing* file, and a lang with no existing translation
+// already fails not_found there regardless of ConfiguredLanguages.
+func rejectUnconfiguredLang(lang string, cfg config.Config) error {
+	lang = strings.TrimSpace(lang)
+	if lang == "" || len(cfg.ConfiguredLanguages) == 0 {
+		return nil
+	}
+	if lang == strings.TrimSpace(cfg.DefaultLanguage) {
+		return nil
+	}
+	for _, c := range cfg.ConfiguredLanguages {
+		if strings.TrimSpace(c) == lang {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid_params: lang %q is not in this site's configured_languages (%s); call get_capabilities to see the authoritative list", lang, strings.Join(cfg.ConfiguredLanguages, ", "))
 }
 
 func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) {
@@ -676,7 +792,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "create_page",
 		Title:        "Publish page",
-		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. `lang` for a language the site does not recognize: if the operator has set `configured_languages`, an unrecognized `lang` is rejected with `invalid_params` and nothing is written (#899); otherwise (the default) it is only a warning — the page is still written, since the server can't tell a typo from a deliberately new language without that operator-declared set. Either way, call get_capabilities first to see the authoritative/known language list.",
 		InputSchema:  tools.MustSchema[createPageInput](),
 		OutputSchema: tools.MustSchema[createPageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -706,6 +822,9 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 		resolvedLang, err := validateLangParam(in.Lang)
 		if err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		if err := rejectUnconfiguredLang(resolvedLang, cfg); err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
 		if in.Title == "" {
@@ -906,7 +1025,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// Compute the unknown-language warning against the index state *before*
 		// inserting this page, so the page's own lang doesn't mask the signal
 		// (#891). This is under hugosite.ContentMu, so the read is race-safe.
-		langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage)
+		langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages)
 		idx.Upsert(created)
 		// Do NOT insert into the public site index — the page is source-only until
 		// Hugo builds it. UpsertPage here would break allow_source_fallback detection.
@@ -1378,7 +1497,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. Pass `owner` to exempt this deletion from the destructive quota (#895) when the target page is disposable test content you created yourself: it is only exempt when the page's frontmatter has `test_content: true` AND its recorded `test_content_owner` (set via create_page's `test_content: {owner}`, #661) exactly matches the `owner` you pass here — any other deletion (real content, or test content with no or a different owner) still consumes the quota exactly as before. `owner` is a caller-supplied label, not inferred from your session/token, so it must match verbatim what you passed to create_page.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -1600,8 +1719,18 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// check above (both free), immediately before the revision_conflict
 		// check below (which consumes). This is the reference placement the
 		// whole #887 fix aligns the other tools to.
-		if !limiter.Allow() {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
+		//
+		// #895 adds one more FREE case on top of #887's list: deleting
+		// disposable test_content the caller itself owns. See
+		// deleteQuotaExemptForTestContent's comment for the exact
+		// (test_content truthy AND exact owner match) conditions — every
+		// other deletion, including test_content with no owner or an owner
+		// that does not match `in.Owner`, still consumes the quota exactly
+		// as before.
+		if !deleteQuotaExemptForTestContent(resolvedSource.SourcePath, in.Owner) {
+			if !limiter.Allow() {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
+			}
 		}
 
 		if err := acquireDeleteLock(); err != nil {
