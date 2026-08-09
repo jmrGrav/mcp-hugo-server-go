@@ -341,10 +341,19 @@ func registerRollbackChange(
 		}
 
 		var updated hugosite.SourcePage
-		if existing, hasExisting := idx.GetBySlug(in.Slug); hasExisting {
-			updated = *existing
-		} else {
-			updated = hugosite.SourcePage{Slug: in.Slug}
+		switch {
+		case resolvedSource.Lang != "":
+			if existing, ok := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); ok {
+				updated = *existing
+			} else {
+				updated = hugosite.SourcePage{Slug: in.Slug, Lang: resolvedSource.Lang}
+			}
+		default:
+			if existing, ok := idx.GetDefaultBySlug(in.Slug); ok {
+				updated = *existing
+			} else {
+				updated = hugosite.SourcePage{Slug: in.Slug}
+			}
 		}
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang

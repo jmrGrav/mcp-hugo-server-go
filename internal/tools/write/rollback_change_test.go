@@ -1,12 +1,21 @@
 package write_test
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // TestRollbackChangeRestoresApplyContentPlanSnapshot is a regression test
@@ -324,6 +333,182 @@ func TestRollbackChangeBilingualIsPerLanguage(t *testing.T) {
 	if enAfterRollback != enBeforeRollback {
 		t.Fatalf("en file must be untouched by a fr-scoped rollback:\nbefore=%q\nafter=%q", enBeforeRollback, enAfterRollback)
 	}
+}
+
+func TestRollbackChangeBilingualReadToolsMatchRestoredLanguage(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	frFile := filepath.Join(pageDir, "index.fr.md")
+	enFile := filepath.Join(pageDir, "index.en.md")
+	if err := os.WriteFile(frFile, []byte("---\ntitle: Titre FR\ndate: 2026-08-09T16:47:10Z\ndescription: Description FR\ntags: [\"fr-tag\"]\ncategories: [\"fr-cat\"]\nfeaturedImage: /images/fr-featured.jpg\ndraft: true\n---\nContenu original FR.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(enFile, []byte("---\ntitle: Title EN\ndate: 2026-08-09T16:47:14Z\ndescription: Description EN\ntags: [\"en-tag\"]\ncategories: [\"en-cat\"]\nfeaturedImage: /images/en-featured.jpg\ndraft: false\n---\nOriginal content EN.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, idx, done := newReadWriteTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/bilingual",
+		"lang": "fr",
+		"operations": []any{
+			map[string]any{"op": "set_field", "field": "description", "value": "Description FR modifiee"},
+			map[string]any{"op": "update_body", "body": "Contenu modifie FR."},
+		},
+	})
+	planData := decodeWriteData(t, planRes)
+	planID := planData["plan_id"].(string)
+	beforeRevision := planData["target"].(map[string]any)["revision"].(string)
+
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
+	}
+	afterApplyRevision := decodeWriteData(t, applyRes)["after_revision"].(string)
+
+	rollbackRes := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/bilingual",
+		"lang":              "fr",
+		"to_revision":       beforeRevision,
+		"expected_revision": afterApplyRevision,
+	})
+	if rollbackRes.IsError {
+		t.Fatalf("rollback_change failed: %s", marshalContent(t, rollbackRes))
+	}
+	rollbackData := decodeWriteData(t, rollbackRes)
+	if rollbackData["after_revision"] != beforeRevision {
+		t.Fatalf("rollback_change after_revision = %v, want %v", rollbackData["after_revision"], beforeRevision)
+	}
+
+	frEntry, ok := idx.GetBySlugLang("posts/bilingual", "fr")
+	if !ok {
+		t.Fatal("fr entry missing from source index after rollback_change")
+	}
+	if frEntry.Date != "2026-08-09T16:47:10Z" {
+		t.Fatalf("source index fr date = %q, want restored FR date", frEntry.Date)
+	}
+	if frEntry.Title != "Titre FR" {
+		t.Fatalf("source index fr title = %q, want restored FR title", frEntry.Title)
+	}
+	if got := frEntry.FrontmatterRaw["description"]; got != "Description FR" {
+		t.Fatalf("source index fr description = %v, want restored FR description", got)
+	}
+
+	fmRes := callTool(t, session, "get_page_frontmatter", map[string]any{
+		"slug": "/posts/bilingual/",
+		"lang": "fr",
+	})
+	if fmRes.IsError {
+		t.Fatalf("get_page_frontmatter failed: %s", marshalContent(t, fmRes))
+	}
+	fm := decodeNestedMap(t, fmRes, "data", "frontmatter")
+	if got := fm["date"]; got != "2026-08-09T16:47:10Z" {
+		t.Fatalf("get_page_frontmatter date = %v, want restored FR date", got)
+	}
+	if got := fm["title"]; got != "Titre FR" {
+		t.Fatalf("get_page_frontmatter title = %v, want restored FR title", got)
+	}
+	if got := fm["description"]; got != "Description FR" {
+		t.Fatalf("get_page_frontmatter description = %v, want restored FR description", got)
+	}
+	if got := fm["featured_image"]; got != "/images/fr-featured.jpg" {
+		t.Fatalf("get_page_frontmatter featured_image = %v, want restored FR featured image", got)
+	}
+	if got := fm["revision"]; got != beforeRevision {
+		t.Fatalf("get_page_frontmatter revision = %v, want %v", got, beforeRevision)
+	}
+
+	editRes := callTool(t, session, "get_page_for_edit", map[string]any{
+		"slug": "/posts/bilingual/",
+		"lang": "fr",
+	})
+	if editRes.IsError {
+		t.Fatalf("get_page_for_edit failed: %s", marshalContent(t, editRes))
+	}
+	page := decodeNestedMap(t, editRes, "data", "page")
+	if got := page["revision"]; got != beforeRevision {
+		t.Fatalf("get_page_for_edit revision = %v, want %v", got, beforeRevision)
+	}
+	editFM, ok := page["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit frontmatter type = %T, want map[string]any", page["frontmatter"])
+	}
+	if got := editFM["date"]; got != "2026-08-09T16:47:10Z" {
+		t.Fatalf("get_page_for_edit frontmatter.date = %v, want restored FR date", got)
+	}
+	if got := editFM["description"]; got != "Description FR" {
+		t.Fatalf("get_page_for_edit frontmatter.description = %v, want restored FR description", got)
+	}
+	if got := editFM["featured_image"]; got != "/images/fr-featured.jpg" {
+		t.Fatalf("get_page_for_edit frontmatter.featured_image = %v, want restored FR featured image", got)
+	}
+	if got := editFM["draft"]; got != true {
+		t.Fatalf("get_page_for_edit frontmatter.draft = %v, want true", got)
+	}
+}
+
+func newReadWriteTestServer(t *testing.T, contentRoot string) (*mcp.ClientSession, *hugosite.SourceIndex, func()) {
+	t.Helper()
+	pg, err := security.New(contentRoot, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+	idx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex: %v", err)
+	}
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	publicIdx := &site.Index{}
+	write.Register(s, pg, idx, cfg, nil, nil)
+	read.Register(s, publicIdx, cfg, idx)
+	read.RegisterWithSourceIndex(s, publicIdx, idx, cfg)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	c := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := c.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, idx, func() { _ = session.Close() }
+}
+
+func decodeNestedMap(t *testing.T, res *mcp.CallToolResult, path ...string) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	var current any
+	if err := json.Unmarshal(raw, &current); err != nil {
+		t.Fatalf("unmarshal structured content: %v", err)
+	}
+	for _, key := range path {
+		m, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("path %v hit %T, want map[string]any", path, current)
+		}
+		current, ok = m[key]
+		if !ok {
+			t.Fatalf("path %v missing key %q", path, key)
+		}
+	}
+	m, ok := current.(map[string]any)
+	if !ok {
+		t.Fatalf("path %v ended on %T, want map[string]any", path, current)
+	}
+	return m
 }
 
 // TestRollbackChangeRestoresUpdatePageSnapshot is a regression test for #629:
