@@ -278,6 +278,38 @@ func (s *Store) List() []Snapshot {
 	return out
 }
 
+func (s *Store) ListOwned(owner string) []Snapshot {
+	if owner == "" {
+		return s.List()
+	}
+	now := time.Now()
+	var expiredDirs []string
+	s.mu.Lock()
+	var out []Snapshot
+	for id, entry := range s.entries {
+		if now.After(entry.ExpiresAt) {
+			expiredDirs = append(expiredDirs, entry.Dir)
+			delete(s.entries, id)
+			continue
+		}
+		if entry.Owner != owner {
+			continue
+		}
+		out = append(out, Snapshot{
+			ID:          id,
+			ExpiresAt:   entry.ExpiresAt,
+			BuildStatus: entry.BuildStatus,
+			CreatedAt:   entry.CreatedAt,
+			Owner:       entry.Owner,
+		})
+	}
+	s.mu.Unlock()
+	for _, dir := range expiredDirs {
+		_ = os.RemoveAll(dir)
+	}
+	return out
+}
+
 // CountByOwner returns how many non-expired previews are attributed to owner.
 // Used by create_preview to enforce a per-caller active-preview cap (#871).
 // Callers should Sweep() first so expired entries don't inflate the count.
@@ -371,6 +403,23 @@ func (s *Store) Revoke(id string) bool {
 	return true
 }
 
+func (s *Store) RevokeOwned(id, owner string) bool {
+	s.mu.Lock()
+	entry, ok := s.entries[id]
+	if ok && owner != "" && entry.Owner != owner {
+		ok = false
+	}
+	if ok {
+		delete(s.entries, id)
+	}
+	s.mu.Unlock()
+	if !ok {
+		return false
+	}
+	_ = os.RemoveAll(entry.Dir)
+	return true
+}
+
 func (s *Store) RevokeAll() int {
 	s.mu.Lock()
 	entries := s.entries
@@ -378,6 +427,27 @@ func (s *Store) RevokeAll() int {
 	s.mu.Unlock()
 	count := 0
 	for _, entry := range entries {
+		count++
+		_ = os.RemoveAll(entry.Dir)
+	}
+	return count
+}
+
+func (s *Store) RevokeAllOwned(owner string) int {
+	if owner == "" {
+		return s.RevokeAll()
+	}
+	s.mu.Lock()
+	owned := make(map[string]*Entry)
+	for id, entry := range s.entries {
+		if entry != nil && entry.Owner == owner {
+			owned[id] = entry
+			delete(s.entries, id)
+		}
+	}
+	s.mu.Unlock()
+	count := 0
+	for _, entry := range owned {
 		count++
 		_ = os.RemoveAll(entry.Dir)
 	}

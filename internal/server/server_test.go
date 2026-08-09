@@ -2193,6 +2193,37 @@ func toolCallResultData(t *testing.T, body string) map[string]any {
 	return nil
 }
 
+func writeServerPreviewMockHugo(t *testing.T, html string) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+dest=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--destination" ]; then
+    dest="$arg"
+  fi
+  prev="$arg"
+done
+if [ -z "$dest" ]; then
+  echo "missing --destination" >&2
+  exit 1
+fi
+mkdir -p "$dest/posts/hello"
+printf '%s' '` + html + `' > "$dest/posts/hello/index.html"
+exit 0
+`
+	p := filepath.Join(dir, "hugo")
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatalf("write mock hugo: %v", err)
+	}
+	return dir
+}
+
+func toolCallBodyHasError(rec *httptest.ResponseRecorder, want string) bool {
+	return strings.Contains(rec.Body.String(), want)
+}
+
 // TestGetMutationStatusIsolatedByCallerAcrossHTTP is the end-to-end
 // counterpart to internal/tools/write's TestIdempotencyStoreIsolatesByCallerKey
 // (#627): that test proves the store isolates two callerKeys handed to it
@@ -2263,6 +2294,294 @@ func TestGetMutationStatusIsolatedByCallerAcrossHTTP(t *testing.T) {
 	aData := toolCallResultData(t, aRec.Body.String())
 	if status, _ := aData["data"].(map[string]any)["status"].(string); status != "succeeded" {
 		t.Fatalf("get_mutation_status (caller A) data.status = %q, want succeeded: %#v", status, aData["data"])
+	}
+}
+
+// TestApplyContentPlanIsolatedByCallerAcrossHTTP closes the cross-principal
+// gap issue #932 called out for server-held plans: principal B must not be
+// able to consume principal A's plan_id, and a rejected attempt must leave
+// disk untouched until A applies it.
+func TestApplyContentPlanIsolatedByCallerAcrossHTTP(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const callerA = "plan-owner-token"
+	const callerB = "plan-intruder-token"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	createRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/e2e-plan-owner","title":"Title","body":"Original body","tags":[],"categories":[]}}}`))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+	filePath := filepath.Join(contentRoot, "posts", "e2e-plan-owner", "index.md")
+	beforeAttempt, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read created file: %v", err)
+	}
+
+	planRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plan_content_change","arguments":{"slug":"posts/e2e-plan-owner","operations":[{"op":"update_body","body":"Changed by plan owner"}]}}}`))
+	if planRec.Code != http.StatusOK {
+		t.Fatalf("plan_content_change status = %d body = %q", planRec.Code, planRec.Body.String())
+	}
+	planEnvelope := toolCallResultData(t, planRec.Body.String())
+	planData := planEnvelope["data"].(map[string]any)
+	planID := planData["plan_id"].(string)
+	if planID == "" {
+		t.Fatal("plan_content_change returned empty plan_id")
+	}
+
+	applyPayload := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_content_plan","arguments":{"plan_id":"%s"}}}`, planID))
+	bRec := doMCPCall(t, srv, callerB, applyPayload)
+	if bRec.Code != http.StatusOK {
+		t.Fatalf("apply_content_plan intruder status = %d body = %q", bRec.Code, bRec.Body.String())
+	}
+	if !toolCallBodyHasError(bRec, "plan_not_found") {
+		t.Fatalf("apply_content_plan intruder body = %q, want plan_not_found", bRec.Body.String())
+	}
+	afterRejected, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after rejected apply: %v", err)
+	}
+	if string(afterRejected) != string(beforeAttempt) {
+		t.Fatalf("intruder apply changed file:\nbefore=%q\nafter=%q", string(beforeAttempt), string(afterRejected))
+	}
+
+	aRec := doMCPCall(t, srv, callerA, applyPayload)
+	if aRec.Code != http.StatusOK {
+		t.Fatalf("apply_content_plan owner status = %d body = %q", aRec.Code, aRec.Body.String())
+	}
+	aData := toolCallResultData(t, aRec.Body.String())["data"].(map[string]any)
+	if got, _ := aData["status"].(string); got != "ok" {
+		t.Fatalf("apply_content_plan owner status = %q, want ok: %#v", got, aData)
+	}
+	applied, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after owner apply: %v", err)
+	}
+	if !strings.Contains(string(applied), "Changed by plan owner") {
+		t.Fatalf("owner apply did not write planned body: %q", string(applied))
+	}
+}
+
+func TestRollbackChangeSnapshotIsolatedByCallerAcrossHTTP(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const callerA = "rollback-owner-token"
+	const callerB = "rollback-intruder-token"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	createRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/e2e-rollback-owner","title":"Title","body":"Before rollback snapshot","tags":[],"categories":[]}}}`))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+	planRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plan_content_change","arguments":{"slug":"posts/e2e-rollback-owner","operations":[{"op":"update_body","body":"After apply snapshot"}]}}}`))
+	planData := toolCallResultData(t, planRec.Body.String())["data"].(map[string]any)
+	planID := planData["plan_id"].(string)
+	applyRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_content_plan","arguments":{"plan_id":"%s"}}}`, planID)))
+	if applyRec.Code != http.StatusOK {
+		t.Fatalf("apply_content_plan status = %d body = %q", applyRec.Code, applyRec.Body.String())
+	}
+	applyData := toolCallResultData(t, applyRec.Body.String())["data"].(map[string]any)
+	beforeRevision := applyData["before_revision"].(string)
+	afterRevision := applyData["after_revision"].(string)
+	filePath := filepath.Join(contentRoot, "posts", "e2e-rollback-owner", "index.md")
+	beforeRejected, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read applied file: %v", err)
+	}
+
+	bRec := doMCPCall(t, srv, callerB, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rollback_change","arguments":{"slug":"posts/e2e-rollback-owner","to_revision":"%s","expected_revision":"%s"}}}`, beforeRevision, afterRevision)))
+	if bRec.Code != http.StatusOK {
+		t.Fatalf("rollback_change intruder status = %d body = %q", bRec.Code, bRec.Body.String())
+	}
+	if !toolCallBodyHasError(bRec, "snapshot_not_found") {
+		t.Fatalf("rollback_change intruder body = %q, want snapshot_not_found", bRec.Body.String())
+	}
+	afterRejected, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after rejected rollback: %v", err)
+	}
+	if string(afterRejected) != string(beforeRejected) {
+		t.Fatalf("intruder rollback changed file:\nbefore=%q\nafter=%q", string(beforeRejected), string(afterRejected))
+	}
+}
+
+func TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const callerA = "bundle-owner-token"
+	const callerB = "bundle-intruder-token"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	for _, createPayload := range []string{
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/e2e-bundle-owner","lang":"fr","title":"Titre FR","body":"Corps FR","tags":[],"categories":[]}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/e2e-bundle-owner","lang":"en","title":"Title EN","body":"Body EN","tags":[],"categories":[]}}}`,
+	} {
+		rec := doMCPCall(t, srv, callerA, []byte(createPayload))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("create multilingual page status = %d body = %q", rec.Code, rec.Body.String())
+		}
+	}
+	frPath := filepath.Join(contentRoot, "posts", "e2e-bundle-owner", "index.fr.md")
+	frBeforePlan, err := os.ReadFile(frPath)
+	if err != nil {
+		t.Fatalf("read fr file before bundle apply: %v", err)
+	}
+
+	planRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plan_bundle_change","arguments":{"slug":"posts/e2e-bundle-owner","translations":[{"lang":"fr","operations":[{"op":"update_body","body":"FR changed by owner"}]},{"lang":"en","operations":[{"op":"update_body","body":"EN changed by owner"}]}]}}}`))
+	if planRec.Code != http.StatusOK {
+		t.Fatalf("plan_bundle_change status = %d body = %q", planRec.Code, planRec.Body.String())
+	}
+	planData := toolCallResultData(t, planRec.Body.String())["data"].(map[string]any)
+	planID := planData["plan_id"].(string)
+
+	bApplyRec := doMCPCall(t, srv, callerB, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_bundle_plan","arguments":{"plan_id":"%s"}}}`, planID)))
+	if bApplyRec.Code != http.StatusOK {
+		t.Fatalf("apply_bundle_plan intruder status = %d body = %q", bApplyRec.Code, bApplyRec.Body.String())
+	}
+	if !toolCallBodyHasError(bApplyRec, "plan_not_found") {
+		t.Fatalf("apply_bundle_plan intruder body = %q, want plan_not_found", bApplyRec.Body.String())
+	}
+	frAfterRejectedApply, err := os.ReadFile(frPath)
+	if err != nil {
+		t.Fatalf("read fr file after rejected bundle apply: %v", err)
+	}
+	if string(frAfterRejectedApply) != string(frBeforePlan) {
+		t.Fatalf("intruder bundle apply changed FR file:\nbefore=%q\nafter=%q", string(frBeforePlan), string(frAfterRejectedApply))
+	}
+
+	aApplyRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_bundle_plan","arguments":{"plan_id":"%s"}}}`, planID)))
+	if aApplyRec.Code != http.StatusOK {
+		t.Fatalf("apply_bundle_plan owner status = %d body = %q", aApplyRec.Code, aApplyRec.Body.String())
+	}
+	aApplyData := toolCallResultData(t, aApplyRec.Body.String())["data"].(map[string]any)
+	beforeBundleRevision := aApplyData["before_revision"].(string)
+	afterBundleRevision := aApplyData["after_revision"].(string)
+	frAfterOwnerApply, err := os.ReadFile(frPath)
+	if err != nil {
+		t.Fatalf("read fr file after owner bundle apply: %v", err)
+	}
+	if !strings.Contains(string(frAfterOwnerApply), "FR changed by owner") {
+		t.Fatalf("owner bundle apply did not change FR file: %q", string(frAfterOwnerApply))
+	}
+
+	bRollbackRec := doMCPCall(t, srv, callerB, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rollback_bundle","arguments":{"slug":"posts/e2e-bundle-owner","to_bundle_revision":"%s","expected_bundle_revision":"%s"}}}`, beforeBundleRevision, afterBundleRevision)))
+	if bRollbackRec.Code != http.StatusOK {
+		t.Fatalf("rollback_bundle intruder status = %d body = %q", bRollbackRec.Code, bRollbackRec.Body.String())
+	}
+	if !toolCallBodyHasError(bRollbackRec, "snapshot_not_found") {
+		t.Fatalf("rollback_bundle intruder body = %q, want snapshot_not_found", bRollbackRec.Body.String())
+	}
+	frAfterRejectedRollback, err := os.ReadFile(frPath)
+	if err != nil {
+		t.Fatalf("read fr file after rejected bundle rollback: %v", err)
+	}
+	if string(frAfterRejectedRollback) != string(frAfterOwnerApply) {
+		t.Fatalf("intruder bundle rollback changed FR file:\nbefore=%q\nafter=%q", string(frAfterOwnerApply), string(frAfterRejectedRollback))
+	}
+}
+
+func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
+	mockDir := writeServerPreviewMockHugo(t, "<html><head><title>Demo</title><meta name=\"description\" content=\"Preview\"></head><body>preview</body></html>")
+	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
+
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const callerA = "preview-owner-token"
+	const callerB = "preview-intruder-token"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	createRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_preview","arguments":{}}}`))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_preview status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+	createData := toolCallResultData(t, createRec.Body.String())["data"].(map[string]any)
+	previewID := createData["preview_id"].(string)
+	if previewID == "" {
+		t.Fatal("create_preview returned empty preview_id")
+	}
+
+	bListRec := doMCPCall(t, srv, callerB, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_previews","arguments":{}}}`))
+	if bListRec.Code != http.StatusOK {
+		t.Fatalf("list_previews intruder status = %d body = %q", bListRec.Code, bListRec.Body.String())
+	}
+	bListData := toolCallResultData(t, bListRec.Body.String())["data"].(map[string]any)
+	if previews, _ := bListData["previews"].([]any); len(previews) != 0 {
+		t.Fatalf("intruder list_previews leaked owner preview: %#v", previews)
+	}
+
+	bInspectRec := doMCPCall(t, srv, callerB, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inspect_preview","arguments":{"slug":"posts/hello","preview_id":"%s"}}}`, previewID)))
+	if bInspectRec.Code != http.StatusOK {
+		t.Fatalf("inspect_preview intruder status = %d body = %q", bInspectRec.Code, bInspectRec.Body.String())
+	}
+	if !toolCallBodyHasError(bInspectRec, "preview_not_found") {
+		t.Fatalf("inspect_preview intruder body = %q, want preview_not_found", bInspectRec.Body.String())
+	}
+
+	bRevokeRec := doMCPCall(t, srv, callerB, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"revoke_preview","arguments":{"preview_id":"%s"}}}`, previewID)))
+	if bRevokeRec.Code != http.StatusOK {
+		t.Fatalf("revoke_preview intruder status = %d body = %q", bRevokeRec.Code, bRevokeRec.Body.String())
+	}
+	if !toolCallBodyHasError(bRevokeRec, "preview_not_found") {
+		t.Fatalf("revoke_preview intruder body = %q, want preview_not_found", bRevokeRec.Body.String())
+	}
+
+	aListRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_previews","arguments":{}}}`))
+	if aListRec.Code != http.StatusOK {
+		t.Fatalf("list_previews owner status = %d body = %q", aListRec.Code, aListRec.Body.String())
+	}
+	aListData := toolCallResultData(t, aListRec.Body.String())["data"].(map[string]any)
+	previews, _ := aListData["previews"].([]any)
+	if len(previews) != 1 {
+		t.Fatalf("owner list_previews count = %d, want 1: %#v", len(previews), previews)
+	}
+	previewItem := previews[0].(map[string]any)
+	if got, _ := previewItem["preview_id"].(string); got != previewID {
+		t.Fatalf("owner list_previews preview_id = %q, want %q", got, previewID)
+	}
+
+	aInspectRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inspect_preview","arguments":{"slug":"posts/hello","preview_id":"%s"}}}`, previewID)))
+	if aInspectRec.Code != http.StatusOK {
+		t.Fatalf("inspect_preview owner status = %d body = %q", aInspectRec.Code, aInspectRec.Body.String())
+	}
+	aInspectData := toolCallResultData(t, aInspectRec.Body.String())["data"].(map[string]any)
+	if got, _ := aInspectData["preview_id"].(string); got != previewID {
+		t.Fatalf("inspect_preview owner preview_id = %q, want %q", got, previewID)
+	}
+
+	aRevokeRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"revoke_preview","arguments":{"preview_id":"%s"}}}`, previewID)))
+	if aRevokeRec.Code != http.StatusOK {
+		t.Fatalf("revoke_preview owner status = %d body = %q", aRevokeRec.Code, aRevokeRec.Body.String())
+	}
+	aRevokeData := toolCallResultData(t, aRevokeRec.Body.String())["data"].(map[string]any)
+	if got, _ := aRevokeData["status"].(string); got != "revoked" {
+		t.Fatalf("revoke_preview owner status = %q, want revoked: %#v", got, aRevokeData)
 	}
 }
 

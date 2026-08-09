@@ -17,6 +17,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/caller"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -487,6 +488,13 @@ func mutationCallerKey(ctx context.Context) string {
 		ip = "unknown"
 	}
 	return ip
+}
+
+func principalCallerKey(ctx context.Context) string {
+	if key := caller.Key(ctx); key != "" {
+		return key
+	}
+	return "unknown"
 }
 
 // idempotencyCallerKey isolates the idempotency store by requesting bearer
@@ -1320,7 +1328,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// file, so there's nothing new to roll back from. create_page is
 		// deliberately not snapshotted — there's no meaningful "pre-create"
 		// state to restore to.
-		rt.snapshots.put(filePath, currentRevision, string(raw))
+		rt.snapshots.put(filePath, currentRevision, principalCallerKey(ctx), string(raw))
 		updated := *currentSource
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang

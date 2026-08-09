@@ -39,6 +39,7 @@ const snapshotTTL = 24 * time.Hour
 const snapshotMaxEntries = 512
 
 type snapshotEntry struct {
+	CallerKey string
 	Content   string
 	CreatedAt time.Time
 }
@@ -66,21 +67,24 @@ func snapshotKey(filePath, revision string) string {
 	return filePath + "\x00" + revision
 }
 
-func (s *snapshotStore) put(filePath, revision, content string) {
+func (s *snapshotStore) put(filePath, revision, callerKey, content string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	s.pruneLocked(now)
-	s.entries[snapshotKey(filePath, revision)] = snapshotEntry{Content: content, CreatedAt: now}
+	s.entries[snapshotKey(filePath, revision)] = snapshotEntry{CallerKey: callerKey, Content: content, CreatedAt: now}
 	s.trimLocked()
 }
 
-func (s *snapshotStore) get(filePath, revision string) (string, bool) {
+func (s *snapshotStore) get(filePath, revision, callerKey string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[snapshotKey(filePath, revision)]
 	if !ok {
+		return "", false
+	}
+	if entry.CallerKey != "" && entry.CallerKey != callerKey {
 		return "", false
 	}
 	return entry.Content, true
@@ -288,7 +292,7 @@ func registerRollbackChange(
 			}
 		}
 
-		snapshotContent, ok := snapshots.get(filePath, in.ToRevision)
+		snapshotContent, ok := snapshots.get(filePath, in.ToRevision, principalCallerKey(ctx))
 		if !ok {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no snapshot recorded for revision %q of this page — only revisions produced by a prior apply_content_plan call, within the last 24 hours, can be rolled back to", in.ToRevision))
 		}
