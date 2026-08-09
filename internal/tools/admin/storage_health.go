@@ -143,6 +143,13 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 	}
 	imagesRoot := filepath.Join(hugoRoot, "static", "images")
 	var out []storageFinding
+	// SourceIndex has no internal synchronization (see hugosite.ContentMu's
+	// doc comment): heroSlugHasOwner below reads idx.bySlug and, on its
+	// fallback path, ranges over idx.pages via AllSlugs — both must be
+	// guarded against a concurrent create_page/update_page/delete_page
+	// mutation rebuilding those maps mid-scan.
+	hugosite.ContentMu.RLock()
+	defer hugosite.ContentMu.RUnlock()
 	_ = filepath.WalkDir(imagesRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // best-effort: skip unreadable subtrees rather than fail the whole check
