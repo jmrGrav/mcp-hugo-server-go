@@ -44,12 +44,13 @@ detail matters for runtime setup.
 | Audit all internal broken links | `get_broken_links` | Published index only |
 | Understand site structure / onboard | `explain_structure` | Sections, languages, recent |
 | Get a health score before publishing | `get_site_health` | Counts + taxonomy warnings |
-| **Create a new page** | `create_page` | → then `build_site` |
-| **Edit an existing page** | `update_page` | → then `build_site` |
+| **Create a new page** | `create_page` | → then `publish_changes` (or `build_site`) |
+| **Edit an existing page** | `update_page` | → then `publish_changes` (or `build_site`) |
 | **Delete a page** | `delete_page` | Rate-limited: 5/min |
-| **Build (publish changes)** | `build_site` | Required after write ops |
+| **Build the site** | `build_site` | Compiles and swaps output; does not itself confirm the live page matches |
+| **Publish and confirm a page is live** | `publish_changes` | Bundles `build_site` + `verify_publication` into one explicitly-confirmed step; `data.status` is only `"published"` when verification comes back fresh |
 | Preview the build output | `preview_build` | Dry-run build |
-| Run post-build hooks (CDN purge, etc.) | `run_post_build_hooks` | After `build_site` |
+| Run post-build hooks (CDN purge, etc.) | `run_post_build_hooks` | After `build_site`/`publish_changes` |
 | Generate a featured image | `generate_hero_image` | write scope; response feeds directly into `delete_page_asset` for cleanup |
 | **Preview a draft/unpublished page before it's public** | `create_preview` | Isolated build behind a single-use, token-gated URL |
 | Audit rendered output of an unpublished preview | `inspect_preview` | Same checks as `inspect_rendered`, run against a `preview_id` |
@@ -67,16 +68,21 @@ detail matters for runtime setup.
 
 ```
 create_page(slug, title, tags, categories, body)
-  → build_site()
+  → publish_changes(slug)          ← builds + verifies the page is live
   → [optional] run_post_build_hooks()
 ```
+
+`build_site()` alone also works if you don't need `verify_publication`'s
+confirmation, but `publish_changes` is the recommended step — a
+`build_site` call never itself confirms the resulting page matches what
+was written (#340, #438).
 
 ### Edit an existing article
 
 ```
 get_page_markdown(slug)          ← read current source
 update_page(slug, title?, body?, tags?, ...)
-  → build_site()
+  → publish_changes(slug)
 ```
 
 ### Full editorial review before editing
@@ -85,7 +91,7 @@ update_page(slug, title?, body?, tags?, ...)
 build_agent_context(slug)             ← frontmatter + Markdown + related pages
 diff_page(slug)                       ← check uncommitted changes
 update_page(slug, ...)
-  → build_site()
+  → publish_changes(slug)
 ```
 
 ### Internal linking pass on a draft
@@ -134,8 +140,8 @@ Need to DISCOVER related content?
 └── Suggest outgoing links     → suggest_links
 
 Need to WRITE?
-├── New page    → create_page → build_site
-├── Edit        → update_page → build_site
+├── New page    → create_page → publish_changes (or build_site)
+├── Edit        → update_page → publish_changes (or build_site)
 └── Delete      → get_backlinks first, then delete_page → build_site
 
 Need to VALIDATE?
