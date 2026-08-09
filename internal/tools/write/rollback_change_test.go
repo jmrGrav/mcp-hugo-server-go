@@ -1,12 +1,21 @@
 package write_test
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // TestRollbackChangeRestoresApplyContentPlanSnapshot is a regression test
@@ -323,6 +332,274 @@ func TestRollbackChangeBilingualIsPerLanguage(t *testing.T) {
 	enAfterRollback := readFileString(t, contentRoot, "posts/bilingual/index.en.md")
 	if enAfterRollback != enBeforeRollback {
 		t.Fatalf("en file must be untouched by a fr-scoped rollback:\nbefore=%q\nafter=%q", enBeforeRollback, enAfterRollback)
+	}
+}
+
+func TestRollbackChangeBilingualReadToolsMatchRestoredLanguage(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	frFile := filepath.Join(pageDir, "index.fr.md")
+	enFile := filepath.Join(pageDir, "index.en.md")
+	if err := os.WriteFile(frFile, []byte("---\ntitle: Titre FR\ndate: 2026-08-09T16:47:10Z\ndescription: Description FR\ntags: [\"fr-tag\"]\ncategories: [\"fr-cat\"]\nfeaturedImage: /images/fr-featured.jpg\ndraft: true\n---\nContenu original FR.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(enFile, []byte("---\ntitle: Title EN\ndate: 2026-08-09T16:47:14Z\ndescription: Description EN\ntags: [\"en-tag\"]\ncategories: [\"en-cat\"]\nfeaturedImage: /images/en-featured.jpg\ndraft: false\n---\nOriginal content EN.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, idx, done := newReadWriteTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/bilingual",
+		"lang": "fr",
+		"operations": []any{
+			map[string]any{"op": "set_field", "field": "description", "value": "Description FR modifiee"},
+			map[string]any{"op": "update_body", "body": "Contenu modifie FR."},
+		},
+	})
+	planData := decodeWriteData(t, planRes)
+	planID := planData["plan_id"].(string)
+	beforeRevision := planData["target"].(map[string]any)["revision"].(string)
+
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
+	}
+	afterApplyRevision := decodeWriteData(t, applyRes)["after_revision"].(string)
+
+	rollbackRes := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/bilingual",
+		"lang":              "fr",
+		"to_revision":       beforeRevision,
+		"expected_revision": afterApplyRevision,
+	})
+	if rollbackRes.IsError {
+		t.Fatalf("rollback_change failed: %s", marshalContent(t, rollbackRes))
+	}
+	rollbackData := decodeWriteData(t, rollbackRes)
+	if rollbackData["after_revision"] != beforeRevision {
+		t.Fatalf("rollback_change after_revision = %v, want %v", rollbackData["after_revision"], beforeRevision)
+	}
+
+	frEntry, ok := idx.GetBySlugLang("posts/bilingual", "fr")
+	if !ok {
+		t.Fatal("fr entry missing from source index after rollback_change")
+	}
+	if frEntry.Date != "2026-08-09T16:47:10Z" {
+		t.Fatalf("source index fr date = %q, want restored FR date", frEntry.Date)
+	}
+	if frEntry.Title != "Titre FR" {
+		t.Fatalf("source index fr title = %q, want restored FR title", frEntry.Title)
+	}
+	if got := frEntry.FrontmatterRaw["description"]; got != "Description FR" {
+		t.Fatalf("source index fr description = %v, want restored FR description", got)
+	}
+
+	fmRes := callTool(t, session, "get_page_frontmatter", map[string]any{
+		"slug": "/posts/bilingual/",
+		"lang": "fr",
+	})
+	if fmRes.IsError {
+		t.Fatalf("get_page_frontmatter failed: %s", marshalContent(t, fmRes))
+	}
+	fm := decodeNestedMap(t, fmRes, "data", "frontmatter")
+	if got := fm["date"]; got != "2026-08-09T16:47:10Z" {
+		t.Fatalf("get_page_frontmatter date = %v, want restored FR date", got)
+	}
+	if got := fm["title"]; got != "Titre FR" {
+		t.Fatalf("get_page_frontmatter title = %v, want restored FR title", got)
+	}
+	if got := fm["description"]; got != "Description FR" {
+		t.Fatalf("get_page_frontmatter description = %v, want restored FR description", got)
+	}
+	if got := fm["featured_image"]; got != "/images/fr-featured.jpg" {
+		t.Fatalf("get_page_frontmatter featured_image = %v, want restored FR featured image", got)
+	}
+	if got := fm["revision"]; got != beforeRevision {
+		t.Fatalf("get_page_frontmatter revision = %v, want %v", got, beforeRevision)
+	}
+
+	editRes := callTool(t, session, "get_page_for_edit", map[string]any{
+		"slug": "/posts/bilingual/",
+		"lang": "fr",
+	})
+	if editRes.IsError {
+		t.Fatalf("get_page_for_edit failed: %s", marshalContent(t, editRes))
+	}
+	page := decodeNestedMap(t, editRes, "data", "page")
+	if got := page["revision"]; got != beforeRevision {
+		t.Fatalf("get_page_for_edit revision = %v, want %v", got, beforeRevision)
+	}
+	editFM, ok := page["frontmatter"].(map[string]any)
+	if !ok {
+		t.Fatalf("get_page_for_edit frontmatter type = %T, want map[string]any", page["frontmatter"])
+	}
+	if got := editFM["date"]; got != "2026-08-09T16:47:10Z" {
+		t.Fatalf("get_page_for_edit frontmatter.date = %v, want restored FR date", got)
+	}
+	if got := editFM["description"]; got != "Description FR" {
+		t.Fatalf("get_page_for_edit frontmatter.description = %v, want restored FR description", got)
+	}
+	if got := editFM["featured_image"]; got != "/images/fr-featured.jpg" {
+		t.Fatalf("get_page_for_edit frontmatter.featured_image = %v, want restored FR featured image", got)
+	}
+	if got := editFM["draft"]; got != true {
+		t.Fatalf("get_page_for_edit frontmatter.draft = %v, want true", got)
+	}
+}
+
+func newReadWriteTestServer(t *testing.T, contentRoot string) (*mcp.ClientSession, *hugosite.SourceIndex, func()) {
+	t.Helper()
+	pg, err := security.New(contentRoot, true)
+	if err != nil {
+		t.Fatalf("security.New: %v", err)
+	}
+	idx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("hugosite.NewSourceIndex: %v", err)
+	}
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	publicIdx := &site.Index{}
+	write.Register(s, pg, idx, cfg, nil, nil)
+	read.Register(s, publicIdx, cfg, idx)
+	read.RegisterWithSourceIndex(s, publicIdx, idx, cfg)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	c := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := c.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, idx, func() { _ = session.Close() }
+}
+
+func decodeNestedMap(t *testing.T, res *mcp.CallToolResult, path ...string) map[string]any {
+	t.Helper()
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	var current any
+	if err := json.Unmarshal(raw, &current); err != nil {
+		t.Fatalf("unmarshal structured content: %v", err)
+	}
+	for _, key := range path {
+		m, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("path %v hit %T, want map[string]any", path, current)
+		}
+		current, ok = m[key]
+		if !ok {
+			t.Fatalf("path %v missing key %q", path, key)
+		}
+	}
+	m, ok := current.(map[string]any)
+	if !ok {
+		t.Fatalf("path %v ended on %T, want map[string]any", path, current)
+	}
+	return m
+}
+
+// TestRollbackChangeBilingualIndexDateSurvivesCrossLanguageRebuild is a
+// tighter #911 regression than TestRollbackChangeBilingualReadToolsMatchRestoredLanguage
+// above. That test seeds both translations as pre-existing files parsed by a
+// single NewSourceIndex walk, where FR happens to land at a higher pages[]
+// index than EN — so the pre-fix lang-blind idx.GetBySlug(slug) already
+// resolved to FR by accident, and the test passes identically whether or not
+// the language-scoped lookup fix is applied (verified: reverting just that
+// switch back to GetBySlug(in.Slug) and rerunning that test still passes).
+//
+// This test forces the trigger condition directly instead: EN is upserted
+// into the index after FR is already present, so EN occupies the higher
+// index and a lang-blind idx.GetBySlug("posts/date-probe") resolves to EN.
+// It asserts on Date rather than Title, because Title is patched
+// unconditionally from the restored snapshot regardless of which entry
+// rollback started from (see restoredTitle below) and can't distinguish
+// correct from corrupted either way — Date was the field the original audit
+// actually observed leaking cross-language.
+//
+// Note on what this test currently proves: rollback_change.go now resyncs
+// every SourcePage field (Date/Draft/PublishDate/ExpiryDate included) from
+// the restored snapshot's own frontmatter, which alone is now sufficient to
+// keep this test green — verified by reverting only the language-scoped
+// lookup switch back to bare GetBySlug(in.Slug) while keeping that resync,
+// and confirming the test still passes. So this test guards the resync (the
+// mechanism that currently prevents the #911 symptom observably), not the
+// language-scoped lookup in isolation; the lookup fix is kept as defense in
+// depth against a future SourcePage field that isn't part of the resync.
+func TestRollbackChangeBilingualIndexDateSurvivesCrossLanguageRebuild(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "date-probe")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	frFile := filepath.Join(pageDir, "index.fr.md")
+	frContent := "---\ntitle: Titre FR\ndate: 2026-01-01T00:00:00Z\n---\nContenu original FR.\n"
+	if err := os.WriteFile(frFile, []byte(frContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	beforeRevision := contentmodel.SourceRevisionBytes([]byte(frContent))
+
+	session, idx, done := newReadWriteTestServer(t, contentRoot)
+	defer done()
+
+	// EN is upserted after FR is already indexed, matching real chronological
+	// creation order (FR created, then EN created later) — this is what
+	// gives EN the higher pages[] index and makes it win the lang-blind
+	// bySlug lookup the pre-fix code used.
+	enFile := filepath.Join(pageDir, "index.en.md")
+	enContent := "---\ntitle: Title EN\ndate: 2026-06-15T00:00:00Z\n---\nOriginal content EN.\n"
+	if err := os.WriteFile(enFile, []byte(enContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	idx.Upsert(hugosite.SourcePage{
+		Slug: "posts/date-probe", Lang: "en", FilePath: enFile,
+		Title: "Title EN", Date: "2026-06-15T00:00:00Z",
+	})
+
+	if bare, ok := idx.GetBySlug("posts/date-probe"); !ok || bare.Lang != "en" {
+		t.Fatalf("test setup invalid: bare GetBySlug must resolve to the EN entry to reproduce the #911 trigger condition, got lang=%q ok=%v", bare.Lang, ok)
+	}
+
+	updateRes := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/date-probe",
+		"lang":              "fr",
+		"description":       "Description FR modifiee",
+		"expected_revision": beforeRevision,
+	})
+	if updateRes.IsError {
+		t.Fatalf("update_page failed: %s", marshalContent(t, updateRes))
+	}
+	afterUpdateRevision := decodeWriteData(t, updateRes)["new_revision"].(string)
+
+	rollbackRes := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/date-probe",
+		"lang":              "fr",
+		"to_revision":       beforeRevision,
+		"expected_revision": afterUpdateRevision,
+	})
+	if rollbackRes.IsError {
+		t.Fatalf("rollback_change failed: %s", marshalContent(t, rollbackRes))
+	}
+
+	frEntry, ok := idx.GetBySlugLang("posts/date-probe", "fr")
+	if !ok {
+		t.Fatal("fr entry missing from source index after rollback_change")
+	}
+	if frEntry.Date != "2026-01-01T00:00:00Z" {
+		t.Errorf("source index fr date = %q after rollback, want restored FR date %q (EN date is %q — a match here means the index rebuild pulled from the wrong language)",
+			frEntry.Date, "2026-01-01T00:00:00Z", "2026-06-15T00:00:00Z")
 	}
 }
 
