@@ -2414,6 +2414,21 @@ func TestRollbackChangeSnapshotIsolatedByCallerAcrossHTTP(t *testing.T) {
 	if string(afterRejected) != string(beforeRejected) {
 		t.Fatalf("intruder rollback changed file:\nbefore=%q\nafter=%q", string(beforeRejected), string(afterRejected))
 	}
+
+	aRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rollback_change","arguments":{"slug":"posts/e2e-rollback-owner","to_revision":"%s","expected_revision":"%s"}}}`, beforeRevision, afterRevision)))
+	if aRec.Code != http.StatusOK {
+		t.Fatalf("rollback_change owner status = %d body = %q", aRec.Code, aRec.Body.String())
+	}
+	if toolCallBodyHasError(aRec, "snapshot_not_found") {
+		t.Fatalf("rollback_change owner lost its snapshot after the intruder attempt: %q", aRec.Body.String())
+	}
+	rolledBack, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after owner rollback: %v", err)
+	}
+	if strings.Contains(string(rolledBack), "After apply snapshot") {
+		t.Fatalf("owner rollback did not restore file contents: %q", string(rolledBack))
+	}
 }
 
 func TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
@@ -2495,6 +2510,21 @@ func TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	}
 	if string(frAfterRejectedRollback) != string(frAfterOwnerApply) {
 		t.Fatalf("intruder bundle rollback changed FR file:\nbefore=%q\nafter=%q", string(frAfterOwnerApply), string(frAfterRejectedRollback))
+	}
+
+	aRollbackRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rollback_bundle","arguments":{"slug":"posts/e2e-bundle-owner","to_bundle_revision":"%s","expected_bundle_revision":"%s"}}}`, beforeBundleRevision, afterBundleRevision)))
+	if aRollbackRec.Code != http.StatusOK {
+		t.Fatalf("rollback_bundle owner status = %d body = %q", aRollbackRec.Code, aRollbackRec.Body.String())
+	}
+	if toolCallBodyHasError(aRollbackRec, "snapshot_not_found") {
+		t.Fatalf("rollback_bundle owner lost its snapshot after the intruder attempt: %q", aRollbackRec.Body.String())
+	}
+	frAfterOwnerRollback, err := os.ReadFile(frPath)
+	if err != nil {
+		t.Fatalf("read fr file after owner bundle rollback: %v", err)
+	}
+	if string(frAfterOwnerRollback) != string(frBeforePlan) {
+		t.Fatalf("owner bundle rollback did not restore FR file:\nbefore=%q\nafter=%q", string(frBeforePlan), string(frAfterOwnerRollback))
 	}
 }
 

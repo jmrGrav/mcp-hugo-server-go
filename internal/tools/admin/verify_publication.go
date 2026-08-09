@@ -100,7 +100,7 @@ func RegisterVerifyPublication(s *mcp.Server, idx *site.Index, srcIdx *hugosite.
 			"always checking once and leaving you to poll it yourself across multiple calls; it only smooths a page " +
 			"the index already knows about catching up after an edit — a brand-new page the index hasn't picked up " +
 			"yet will not resolve mid-wait no matter how long you wait. Omit `wait_seconds` to preserve the original " +
-			"single point-in-time check. Requires site.admin because it makes one outbound HTTP request to the " +
+			"single point-in-time check. Requires write because it makes one outbound HTTP request to the " +
 			"configured site_url.",
 		InputSchema:  tools.MustSchema[verifyPublicationInput](),
 		OutputSchema: tools.MustSchema[verifyPublicationOutput](),

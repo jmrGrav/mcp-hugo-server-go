@@ -220,7 +220,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			"This tool never overwrites: fails with already_exists if filename is already taken in this bundle. " +
 			"If identical content already exists under a different filename in the same bundle, the response includes duplicate_of as an advisory only — the file is still written under the requested name. " +
 			"Callers may provide idempotency_key to safely replay the exact same upload after a timeout or uncertain delivery. " +
-			"rate_limit_remaining reports the caller's remaining budget on the shared create_page/update_page/upload_page_asset quota (#466); if exceeded, the error's resolution.retry_after_seconds gives a concrete wait time instead of forcing you to guess a safe pacing. Requires content.write.",
+			"rate_limit_remaining reports the caller's remaining budget on the shared create_page/update_page/upload_page_asset quota (#466); if exceeded, the error's resolution.retry_after_seconds gives a concrete wait time instead of forcing you to guess a safe pacing. Requires write.",
 		InputSchema:  tools.MustSchema[uploadPageAssetInput](),
 		OutputSchema: tools.MustSchema[uploadPageAssetOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -649,7 +649,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			"Callers may provide idempotency_key to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. " +
 			"This only removes the source asset, not any built public copy or CDN cache — unlike delete_page, it does not purge; the asset stays reachable at its old URL until the next build. " +
 			"rate_limit_remaining reports the caller's remaining budget on delete_page's own destructive quota (#466), separate from create_page/update_page/upload_page_asset's shared quota. " +
-			"Optional `owner` is advisory metadata only: it can mirror create_page's `test_content: {owner}` label for filtering or audit correlation, but delete_page_asset never derives identity, authorization, or quota treatment from that string. Requires content.write.",
+			"Optional `owner` is advisory metadata only: it can mirror create_page's `test_content: {owner}` label for filtering or audit correlation, but delete_page_asset never derives identity, authorization, or quota treatment from that string. Requires write.",
 		InputSchema:  tools.MustSchema[deletePageAssetInput](),
 		OutputSchema: tools.MustSchema[deletePageAssetOutput](),
 		Annotations: &mcp.ToolAnnotations{

@@ -274,8 +274,20 @@ func TestVerifyPublicationTestContentSourceOnlyReportsIntentionalExclusion(t *te
 	if got := data["status"]; got != "intentionally_unpublished" {
 		t.Fatalf("status = %v, want intentionally_unpublished (data=%v)", got, data)
 	}
+	if got := data["reason_code"]; got != "test_content_forces_draft" {
+		t.Fatalf("reason_code = %v, want test_content_forces_draft", got)
+	}
 	if got := data["explanation"]; got == nil || !strings.Contains(got.(string), "test_content") {
 		t.Fatalf("explanation = %v, want test_content-specific explanation", got)
+	}
+	if got := data["public"]; got != "not_yet_available" {
+		t.Fatalf("public = %v, want not_yet_available", got)
+	}
+	if got := data["index"]; got != "source_only" {
+		t.Fatalf("index = %v, want source_only", got)
+	}
+	if got := data["http_checked"]; got != false {
+		t.Fatalf("http_checked = %v, want false for intentionally unpublished test_content", got)
 	}
 	if got := data["sitemap_present"]; got != false {
 		t.Fatalf("sitemap_present = %v, want false for intentionally unpublished test_content", got)

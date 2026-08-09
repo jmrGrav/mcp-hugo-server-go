@@ -84,7 +84,7 @@ func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
 			"(entries are retained " + ttlDesc + " on this server — a deployment-level setting, shared with the underlying idempotency cache), or never attempted with this key. Only successful calls are ever recorded here " +
 			"(failures are safe to simply retry). When in doubt, retrying the original mutation call with the same " +
 			"idempotency_key and payload is always safe regardless of what this tool reports — it will either replay the " +
-			"already-completed result or execute for the first time. Requires content.write.",
+			"already-completed result or execute for the first time. Requires write.",
 		InputSchema:  tools.MustSchema[getMutationStatusInput](),
 		OutputSchema: tools.MustSchema[getMutationStatusOutput](),
 		Annotations: &mcp.ToolAnnotations{

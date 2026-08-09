@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -287,6 +288,145 @@ clients:
 	}
 	if !found {
 		t.Fatalf("token_endpoint_auth_methods_supported = %v, want client_secret_* support", meta.TokenEndpointAuthMethodsSupported)
+	}
+}
+
+func TestDiscoveryMinimalPublicSurfaceSnapshots(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+
+	type accessProfileSnapshot struct {
+		AcquisitionMode string   `json:"acquisition_mode"`
+		InternalScopes  []string `json:"internal_scopes"`
+	}
+
+	authReq := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server", nil)
+	authRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("auth server status = %d want 200", authRec.Code)
+	}
+	var authMeta struct {
+		Issuer          string                           `json:"issuer"`
+		ScopesSupported []string                         `json:"scopes_supported"`
+		AccessProfiles  map[string]accessProfileSnapshot `json:"access_profiles"`
+	}
+	if err := json.Unmarshal(authRec.Body.Bytes(), &authMeta); err != nil {
+		t.Fatalf("decode auth server: %v", err)
+	}
+	authSubset := map[string]any{
+		"issuer":           authMeta.Issuer,
+		"scopes_supported": authMeta.ScopesSupported,
+		"reader_profile":   authMeta.AccessProfiles["reader"],
+		"operator_profile": authMeta.AccessProfiles["operator"],
+	}
+	wantAuth := map[string]any{
+		"issuer":           "https://mcp.arleo.eu",
+		"scopes_supported": []string{"read", "write"},
+		"reader_profile":   accessProfileSnapshot{AcquisitionMode: "operator_approved_claim_or_pre_registered_oauth_client", InternalScopes: []string{"read"}},
+		"operator_profile": accessProfileSnapshot{AcquisitionMode: "approved_token", InternalScopes: []string{"write"}},
+	}
+	if !reflect.DeepEqual(authSubset, wantAuth) {
+		t.Fatalf("auth server subset = %#v, want %#v", authSubset, wantAuth)
+	}
+
+	prReq := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+	prRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(prRec, prReq)
+	if prRec.Code != http.StatusOK {
+		t.Fatalf("protected resource status = %d want 200", prRec.Code)
+	}
+	var prMeta struct {
+		Resource              string                           `json:"resource"`
+		ResourceDocumentation string                           `json:"resource_documentation"`
+		ScopesSupported       []string                         `json:"scopes_supported"`
+		AccessProfiles        map[string]accessProfileSnapshot `json:"access_profiles"`
+	}
+	if err := json.Unmarshal(prRec.Body.Bytes(), &prMeta); err != nil {
+		t.Fatalf("decode protected resource: %v", err)
+	}
+	prSubset := map[string]any{
+		"resource":               prMeta.Resource,
+		"resource_documentation": prMeta.ResourceDocumentation,
+		"scopes_supported":       prMeta.ScopesSupported,
+		"reader_profile":         prMeta.AccessProfiles["reader"],
+		"operator_profile":       prMeta.AccessProfiles["operator"],
+	}
+	wantPR := map[string]any{
+		"resource":               "https://mcp.arleo.eu/mcp",
+		"resource_documentation": "https://mcp.arleo.eu/auth.md",
+		"scopes_supported":       []string{"read", "write"},
+		"reader_profile":         accessProfileSnapshot{AcquisitionMode: "operator_approved_claim_or_pre_registered_oauth_client", InternalScopes: []string{"read"}},
+		"operator_profile":       accessProfileSnapshot{AcquisitionMode: "approved_token", InternalScopes: []string{"write"}},
+	}
+	if !reflect.DeepEqual(prSubset, wantPR) {
+		t.Fatalf("protected resource subset = %#v, want %#v", prSubset, wantPR)
+	}
+}
+
+func TestPublishedAuthAndToolSurfacesStayConvergedOnCanonicalReadWrite(t *testing.T) {
+	dir := t.TempDir()
+	const content = "# auth.md\n\nAgent authentication instructions.\n"
+	if err := os.WriteFile(filepath.Join(dir, "auth.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(auth.md): %v", err)
+	}
+	srv := mustDiscoveryServer(t, dir)
+
+	authReq := httptest.NewRequest(http.MethodGet, "/auth.md", nil)
+	authRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusOK {
+		t.Fatalf("auth.md status = %d want 200", authRec.Code)
+	}
+	authBody := authRec.Body.String()
+	for _, want := range []string{
+		"`reader` maps to `read`; `operator` maps to `write`.",
+		`"internal_scopes": ["read"]`,
+		`"internal_scopes": ["write"]`,
+	} {
+		if !strings.Contains(authBody, want) {
+			t.Fatalf("auth.md missing %q:\n%s", want, authBody)
+		}
+	}
+	for _, bad := range []string{
+		`"internal_scopes": ["read", "write"]`,
+		"public-safe",
+	} {
+		if strings.Contains(authBody, bad) {
+			t.Fatalf("auth.md contains forbidden legacy wording %q:\n%s", bad, authBody)
+		}
+	}
+
+	oauthSrv := mustOAuthServer(t)
+	bearer := obtainBearerToken(t, oauthSrv)
+	body := doMCPToolsListBody(t, oauthSrv, bearer, nil)
+	var result struct {
+		Result struct {
+			Tools []struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	parsed := false
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "data: ") {
+			line = strings.TrimPrefix(line, "data: ")
+		}
+		if err := json.Unmarshal([]byte(line), &result); err == nil && len(result.Result.Tools) > 0 {
+			parsed = true
+			break
+		}
+	}
+	if !parsed {
+		t.Fatalf("tools/list response did not contain a parseable tools payload: %q", body)
+	}
+	for _, tool := range result.Result.Tools {
+		for _, bad := range []string{"content.read", "content.write", "site.admin", "public-safe", "reader-safe"} {
+			if strings.Contains(tool.Description, bad) {
+				t.Fatalf("tool %q description contains forbidden legacy wording %q: %q", tool.Name, bad, tool.Description)
+			}
+		}
 	}
 }
 

@@ -87,7 +87,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "list_previews",
 		Title:        "List previews",
-		Description:  "List currently active preview sessions with owner and expiry metadata, plus current usage against the configured caps (caller_active_count/max_previews_per_caller and preview_disk_used_bytes/preview_disk_max_bytes) so an agent can self-regulate before create_preview refuses a new preview at a cap boundary (#871). Returns clean preview URLs without re-emitting the entry token; the entry token is single-use — once its session has fetched content it can no longer mint a new session, so a leaked entry URL that was already opened is inert, but use revoke_preview to cut off access to an active preview immediately. Requires site.admin.",
+		Description:  "List currently active preview sessions with owner and expiry metadata, plus current usage against the configured caps (caller_active_count/max_previews_per_caller and preview_disk_used_bytes/preview_disk_max_bytes) so an agent can self-regulate before create_preview refuses a new preview at a cap boundary (#871). Returns clean preview URLs without re-emitting the entry token; the entry token is single-use — once its session has fetched content it can no longer mint a new session, so a leaked entry URL that was already opened is inert, but use revoke_preview to cut off access to an active preview immediately. Requires write.",
 		InputSchema:  tools.MustSchema[listPreviewsInput](),
 		OutputSchema: tools.MustSchema[listPreviewsOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -128,7 +128,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "revoke_preview",
 		Title:        "Revoke preview",
-		Description:  "Revoke one active preview by preview_id and delete its isolated build directory. Requires site.admin.",
+		Description:  "Revoke one active preview by preview_id and delete its isolated build directory. Requires write.",
 		InputSchema:  tools.MustSchema[revokePreviewInput](),
 		OutputSchema: tools.MustSchema[revokePreviewOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -156,7 +156,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "revoke_all_previews",
 		Title:        "Revoke all previews",
-		Description:  "Revoke every active preview and delete all isolated preview directories. Requires site.admin.",
+		Description:  "Revoke every active preview and delete all isolated preview directories. Requires write.",
 		InputSchema:  tools.MustSchema[revokeAllPreviewsInput](),
 		OutputSchema: tools.MustSchema[revokeAllPreviewsOutput](),
 		Annotations: &mcp.ToolAnnotations{
