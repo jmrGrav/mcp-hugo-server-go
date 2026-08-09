@@ -142,14 +142,21 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 		return nil
 	}
 	imagesRoot := filepath.Join(hugoRoot, "static", "images")
-	var out []storageFinding
+
 	// SourceIndex has no internal synchronization (see hugosite.ContentMu's
-	// doc comment): heroSlugHasOwner below reads idx.bySlug and, on its
-	// fallback path, ranges over idx.pages via AllSlugs — both must be
-	// guarded against a concurrent create_page/update_page/delete_page
-	// mutation rebuilding those maps mid-scan.
+	// doc comment), so its slugs must be snapshotted under the read lock
+	// before use. Snapshotting once — rather than holding the lock across
+	// the WalkDir filesystem I/O below — keeps a concurrent
+	// create_page/update_page/delete_page from stalling behind this scan.
 	hugosite.ContentMu.RLock()
-	defer hugosite.ContentMu.RUnlock()
+	knownSlugs := srcIdx.AllSlugs()
+	hugosite.ContentMu.RUnlock()
+	slugSet := make(map[string]struct{}, len(knownSlugs))
+	for _, s := range knownSlugs {
+		slugSet[s] = struct{}{}
+	}
+
+	var out []storageFinding
 	_ = filepath.WalkDir(imagesRoot, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // best-effort: skip unreadable subtrees rather than fail the whole check
@@ -165,7 +172,7 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 		if slug == "" {
 			return nil
 		}
-		if heroSlugHasOwner(srcIdx, slug) {
+		if heroSlugHasOwner(slugSet, slug) {
 			return nil // has an owning page — not orphaned
 		}
 		out = append(out, storageFinding{
@@ -183,25 +190,26 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 }
 
 // heroSlugHasOwner reports whether slug — derived from a hero image's path
-// relative to static/images — has an owning page in the source index.
-// generate_hero_image historically wrote flat filenames keyed on the bare
-// post slug (static/images/{slug}-featured.jpg) before it started keying on
-// the full source slug, which nests section pages under a subdirectory
-// (e.g. static/images/posts/{slug}-featured.jpg). A flat legacy filename for
-// a page under a section (slug has no "/") therefore never matches
-// GetBySlug's exact section-qualified key directly; the fallback below
-// checks whether any indexed page's slug ends in "/"+slug before concluding
-// the asset is truly orphaned, so pre-existing flat hero images for real
-// pages aren't misreported as residue.
-func heroSlugHasOwner(srcIdx *hugosite.SourceIndex, slug string) bool {
-	if _, ok := srcIdx.GetBySlug(slug); ok {
+// relative to static/images — has an owning page in knownSlugs, a snapshot
+// of every SourcePage.Slug in the index. generate_hero_image historically
+// wrote flat filenames keyed on the bare post slug
+// (static/images/{slug}-featured.jpg) before it started keying on the full
+// source slug, which nests section pages under a subdirectory (e.g.
+// static/images/posts/{slug}-featured.jpg). A flat legacy filename for a
+// page under a section (slug has no "/") therefore never matches the
+// section-qualified slug directly; the fallback below checks whether any
+// indexed slug ends in "/"+slug before concluding the asset is truly
+// orphaned, so pre-existing flat hero images for real pages aren't
+// misreported as residue.
+func heroSlugHasOwner(knownSlugs map[string]struct{}, slug string) bool {
+	if _, ok := knownSlugs[slug]; ok {
 		return true
 	}
 	if strings.Contains(slug, "/") {
 		return false
 	}
 	suffix := "/" + slug
-	for _, full := range srcIdx.AllSlugs() {
+	for full := range knownSlugs {
 		if strings.HasSuffix(full, suffix) {
 			return true
 		}
