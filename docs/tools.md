@@ -27,19 +27,19 @@ connector this session. `TestToolNamesWithinConnectorTruncationBudget`
 (`internal/tools/toolcount_test.go`) enforces the budget mechanically for
 every registered tool going forward.
 
-## External access profiles
+## Runtime access model
 
-Public documentation uses two external profiles, which map directly onto the
-internal `read`/`write` scopes (#450, see `docs/mcp-contract.md` §6.12):
+The runtime currently enforces exactly two canonical scopes (#450, see
+`docs/mcp-contract.md` §6.12):
 
-- `reader`: all read tools (full visibility, drafts included)
-- `operator`: reader tools plus write and site operations
+- `read`: full source-aware read visibility, including drafts and source-only content
+- `write`: `read` plus every mutation/build/preview/site-operation tool
 
-The registry below lists the current internal scope tiers enforced by the
-runtime so the mapping stays explicit and auditable. Since #450, there are
-only two: `read` (the reader tier; on OAuth-enabled deployments `/mcp`
-still requires a Bearer token, but no additional per-tool scope split
-exists below `read`) and `write` (requires a registered OAuth client).
+Some public docs still use the descriptive labels `reader` and `operator`.
+Treat them as human-facing profile names only, not as additional runtime
+scopes or a finer ACL split. On OAuth-enabled deployments `/mcp` requires a
+Bearer token for every tool call, including the tools listed below under the
+anonymous tier.
 
 ## Search tool selection (#326)
 
@@ -52,7 +52,12 @@ tools support `limit`/`offset` pagination).
 a lighter-weight alternative to reach for when `search_content` is
 available.
 
-## Anonymous
+## Anonymous-tier tool IDs
+
+These tools have `RequiredScope: ""` in the registry. On OAuth-disabled
+deployments they can be called directly. On OAuth-enabled deployments they
+remain ungated at the ACL layer but still require a Bearer token because the
+transport itself is authenticated.
 
 - `list_pages` - Browse pages
 - `get_page` - Read page
@@ -66,7 +71,7 @@ available.
 - `get_changelog` - Get changelog
 - `get_capabilities` - Get capabilities (machine-readable runtime limits and feature discovery, e.g. rate-limit windows, TTL/body-size bounds, enabled optional features; see #859)
 
-## `read` (reader tier; on OAuth-enabled deployments, obtain a Bearer token first)
+## `read` (canonical read scope; full visibility, drafts included)
 
 - `get_page_markdown` - Get full page Markdown
 - `get_page_frontmatter` - Get page frontmatter
@@ -90,7 +95,7 @@ available.
 - `plan_page` - Plan page scaffold (proposes a slug/frontmatter/vocabulary scaffold for a new page before create_page; see #622)
 - `list_page_revisions` - List page revisions (git-baseline revision history for a page; see #615)
 
-## `write` (requires a registered OAuth client)
+## `write` (canonical write scope; implies `read`)
 
 Per #450, `write` implies `read` and folds in every tool that used to
 require a separate `site.admin` scope, with no exceptions.

@@ -11,10 +11,15 @@ drafts). OAuth 2.0 unlocks richer tools.
 
 ## Agent registration
 
-External access profiles:
+Canonical runtime scopes:
 
-- `reader`: read-only access, no secret needed, self-service registration
-- `operator`: reader access plus write and site operations
+- `read`: self-serve OAuth registration, full read visibility including drafts/source-only content
+- `write`: approved client, `read` plus mutations and site operations
+
+Descriptive external profile labels still used in some docs:
+
+- `reader`: human-facing label for the `read` scope
+- `operator`: human-facing label for the `write` scope
 
 The OAuth scopes below are the current internal capability strings accepted by
 the server during v1.x.
@@ -105,14 +110,14 @@ the server during v1.x.
   "scopes": ["read", "write"],
   "access_profiles": {
     "reader": {
-      "description": "Read-only access profile for discovery and content inspection (full visibility, drafts included).",
-      "acquisition": "anonymous or self-serve registration",
+      "description": "Human-facing label for the canonical `read` scope: discovery and content inspection with full visibility, drafts included.",
+      "acquisition": "self-serve OAuth registration",
       "internal_scopes": ["read"]
     },
     "operator": {
-      "description": "Approved operator profile that bundles read, write, and site operation capabilities.",
-      "acquisition": "approved token present in the server registry",
-      "internal_scopes": ["read", "write"]
+      "description": "Human-facing label for the canonical `write` scope: full read visibility plus write and site operation capabilities.",
+      "acquisition": "approved OAuth client/token present in the server registry",
+      "internal_scopes": ["write"]
     }
   }
 }

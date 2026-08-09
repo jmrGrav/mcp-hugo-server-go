@@ -183,17 +183,22 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 
 ## Tool Access Scopes
 
-Since #450, the server enforces exactly two internal scopes, which map
-directly onto the two external profiles operators should think in:
+Since #450, the server enforces exactly two canonical runtime scopes:
 
-- `reader` / `read`: full visibility, including drafts and other
+- `read`: full visibility, including drafts and other
   source-only/pre-publication content (an explicit operator
-  risk-acceptance decision — see `docs/mcp-contract.md` §6.12). Requires no
-  secret; auto-registrable.
-- `operator` / `write`: reader capability plus mutations and site
-  operations. Requires a registered OAuth client. `write` implies `read` —
-  there is no third tier; every tool that used to require a separate
-  `site.admin` scope now just requires `write`.
+  risk-acceptance decision — see `docs/mcp-contract.md` §6.12). On
+  OAuth-enabled deployments, callers obtain this through self-serve OAuth
+  registration; `/mcp` still requires a Bearer token even for anonymous-tier
+  tools.
+- `write`: `read` plus mutations and site operations. Requires a registered
+  OAuth client. `write` implies `read` — there is no third tier; every tool
+  that used to require a separate `site.admin` scope now just requires
+  `write`.
+
+Some docs and discovery metadata still use the descriptive profile labels
+`reader` and `operator`. Treat those as human-facing names for the two
+runtime scopes above, not as separate ACL layers.
 
 Legacy clients may still send any pre-#450 scope string (`mcp`, `reader`,
 `content.read`, `content.write`, `site.admin`, `system.admin`, and other
@@ -204,8 +209,8 @@ clients.
 
 Published discovery metadata now carries both:
 
-- canonical internal scope strings (`read`, `write`) in `scopes_supported`
-- additive `access_profiles.reader` / `access_profiles.operator` metadata for the simplified external model
+- canonical runtime scope strings (`read`, `write`) in `scopes_supported`
+- additive `access_profiles.reader` / `access_profiles.operator` metadata as descriptive profile labels over that same two-scope model
 
 To enable confidential OAuth clients for `write`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
 
@@ -567,7 +572,7 @@ When OAuth is disabled, `write` tools are rejected with a `not_authorized` error
 
 ### Storage Health and One-Time Orphan Cleanup
 
-`get_storage_health` (site.admin, #861) is an **advisory-only** integrity
+`get_storage_health` (`write`, #861) is an **advisory-only** integrity
 surface: it reports residue that accumulates *outside* a page's own content
 bundle and **never deletes anything** (`data.auto_delete` is always `false`).
 Each finding carries a stable `code`, `severity`, and `resource_class`.
