@@ -1409,6 +1409,10 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// successful update_page that set description (#810).
 		if fm := parseFrontmatterMap([]byte(content)); fm != nil {
 			updated.FrontmatterRaw = fm
+			updated.Date = frontmatterString(fm["date"])
+			updated.Draft = frontmatterBool(fm["draft"])
+			updated.PublishDate = frontmatterTime(fm["publishDate"])
+			updated.ExpiryDate = frontmatterTime(fm["expiryDate"])
 		}
 		if writeTags != nil {
 			updated.Tags = writeTags
