@@ -269,3 +269,75 @@ func TestStorageHealthHonorsExplicitFrontmatterHeroReferenceIncludingPNG(t *test
 		}
 	}
 }
+
+func TestStorageHealthHeroScannerDistinguishesLegacyLivePNGAndModernOrphan(t *testing.T) {
+	hugoRoot := t.TempDir()
+	flatImages := filepath.Join(hugoRoot, "static", "images")
+	nestedImages := filepath.Join(hugoRoot, "static", "images", "posts")
+	if err := os.MkdirAll(flatImages, 0o755); err != nil {
+		t.Fatalf("mkdir flat images: %v", err)
+	}
+	if err := os.MkdirAll(nestedImages, 0o755); err != nil {
+		t.Fatalf("mkdir nested images: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(flatImages, "legacy-live"+admin.HeroImageSuffix), []byte("jpeg"), 0o644); err != nil {
+		t.Fatalf("write legacy jpg: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(flatImages, "chatgpt-job-featured.png"), []byte("png"), 0o644); err != nil {
+		t.Fatalf("write legacy png: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedImages, "modern-orphan"+admin.HeroImageSuffix), []byte("jpeg"), 0o644); err != nil {
+		t.Fatalf("write modern orphan: %v", err)
+	}
+
+	srcIdx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	srcIdx.Upsert(hugosite.SourcePage{Slug: "posts/legacy-live", Title: "Legacy live"})
+	srcIdx.Upsert(hugosite.SourcePage{
+		Slug:     "posts/chatgpt-took-the-lead",
+		Title:    "ChatGPT Took The Lead",
+		FilePath: filepath.Join(t.TempDir(), "unused.md"),
+		FrontmatterRaw: map[string]any{
+			"featuredImage": "/images/chatgpt-job-featured.png",
+		},
+	})
+
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+	session, done := newStorageHealthServer(t, cfg, srcIdx, previewstore.New())
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_storage_health", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("get_storage_health returned error")
+	}
+
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	data, _ := env["data"].(map[string]any)
+	findings, _ := data["findings"].([]any)
+	var modernOrphanFound bool
+	for _, f := range findings {
+		fm, _ := f.(map[string]any)
+		if fm["logical_path"] == "static/images/legacy-live-featured.jpg" || fm["logical_path"] == "static/images/chatgpt-job-featured.png" {
+			t.Fatalf("live legacy hero image was flagged orphaned: %#v", fm)
+		}
+		if fm["logical_path"] == "static/images/posts/modern-orphan-featured.jpg" {
+			modernOrphanFound = true
+		}
+	}
+	if !modernOrphanFound {
+		t.Fatalf("modern nested orphan hero image was not reported; findings=%v", findings)
+	}
+}

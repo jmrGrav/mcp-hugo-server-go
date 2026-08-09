@@ -56,7 +56,7 @@ func RegisterInspectPreviewRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "inspect_preview",
 		Title:        "Inspect preview rendered page",
-		Description:  "Inspect rendered HTML/SEO/security checks against an isolated preview build for an unpublished or draft page. Requires preview_id from create_preview and a page slug/source key. Returns explicit preview-scoped context so callers do not confuse preview inspection with public availability. Requires site.admin.",
+		Description:  "Inspect rendered HTML/SEO/security checks against an isolated preview build for an unpublished or draft page. Requires preview_id from create_preview and a page slug/source key. Returns explicit preview-scoped context so callers do not confuse preview inspection with public availability. Requires write.",
 		InputSchema:  tools.MustSchema[inspectPreviewRenderedInput](),
 		OutputSchema: tools.MustSchema[inspectPreviewRenderedOutput](),
 		Annotations: &mcp.ToolAnnotations{

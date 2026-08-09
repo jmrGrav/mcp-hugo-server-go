@@ -109,7 +109,7 @@ func RegisterStorageHealth(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		Title: "Get storage health",
 		Description: "Advisory-only storage/integrity health check (#861). Returns machine-readable findings — each with a stable `code`, `severity`, and `resource_class` — for residue that accumulates outside a page's own content bundle: " +
 			"`orphaned_generated_asset` (a generate_hero_image `{slug}-featured.jpg` under static/images whose owning page no longer exists in the index) and `expired_preview_residue` (an mcp-preview-* directory still on disk with no live preview backing it, e.g. after a restart). " +
-			"NEVER deletes anything: `data.auto_delete` is always false; use delete_page_asset (scope=generated) or revoke_preview to act on a finding. Host-safe: generated assets report a hugo_root-relative logical path, preview residue reports only an opaque directory basename — never an absolute host path. Requires site.admin.",
+			"NEVER deletes anything: `data.auto_delete` is always false; use delete_page_asset (scope=generated) or revoke_preview to act on a finding. Host-safe: generated assets report a hugo_root-relative logical path, preview residue reports only an opaque directory basename — never an absolute host path. Requires write.",
 		InputSchema:  tools.MustSchema[getStorageHealthInput](),
 		OutputSchema: tools.MustSchema[getStorageHealthOutput](),
 		Annotations: &mcp.ToolAnnotations{

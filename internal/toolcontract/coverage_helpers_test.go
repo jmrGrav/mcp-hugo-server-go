@@ -322,6 +322,35 @@ func TestWrapToolReturnsStructuredErrorForInvalidResponseMode(t *testing.T) {
 	}
 }
 
+func TestWrapToolInvalidResponseModeErrorSnapshot(t *testing.T) {
+	handler := WrapTool(func(ctx context.Context, req *mcp.CallToolRequest, in wrapFixtureInput) (*mcp.CallToolResult, wrapFixtureOutput, error) {
+		t.Fatal("handler should not run when response_mode is invalid")
+		return nil, wrapFixtureOutput{}, nil
+	})
+
+	res, out, err := handler(context.Background(), &mcp.CallToolRequest{}, wrapFixtureInput{ResponseMode: "banana"})
+	if err != nil {
+		t.Fatalf("WrapTool() error = %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("WrapTool() result = %#v, want structured error result", res)
+	}
+
+	if len(out.Errors) != 1 {
+		t.Fatalf("typed error output = %#v, want one error", out.Errors)
+	}
+	err0 := out.Errors[0]
+	if err0.Code != "invalid_params" || err0.Resolution == nil || err0.Resolution.Action != "retry_with_parameter" {
+		t.Fatalf("typed error snapshot drifted: %#v", err0)
+	}
+	if err0.Message == "" || !strings.Contains(err0.Message, "response_mode must be one of: standard, compact") {
+		t.Fatalf("typed error message = %q, want invalid response_mode guidance", err0.Message)
+	}
+	if len(err0.Resolution.AllowedValues) != 2 || err0.Resolution.AllowedValues[0] != "standard" || err0.Resolution.AllowedValues[1] != "compact" {
+		t.Fatalf("resolution allowed_values = %#v, want [standard compact]", err0.Resolution.AllowedValues)
+	}
+}
+
 func TestWrapToolCarriesRequestContextAndCompatFieldsOnError(t *testing.T) {
 	handler := WrapTool(func(ctx context.Context, req *mcp.CallToolRequest, in wrapFixtureInput) (*mcp.CallToolResult, wrapFixtureOutput, error) {
 		err := fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")

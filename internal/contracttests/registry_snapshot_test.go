@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"context"
@@ -206,4 +207,30 @@ func TestContractCriticalToolDescriptionsStable(t *testing.T) {
 		}
 	}
 	_ = tools.KnownScopes
+}
+
+func TestContractToolDescriptionsAvoidLegacyScopesAndPublicSafeWording(t *testing.T) {
+	s := registerFullContractServer(t)
+	session, done := connectClient(t, s)
+	defer done()
+
+	res, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+
+	forbidden := []string{
+		"Requires content.read",
+		"Requires content.write",
+		"Requires site.admin",
+		"public-safe",
+		"reader-safe",
+	}
+	for _, tl := range res.Tools {
+		for _, bad := range forbidden {
+			if strings.Contains(tl.Description, bad) {
+				t.Fatalf("tool %q description contains forbidden legacy wording %q: %q", tl.Name, bad, tl.Description)
+			}
+		}
+	}
 }

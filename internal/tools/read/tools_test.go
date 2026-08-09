@@ -194,6 +194,32 @@ func TestGetFullPageMarkdown(t *testing.T) {
 	assertEnvelopeContentProvenance(t, res, "site_source_untrusted")
 }
 
+func TestSourceBearingReadToolsCarryUntrustedContentProvenance(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClient(t, idx)
+	defer done()
+
+	tests := []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "get_page_markdown", args: map[string]any{"slug": "/posts/hello"}},
+		{name: "get_page_frontmatter", args: map[string]any{"slug": "/posts/hello"}},
+		{name: "get_page_for_edit", args: map[string]any{"slug": "/posts/hello"}},
+		{name: "build_agent_context", args: map[string]any{"slug": "/posts/hello"}},
+		{name: "export_agent_context", args: map[string]any{"limit": 1, "include_body": true}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			res := callTool(t, session, tc.name, tc.args)
+			if res.IsError {
+				t.Fatalf("%s returned error: %v", tc.name, res.Content)
+			}
+			assertEnvelopeContentProvenance(t, res, "site_source_untrusted")
+		})
+	}
+}
+
 func TestGetFullPageMarkdownIncludeTermsFalseOmitsTerms(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClient(t, idx)
