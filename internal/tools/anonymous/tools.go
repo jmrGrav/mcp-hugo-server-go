@@ -48,6 +48,14 @@ type getPageInput struct {
 	// content_only flip) since this is new opt-out surface, not a
 	// documented-broken default.
 	IncludeTerms *bool `json:"include_terms,omitempty"`
+	// MaxBodyChars follows the same pattern as build_agent_context's and
+	// get_page_for_edit's max_body_chars (see internal/tools/read/tools.go):
+	// nil means "omitted, no truncation" (existing behavior unchanged);
+	// an explicit positive value truncates the returned html to that many
+	// characters with an explicit warning; an explicit non-positive value
+	// (0 or negative) is rejected with invalid_params, matching #837's
+	// validation convention (#896).
+	MaxBodyChars *int `json:"max_body_chars,omitempty"`
 }
 
 // contentOnly resolves getPageInput.ContentOnly's effective value: true
@@ -368,7 +376,7 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 			"Pass allow_source_fallback=true to also return source-index entries for pages not yet built "+
 			"(e.g. immediately after create_page, before the next Hugo build); draft pages are always excluded. "+
 			"`content_only` defaults to true (BREAKING as of this release — previously defaulted to false): the `html` field returns just the article body (prefers the theme's id=\"content\" wrapper when present, excluding title, TOC, post metadata, share buttons, and prev/next navigation; falls back to <article>/<main>/<body>-minus-chrome otherwise) rather than the full rendered page including theme chrome (nav, footer, search widgets, share buttons, scripts) — the old default ran to several thousand tokens for a short article. Pass content_only=false explicitly to opt back into the full-page HTML. "+
-			"Cost note (#865): content_only=true only strips theme chrome — it still returns the page's entire article body, so on a long article the `html` field can still be very large (many thousands of tokens). The name bounds the *shape* (body vs full page), not the *size*. When you need a size-bounded read, prefer get_page_frontmatter (metadata only, no body) or get_page_markdown for the raw source; there is no server-side truncation of the returned body. "+
+			"Cost note (#865): content_only=true only strips theme chrome — it still returns the page's entire article body, so on a long article the `html` field can still be very large (many thousands of tokens). The name bounds the *shape* (body vs full page), not the *size*. When you need a size-bounded read, prefer get_page_frontmatter (metadata only, no body) or get_page_markdown for the raw source, or pass `max_body_chars: N` to truncate the returned `html` to N characters (#896, same model as build_agent_context/get_page_for_edit): omitting it preserves the full untruncated body (unchanged default), an explicit positive value truncates with an explicit warning in the response, and N must be greater than 0 when provided. "+
 			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; with the default content_only=true, the `html` field is returned empty for source-only fallback results). "+
 			"`html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
@@ -381,6 +389,9 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 			}
 			if in.Slug == "" {
 				return nil, getPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
+			}
+			if err := positiveMaxBodyCharsError(in.MaxBodyChars); err != nil {
+				return nil, getPageOutput{}, err
 			}
 			resolved, ok := resolver.Resolve(in.Slug)
 			if !ok {
@@ -429,7 +440,12 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 				dto.TagTerms = nil
 				dto.CategoryTerms = nil
 			}
-			return nil, newGetPageOutput(getPageData{Page: &dto}), nil
+			var warnings []string
+			if html, truncated := toolcontract.TruncateBody(dto.HTML, derefMaxBodyChars(in.MaxBodyChars)); truncated {
+				dto.HTML = html
+				warnings = append(warnings, fmt.Sprintf("html truncated to max_body_chars=%d; set a higher value or omit the parameter to get the full body.", *in.MaxBodyChars))
+			}
+			return nil, newGetPageOutput(getPageData{Page: &dto}, warnings), nil
 		})
 
 	addReadOnlyTool(s, "search_pages", "Search content", "Keyword search across published pages (title, summary, tags, categories, URL). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Published-content alternative to search_content — if you already have a reader token, prefer search_content instead: it also matches body text, and supports type/language/sort filtering that this tool doesn't. Matching is intentionally broad: any page containing at least one query term in any indexed field is returned, ranked by `score` (count of matching terms, highest first) — it is not an exact-match search. Each result's `score` field indicates match strength; a low score means a loose/partial match. Use `match: \"title_exact\"` for a strict case-insensitive full-title match instead (e.g. to verify whether a specific page still exists after deleting it), which returns zero results rather than loosely related hits when there's no exact title match. Supports response shaping: `response_mode: \"compact\"` returns only slug/title/url per page (use during selection, before fetching full content); `fields: [...]` restricts each page to the named JSON fields, applied after response_mode. Omitting both preserves the full default shape.",
@@ -750,8 +766,12 @@ func newListPagesOutput(data listPagesData) listPagesOutput {
 	return listPagesOutput{ToolResponse: success(data)}
 }
 
-func newGetPageOutput(data getPageData) getPageOutput {
-	return getPageOutput{ToolResponse: success(data)}
+func newGetPageOutput(data getPageData, warnings []string) getPageOutput {
+	resp := success(data)
+	if len(warnings) > 0 {
+		resp.Warnings = warnings
+	}
+	return getPageOutput{ToolResponse: resp}
 }
 
 func newSearchPagesOutput(data searchPagesData) searchPagesOutput {
@@ -815,6 +835,27 @@ func negativeOffsetError(v int) error {
 		return fmt.Errorf("invalid_params: offset must not be negative")
 	}
 	return nil
+}
+
+// positiveMaxBodyCharsError rejects an explicit non-positive max_body_chars
+// (0 or negative), matching #837's validation convention and the identical
+// helper in internal/tools/read/tools.go for build_agent_context/
+// get_page_for_edit. nil (omitted) is always valid — see getPageInput's
+// MaxBodyChars comment.
+func positiveMaxBodyCharsError(v *int) error {
+	if v != nil && *v <= 0 {
+		return fmt.Errorf("invalid_params: max_body_chars must be greater than 0")
+	}
+	return nil
+}
+
+// derefMaxBodyChars resolves getPageInput.MaxBodyChars to toolcontract.
+// TruncateBody's maxChars argument: 0 (no truncation) when omitted.
+func derefMaxBodyChars(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // resolveSourceKey looks up the source-relative, language-prefix-stripped
