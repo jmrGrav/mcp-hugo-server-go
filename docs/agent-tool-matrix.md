@@ -6,10 +6,11 @@ by trial and error.
 
 Access terminology in this document:
 
-- `reader` = read-only access profile (internal scope `read`; full
-  visibility, drafts included — see `docs/mcp-contract.md` §6.12)
-- `operator` = reader profile plus write and site operations (internal
-  scope `write`, which implies `read`)
+- canonical runtime scopes are `read` and `write`
+- `read` includes full source-aware visibility, including drafts/source-only content
+- `write` implies `read` and includes mutations plus every former build/preview/admin tool
+- `reader` / `operator` are descriptive profile labels some docs still use for
+  those same two runtime scopes
 
 The per-tool notes below still reference the current internal scopes where that
 detail matters for runtime setup.
@@ -27,12 +28,12 @@ detail matters for runtime setup.
 | Bulk-export content for analysis | `export_agent_context` | Tag/category filter + pagination + per-page `state` |
 | Simple keyword search | `search_pages` | Published-page search; on OAuth-enabled deployments, obtain a read Bearer token first |
 | Filtered search (type, tag, language, sort) | `search_content` | Full filter set + pagination + per-result `state` |
-| List all published pages with pagination | `list_pages` | No auth, metadata only |
-| Get the full URL list (including taxonomy) | `get_sitemap` | No auth, all slugs |
-| Read recent posts for a digest | `get_recent_posts` | No auth |
-| List all tags | `list_tags` | No auth |
-| List all categories | `list_categories` | No auth |
-| Read site name/URL/language | `get_site_information` | No auth |
+| List all published pages with pagination | `list_pages` | Anonymous-tier tool; on OAuth-enabled deployments still use a read Bearer token |
+| Get the full URL list (including taxonomy) | `get_sitemap` | Anonymous-tier tool; on OAuth-enabled deployments still use a read Bearer token |
+| Read recent posts for a digest | `get_recent_posts` | Anonymous-tier tool; on OAuth-enabled deployments still use a read Bearer token |
+| List all tags | `list_tags` | Anonymous-tier tool; on OAuth-enabled deployments still use a read Bearer token |
+| List all categories | `list_categories` | Anonymous-tier tool; on OAuth-enabled deployments still use a read Bearer token |
+| Read site name/URL/language | `get_site_information` | Anonymous-tier tool; on OAuth-enabled deployments still use a read Bearer token |
 | Get page metadata only (no body) | `get_page_frontmatter` | Reading time, tags, categories + `frontmatter.state` |
 | Find pages related to a slug | `get_related_content` | Shared tags/categories |
 | **Suggest links to add in a draft** | `suggest_links` | Tags/categories → ranked suggestions |
@@ -55,7 +56,7 @@ detail matters for runtime setup.
 | Check/manage currently active previews | `list_previews`, `revoke_preview`, `revoke_all_previews` | Revoke immediately if a preview URL leaked |
 | **Edit both translations of a bilingual page atomically** | `plan_bundle_change` → `apply_bundle_plan` | All-or-nothing across every translation in a bundle; `rollback_bundle` to undo |
 | Check for orphaned assets / preview residue | `get_storage_health` | Advisory-only, never deletes |
-| Discover runtime limits/features before acting | `get_capabilities` | No auth |
+| Discover runtime limits/features before acting | `get_capabilities` | Anonymous-tier tool; on OAuth-enabled deployments still use a read Bearer token |
 | Check remaining mutation quota before a write | `get_rate_limits` | Never itself consumes quota |
 
 ---
@@ -118,7 +119,7 @@ get_broken_links()                    ← internal link audit
 
 ```
 Need to READ a page?
-├── No Bearer token yet     → obtain a reader token first on OAuth-enabled deployments
+├── No Bearer token yet     → obtain a read token first on OAuth-enabled deployments
 └── Bearer token available
     ├── Just metadata       → get_page_frontmatter
     ├── Markdown (editing)  → get_page_markdown
@@ -150,7 +151,7 @@ Need to VALIDATE?
 
 | | `search_pages` | `search_content` |
 |---|---|---|
-| Auth | Reader tool; on OAuth-enabled deployments, use a read Bearer token | Reader tool; on OAuth-enabled deployments, use a read Bearer token |
+| Auth | Anonymous-tier tool; on OAuth-enabled deployments, still use a read Bearer token | `read` tool; on OAuth-enabled deployments, use a read Bearer token |
 | Filters | Query only | type, tag, category, language, sort, order |
 | Pagination | None | limit, offset, total in response |
 | Envelope | Flat `{pages}` | Structured `{success, data, warnings, errors}` |
@@ -160,7 +161,7 @@ Need to VALIDATE?
 
 | | `get_page` | `get_page_markdown` | `build_agent_context` |
 |---|---|---|---|
-| Auth | Reader tool; on OAuth-enabled deployments, use a read Bearer token | Reader tool; on OAuth-enabled deployments, use a read Bearer token | Reader tool; on OAuth-enabled deployments, use a read Bearer token |
+| Auth | Anonymous-tier tool; on OAuth-enabled deployments, still use a read Bearer token | `read` tool; on OAuth-enabled deployments, use a read Bearer token | `read` tool; on OAuth-enabled deployments, use a read Bearer token |
 | Returns | Published HTML + metadata | Source Markdown + frontmatter | Frontmatter + Markdown + related pages |
 | Source fallback | Yes (`allow_source_fallback`) | Published only | Published only |
 | Use when | Reading/display | About to edit | Full context before editing/summarizing |
@@ -169,7 +170,7 @@ Need to VALIDATE?
 
 | | `list_pages` | `get_sitemap` |
 |---|---|---|
-| Auth | None | None |
+| Auth | Anonymous-tier tool; on OAuth-enabled deployments, still use a read Bearer token | Anonymous-tier tool; on OAuth-enabled deployments, still use a read Bearer token |
 | Scope | Content pages (articles/pages) | All slugs including taxonomy (`/tags/go/`, `/categories/docs/`) |
 | Pagination | Yes (limit, offset) | Yes (limit, offset, exclude_taxonomies) |
 | Response fields | title, summary, tags, categories, date, URL | slug, URL, date only |

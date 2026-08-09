@@ -1,6 +1,6 @@
 # Access Model Design
 
-> **Superseded by #450.** This document was the design anchor for the
+> **Superseded by #450 and non-authoritative for current runtime ACLs.** This document was the design anchor for the
 > pre-#450 migration path (issue `#352`) and described a *target* external
 > `reader`/`operator` model while still enforcing four internal scope tiers
 > (`content.read`, `content.write`, `site.admin`) during v1.x. #450 shipped a
@@ -13,6 +13,13 @@
 > The rest of this document is kept as historical design record — the tool
 > matrix below reflects the pre-#450 internal scopes and no longer matches
 > the live `RequiredScope` values.
+>
+> Current runtime summary, repeated here to prevent accidental misreads:
+>
+> - canonical scopes are exactly `read` and `write`
+> - `read` includes full source-aware visibility, including drafts/source-only content
+> - `write` implies `read` and includes every former build/preview/admin tool
+> - any `reader` / `operator` language below is historical design vocabulary, not the live ACL contract
 
 This document is the design anchor for issue `#352`.
 
