@@ -503,12 +503,9 @@ type deletePageAssetInput struct {
 	Force            bool   `json:"force,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	DryRun           bool   `json:"dry_run,omitempty"`
-	// Owner (#895) — see deletePageInput.Owner's comment in tools.go. Same
-	// exemption, same caller-supplied-label semantics, applied here because
-	// this quota is shared with delete_page (see registerDeletePageAsset's
-	// doc comment) and a bilingual test bundle's cleanup routinely needs
-	// both page and asset deletes; exempting only delete_page would leave
-	// the asset deletes in the same cleanup still metered.
+	// Owner is optional advisory metadata only — see deletePageInput.Owner's
+	// comment in tools.go. It never affects authorization or destructive
+	// quota treatment on delete_page_asset.
 	Owner string `json:"owner,omitempty"`
 }
 
@@ -652,7 +649,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			"Callers may provide idempotency_key to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. " +
 			"This only removes the source asset, not any built public copy or CDN cache — unlike delete_page, it does not purge; the asset stays reachable at its old URL until the next build. " +
 			"rate_limit_remaining reports the caller's remaining budget on delete_page's own destructive quota (#466), separate from create_page/update_page/upload_page_asset's shared quota. " +
-			"Pass `owner` to exempt this deletion from the destructive quota (#895) when the owning page bundle is disposable test content you created yourself: exempt only when the bundle's frontmatter has `test_content: true` AND its recorded `test_content_owner` (set via create_page's `test_content: {owner}`, #661) exactly matches the `owner` you pass here — a `scope:\"generated\"` delete with no owning bundle (an orphaned asset) is never exempt, and any other case still consumes the quota exactly as before. Requires content.write.",
+			"Optional `owner` is advisory metadata only: it can mirror create_page's `test_content: {owner}` label for filtering or audit correlation, but delete_page_asset never derives identity, authorization, or quota treatment from that string. Requires content.write.",
 		InputSchema:  tools.MustSchema[deletePageAssetInput](),
 		OutputSchema: tools.MustSchema[deletePageAssetOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -859,17 +856,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		// and asset_referenced rejections below, and the delete itself, all cost
 		// a token, while not_found / read_error above stay free.
 		//
-		// #895 adds the same test_content-owner exemption delete_page has: if
-		// the owning bundle's source file has test_content: true and its
-		// recorded test_content_owner matches in.Owner, this delete is free.
-		// hasBundleDir==false (a generated-scope orphan with no page bundle)
-		// has no frontmatter to check, so it always falls through to Allow()
-		// — fails closed, same as any other lookup failure.
-		exempt := false
-		if hasBundleDir {
-			exempt = deleteQuotaExemptForTestContent(inspectDeleteSource(dir).SourcePath, in.Owner)
-		}
-		if !exempt && !limiter.Allow() {
+		if !limiter.Allow() {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page_asset", cfg.RateLimit.DestructivePerMin, limiter))
 		}
 		actualHash := contentmodel.SourceRevisionBytes(data)

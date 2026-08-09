@@ -1055,12 +1055,10 @@ func TestDeletePageAssetDryRunDoesNotConsumeDestructiveQuota(t *testing.T) {
 	}
 }
 
-// TestDeletePageAssetOwnedTestContentExemptFromDestructiveQuota is a
-// regression test for #895: deleting assets that belong to the caller's own
-// test_content bundle must not consume the destructive quota, matching
-// delete_page's own exemption — a bilingual test bundle's cleanup often
-// deletes both the pages and their assets in the same pass.
-func TestDeletePageAssetOwnedTestContentExemptFromDestructiveQuota(t *testing.T) {
+// TestDeletePageAssetMatchingOwnerStillConsumesQuota confirms `owner` is
+// advisory metadata only on asset deletes too: a matching test_content_owner
+// must not bypass the destructive quota.
+func TestDeletePageAssetMatchingOwnerStillConsumesQuota(t *testing.T) {
 	contentRoot := t.TempDir()
 	rl := config.Default().RateLimit
 	rl.DestructivePerMin = 1
@@ -1085,25 +1083,31 @@ func TestDeletePageAssetOwnedTestContentExemptFromDestructiveQuota(t *testing.T)
 		}
 	}
 
-	// Both asset deletes must succeed despite DestructivePerMin=1, since
-	// both are exempt (owning bundle is test_content owned by this caller).
-	for _, name := range []string{"cover.png", "cover2.png"} {
-		res := callTool(t, session, "delete_page_asset", map[string]any{
-			"slug": "posts/owned-asset-test", "filename": name,
-			"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "owned-asset-test", "index.md")),
-			"owner":             owner,
-		})
-		if res.IsError {
-			raw, _ := json.Marshal(res.Content)
-			t.Fatalf("delete_page_asset %s (owned test_content) expected exemption from quota, got error: %s", name, raw)
-		}
+	if res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug": "posts/owned-asset-test", "filename": "cover.png",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "owned-asset-test", "index.md")),
+		"owner":             owner,
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page_asset expected success, got error: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page_asset", map[string]any{
+		"slug": "posts/owned-asset-test", "filename": "cover2.png",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "owned-asset-test", "index.md")),
+		"owner":             owner,
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete_page_asset with matching owner, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
 	}
 }
 
-// TestDeletePageAssetMismatchedOwnerStillConsumesQuota is a regression test
-// for #895 proving the delete_page_asset exemption cannot be used to bypass
-// the destructive quota on someone else's test content, or on a
-// scope:"generated" asset with no owning bundle at all.
+// TestDeletePageAssetMismatchedOwnerStillConsumesQuota confirms the same
+// outcome for a mismatched owner string.
 func TestDeletePageAssetMismatchedOwnerStillConsumesQuota(t *testing.T) {
 	contentRoot := t.TempDir()
 	rl := config.Default().RateLimit
@@ -1154,10 +1158,8 @@ func TestDeletePageAssetMismatchedOwnerStillConsumesQuota(t *testing.T) {
 }
 
 // TestDeletePageAssetGeneratedScopeWithoutBundleIgnoresOwnerStillConsumesQuota
-// is a regression test for #895: a scope:"generated" delete on an orphaned
-// hero image with no owning page bundle has no frontmatter to check, so it
-// must never be exempt regardless of the `owner` param passed — it always
-// falls through to the normal quota consumption.
+// confirms `owner` has no effect on generated-scope deletes without an owning
+// bundle either.
 func TestDeletePageAssetGeneratedScopeWithoutBundleIgnoresOwnerStillConsumesQuota(t *testing.T) {
 	contentRoot := t.TempDir()
 	hugoRoot := t.TempDir()

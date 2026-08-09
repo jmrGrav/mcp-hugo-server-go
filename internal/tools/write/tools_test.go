@@ -650,12 +650,10 @@ func TestDeletePageRateLimit(t *testing.T) {
 	}
 }
 
-// TestDeletePageOwnedTestContentExemptFromDestructiveQuota is a regression
-// test for #895: deleting the caller's own test_content pages (test_content:
-// true, test_content_owner matching the `owner` param) must not consume the
-// destructive quota at all, so a bilingual bundle cleanup needing more than
-// DestructivePerMin calls doesn't get throttled mid-cleanup.
-func TestDeletePageOwnedTestContentExemptFromDestructiveQuota(t *testing.T) {
+// TestDeletePageMatchingOwnerStillConsumesQuota confirms `owner` is advisory
+// metadata only: even when it matches test_content_owner exactly, it must not
+// bypass the destructive quota.
+func TestDeletePageMatchingOwnerStillConsumesQuota(t *testing.T) {
 	contentRoot := t.TempDir()
 	rl := config.Default().RateLimit
 	rl.DestructivePerMin = 1
@@ -663,7 +661,7 @@ func TestDeletePageOwnedTestContentExemptFromDestructiveQuota(t *testing.T) {
 	defer done()
 
 	const owner = "agent-895"
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 2; i++ {
 		res := callTool(t, session, "create_page", map[string]any{
 			"slug": fmt.Sprintf("owned-test-%d", i), "title": "T", "body": "B",
 			"tags": []any{}, "categories": []any{},
@@ -675,27 +673,31 @@ func TestDeletePageOwnedTestContentExemptFromDestructiveQuota(t *testing.T) {
 		}
 	}
 
-	// All 3 deletes must succeed despite DestructivePerMin=1, since every
-	// one is exempt (test_content owned by the matching caller).
-	for i := 0; i < 3; i++ {
-		slug := fmt.Sprintf("owned-test-%d", i)
-		res := callTool(t, session, "delete_page", map[string]any{
-			"slug":              slug,
-			"expected_revision": currentRevision(t, filepath.Join(contentRoot, slug, "index.md")),
-			"owner":             owner,
-		})
-		if res.IsError {
-			raw, _ := json.Marshal(res.Content)
-			t.Fatalf("delete_page %d (owned test_content) expected exemption from quota, got error: %s", i, raw)
-		}
+	if res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "owned-test-0",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "owned-test-0", "index.md")),
+		"owner":             owner,
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page expected success, got error: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "owned-test-1",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "owned-test-1", "index.md")),
+		"owner":             owner,
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete with matching owner, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
 	}
 }
 
-// TestDeletePageMismatchedOwnerTestContentStillConsumesQuota is a regression
-// test for #895 proving the exemption cannot be used to bypass the
-// destructive quota on someone else's test content: an owner string that
-// does not match the page's recorded test_content_owner is treated exactly
-// like real content — the quota is consumed and exhausted normally.
+// TestDeletePageMismatchedOwnerTestContentStillConsumesQuota confirms the
+// same outcome for a mismatched owner string: quota is consumed normally.
 func TestDeletePageMismatchedOwnerTestContentStillConsumesQuota(t *testing.T) {
 	contentRoot := t.TempDir()
 	rl := config.Default().RateLimit
@@ -741,10 +743,9 @@ func TestDeletePageMismatchedOwnerTestContentStillConsumesQuota(t *testing.T) {
 	}
 }
 
-// TestDeletePageRealContentIgnoresOwnerParamStillConsumesQuota is a
-// regression test for #895: passing `owner` on a delete against real
-// (non-test_content) content must have no effect — the deletion still
-// consumes the destructive quota exactly as before the exemption existed.
+// TestDeletePageRealContentIgnoresOwnerParamStillConsumesQuota confirms
+// passing `owner` on a delete against real (non-test_content) content has no
+// effect.
 func TestDeletePageRealContentIgnoresOwnerParamStillConsumesQuota(t *testing.T) {
 	contentRoot := t.TempDir()
 	rl := config.Default().RateLimit

@@ -80,31 +80,11 @@ const (
 // which necessarily places its lock wait after Allow); it is not governed by
 // this rule. dry_run never consumes on any tool (#588).
 //
-// #895 adds one more FREE case on top of the base rule above, scoped to
-// delete_page and delete_page_asset's shared destructive quota: deleting a
-// page (or an asset in a page's bundle) whose owning source file has
-// frontmatter test_content: true AND whose recorded test_content_owner
-// exactly matches the caller-supplied `owner` parameter. This exists
-// because a bilingual test bundle's cleanup can need 4-5 destructive calls
-// across both tools, hitting DestructivePerMin mid-cleanup — the worst
-// time, since it slows down exactly the deletions that carry zero
-// mass-deletion risk (disposable content already scoped to the caller that
-// created it). Every other deletion — real content, test content with no
-// or a mismatched owner, or a delete_page_asset scope:"generated" call with
-// no owning bundle at all — still consumes the quota exactly as before; see
-// deleteQuotaExemptForTestContent in tools.go for the exact match logic.
-//
-// Security note: `owner` is a caller-supplied free-text label compared with
-// plain string equality against test_content_owner, not an authenticated
-// identity — deliberate, since it's the same label create_page's
-// test_content.owner already writes to frontmatter and #894's owner filter
-// already compares against the same way. This is an acceptable
-// capability-by-label scope for content that is (a) always draft:true, (b)
-// already visible to any caller that can enumerate test_content via #894's
-// validate_site/validate_frontmatter owner-less listing, and (c) time-boxed
-// by test_content_expires_at regardless. It only ever grants "delete this
-// disposable content faster," never access to anything a caller couldn't
-// already read or eventually get cleaned up anyway.
+// `owner` remains caller-supplied advisory metadata for test content created
+// via create_page, but it is intentionally excluded from quota and
+// authorization decisions on destructive tools. Rate limiting continues to
+// depend only on the request class and current limiter state, never on an
+// unbound label supplied by the caller.
 func newRateLimitBucket(l *rate.Limiter, limit int, scope string, now time.Time) rateLimitBucket {
 	retryAfter := rateLimitRetryAfterSeconds(l)
 	resetAt := now.UTC()
