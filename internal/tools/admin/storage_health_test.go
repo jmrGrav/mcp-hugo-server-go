@@ -132,3 +132,82 @@ func TestStorageHealthCatchesOrphanedGeneratedAssetAndPreviewResidue(t *testing.
 		t.Errorf("expected expired_preview_residue finding for %q; findings=%v", residueRef, findings)
 	}
 }
+
+// TestStorageHealthDoesNotFlagLegacyFlatHeroImageAsOrphaned is a regression
+// test for a false-positive found while auditing production storage_health
+// output: generate_hero_image originally wrote flat filenames keyed on the
+// bare post slug (static/images/{slug}-featured.jpg), before it started
+// nesting section pages under a subdirectory (static/images/{section}/{slug}
+// -featured.jpg, e.g. static/images/posts/...). The orphan scanner derived a
+// bare slug from the flat legacy filename and looked it up with the exact,
+// section-qualified GetBySlug key, so every pre-existing flat hero image for
+// a page under a section (i.e. nearly every real post) was misreported as
+// orphaned residue — while a hero image with no owning page at all, flat or
+// nested, must still be flagged.
+func TestStorageHealthDoesNotFlagLegacyFlatHeroImageAsOrphaned(t *testing.T) {
+	hugoRoot := t.TempDir()
+	imagesRoot := filepath.Join(hugoRoot, "static", "images")
+	if err := os.MkdirAll(imagesRoot, 0o755); err != nil {
+		t.Fatalf("mkdir images: %v", err)
+	}
+	// legacy-live: flat filename for a page that exists under content/posts/
+	// → must NOT be flagged, even though its bare slug isn't the index key.
+	// legacy-gone: flat filename with no owning page anywhere → must still
+	// be flagged as genuinely orphaned.
+	for _, slug := range []string{"legacy-live", "legacy-gone"} {
+		if err := os.WriteFile(filepath.Join(imagesRoot, slug+admin.HeroImageSuffix), []byte("jpeg"), 0o644); err != nil {
+			t.Fatalf("write %s image: %v", slug, err)
+		}
+	}
+
+	srcIdx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	srcIdx.Upsert(hugosite.SourcePage{Slug: "posts/legacy-live", Title: "Legacy live"})
+
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+
+	session, done := newStorageHealthServer(t, cfg, srcIdx, previewstore.New())
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "get_storage_health", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("get_storage_health returned error")
+	}
+
+	raw, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var env map[string]any
+	if err := json.Unmarshal(raw, &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	data, _ := env["data"].(map[string]any)
+	findings, _ := data["findings"].([]any)
+
+	var liveFlagged, goneFound bool
+	for _, f := range findings {
+		fm, _ := f.(map[string]any)
+		if fm["code"] != "orphaned_generated_asset" {
+			continue
+		}
+		switch fm["slug"] {
+		case "legacy-live":
+			liveFlagged = true
+		case "legacy-gone":
+			goneFound = true
+		}
+	}
+	if liveFlagged {
+		t.Errorf("flat legacy hero image for an existing section page must not be flagged as orphaned; findings=%v", findings)
+	}
+	if !goneFound {
+		t.Errorf("expected orphaned_generated_asset finding for legacy-gone; findings=%v", findings)
+	}
+}

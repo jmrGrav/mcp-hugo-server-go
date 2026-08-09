@@ -158,7 +158,7 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 		if slug == "" {
 			return nil
 		}
-		if _, ok := srcIdx.GetBySlug(slug); ok {
+		if heroSlugHasOwner(srcIdx, slug) {
 			return nil // has an owning page — not orphaned
 		}
 		out = append(out, storageFinding{
@@ -173,6 +173,33 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 	})
 	sort.Slice(out, func(i, j int) bool { return out[i].LogicalPath < out[j].LogicalPath })
 	return out
+}
+
+// heroSlugHasOwner reports whether slug — derived from a hero image's path
+// relative to static/images — has an owning page in the source index.
+// generate_hero_image historically wrote flat filenames keyed on the bare
+// post slug (static/images/{slug}-featured.jpg) before it started keying on
+// the full source slug, which nests section pages under a subdirectory
+// (e.g. static/images/posts/{slug}-featured.jpg). A flat legacy filename for
+// a page under a section (slug has no "/") therefore never matches
+// GetBySlug's exact section-qualified key directly; the fallback below
+// checks whether any indexed page's slug ends in "/"+slug before concluding
+// the asset is truly orphaned, so pre-existing flat hero images for real
+// pages aren't misreported as residue.
+func heroSlugHasOwner(srcIdx *hugosite.SourceIndex, slug string) bool {
+	if _, ok := srcIdx.GetBySlug(slug); ok {
+		return true
+	}
+	if strings.Contains(slug, "/") {
+		return false
+	}
+	suffix := "/" + slug
+	for _, full := range srcIdx.AllSlugs() {
+		if strings.HasSuffix(full, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // scanExpiredPreviewResidue enumerates on-disk mcp-preview-* directories and
