@@ -88,16 +88,16 @@ func discoveryAccessProfiles(cfg config.Config) map[string]discoveryAccessProfil
 	readerMode, readerAcquisition := readerAcquisitionProfile(cfg)
 	return map[string]discoveryAccessProfile{
 		"reader": {
-			Description:     "Read-only access profile for discovery and content inspection (full visibility, drafts included).",
+			Description:     "Human-facing label for the canonical read scope used for discovery and content inspection, including source and drafts when the deployment allows it.",
 			Acquisition:     readerAcquisition,
 			AcquisitionMode: readerMode,
 			InternalScopes:  []string{"read"},
 		},
 		"operator": {
-			Description:     "Approved operator profile that bundles read, write, and site operation capabilities.",
+			Description:     "Human-facing label for the canonical write scope used by approved operators for mutations and site operations.",
 			Acquisition:     "approved token present in the server registry",
 			AcquisitionMode: "approved_token",
-			InternalScopes:  []string{"read", "write"},
+			InternalScopes:  []string{"write"},
 		},
 	}
 }
@@ -416,8 +416,8 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 		block.WriteString(fmt.Sprintf(
 			"## Agent registration\n\n"+
 				"External access profiles: `reader` and `operator`.\n"+
-				"`reader` is the public-safe read-only profile; `operator` bundles read, write, and site operations.\n"+
-				"The OAuth scopes below remain the internal capability strings accepted by the server during v1.x.\n\n"+
+				"`reader` and `operator` are human-facing labels layered on top of the canonical OAuth scopes `read` and `write`.\n"+
+				"`reader` maps to `read`; `operator` maps to `write`.\n\n"+
 				"Registration endpoint: `%s/register`\n"+
 				"Authorization endpoint: `%s/authorize`\n"+
 				"Token endpoint: `%s/token`\n"+
@@ -459,10 +459,10 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"      \"internal_scopes\": [\"read\"]\n"+
 				"    },\n"+
 				"    \"operator\": {\n"+
-				"      \"description\": \"Approved operator profile that bundles read, write, and site operation capabilities.\",\n"+
+				"      \"description\": \"Human-facing label for the canonical write scope used by approved operators for mutations and site operations.\",\n"+
 				"      \"acquisition\": \"approved token present in the server registry\",\n"+
 				"      \"acquisition_mode\": \"approved_token\",\n"+
-				"      \"internal_scopes\": [\"read\", \"write\"]\n"+
+				"      \"internal_scopes\": [\"write\"]\n"+
 				"    }\n"+
 				"  }\n"+
 				"}\n"+

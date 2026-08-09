@@ -189,18 +189,14 @@ func TestWellKnownOAuthServer(t *testing.T) {
 	if len(reader.InternalScopes) != 1 || reader.InternalScopes[0] != "read" {
 		t.Fatalf("reader internal_scopes = %v, want [read]", reader.InternalScopes)
 	}
-	wantOperatorScopes := []string{"read", "write"}
-	for _, want := range wantOperatorScopes {
-		found := false
-		for _, got := range operator.InternalScopes {
-			if got == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("operator internal_scopes missing %q: %v", want, operator.InternalScopes)
-		}
+	if len(operator.InternalScopes) != 1 || operator.InternalScopes[0] != "write" {
+		t.Fatalf("operator internal_scopes = %v, want [write]", operator.InternalScopes)
+	}
+	if !strings.Contains(reader.Description, "canonical read scope") {
+		t.Fatalf("reader description = %q, want canonical read scope wording", reader.Description)
+	}
+	if !strings.Contains(operator.Description, "canonical write scope") {
+		t.Fatalf("operator description = %q, want canonical write scope wording", operator.Description)
 	}
 }
 
@@ -709,6 +705,15 @@ func TestAuthMdAppendsCanonicalRegistrationBlockWhenMissing(t *testing.T) {
 	}
 	if !strings.Contains(body, "https://mcp.arleo.eu/register") {
 		t.Fatal("auth.md response must reference the canonical /register endpoint")
+	}
+	if !strings.Contains(body, `"internal_scopes": ["write"]`) {
+		t.Fatal("auth.md response must publish operator as the canonical write scope")
+	}
+	if strings.Contains(body, `"internal_scopes": ["read", "write"]`) {
+		t.Fatal("auth.md response must not publish legacy operator scope inheritance")
+	}
+	if !strings.Contains(body, "`reader` maps to `read`; `operator` maps to `write`.") {
+		t.Fatal("auth.md response must explain the reader/operator labels in terms of canonical scopes")
 	}
 }
 
