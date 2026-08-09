@@ -1,178 +1,90 @@
-# Access Model Design
+# Access Model
 
-> **Superseded by #450 and non-authoritative for current runtime ACLs.** This document was the design anchor for the
-> pre-#450 migration path (issue `#352`) and described a *target* external
-> `reader`/`operator` model while still enforcing four internal scope tiers
-> (`content.read`, `content.write`, `site.admin`) during v1.x. #450 shipped a
-> different, simpler resolution than "Non-negotiable invariants" §2-4 below
-> anticipated: it collapsed straight to two internal scopes, `read`/`write`
-> (`read` = full visibility, drafts included — an explicit operator
-> risk-acceptance decision, not the "public-safe reader" profile this
-> document assumed), and **write** now implies **read** with no third tier.
-> See `docs/mcp-contract.md` §6.12 for the current, authoritative model.
-> The rest of this document is kept as historical design record — the tool
-> matrix below reflects the pre-#450 internal scopes and no longer matches
-> the live `RequiredScope` values.
->
-> Current runtime summary, repeated here to prevent accidental misreads:
->
-> - canonical scopes are exactly `read` and `write`
-> - `read` includes full source-aware visibility, including drafts/source-only content
-> - `write` implies `read` and includes every former build/preview/admin tool
-> - any `reader` / `operator` language below is historical design vocabulary, not the live ACL contract
+This document describes the **current runtime contract**. It replaces the
+older pre-`#450` design notes that assumed a future "public-safe reader"
+profile distinct from full source-aware read access.
 
-This document is the design anchor for issue `#352`.
+For the authoritative per-tool contract, see:
 
-It does **not** change authorization semantics on its own. Its job is to pin
-down the current verified model, the target external model, and the migration
-invariants before follow-up implementation issues widen any visibility.
+- [docs/mcp-contract.md](docs/mcp-contract.md)
+- [docs/tools.md](docs/tools.md)
+- [docs/operator-guide.md](docs/operator-guide.md)
 
-## Current verified internal model
+## Current runtime summary
 
-The repository currently exposes 33 tools across four internal scope tiers:
+The live server exposes exactly two canonical scopes:
 
-| Internal scope | Count | Notes |
-| --- | ---: | --- |
-| `anonymous` | 9 | Public browse/read surfaces |
-| `content.read` | 14 | Source-aware read and validation surfaces |
-| `content.write` | 3 | Source mutations |
-| `site.admin` | 7 | Build, hook, image, SRI, runtime status, and theme status operations |
+| Canonical scope | Meaning today |
+| --- | --- |
+| `read` | Full source-aware visibility, including drafts and other source-only / pre-publication content |
+| `write` | `read` plus every mutation and site-operation tool |
 
-Compatibility aliases that still exist today:
+Important consequences:
 
-- `mcp` -> `content.read`
-- `system.admin` -> `site.admin`
+- There is **no separate public-only read scope** in the current runtime.
+- A `write` token **implies `read`**.
+- Former `site.admin` operations are now part of `write`.
+- OAuth discovery and docs may still use `reader` / `operator` as
+  human-facing labels, but they are descriptive names layered over the same
+  two canonical scopes:
+  - `reader` -> `read`
+  - `operator` -> `write`
 
-These are implementation details and should not remain the user-facing access
-story.
+## Anonymous vs authenticated read
 
-## Target external model
+Anonymous callers and `read`-scoped callers do **not** have the same
+effective access:
 
-The long-term external contract should expose two profiles only:
+- anonymous callers only see the anonymous tool surface
+- authenticated `read` callers can invoke the read-tier tools and receive full
+  source-aware visibility
 
-| External profile | Intended acquisition path | Effective capability bundle |
-| --- | --- | --- |
-| `reader` | anonymous or self-serve registration | public-safe read-only tools |
-| `operator` | approved token present in the DB | `reader` + write + site operations |
+On OAuth-enabled deployments, `/mcp` still requires a Bearer token even to
+call anonymous-tier tools. "Anonymous" in the tool matrix therefore means
+"no additional scope beyond transport authentication", not "unauthenticated
+HTTP access to `/mcp`".
 
-The server may still keep finer-grained internal permissions:
+## Compatibility aliases
 
-- `content.read`
-- `content.write`
-- `site.operate` (target name for the current `site.admin`)
+Legacy scope strings are still accepted as input for backward compatibility,
+but they are normalized to the canonical two-scope model and are never
+advertised as canonical.
 
-`operator` is expected to be a bundle of internal permissions, not a separate
-parallel authorization model.
+Current normalization summary:
 
-## Non-negotiable invariants
+| Accepted input scope(s) | Canonical runtime scope |
+| --- | --- |
+| `mcp`, `read`, `content.read`, `reader` | `read` |
+| `write`, `content.write`, `site.admin`, `site_admin`, `siteadmin`, `system.admin`, `admin`, `system_admin`, `systemadmin` | `write` |
 
-1. Capability differences must depend only on token trust, never on provider
-   identity (`ChatGPT`, `Claude`, `Gemini`, `Le Chat`, `Copilot`, or another
-   MCP client).
-2. No implicit promotion path may exist from `reader` to `operator`.
-3. No mutation, build, or hook capability may become visible to a `reader`.
-4. Read-only tools may move to the `reader` profile only after the public-safe
-   response policy is defined and enforced.
-5. During v1.x, compatibility aliases may remain accepted internally, but the
-   published contract should converge on `reader` / `operator` externally and
-   `content.read` / `content.write` / `site.operate` internally.
+This is a compatibility layer only. New docs, discovery metadata, OAuth
+clients, tests, and operator guidance should speak in terms of `read` and
+`write`.
 
-## Verified current tool matrix
+## Tool-family overview
 
-The following matrix is derived from the actual tool registry and runtime code,
-not from README prose alone.
+At a high level:
 
-Legend used in `MCP annotations`:
+| Tool family | Effective scope today |
+| --- | --- |
+| Public browse/read tools (`list_pages`, `get_page`, `search_pages`, etc.) | anonymous surface |
+| Source-aware read tools (`get_page_markdown`, `get_page_frontmatter`, `get_page_for_edit`, `build_agent_context`, `export_agent_context`, `search_content`, `validate_*`, etc.) | `read` |
+| Mutations (`create_page`, `update_page`, `delete_page`, plans, rollback, asset writes/deletes) | `write` |
+| Site operations (`create_preview`, `build_site`, `verify_publication`, `generate_hero_image`, runtime/theme/SRI/admin diagnostics) | `write` |
 
-- `RO` = `readOnlyHint=true`
-- `IDEM` = `idempotentHint=true`
-- `DEST` = `destructiveHint=true`
-- `OPEN` = `openWorldHint=true`
-- `CLOSED` = `openWorldHint=false`
+If a future product decision intentionally introduces a third
+published-content-only read scope, that must be specified and tested as a new
+runtime contract. It must not be implied by legacy `reader` wording.
 
-| Tool | Real behavior | Current scope | Target external profile | Sensitive data risk | MCP annotations |
-| --- | --- | --- | --- | --- | --- |
-| `list_pages` | Published content listing | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `get_page` | Published page read with source fallback states | `anonymous` | `reader` | medium | `RO, IDEM, CLOSED` |
-| `search_pages` | Anonymous keyword search | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `get_recent_posts` | Recent published posts | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `list_tags` | Published tag listing | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `list_categories` | Published category listing | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `get_sitemap` | Published URL inventory | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `get_feed` | Published feed slice | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `get_site_information` | Site metadata | `anonymous` | `reader` | low | `RO, IDEM, CLOSED` |
-| `get_page_markdown` | Source markdown read | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `get_page_frontmatter` | Source/frontmatter metadata read | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `get_related_content` | Related-content analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `build_agent_context` | Source-aware edit context bundle | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
-| `export_agent_context` | Bulk source/context export | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
-| `get_page_for_edit` | Compact edit bundle (frontmatter+markdown+state+quality+revision) | `content.read` | `reader` after public-safe filtering; `quality` omitted for `reader` | high | `RO, IDEM, CLOSED` |
-| `list_content_types` | Content type/archetype discovery | `content.read` | `reader` sees archetype metadata only; `page_count` and observed-page-derived `expected_fields` (source-derived) omitted | low | `RO, IDEM, CLOSED` |
-| `list_page_assets` | Page bundle asset directory listing | `content.read` | source-derived; `reader` gets an empty `assets` list even for a public page (`SourcePath` is stripped), and `content_not_public` for a non-public page | medium | `RO, IDEM, CLOSED` |
-| `search_content` | Filtered source-aware search | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `explain_structure` | Site-structure summary | `content.read` | `reader` after public-safe filtering | low | `RO, IDEM, CLOSED` |
-| `get_site_health` | Site health summary | `content.read` | `reader` after public-safe filtering | low | `RO, IDEM, CLOSED` |
-| `get_broken_links` | Broken-link analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `get_backlinks` | Backlink analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `suggest_links` | Link suggestion analysis | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `diff_page` | Source vs Git diff | `content.read` | `reader` after public-safe filtering | high | `RO, IDEM, CLOSED` |
-| `inspect_rendered` | Rendered-HTML/SEO/link validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `validate_frontmatter` | Source validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `validate_site` | Full-site source validation | `content.read` | `reader` after public-safe filtering | medium | `RO, IDEM, CLOSED` |
-| `create_page` | Create source content | `content.write` | `operator` | high | `OPEN` |
-| `update_page` | Mutate source content | `content.write` | `operator` | high | `IDEM, OPEN` |
-| `delete_page` | Delete source content | `content.write` | `operator` | high | `DEST, OPEN` |
-| `upload_page_asset` | Write a new file into a page bundle directory (png/jpg/jpeg/gif/webp only; SVG deferred) | `content.write` | `operator` | high | `OPEN` |
-| `build_site` | Build/publish site output | `site.admin` | `operator` | high | `OPEN` |
-| `preview_build` | Preview build execution | `site.admin` | `operator` | high | `CLOSED` |
-| `run_post_build_hooks` | Outbound post-build webhooks | `site.admin` | `operator` | high | `OPEN` |
-| `generate_hero_image` | Generate/write image asset | `site.admin` | `operator` | high | `CLOSED` |
-| `check_sri_versions` | Live SRI verification against remote assets | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
-| `get_runtime_status` | Runtime/build/git/site status surface | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
-| `get_theme_status` | Active theme/module presence + Git commit/dirty state | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
-| `verify_publication` | Source/build/public/index freshness + live HTTP check | `site.admin` | `operator` | medium | `RO, IDEM, OPEN` |
-| `create_preview` | Build source (optionally with drafts) to an isolated, token-gated preview URL | `site.admin` | `operator` | high | `OPEN` |
+## Historical note
 
-## Why `check_sri_versions` stays operator-only
+Earlier design work described a different target model:
 
-`check_sri_versions` is read-only, but it is still not a good `reader` tool in
-the target model:
+- a public-safe `reader` profile
+- a broader `operator` profile
+- multiple internal tiers such as `content.read`, `content.write`, and
+  `site.admin`
 
-- it scans operator-managed templates and SRI data files
-- it performs live outbound fetches
-- it can surface environment-specific diagnostics that are not part of the
-  normal editorial read path
-
-This is the canonical example of a tool that is read-only in the MCP sense but
-still belongs to `operator` in the external access model.
-
-## Migration decisions captured here
-
-### `site.admin` -> `site.operate`
-
-Recommended direction:
-
-- keep `site.admin` accepted during v1.x
-- introduce `site.operate` as the clearer internal name in follow-up work
-- publish `operator` externally rather than surfacing either internal string to
-  end users
-
-### `system.admin`
-
-Recommended direction:
-
-- keep as compatibility alias during v1.x only
-- do not advertise it in discovery or docs
-- cover any remaining uses with compatibility tests before eventual removal
-
-## Dependencies and rollout order
-
-This document intentionally precedes the implementation issues that depend on
-it:
-
-1. `#354` — public-safe read response policy
-2. `#353` — self-serve reader registration
-3. `#355` — operator parity across MCP clients
-4. `#357` — discovery metadata and OAuth docs aligned with the new model
-
-No follow-up should widen reader visibility before `#354` is implemented.
+That is **not** the shipped contract anymore. The repository kept some helper
+names and historical issue references from that period, but the live runtime
+contract is the two-scope model summarized above.
