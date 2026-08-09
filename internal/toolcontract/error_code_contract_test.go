@@ -24,6 +24,7 @@ func TestStableErrorCodeContract(t *testing.T) {
 		{"missing_expected_revision", `invalid_params: expected_revision is required for non-dry-run update_page`, "missing_required_parameter", true, "retry_with_parameter"},
 		{"rate_limit_exceeded", `rate_limit_exceeded: create_page is limited to 60 per minute`, "rate_limit_exceeded", true, "retry_later"},
 		{"build_in_progress", `build_in_progress: a build is already running`, "build_in_progress", true, "retry_later"},
+		{"build_in_progress_consumed_plan", `build_in_progress: content lock is held and this single-use plan was already consumed; call plan_bundle_change again before retrying`, "build_in_progress", false, "replan_then_retry"},
 		{"revision_conflict", `revision_conflict: page changed since it was read; read the latest revision and replan`, "revision_conflict", true, "reread_then_retry"},
 		{"asset_referenced", `asset_referenced: asset is still linked from the page body`, "asset_referenced", true, "retry_with_parameter"},
 		{"content_not_found", `content_not_found: page not found for slug "posts/x"`, "content_not_found", false, "search_then_retry"},

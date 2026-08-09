@@ -1606,6 +1606,9 @@ func sourcePagesForValidation(idx *hugosite.SourceIndex, slug, lang string) ([]h
 		return nil, nil
 	}
 	rawSlug := strings.TrimSpace(slug)
+	if err := validateSlugLangConsistency(rawSlug, lang); err != nil {
+		return nil, err
+	}
 	slug = strings.Trim(strings.TrimSpace(slug), "/")
 	lang = strings.TrimSpace(lang)
 	if slug == "" {

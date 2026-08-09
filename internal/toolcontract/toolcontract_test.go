@@ -318,6 +318,19 @@ func TestParseToolErrorBuildInProgressHasNoRetryAfterSeconds(t *testing.T) {
 	}
 }
 
+func TestParseToolErrorBuildInProgressConsumedPlanRequiresReplan(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("build_in_progress: content lock is held and this single-use plan was already consumed; call plan_bundle_change again before retrying"))
+	if got.Retryable {
+		t.Fatalf("Retryable = %v, want false when the consumed plan cannot be retried verbatim", got.Retryable)
+	}
+	if got.Resolution == nil || got.Resolution.Action != "replan_then_retry" {
+		t.Fatalf("Resolution = %#v, want replan_then_retry", got.Resolution)
+	}
+	if got.Resolution.RecommendedTool != "plan_bundle_change" {
+		t.Fatalf("RecommendedTool = %q, want plan_bundle_change", got.Resolution.RecommendedTool)
+	}
+}
+
 func TestParseToolErrorRejectsNonMachinePrefix(t *testing.T) {
 	got := ParseToolError(fmt.Errorf("unexpected content-type: text/html"))
 	if got.Code != "tool_error" {

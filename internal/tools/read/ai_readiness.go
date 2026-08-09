@@ -54,6 +54,9 @@ func RegisterAIReadiness(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Source
 			if slug == "" {
 				return nil, validateAIReadinessOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 			}
+			if err := validateSlugLangConsistency(slug, in.Lang); err != nil {
+				return nil, validateAIReadinessOutput{}, err
+			}
 
 			resolver := site.NewPageResolver(idx, srcIdx, cfg)
 			resolved, ok := resolver.ResolveWithLang(slug, strings.TrimSpace(in.Lang))

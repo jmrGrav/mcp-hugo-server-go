@@ -400,6 +400,14 @@ func ParseToolError(err error) ToolError {
 			out.Resolution.AllowedValues = allowed
 		}
 	case "build_in_progress", "rate_limit_exceeded":
+		if code == "build_in_progress" && strings.Contains(message, "plan_bundle_change again") {
+			out.Retryable = false
+			out.Resolution = &ErrorResolution{
+				Action:          "replan_then_retry",
+				RecommendedTool: "plan_bundle_change",
+			}
+			return out
+		}
 		out.Retryable = true
 		out.Resolution = &ErrorResolution{Action: "retry_later"}
 		if code == "rate_limit_exceeded" {

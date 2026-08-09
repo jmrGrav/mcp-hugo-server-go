@@ -456,6 +456,9 @@ func registerReadPageTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sour
 			if idx == nil && srcIdx == nil {
 				return nil, getFullPageMarkdownOutput{}, fmt.Errorf("index not initialized")
 			}
+			if err := validateSlugLangConsistency(in.Slug, in.Lang); err != nil {
+				return nil, getFullPageMarkdownOutput{}, err
+			}
 			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 			if err != nil {
 				return nil, getFullPageMarkdownOutput{}, err
@@ -478,6 +481,9 @@ func registerReadPageTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sour
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getPageFrontmatterInput) (*mcp.CallToolResult, getPageFrontmatterOutput, error) {
 			if idx == nil {
 				return nil, getPageFrontmatterOutput{}, fmt.Errorf("index not initialized")
+			}
+			if err := validateSlugLangConsistency(in.Slug, in.Lang); err != nil {
+				return nil, getPageFrontmatterOutput{}, err
 			}
 			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 			if err != nil {
@@ -557,6 +563,9 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				return nil, buildAgentContextOutput{}, fmt.Errorf("index not initialized")
 			}
 			if err := positiveMaxBodyCharsError(in.MaxBodyChars); err != nil {
+				return nil, buildAgentContextOutput{}, err
+			}
+			if err := validateSlugLangConsistency(in.Slug, in.Lang); err != nil {
 				return nil, buildAgentContextOutput{}, err
 			}
 			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
@@ -724,6 +733,9 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				return nil, getPageForEditOutput{}, fmt.Errorf("index not initialized")
 			}
 			if err := positiveMaxBodyCharsError(in.MaxBodyChars); err != nil {
+				return nil, getPageForEditOutput{}, err
+			}
+			if err := validateSlugLangConsistency(in.Slug, in.Lang); err != nil {
 				return nil, getPageForEditOutput{}, err
 			}
 			include, err := resolveEditInclude(in.Include)
@@ -907,6 +919,18 @@ func readerSafeResolvedPage(ctx context.Context, resolved site.ResolvedPage, slu
 		return site.ResolvedPage{}, fmt.Errorf("content_not_public: page is not publicly available for slug %q", slug)
 	}
 	return publicOnly, nil
+}
+
+func validateSlugLangConsistency(rawSlug, explicitLang string) error {
+	explicitLang = strings.TrimSpace(explicitLang)
+	if explicitLang == "" {
+		return nil
+	}
+	prefix := site.LanguagePrefixFromSlug(rawSlug)
+	if prefix == "" || prefix == explicitLang {
+		return nil
+	}
+	return fmt.Errorf("invalid_params: slug selects language %q but lang=%q was also requested; remove one or make them match", prefix, explicitLang)
 }
 
 func resolvedMarkdown(resolved site.ResolvedPage) string {

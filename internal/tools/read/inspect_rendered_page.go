@@ -304,6 +304,7 @@ func brokenInternalLinksFromDoc(idx *site.Index, page site.Page, doc *html.Node)
 	if err != nil {
 		return nil, err
 	}
+	previewPrefix := previewPrefixFromPath(base.Path)
 	classifier := site.NewClassifier(idx)
 	var broken []string
 	for _, href := range extractLinksFromDoc(doc) {
@@ -311,6 +312,7 @@ func brokenInternalLinksFromDoc(idx *site.Index, page site.Page, doc *html.Node)
 		if !ok {
 			continue
 		}
+		target.Path = stripPreviewPrefix(target.Path, previewPrefix)
 		if shouldIgnoreBrokenLinkTarget(classifier, target.Path) {
 			continue
 		}
@@ -342,6 +344,7 @@ func checkMissingImages(cfg config.Config, page site.Page, doc *html.Node) rende
 	if err != nil {
 		return renderCheckResult{Check: "missing_images", Status: "warn", Detail: "page URL could not be parsed, skipped image check"}
 	}
+	previewPrefix := previewPrefixFromPath(base.Path)
 	var missing []string
 	walkNodes(doc, func(n *html.Node) bool {
 		if n.Type == html.ElementNode && n.Data == "img" {
@@ -353,6 +356,7 @@ func checkMissingImages(cfg config.Config, page site.Page, doc *html.Node) rende
 			if !ok {
 				return true
 			}
+			target.Path = stripPreviewPrefix(target.Path, previewPrefix)
 			localPath := filepath.Join(cfg.SiteRoot, filepath.FromSlash(strings.TrimPrefix(target.Path, "/")))
 			if _, statErr := os.Stat(localPath); statErr != nil {
 				missing = append(missing, src)
@@ -492,6 +496,9 @@ func checkRenderedInlineEventHandlers(doc *html.Node) renderCheckResult {
 		for _, attr := range n.Attr {
 			key := strings.ToLower(strings.TrimSpace(attr.Key))
 			if strings.HasPrefix(key, "on") && strings.TrimSpace(attr.Val) != "" {
+				if isBenignStylesheetPreloadOnload(n, key, attr.Val) {
+					continue
+				}
 				findings = append(findings, fmt.Sprintf("<%s> has inline handler %s", n.Data, key))
 				if len(findings) >= 5 {
 					return false
@@ -504,6 +511,36 @@ func checkRenderedInlineEventHandlers(doc *html.Node) renderCheckResult {
 		return renderCheckResult{Check: "security_inline_event_handlers", Status: "fail", Detail: strings.Join(findings, "; ")}
 	}
 	return renderCheckResult{Check: "security_inline_event_handlers", Status: "pass"}
+}
+
+func isBenignStylesheetPreloadOnload(n *html.Node, key, val string) bool {
+	if n == nil || n.Type != html.ElementNode || n.Data != "link" || key != "onload" {
+		return false
+	}
+	rel := strings.ToLower(strings.TrimSpace(htmlAttr(n, "rel")))
+	as := strings.ToLower(strings.TrimSpace(htmlAttr(n, "as")))
+	val = strings.ToLower(strings.TrimSpace(val))
+	return rel == "preload" && as == "style" &&
+		(strings.Contains(val, "this.rel='stylesheet'") || strings.Contains(val, `this.rel="stylesheet"`))
+}
+
+func previewPrefixFromPath(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 2 || parts[0] != "preview" {
+		return ""
+	}
+	return "/preview/" + parts[1]
+}
+
+func stripPreviewPrefix(path, prefix string) string {
+	if prefix == "" || !strings.HasPrefix(path, prefix+"/") {
+		return path
+	}
+	stripped := strings.TrimPrefix(path, prefix)
+	if stripped == "" {
+		return "/"
+	}
+	return stripped
 }
 
 func checkRenderedUnsafeURLs(doc *html.Node) renderCheckResult {

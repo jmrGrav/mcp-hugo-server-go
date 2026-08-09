@@ -687,7 +687,7 @@ func registerApplyBundlePlan(
 		}
 
 		if !acquireContentLock("apply_bundle_plan") {
-			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held and this single-use plan was already consumed; call plan_bundle_change again before retrying"))
 		}
 		defer releaseContentLock("apply_bundle_plan")
 
