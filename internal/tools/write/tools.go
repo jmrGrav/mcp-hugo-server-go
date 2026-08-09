@@ -275,6 +275,18 @@ type deletePageInput struct {
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	DryRun           bool   `json:"dry_run,omitempty"`
 	ResponseMode     string `json:"response_mode,omitempty"`
+	// Owner (#895) is a deliberate, explicit opt-in identifying the calling
+	// agent for the destructive-quota exemption below — the same
+	// caller-supplied free-text label create_page's test_content.owner
+	// writes to frontmatter (#661) and validate_frontmatter/validate_site's
+	// owner filter compares against (#894). It is never inferred from
+	// context (IP/token): those identity signals are shared infrastructure
+	// concerns (per-caller rate limiting, idempotency isolation), not the
+	// same "owner" a multi-agent deployment's callers choose to stamp on
+	// their own disposable content, so comparing them would silently never
+	// match in practice. Only used to compare against the target page's own
+	// test_content_owner; has no effect on real (non-test) content.
+	Owner string `json:"owner,omitempty"`
 }
 
 type deletePageBacklinkDTO struct {
@@ -518,6 +530,67 @@ func callerLimiter(mu *sync.Mutex, m map[string]*rate.Limiter, key string, perMi
 	}
 	m[key] = l
 	return l
+}
+
+// deleteQuotaExemptForTestContent reports whether delete_page's destructive
+// quota should be skipped for this deletion (#895): the page at sourcePath
+// is disposable test content (frontmatter `test_content: true`, written by
+// create_page's test_content option, #661) AND its recorded
+// `test_content_owner` exactly matches the caller-supplied owner. This is
+// the exemption the issue chose over simply raising the global
+// DestructivePerMin limit — it preserves the anti-mass-deletion guard
+// exactly where it has value (real/published content, which is never
+// test_content) while removing friction exactly where the risk is zero
+// (content already scoped to the caller that created it).
+//
+// Both conditions are required, never either alone: an owner match on
+// non-test content or a test_content page with no/mismatched owner still
+// consumes the quota exactly as before, closing the obvious bypass (a
+// caller can't free-delete arbitrary content just by guessing/echoing an
+// owner string, and can't get a free pass on someone else's disposable
+// test content by omitting or misreporting an owner). Fails closed: a
+// missing source file, empty owner, unreadable/unparsable frontmatter, or
+// any lookup error is NOT exempt (quota still consumes) — this only ever
+// narrows an existing charge, never invents a new one.
+//
+// owner is a caller-supplied free-text label, not derived from ctx
+// (IP/token) — see deletePageInput.Owner's comment for why that's the
+// correct comparison value: it's the same label create_page's
+// test_content.owner writes to frontmatter and validate_frontmatter/
+// validate_site's owner filter compares against with the same exact `==`
+// semantics (#894), so this stays apples-to-apples with how the owner was
+// recorded in the first place.
+func deleteQuotaExemptForTestContent(sourcePath, owner string) bool {
+	owner = strings.TrimSpace(owner)
+	if sourcePath == "" || owner == "" {
+		return false
+	}
+	fm, err := hugosite.ParseFrontmatterFile(sourcePath)
+	if err != nil || fm == nil {
+		return false
+	}
+	if !isTruthyFrontmatterValue(fm["test_content"]) {
+		return false
+	}
+	recordedOwner, _ := fm["test_content_owner"].(string)
+	return strings.TrimSpace(recordedOwner) != "" && strings.TrimSpace(recordedOwner) == owner
+}
+
+// isTruthyFrontmatterValue mirrors the same bool-or-"true"-string leniency
+// admin.isTruthyFrontmatter and read.isExplicitTestContent already apply to
+// this exact field elsewhere — a freshly create_page'd entry still only in
+// the in-memory index carries test_content as a native Go bool, while the
+// same value round-tripped through on-disk YAML can come back either way
+// depending on how it was authored.
+func isTruthyFrontmatterValue(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return strings.EqualFold(strings.TrimSpace(x), "true")
+	default:
+		return false
+	}
 }
 
 // rateLimitRemaining reports the caller's current available quota on l,
@@ -1378,7 +1451,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. Pass `owner` to exempt this deletion from the destructive quota (#895) when the target page is disposable test content you created yourself: it is only exempt when the page's frontmatter has `test_content: true` AND its recorded `test_content_owner` (set via create_page's `test_content: {owner}`, #661) exactly matches the `owner` you pass here — any other deletion (real content, or test content with no or a different owner) still consumes the quota exactly as before. `owner` is a caller-supplied label, not inferred from your session/token, so it must match verbatim what you passed to create_page.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -1600,8 +1673,18 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// check above (both free), immediately before the revision_conflict
 		// check below (which consumes). This is the reference placement the
 		// whole #887 fix aligns the other tools to.
-		if !limiter.Allow() {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
+		//
+		// #895 adds one more FREE case on top of #887's list: deleting
+		// disposable test_content the caller itself owns. See
+		// deleteQuotaExemptForTestContent's comment for the exact
+		// (test_content truthy AND exact owner match) conditions — every
+		// other deletion, including test_content with no owner or an owner
+		// that does not match `in.Owner`, still consumes the quota exactly
+		// as before.
+		if !deleteQuotaExemptForTestContent(resolvedSource.SourcePath, in.Owner) {
+			if !limiter.Allow() {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
+			}
 		}
 
 		if err := acquireDeleteLock(); err != nil {

@@ -79,6 +79,18 @@ const (
 // (upload_page_asset meters its base64 decode behind Allow() as a DoS guard,
 // which necessarily places its lock wait after Allow); it is not governed by
 // this rule. dry_run never consumes on any tool (#588).
+//
+// #895 adds one more FREE case on top of the base rule above, scoped to
+// delete_page's destructive quota only: deleting a page whose frontmatter
+// has test_content: true AND whose recorded test_content_owner exactly
+// matches the caller-supplied `owner` parameter. This exists because a
+// bilingual test bundle's cleanup can need 4-5 destructive calls on its
+// own, hitting DestructivePerMin mid-cleanup — the worst time, since it
+// slows down exactly the deletions that carry zero mass-deletion risk
+// (disposable content already scoped to the caller that created it). Every
+// other deletion — real content, or test content with no or a mismatched
+// owner — still consumes the quota exactly as before; see
+// deleteQuotaExemptForTestContent in tools.go for the exact match logic.
 func newRateLimitBucket(l *rate.Limiter, limit int, scope string, now time.Time) rateLimitBucket {
 	retryAfter := rateLimitRetryAfterSeconds(l)
 	resetAt := now.UTC()

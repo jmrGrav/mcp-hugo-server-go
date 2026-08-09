@@ -643,6 +643,142 @@ func TestDeletePageRateLimit(t *testing.T) {
 	}
 }
 
+// TestDeletePageOwnedTestContentExemptFromDestructiveQuota is a regression
+// test for #895: deleting the caller's own test_content pages (test_content:
+// true, test_content_owner matching the `owner` param) must not consume the
+// destructive quota at all, so a bilingual bundle cleanup needing more than
+// DestructivePerMin calls doesn't get throttled mid-cleanup.
+func TestDeletePageOwnedTestContentExemptFromDestructiveQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	const owner = "agent-895"
+	for i := 0; i < 3; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("owned-test-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+			"test_content": map[string]any{"owner": owner},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	// All 3 deletes must succeed despite DestructivePerMin=1, since every
+	// one is exempt (test_content owned by the matching caller).
+	for i := 0; i < 3; i++ {
+		slug := fmt.Sprintf("owned-test-%d", i)
+		res := callTool(t, session, "delete_page", map[string]any{
+			"slug":              slug,
+			"expected_revision": currentRevision(t, filepath.Join(contentRoot, slug, "index.md")),
+			"owner":             owner,
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("delete_page %d (owned test_content) expected exemption from quota, got error: %s", i, raw)
+		}
+	}
+}
+
+// TestDeletePageMismatchedOwnerTestContentStillConsumesQuota is a regression
+// test for #895 proving the exemption cannot be used to bypass the
+// destructive quota on someone else's test content: an owner string that
+// does not match the page's recorded test_content_owner is treated exactly
+// like real content — the quota is consumed and exhausted normally.
+func TestDeletePageMismatchedOwnerTestContentStillConsumesQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	for i := 0; i < 2; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("other-owner-test-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+			"test_content": map[string]any{"owner": "someone-else"},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	// First delete with a non-matching owner consumes the (size-1) quota.
+	if res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "other-owner-test-0",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "other-owner-test-0", "index.md")),
+		"owner":             "not-the-recorded-owner",
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page expected success, got error: %s", raw)
+	}
+
+	// Second delete (also mismatched owner) must be blocked — no exemption,
+	// so it hits the same DestructivePerMin=1 budget the first call spent.
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "other-owner-test-1",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "other-owner-test-1", "index.md")),
+		"owner":             "not-the-recorded-owner",
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete with mismatched owner, got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
+	}
+}
+
+// TestDeletePageRealContentIgnoresOwnerParamStillConsumesQuota is a
+// regression test for #895: passing `owner` on a delete against real
+// (non-test_content) content must have no effect — the deletion still
+// consumes the destructive quota exactly as before the exemption existed.
+func TestDeletePageRealContentIgnoresOwnerParamStillConsumesQuota(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.DestructivePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	for i := 0; i < 2; i++ {
+		res := callTool(t, session, "create_page", map[string]any{
+			"slug": fmt.Sprintf("real-post-%d", i), "title": "T", "body": "B",
+			"tags": []any{}, "categories": []any{},
+		})
+		if res.IsError {
+			raw, _ := json.Marshal(res.Content)
+			t.Fatalf("create_page %d expected success, got error: %s", i, raw)
+		}
+	}
+
+	if res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "real-post-0",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "real-post-0", "index.md")),
+		"owner":             "agent-895",
+	}); res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("first delete_page expected success, got error: %s", raw)
+	}
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug":              "real-post-1",
+		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "real-post-1", "index.md")),
+		"owner":             "agent-895",
+	})
+	if !res.IsError {
+		t.Fatal("expected rate_limit_exceeded on 2nd delete of real content (owner param must not exempt it), got success")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "rate_limit_exceeded") {
+		t.Errorf("expected rate_limit_exceeded error, got: %s", raw)
+	}
+}
+
 func TestCreatePageRateLimit(t *testing.T) {
 	// #378: create_page/update_page/upload_page_asset share a per-caller
 	// budget separate from delete_page's own (defense-in-depth mirroring
