@@ -26,7 +26,12 @@ import (
 	"golang.org/x/net/html"
 )
 
-var misplacedFrontmatterRE = regexp.MustCompile(`(?m)^\s*(?:aliases|title|draft|tags|categories|date|description):\s*(?:\n\s*-\s+|\S)`)
+// misplacedFrontmatterRE deliberately has no (?m) flag: ^ must anchor only
+// at the true start of the (trimmed) body, not at every line start, or a
+// legitimate mid-article line like "tags: this is prose about frontmatter
+// syntax" would false-positive far from the actual beginning (#1004 asks
+// for detection "at the beginning of Markdown bodies" specifically).
+var misplacedFrontmatterRE = regexp.MustCompile(`^\s*(?:aliases|title|draft|tags|categories|date|description):\s*(?:\n\s*-\s+|\S)`)
 
 type searchContentInput struct {
 	Query        string `json:"query,omitempty"`
