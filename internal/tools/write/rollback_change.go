@@ -213,6 +213,13 @@ func registerRollbackChange(
 		if err != nil {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
 		}
+		if lang != "" {
+			trimmedSlug := strings.Trim(in.Slug, "/")
+			prefix := lang + "/"
+			if strings.HasPrefix(trimmedSlug, prefix) {
+				return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("language_prefixed_slug_with_explicit_lang: use slug %q with lang %q", strings.TrimPrefix(trimmedSlug, prefix), lang))
+			}
+		}
 		if err := validateSlugFormat(in.Slug); err != nil {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
 		}
