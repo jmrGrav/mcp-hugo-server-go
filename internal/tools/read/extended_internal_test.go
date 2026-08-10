@@ -2,6 +2,7 @@ package read
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,6 +179,11 @@ func TestBuildSiteHealthDetectsIncompleteMultilingualPublicOutput(t *testing.T) 
 	if !slicesContain(health.RuntimeDegradedReasons, "public_output_incomplete") {
 		t.Fatalf("runtime_degraded_reasons = %#v, want public_output_incomplete", health.RuntimeDegradedReasons)
 	}
+	coverage := health.PublicationCoverage
+	if coverage == nil || coverage.PublishableContentSources != 2 || coverage.OtherExcludedSources != 3 ||
+		coverage.MissingPublishableContentPages != 1 || coverage.Complete {
+		t.Fatalf("publication_coverage = %#v, want 2 publishable, 3 excluded, 1 missing, incomplete", coverage)
+	}
 }
 
 func TestBuildSiteHealthRecognizesCustomPublicURL(t *testing.T) {
@@ -291,6 +297,93 @@ func TestBuildSiteHealthIgnoresSectionIndexBundles(t *testing.T) {
 	}
 	if health.Status != "healthy" {
 		t.Fatalf("status = %q, want healthy", health.Status)
+	}
+	coverage := health.PublicationCoverage
+	if health.SourcePages != 2 || health.SectionIndexPages != 2 || health.PublishableContentPages != 0 ||
+		coverage == nil || coverage.SourceDocuments != 2 || coverage.SectionIndexSources != 2 || coverage.OtherExcludedSources != 0 || !coverage.Complete {
+		t.Fatalf("section-index publication coverage = %#v; health=%#v", coverage, health)
+	}
+}
+
+// TestBuildSiteHealthExplainsEightyContentPlusTwoLanguageIndexes reproduces
+// the v1.8.2 numeric shape from #992. It intentionally proves that equal
+// residual counts do not establish identity: two source indexes and two
+// additional public content routes are separate populations.
+func TestBuildSiteHealthExplainsEightyContentPlusTwoLanguageIndexes(t *testing.T) {
+	buildstatus.ResetForTest()
+	defer buildstatus.ResetForTest()
+
+	siteRoot := t.TempDir()
+	contentRoot := t.TempDir()
+	writePublic := func(rel, lang, canonical, title string) {
+		t.Helper()
+		full := filepath.Join(siteRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		html := fmt.Sprintf(`<!DOCTYPE html><html lang="%s"><head><title>%s</title><link rel="canonical" href="https://example.test%s"></head><body>%s</body></html>`, lang, title, canonical, title)
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSource := func(rel, title string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw := fmt.Sprintf("---\ntitle: %s\ndate: 2026-01-01\n---\n%s\n", title, title)
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writePublic("posts/index.html", "en", "/posts/", "Posts")
+	writePublic("fr/posts/index.html", "fr", "/fr/posts/", "Articles")
+	// Two public-only regular pages make published_pages 82. They deliberately
+	// do not masquerade as the two source _index documents: the breakdown must
+	// expose both residual populations independently rather than infer a match.
+	writePublic("about/index.html", "en", "/about/", "About")
+	writePublic("contact/index.html", "en", "/contact/", "Contact")
+	writeSource("posts/_index.en.md", "Posts")
+	writeSource("posts/_index.fr.md", "Articles")
+	for i := 0; i < 80; i++ {
+		slug := fmt.Sprintf("page-%02d", i)
+		title := fmt.Sprintf("Page %02d", i)
+		writePublic(filepath.ToSlash(filepath.Join("posts", slug, "index.html")), "en", "/posts/"+slug+"/", title)
+		writeSource(filepath.ToSlash(filepath.Join("posts", slug, "index.en.md")), title)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg)
+	if health.SourcePages != 82 || health.PublishableSourcePages != 80 || health.PublishableContentPages != 80 ||
+		health.SectionIndexPages != 2 || health.PublishedPages != 82 || health.MissingPublicPages != 0 ||
+		health.PublicOutputComplete == nil || !*health.PublicOutputComplete {
+		t.Fatalf("health counters = source:%d legacy_publishable:%d content:%d indexes:%d published:%d missing:%d complete:%v",
+			health.SourcePages, health.PublishableSourcePages, health.PublishableContentPages, health.SectionIndexPages,
+			health.PublishedPages, health.MissingPublicPages, health.PublicOutputComplete)
+	}
+	want := publicationCoverageDTO{
+		SourceDocuments: 82, PublishableContentSources: 80, SectionIndexSources: 2,
+		OtherExcludedSources: 0, PublishedContentPages: 82, MissingPublishableContentPages: 0,
+		CompletenessBasis: "publishable_content_sources", CountersDirectlyComparable: false, Complete: true,
+	}
+	if health.PublicationCoverage == nil || *health.PublicationCoverage != want {
+		t.Fatalf("publication_coverage = %#v, want %#v", health.PublicationCoverage, want)
 	}
 }
 

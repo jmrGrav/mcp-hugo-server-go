@@ -164,12 +164,15 @@ type contentEnvelopeData struct {
 	// backward compatibility (#210/#328: no v1.x field-shape breaks).
 	// TaxonomyInconsistencyDetails is the additive, structured sibling —
 	// same findings, same order, with affected page slugs attached.
-	PublishedPages               int                        `json:"published_pages,omitempty"`
-	SourcePages                  int                        `json:"source_pages,omitempty"`
+	PublishedPages               int                        `json:"published_pages,omitempty" jsonschema:"Rendered pages currently classified as content in the public index. This public population is independent from source categories and can contain routes not matched to publishable ordinary sources."`
+	SourcePages                  int                        `json:"source_pages,omitempty" jsonschema:"All indexed source documents, including ordinary content, drafts, headless content, and section or language _index documents."`
 	DraftPages                   int                        `json:"draft_pages,omitempty"`
-	PublishableSourcePages       int                        `json:"publishable_source_pages,omitempty"`
-	MissingPublicPages           int                        `json:"missing_public_pages,omitempty"`
-	PublicOutputComplete         *bool                      `json:"public_output_complete,omitempty"`
+	PublishableSourcePages       int                        `json:"publishable_source_pages,omitempty" jsonschema:"Backward-compatible count of ordinary non-draft source pages expected to have an individually resolvable public page; excludes section indexes, headless content, future or expired pages, and _build render exclusions. Prefer publication_coverage.publishable_content_sources for new clients."`
+	PublishableContentPages      int                        `json:"publishable_content_pages,omitempty" jsonschema:"Ordinary non-draft source content expected to have an individually resolvable public page. This is the clearly named successor to publishable_source_pages and intentionally excludes section or language _index documents."`
+	SectionIndexPages            int                        `json:"section_index_pages,omitempty" jsonschema:"Source section or language index documents named _index.md or _index.<lang>.md. They are counted in source_pages but excluded from publishable_content_pages because their public route is the containing section."`
+	MissingPublicPages           int                        `json:"missing_public_pages,omitempty" jsonschema:"Publishable ordinary content sources for which no matching public page can be resolved. Section index documents are not part of this missing-page check."`
+	PublicOutputComplete         *bool                      `json:"public_output_complete,omitempty" jsonschema:"True when missing_public_pages is zero for every publishable ordinary content source checked. Read publication_coverage for the exact populations behind this result."`
+	PublicationCoverage          *publicationCoverageDTO    `json:"publication_coverage,omitempty" jsonschema:"Typed reconciliation of source-document populations with the rendered content-page population used by public-output health checks."`
 	Tags                         int                        `json:"tags,omitempty"`
 	Categories                   int                        `json:"categories,omitempty"`
 	MissingTitles                int                        `json:"missing_titles,omitempty"`
@@ -191,6 +194,18 @@ type contentEnvelopeData struct {
 	Summary              string       `json:"summary,omitempty"`
 	RecentPages          []pageDTO    `json:"recent_pages,omitempty"`
 	Notes                []string     `json:"notes,omitempty"`
+}
+
+type publicationCoverageDTO struct {
+	SourceDocuments                int    `json:"source_documents" jsonschema:"All indexed source documents represented by source_pages."`
+	PublishableContentSources      int    `json:"publishable_content_sources" jsonschema:"Ordinary source content expected to resolve to an individual public page; excludes section indexes and non-publishable sources."`
+	SectionIndexSources            int    `json:"section_index_sources" jsonschema:"Source _index documents whose public route is their containing section rather than a page derived from the source filename."`
+	OtherExcludedSources           int    `json:"other_excluded_sources" jsonschema:"Source documents excluded from publication coverage for reasons other than being section indexes, such as draft, future, expired, headless, or _build render settings."`
+	PublishedContentPages          int    `json:"published_content_pages" jsonschema:"Rendered pages classified as content in the public index. This is an independent public population, not the sum of source categories."`
+	MissingPublishableContentPages int    `json:"missing_publishable_content_pages" jsonschema:"Publishable ordinary content sources with no matching public page."`
+	CompletenessBasis              string `json:"completeness_basis" jsonschema:"Population used to compute complete; currently always publishable_content_sources."`
+	CountersDirectlyComparable     bool   `json:"counters_directly_comparable" jsonschema:"Always false: source-document categories and the independently classified public content-page population must not be compared as if they were the same set."`
+	Complete                       bool   `json:"complete" jsonschema:"True when missing_publishable_content_pages is zero."`
 }
 
 type contentEnvelope struct {
@@ -679,7 +694,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, newContentEnvelope(data, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true; `runtime_degraded_reasons`, `publishable_source_pages`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. Counter populations are intentionally distinct: `source_pages` includes every indexed source document; `publishable_source_pages` is the backward-compatible count of ordinary content expected to resolve individually and excludes `_index` documents and other non-publishable sources; `published_pages` is the independently classified rendered content-page population and can include public routes not matched to publishable ordinary sources. New clients should use `publishable_content_pages`, `section_index_pages`, and the typed `publication_coverage` breakdown instead of comparing the three legacy counters directly. `public_output_complete` means every publishable ordinary content source has a public match, not that all three counters must be equal. `publication_coverage.completeness_basis` identifies that source population explicitly, while `counters_directly_comparable:false` warns agents not to subtract the independent source and public counters. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true; `runtime_degraded_reasons`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -697,8 +712,11 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				SourcePages:                  health.SourcePages,
 				DraftPages:                   health.DraftPages,
 				PublishableSourcePages:       health.PublishableSourcePages,
+				PublishableContentPages:      health.PublishableContentPages,
+				SectionIndexPages:            health.SectionIndexPages,
 				MissingPublicPages:           health.MissingPublicPages,
 				PublicOutputComplete:         health.PublicOutputComplete,
+				PublicationCoverage:          health.PublicationCoverage,
 				Tags:                         health.Tags,
 				Categories:                   health.Categories,
 				MissingTitles:                health.MissingTitles,
@@ -1791,6 +1809,10 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 			now := time.Now()
 			resolver := site.NewPageResolver(idx, srcIdx, cfg)
 			for _, p := range pages {
+				if isSectionIndexSource(p) {
+					health.SectionIndexPages++
+					continue
+				}
 				if !sourceExpectedInPublic(p, now) {
 					continue
 				}
@@ -1800,7 +1822,19 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 				}
 			}
 			complete := health.MissingPublicPages == 0
+			health.PublishableContentPages = health.PublishableSourcePages
 			health.PublicOutputComplete = &complete
+			health.PublicationCoverage = &publicationCoverageDTO{
+				SourceDocuments:                health.SourcePages,
+				PublishableContentSources:      health.PublishableSourcePages,
+				SectionIndexSources:            health.SectionIndexPages,
+				OtherExcludedSources:           health.SourcePages - health.PublishableSourcePages - health.SectionIndexPages,
+				PublishedContentPages:          health.PublishedPages,
+				MissingPublishableContentPages: health.MissingPublicPages,
+				CompletenessBasis:              "publishable_content_sources",
+				CountersDirectlyComparable:     false,
+				Complete:                       complete,
+			}
 			if !complete {
 				degraded := true
 				health.RuntimeDegraded = &degraded
@@ -1888,7 +1922,7 @@ func sourceExpectedInPublic(p hugosite.SourcePage, now time.Time) bool {
 	// pages always "fails" even when the section is fully published, which
 	// would flip get_site_health to degraded on every real site that uses
 	// Hugo section indexes at all.
-	if strings.HasPrefix(filepath.Base(p.FilePath), "_index.") {
+	if isSectionIndexSource(p) {
 		return false
 	}
 	if p.Draft {
@@ -1912,6 +1946,10 @@ func sourceExpectedInPublic(p hugosite.SourcePage, now time.Time) bool {
 		}
 	}
 	return true
+}
+
+func isSectionIndexSource(p hugosite.SourcePage) bool {
+	return strings.HasPrefix(filepath.Base(p.FilePath), "_index.")
 }
 
 func sourceHasPublicOutput(idx *site.Index, resolver *site.PageResolver, p hugosite.SourcePage) bool {

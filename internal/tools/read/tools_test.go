@@ -4251,7 +4251,26 @@ func TestExtendedReadAnnotations(t *testing.T) {
 	}
 	assertSchemaHasProperties(t, got["get_site_health"], "outputSchema.data",
 		"status", "content_status", "runtime_degraded", "runtime_degraded_reasons",
-		"published_pages", "source_pages", "publishable_source_pages", "missing_public_pages", "public_output_complete")
+		"published_pages", "source_pages", "publishable_source_pages", "publishable_content_pages", "section_index_pages",
+		"missing_public_pages", "public_output_complete", "publication_coverage")
+	assertSchemaHasProperties(t, got["get_site_health"], "outputSchema.data.publication_coverage",
+		"source_documents", "publishable_content_sources", "section_index_sources", "other_excluded_sources",
+		"published_content_pages", "missing_publishable_content_pages", "completeness_basis",
+		"counters_directly_comparable", "complete")
+	for _, path := range []string{
+		"outputSchema.data.source_pages",
+		"outputSchema.data.publishable_source_pages",
+		"outputSchema.data.publishable_content_pages",
+		"outputSchema.data.section_index_pages",
+		"outputSchema.data.published_pages",
+		"outputSchema.data.public_output_complete",
+		"outputSchema.data.publication_coverage",
+		"outputSchema.data.publication_coverage.completeness_basis",
+		"outputSchema.data.publication_coverage.counters_directly_comparable",
+		"outputSchema.data.publication_coverage.complete",
+	} {
+		assertSchemaHasDescription(t, got["get_site_health"], path)
+	}
 }
 
 func assertReadPageState(t *testing.T, raw any, source, build, public, index string) {
@@ -4322,6 +4341,14 @@ func assertSchemaLacksProperties(t *testing.T, tool *mcp.Tool, field string, wan
 		if _, ok := props[key]; ok {
 			t.Fatalf("tool %q: %s.properties unexpectedly contains %q", tool.Name, field, key)
 		}
+	}
+}
+
+func assertSchemaHasDescription(t *testing.T, tool *mcp.Tool, field string) {
+	t.Helper()
+	schema := schemaAt(t, tool, field)
+	if description, _ := schema["description"].(string); strings.TrimSpace(description) == "" {
+		t.Fatalf("tool %q: %s has no published description", tool.Name, field)
 	}
 }
 

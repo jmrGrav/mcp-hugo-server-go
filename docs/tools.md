@@ -84,7 +84,7 @@ transport itself is authenticated.
 - `check_ai_readiness` - Validate AI readiness (deterministic Markdown/frontmatter audit for heading hierarchy, section and paragraph length outliers, metadata presence, internal-link density, and citation structure; intentionally not an SEO/render/build validator; see #437)
 - `search_content` - Search content
 - `explain_structure` - Explain site structure
-- `get_site_health` - Get site health
+- `get_site_health` - Get site health, with a typed `publication_coverage` breakdown separating all sources, publishable ordinary content, section indexes, rendered content pages, and missing public pages
 - `get_broken_links` - Get broken links
 - `get_backlinks` - Get backlinks
 - `suggest_links` - Suggest internal links
