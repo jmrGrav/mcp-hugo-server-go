@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.0] - 2026-08-10
+
+Response to Sol's 2026-08-10 live audit of v1.7.9 (60/60 tools exercised, 7.8/10). Delivered as #959 plus a follow-up hardening fix caught during review.
+
+### Security
+- **Mutation quota isolation vs. rate-limit sharing untangled** (#950, follow-up fix on #959): #950 made mutation rate-limit quotas (`create_update_upload`, etc.) key on the stable OAuth principal (`client_id`/agent registration id) instead of the ephemeral per-request identity Sol found resetting on every reconnect. That widened `caller.Key()`, which plan/rollback-snapshot/preview ownership (`internal/tools/write/{content_plan,bundle_plan,rollback_change}.go`, `internal/tools/admin` preview tools) also resolved through — silently reopening the cross-caller leak #932/#934 had just fixed: a second token issued to the same principal (a refreshed token, a concurrent session) could consume, apply, inspect, or revoke another token's plan, snapshot, or preview. Caught in review before merge; fixed by introducing `caller.TokenKey()` (never widens to principal) and routing plan/rollback/preview ownership through it, keeping `caller.Key()`'s principal-preference exclusive to rate limiting. Regression test added and confirmed red against the unpatched isolation.
+
+### Correctness / contract
+- **`get_rate_limits.reset_at` now points to the bucket's real next refill** instead of echoing the call timestamp (#950).
+- **`get_changelog` release-drift can no longer ship silently**: `check-changelog` now fails a release build if the requested version is not the first heading in `CHANGELOG.md`, not merely present somewhere in it (#952) — closing the same gap that let v1.7.9 deploy with the changelog still on v1.7.8.
+- **`get_capabilities` no longer contradicts observed tool behavior** (#953): split `image_generation_available` into `local_hero_generation_available`/`external_image_generation_available`; added `languages.mode: configured|observed` and restored the unknown-language warning on `create_page` dry-runs when running in observed mode.
+- **`get_page(response_mode="compact")` explains its empty `html`** with `html_omitted_reason: "compact_mode"` instead of leaving agents to guess (#954).
+- **`delete_page`'s partial-bundle-removal warning is no longer emitted when there was no public output to touch** for the removed translation (#956).
+- **`check_sri_versions` description now matches the runtime**: describes the declared SRI algorithm instead of hardcoding SHA-384 while the live site validates SHA-256 (#957).
+- **`auth.md` and tool descriptions converged on the current two-scope (`read`/`write`) runtime model** in the repo's reference template (#949, #959) — see Known gaps below.
+
+### Known gaps
+- **The live `arleo.eu` `auth.md` was not updated by this release.** `/auth.md` is served at runtime from the Hugo site's own `SiteRoot/auth.md`, not from this repo/binary — #959 only updated the repo's reference template at `docs/examples/agent-ready/static/auth.md`. The operator-facing contract fix (#949) still needs the equivalent edit applied to the live site content directly, or Sol's next audit will re-flag the same OAuth/public divergence.
+- `test_content.owner`'s destructive-quota exemption, flagged by Sol as regressed, is not being restored: it was deliberately removed in v1.7.9 (#927, #936) as a capability-by-label security fix, and both `delete_page`'s and `delete_page_asset`'s descriptions already document `owner` as advisory-only (#951, closed as working-as-intended).
+
 ## [v1.7.9] - 2026-08-10
 
 Follow-up fixes from the 2026-08-09 external audits of v1.7.8 (Sol, ChatGPT, Claude), delivered as 15 independently-reviewed PRs. Each PR went through an `advisor`-level review pass before merge, catching a real cross-tenant vulnerability and a live production data-integrity bug before they could be exploited/hit.
