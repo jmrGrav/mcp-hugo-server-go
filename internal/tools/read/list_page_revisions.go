@@ -24,10 +24,11 @@ type listPageRevisionsInput struct {
 }
 
 type pageRevisionDTO struct {
-	Commit      string `json:"commit"`
-	ShortCommit string `json:"short_commit"`
-	Date        string `json:"date"`
-	Subject     string `json:"subject"`
+	RevisionKind string `json:"revision_kind"`
+	Commit       string `json:"commit"`
+	ShortCommit  string `json:"short_commit"`
+	Date         string `json:"date"`
+	Subject      string `json:"subject"`
 }
 
 type listPageRevisionsData struct {
@@ -63,7 +64,7 @@ func RegisterListPageRevisions(s *mcp.Server, idx *site.Index, srcIdx *hugosite.
 		return
 	}
 	addReadOnlyTool(s, "list_page_revisions", "List page revisions",
-		"List the prior git commits that touched a page's source file, most recent first — the read-side \"what could I revert to\" answer, independently useful (e.g. to compare diff_page against an older revision, not just HEAD) and a smaller, lower-risk first step before any write-path rollback tool. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		"List the prior git commits that touched a page's source file, most recent first. Each row is explicitly `revision_kind:\"git_commit\"`: it is suitable for git history and diff_page, but is not an apply_content_plan snapshot and cannot be passed to rollback_change. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in listPageRevisionsInput) (*mcp.CallToolResult, listPageRevisionsOutput, error) {
 			if site.IsReaderProfile(ctx) {
 				return nil, listPageRevisionsOutput{}, fmt.Errorf("content_not_public: reader profile cannot access source git diagnostics")
@@ -136,10 +137,11 @@ func RegisterListPageRevisions(s *mcp.Server, idx *site.Index, srcIdx *hugosite.
 						continue
 					}
 					revisions = append(revisions, pageRevisionDTO{
-						Commit:      parts[0],
-						ShortCommit: parts[1],
-						Date:        parts[2],
-						Subject:     parts[3],
+						RevisionKind: "git_commit",
+						Commit:       parts[0],
+						ShortCommit:  parts[1],
+						Date:         parts[2],
+						Subject:      parts[3],
 					})
 				}
 			}

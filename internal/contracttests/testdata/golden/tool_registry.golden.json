@@ -3392,7 +3392,7 @@
   {
     "name": "list_page_revisions",
     "required_scope": "",
-    "description": "List the prior git commits that touched a page's source file, most recent first — the read-side \"what could I revert to\" answer, independently useful (e.g. to compare diff_page against an older revision, not just HEAD) and a smaller, lower-risk first step before any write-path rollback tool. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "description": "List the prior git commits that touched a page's source file, most recent first. Each row is explicitly `revision_kind:\"git_commit\"`: it is suitable for git history and diff_page, but is not an apply_content_plan snapshot and cannot be passed to rollback_change. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -3416,6 +3416,7 @@
       "data.revisions:unspecified:required",
       "data.revisions[].commit:string:required",
       "data.revisions[].date:string:required",
+      "data.revisions[].revision_kind:string:required",
       "data.revisions[].short_commit:string:required",
       "data.revisions[].subject:string:required",
       "data.slug:string:required",
@@ -3452,7 +3453,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "30610289f3bed08a7b5a0a9f06e41454d87ea52fb650b46b7ee8905fa4fc3dc4"
+    "output_schema_sha256": "be187874142b577dc1d6c4175698ba63d3ce01a56535cab06cb963730c01d8d4"
   },
   {
     "name": "list_pages",
