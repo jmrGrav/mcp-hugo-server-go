@@ -2401,6 +2401,7 @@
       "data.destructive.scope:string:required",
       "data.destructive.window_seconds:integer:required",
       "data.destructive:object:required",
+      "data.identity_source:string:required",
       "data:object:required",
       "errors:unspecified:required",
       "errors[].build_id:string",
@@ -2431,7 +2432,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "19bb5bfa05a7d98055c57475839ccbc3e0706a06ee4fc72d7c193bda7107f8f2"
+    "output_schema_sha256": "29e50c1c353b5423ef6a8a65c910e4e05a2c54ba9f225e420100dbcfe456a418"
   },
   {
     "name": "get_recent_posts",
