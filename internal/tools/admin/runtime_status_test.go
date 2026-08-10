@@ -486,6 +486,12 @@ func TestGetRuntimeStatusReportsChangedFilesCountWhenClean(t *testing.T) {
 	if _, present := git["changed_files_count"]; present {
 		t.Fatalf("git.changed_files_count = %v, want omitted for clean repo", git["changed_files_count"])
 	}
+	if data["site_worktree_dirty"] != false {
+		t.Fatalf("site_worktree_dirty = %v, want false for clean repo", data["site_worktree_dirty"])
+	}
+	if data["binary_build_dirty"] != data["build_dirty"] {
+		t.Fatalf("binary_build_dirty = %v must mirror build_dirty = %v", data["binary_build_dirty"], data["build_dirty"])
+	}
 }
 
 func TestGetRuntimeStatusReportsChangedFilesCountWhenDirty(t *testing.T) {
@@ -559,5 +565,8 @@ func TestGetRuntimeStatusReportsChangedFilesCountWhenDirty(t *testing.T) {
 	}
 	if int(count) != 3 {
 		t.Fatalf("git.changed_files_count = %v, want 3", int(count))
+	}
+	if data["site_worktree_dirty"] != true {
+		t.Fatalf("site_worktree_dirty = %v, want true for dirty repo", data["site_worktree_dirty"])
 	}
 }
