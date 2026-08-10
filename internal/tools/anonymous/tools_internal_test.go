@@ -169,8 +169,8 @@ func TestToPageDTOsForProfileReaderSafeVsEnriched(t *testing.T) {
 	if readerSafe[0].Categories[0] != "public-category" {
 		t.Fatalf("readerSafe Categories = %#v, want public categories preserved", readerSafe[0].Categories)
 	}
-	if readerSafe[0].Tags[0] != "Infrastructure" {
-		t.Fatalf("readerSafe Tags = %#v, want original tags preserved when no effective alias exists", readerSafe[0].Tags)
+	if readerSafe[0].Tags[0] != "infrastructure" {
+		t.Fatalf("readerSafe Tags = %#v, want normalized tag when no effective alias exists", readerSafe[0].Tags)
 	}
 
 	enriched := toPageDTOsForProfile(pages, srcIdx, aliases, false)

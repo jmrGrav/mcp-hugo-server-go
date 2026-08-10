@@ -567,7 +567,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 				tags = []string{}
 			}
 			tags = taxonomy.ApplyAliases(tags, aliases)
-			return nil, newListTagsOutput(listTagsData{Tags: tags}), nil
+			return nil, newListTagsOutput(listTagsData{Tags: taxonomy.Slugs(taxonomy.Normalize(tags))}), nil
 		})
 
 	addReadOnlyTool(s, "list_categories", "Browse categories", "List the categories discovered from the index. Returns a sorted category list and does not require authentication.",
@@ -583,7 +583,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 				cats = []string{}
 			}
 			cats = taxonomy.ApplyAliases(cats, aliases)
-			return nil, newListCategoriesOutput(listCategoriesData{Categories: cats}), nil
+			return nil, newListCategoriesOutput(listCategoriesData{Categories: taxonomy.Slugs(taxonomy.Normalize(cats))}), nil
 		})
 
 	addReadOnlyTool(s, "get_sitemap", "Read sitemap",
@@ -894,8 +894,8 @@ func toPageDTO(p site.Page) pageDTO {
 		Slug:       p.Slug,
 		Title:      p.Title,
 		Summary:    p.Summary,
-		Tags:       tags,
-		Categories: cats,
+		Tags:       taxonomy.Slugs(taxonomy.Normalize(tags)),
+		Categories: taxonomy.Slugs(taxonomy.Normalize(cats)),
 		Date:       p.Date,
 		URL:        p.URL,
 		Lang:       p.Lang,
@@ -917,7 +917,7 @@ func toPageDTOsEnriched(pages []site.Page, srcIdx *hugosite.SourceIndex, aliases
 					if cats == nil {
 						cats = []string{}
 					}
-					dto.Categories = cats
+					dto.Categories = taxonomy.Slugs(taxonomy.Normalize(cats))
 					dto.SourceKey = candidate
 					break
 				}
@@ -994,8 +994,8 @@ func toPageDetailDTO(p site.Page) pageDetailDTO {
 		Slug:              p.Slug,
 		Title:             p.Title,
 		Summary:           p.Summary,
-		Tags:              tags,
-		Categories:        cats,
+		Tags:              taxonomy.Slugs(taxonomy.Normalize(tags)),
+		Categories:        taxonomy.Slugs(taxonomy.Normalize(cats)),
 		TagTerms:          taxonomy.Normalize(tags),
 		CategoryTerms:     taxonomy.Normalize(cats),
 		Date:              p.Date,
@@ -1039,8 +1039,8 @@ func toResolvedPageDetailDTO(resolved site.ResolvedPage, contentRoot string) pag
 		Slug:               "/" + src.Slug + "/",
 		SourceKey:          contentmodel.SourceKeyFromLogicalPath(fileutil.LogicalContentPath(contentRoot, resolved.SourcePath)),
 		Title:              src.Title,
-		Tags:               tags,
-		Categories:         cats,
+		Tags:               taxonomy.Slugs(taxonomy.Normalize(tags)),
+		Categories:         taxonomy.Slugs(taxonomy.Normalize(cats)),
 		TagTerms:           taxonomy.Normalize(tags),
 		CategoryTerms:      taxonomy.Normalize(cats),
 		Date:               src.Date,

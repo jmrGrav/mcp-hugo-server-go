@@ -326,7 +326,7 @@ type applyBundlePlanOutput struct {
 }
 
 func newApplyBundlePlanOutput(data applyBundlePlanData, rateLimitRemaining int) applyBundlePlanOutput {
-	return applyBundlePlanOutput{ToolResponse: writeSuccessEnvelope(data), RateLimitRemaining: rateLimitRemaining}
+	return applyBundlePlanOutput{ToolResponse: writeSuccessEnvelopeWithWarning(data, data.Warning), RateLimitRemaining: rateLimitRemaining}
 }
 
 type rollbackBundleInput struct {
@@ -358,7 +358,7 @@ type rollbackBundleOutput struct {
 }
 
 func newRollbackBundleOutput(data rollbackBundleData, rateLimitRemaining int) rollbackBundleOutput {
-	return rollbackBundleOutput{ToolResponse: writeSuccessEnvelope(data), RateLimitRemaining: rateLimitRemaining}
+	return rollbackBundleOutput{ToolResponse: writeSuccessEnvelopeWithWarning(data, data.Warning), RateLimitRemaining: rateLimitRemaining}
 }
 
 // ---- shared helpers ------------------------------------------------------

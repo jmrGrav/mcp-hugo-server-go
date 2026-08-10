@@ -142,7 +142,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, cfg config.Config) 
 			"`server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); "+
 			"`limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
-			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. Anonymous: no authentication needed, so capabilities can be discovered before obtaining a token.",
+			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
 			pMin, pDef, pMax := adminpkg.PreviewTTLBoundsSeconds()
 			localHeroGenerationAvailable := strings.TrimSpace(cfg.HugoRoot) != ""

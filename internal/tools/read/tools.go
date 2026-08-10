@@ -828,8 +828,8 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 						Date:        resolved.Source.Date,
 						Summary:     frontmatterStringValue(resolved.Source.FrontmatterRaw["summary"]),
 						Description: frontmatterStringValue(resolved.Source.FrontmatterRaw["description"]),
-						Tags:        append([]string(nil), resolved.Source.Tags...),
-						Categories:  append([]string(nil), resolved.Source.Categories...),
+						Tags:        canonicalTaxonomyStrings(resolved.Source.Tags),
+						Categories:  canonicalTaxonomyStrings(resolved.Source.Categories),
 						Markdown:    resolved.Source.Body,
 					})
 					page.Readiness = &pageReadinessDTO{
@@ -888,8 +888,8 @@ func toPageMarkdownDTO(p site.Page, md, resolvedSourcePath, resolvedLang, revisi
 		SourceKey:          contentmodel.SourceKeyFromLogicalPath(resolvedSourcePath),
 		Title:              p.Title,
 		Date:               p.Date,
-		Tags:               nullsafeStrings(p.Tags),
-		Categories:         nullsafeStrings(p.Categories),
+		Tags:               canonicalTaxonomyStrings(nullsafeStrings(p.Tags)),
+		Categories:         canonicalTaxonomyStrings(nullsafeStrings(p.Categories)),
 		URL:                p.URL,
 		Lang:               p.Lang,
 		ResolvedLang:       resolvedLang,
@@ -963,8 +963,8 @@ func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
 		Slug:       canonicalSourceSlug(src.Slug),
 		Title:      src.Title,
 		Date:       src.Date,
-		Tags:       src.Tags,
-		Categories: src.Categories,
+		Tags:       canonicalTaxonomyStrings(src.Tags),
+		Categories: canonicalTaxonomyStrings(src.Categories),
 		Lang:       src.Lang,
 	}
 }
@@ -976,8 +976,8 @@ func toFrontmatterDTO(p site.Page, resolved site.ResolvedPage, contentRoot, site
 		SourceKey:          identity.SourceKey,
 		Title:              identity.Title,
 		Date:               p.Date,
-		Tags:               nullsafeStrings(p.Tags),
-		Categories:         nullsafeStrings(p.Categories),
+		Tags:               canonicalTaxonomyStrings(nullsafeStrings(p.Tags)),
+		Categories:         canonicalTaxonomyStrings(nullsafeStrings(p.Categories)),
 		URL:                identity.URL,
 		Lang:               identity.Lang,
 		ResolvedLang:       resolvedLang(resolved),

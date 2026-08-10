@@ -243,7 +243,7 @@ type applyContentPlanOutput struct {
 // #605): rateLimitRemaining is an explicit parameter, not read off data.
 func newApplyContentPlanOutput(data applyContentPlanData, rateLimitRemaining int) applyContentPlanOutput {
 	return applyContentPlanOutput{
-		ToolResponse:       writeSuccessEnvelope(data),
+		ToolResponse:       writeSuccessEnvelopeWithWarning(data, data.Warning),
 		RateLimitRemaining: rateLimitRemaining,
 	}
 }

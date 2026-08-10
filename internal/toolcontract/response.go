@@ -76,6 +76,11 @@ type ToolError struct {
 	Field      string           `json:"field,omitempty"`
 	Retryable  bool             `json:"retryable"`
 	Resolution *ErrorResolution `json:"resolution,omitempty"`
+	ErrorClass string           `json:"error_class,omitempty"`
+	BuildID    string           `json:"build_id,omitempty"`
+	Stage      string           `json:"stage,omitempty"`
+	LogHint    string           `json:"log_hint,omitempty"`
+	Suggestion string           `json:"suggestion,omitempty"`
 }
 
 type ToolResponse[T any] struct {
@@ -360,6 +365,10 @@ func ParseToolError(err error) ToolError {
 	}
 	code, message := splitErrorPrefix(err.Error())
 	out := NewError(code, message)
+	if code == "build_error" || code == "build_precondition_failed" {
+		populateBuildError(&out, code, message)
+		return out
+	}
 
 	switch code {
 	case "ambiguous_language":
@@ -483,6 +492,45 @@ func ParseToolError(err error) ToolError {
 	}
 
 	return out
+}
+
+type buildErrorEnvelope struct {
+	Error      string `json:"error"`
+	ErrorClass string `json:"error_class"`
+	BuildID    string `json:"build_id"`
+	Stage      string `json:"stage"`
+	LogHint    string `json:"log_hint"`
+	Suggestion string `json:"suggestion"`
+	Retryable  bool   `json:"retryable"`
+	Operator   string `json:"operator_hint"`
+}
+
+func populateBuildError(out *ToolError, code, message string) {
+	var payload buildErrorEnvelope
+	if err := json.Unmarshal([]byte(message), &payload); err != nil {
+		out.ErrorClass = code
+		out.Stage = "hugo_build"
+		return
+	}
+	out.ErrorClass = payload.ErrorClass
+	if out.ErrorClass == "" {
+		out.ErrorClass = code
+	}
+	out.BuildID = payload.BuildID
+	out.Stage = payload.Stage
+	if out.Stage == "" {
+		if code == "build_precondition_failed" {
+			out.Stage = "preflight"
+		} else {
+			out.Stage = "hugo_build"
+		}
+	}
+	out.LogHint = payload.LogHint
+	out.Suggestion = payload.Suggestion
+	if out.Suggestion == "" {
+		out.Suggestion = payload.Operator
+	}
+	out.Retryable = payload.Retryable
 }
 
 func WrapTool[In, Out any](handler mcp.ToolHandlerFor[In, Out]) mcp.ToolHandlerFor[In, Out] {

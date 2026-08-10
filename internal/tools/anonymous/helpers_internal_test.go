@@ -49,7 +49,7 @@ func TestAnonymousHelperDTOBranches(t *testing.T) {
 	if len(enriched) != 1 {
 		t.Fatalf("toPageDTOsEnriched() len = %d", len(enriched))
 	}
-	if len(enriched[0].Categories) != 1 || enriched[0].Categories[0] != "Infrastructure" {
+	if len(enriched[0].Categories) != 1 || enriched[0].Categories[0] != "infrastructure" {
 		t.Fatalf("toPageDTOsEnriched() categories = %#v", enriched[0].Categories)
 	}
 
@@ -61,7 +61,7 @@ func TestAnonymousHelperDTOBranches(t *testing.T) {
 			Categories: []string{"Infra"},
 		},
 	}, contentRoot)
-	if len(resolvedPublic.Tags) != 1 || resolvedPublic.Tags[0] != "Ia" {
+	if len(resolvedPublic.Tags) != 1 || resolvedPublic.Tags[0] != "ia" {
 		t.Fatalf("toResolvedPageDetailDTO(public+source) tags = %#v", resolvedPublic.Tags)
 	}
 

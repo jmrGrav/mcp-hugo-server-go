@@ -2802,6 +2802,11 @@ func TestCreatePageWarnsOnUnknownLanguage(t *testing.T) {
 	if !strings.Contains(warning, "get_capabilities") {
 		t.Fatalf("create_page unknown-lang warning must point at get_capabilities, got warning=%q", warning)
 	}
+	envelope := decodeWriteContent(t, res)
+	warnings, ok := envelope["warnings"].([]any)
+	if !ok || len(warnings) != 1 || warnings[0] != warning {
+		t.Fatalf("create_page unknown-lang warnings = %#v, want one envelope warning mirroring data.warning=%q", envelope["warnings"], warning)
+	}
 	// Non-silent: the file IS written (warn, not reject) so the caller can act
 	// on the warning; it is not lost, unlike a rejected write.
 	zzPath := filepath.Join(contentRoot, "posts", "zz-orphan", "index.zz.md")

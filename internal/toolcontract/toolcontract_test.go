@@ -3,6 +3,7 @@ package toolcontract
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -419,5 +420,22 @@ func TestErrorResultMirrorsCompatFieldsIntoRootAndData(t *testing.T) {
 	}
 	if got := data["rate_limit_remaining"]; got != float64(59) {
 		t.Fatalf("data.rate_limit_remaining = %v, want 59", got)
+	}
+}
+
+func TestParseToolErrorPromotesStructuredBuildFailure(t *testing.T) {
+	err := fmt.Errorf(`build_error: {"error":"build_error","error_class":"permission_denied","build_id":"build-123","stderr_summary":"operation not permitted","suggestion":"fix ownership","log_hint":"Search logs for build-123"}`)
+	got := ParseToolError(err)
+	if got.Code != "build_error" || got.ErrorClass != "permission_denied" {
+		t.Fatalf("build error identity = %#v", got)
+	}
+	if got.BuildID != "build-123" || got.Stage != "hugo_build" {
+		t.Fatalf("build error context = %#v", got)
+	}
+	if got.Suggestion != "fix ownership" || got.LogHint == "" {
+		t.Fatalf("build error guidance = %#v", got)
+	}
+	if !strings.Contains(got.Message, "permission_denied") {
+		t.Fatalf("build error message lost compatibility payload: %q", got.Message)
 	}
 }

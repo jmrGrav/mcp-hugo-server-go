@@ -96,9 +96,17 @@ func buildSiteSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
+func buildSiteSuccessEnvelopeWithWarning[T any](data T, warning string) toolcontract.ToolResponse[T] {
+	envelope := buildSiteSuccessEnvelope(data)
+	if strings.TrimSpace(warning) != "" {
+		envelope.Warnings = []string{warning}
+	}
+	return envelope
+}
+
 func newBuildSiteOutput(data buildSiteData) buildSiteOutput {
 	return buildSiteOutput{
-		ToolResponse:   buildSiteSuccessEnvelope(data),
+		ToolResponse:   buildSiteSuccessEnvelopeWithWarning(data, data.Warning),
 		Status:         data.Status,
 		DurationMs:     data.DurationMs,
 		BuildID:        data.BuildID,
@@ -270,6 +278,46 @@ func buildCommandArgs(cacheDir string, preview bool) []string {
 		args = append(args, "--cleanDestinationDir")
 	}
 	return args
+}
+
+// swapBuildOutput installs a fully rendered Hugo destination only after Hugo
+// has completed successfully. The old output is retained until the new tree
+// is in place; if the second rename fails, it is restored. The returned
+// warning is non-fatal because the public tree is already the new build and
+// only cleanup of the backup failed (#965).
+func swapBuildOutput(tempDir, siteRoot string) (string, error) {
+	parent := filepath.Dir(siteRoot)
+	backup, err := os.MkdirTemp(parent, ".mcp-public-backup-")
+	if err != nil {
+		return "", fmt.Errorf("output_swap: failed to prepare backup directory")
+	}
+	if err := os.Remove(backup); err != nil {
+		return "", fmt.Errorf("output_swap: failed to prepare backup path")
+	}
+
+	hadOld := false
+	if _, err := os.Lstat(siteRoot); err == nil {
+		if err := os.Rename(siteRoot, backup); err != nil {
+			return "", fmt.Errorf("output_swap: failed to stage existing public output")
+		}
+		hadOld = true
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("output_swap: failed to inspect existing public output")
+	}
+
+	if err := os.Rename(tempDir, siteRoot); err != nil {
+		if hadOld {
+			_ = os.Rename(backup, siteRoot)
+		}
+		return "", fmt.Errorf("output_swap: failed to install rendered output")
+	}
+	if !hadOld {
+		return "", nil
+	}
+	if err := os.RemoveAll(backup); err != nil {
+		return fmt.Sprintf("output_swap: new output installed but previous output cleanup failed: %v", err), nil
+	}
+	return "", nil
 }
 
 func commandString(name string, args []string) string {
@@ -466,10 +514,16 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 	}
 	defer hugosite.ContentMu.Unlock()
 
-	if err := checkBuildWritable(cfg.SiteRoot, filepath.Join(cfg.HugoRoot, "resources")); err != nil {
+	if err := checkBuildWritable(filepath.Dir(cfg.SiteRoot), filepath.Join(cfg.HugoRoot, "resources")); err != nil {
 		buildstatus.RecordFailure("permission_denied", time.Now())
 		return buildSiteData{}, err
 	}
+	buildDir, buildDirErr := os.MkdirTemp(filepath.Dir(cfg.SiteRoot), ".mcp-build-output-")
+	if buildDirErr != nil {
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildSiteData{}, buildPreflightError(filepath.Dir(cfg.SiteRoot))
+	}
+	defer func() { _ = os.RemoveAll(buildDir) }()
 
 	timeout := cfg.BuildTimeoutSeconds
 	if timeout <= 0 {
@@ -484,7 +538,7 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 
 	start := time.Now()
 	runID := newBuildID(start)
-	args := buildCommandArgs(cacheDir, false)
+	args := append(buildCommandArgs(cacheDir, false), "--destination", buildDir)
 	// #nosec G204 -- executable is fixed to hugo; args come from
 	// buildCommandArgs and validated config, not from MCP caller input.
 	cmd := exec.CommandContext(tctx, "hugo", args...)
@@ -559,6 +613,11 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		return buildSiteData{}, fmt.Errorf("build_error: %s", jsonPayload)
 	}
 	buildstatus.RecordSuccess(time.Now())
+	swapWarning, swapErr := swapBuildOutput(buildDir, cfg.SiteRoot)
+	if swapErr != nil {
+		buildstatus.RecordFailure("output_swap", time.Now())
+		return buildSiteData{}, swapErr
+	}
 
 	// Capture the page-aware "changed set" BEFORE the callback loop runs: the
 	// index_reload callback calls ClearAllBuildPending(), so pending pages
@@ -574,6 +633,9 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 	cbCtx, cbCancel := context.WithTimeout(context.Background(), callbackTimeout)
 	defer cbCancel()
 	var cbWarning string
+	if swapWarning != "" {
+		cbWarning = swapWarning
+	}
 	// callbackOutcomes records each named callback's individual result for the
 	// stage-aware report (#858 AC2). Any callback not reached (because an
 	// earlier one timed out and broke the loop) is left absent, then filled in

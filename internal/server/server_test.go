@@ -968,7 +968,7 @@ func TestReaderTokenListPagesExposeSourceDerivedMetadata(t *testing.T) {
 	// Per #450, "read" grants full visibility: source-derived taxonomy
 	// (categories not present in the public rendered HTML) is now
 	// expected to be visible, not stripped.
-	if !strings.Contains(rec.Body.String(), "SourceCat") {
+	if !strings.Contains(rec.Body.String(), "sourcecat") {
 		t.Fatalf("read list_pages must expose source-derived taxonomy (full visibility per #450); body = %q", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "\"slug\":\"/posts/demo/\"") {
