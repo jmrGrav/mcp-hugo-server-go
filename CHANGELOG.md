@@ -2,14 +2,6 @@
 
 All notable changes to this project are documented here.
 
-## [v1.7.91] - 2026-08-10
-
-Process fix, prompted by an external audit (Sol, ChatGPT) catching that the v1.7.9 production binary reported version v1.7.9 while its embedded `CHANGELOG.md` (via `go:embed`, read by `get_changelog`) still ended at v1.7.8 — the deploy had run, but the separate `release.yml` workflow that was supposed to cut the tag/release and land the changelog entry was never triggered.
-
-### Process / CI
-- **`release.yml` folded into `deploy.yml`** (#945): tagging, GitHub release creation, changelog/README release-policy gates, and binary/`.mcpb` asset publishing are now a single chained job (`release`) inside the deploy workflow, gated on the `release_version` input, instead of a second workflow a human had to remember to trigger separately. A fail-fast release-notes gate now runs first and blocks the whole deploy — including the production push — if the changelog entry, `npm/package.json` version, or `manifest.json` version don't match `release_version`, so a deploy can no longer ship ahead of (or without) its own changelog entry again.
-- **Fixed a flaky TOCTOU regression test** (#946): `internal/fileutil`'s symlink-swap tests (added in #942) intermittently failed under CI/tmpfs load because the swap was landed via a polling goroutine racing the real write — replaced with a deterministic synchronous hook (`SwapDirOnTempCreate`) that lands the swap precisely inside the write window every time.
-
 ## [v1.7.9] - 2026-08-10
 
 Follow-up fixes from the 2026-08-09 external audits of v1.7.8 (Sol, ChatGPT, Claude), delivered as 15 independently-reviewed PRs. Each PR went through an `advisor`-level review pass before merge, catching a real cross-tenant vulnerability and a live production data-integrity bug before they could be exploited/hit.
@@ -33,6 +25,10 @@ Follow-up fixes from the 2026-08-09 external audits of v1.7.8 (Sol, ChatGPT, Cla
 ### Internal / coverage
 - Multi-principal end-to-end isolation harness (#932, #934), `internal/caller` coverage (#939), previously low-covered packages raised with meaningful (not just line-count) tests — `previewstore`'s owner-scoped `ListOwned`/`RevokeOwned`/`RevokeAllOwned` (#941, #942), `fileutil`'s atomic-write/TOCTOU-symlink-rejection paths, `contentmodel`, and `buildinfo` (#940, #942).
 - Fixed a `staticcheck` regression (S1017) that was failing the push-triggered CI `test` job on every push to `main` after #940 merged, before the actual test suite could run (#943).
+
+### Process / CI
+- **`release.yml` folded into `deploy.yml`** (#945): tagging, GitHub release creation, changelog/README release-policy gates, and binary/`.mcpb` asset publishing are now a single chained job (`release`) inside the deploy workflow, gated on the `release_version` input, instead of a second workflow a human had to remember to trigger separately. A fail-fast release-notes gate now runs first and blocks the whole deploy — including the production push — if the changelog entry, `npm/package.json` version, or `manifest.json` version don't match `release_version`, so a deploy can no longer ship ahead of (or without) its own changelog entry again. This entry itself exists because that gap let this exact production deploy ship reporting v1.7.9 while the embedded `CHANGELOG.md` (via `go:embed`, read live by `get_changelog`) still ended at v1.7.8 — caught by an external audit (Sol, ChatGPT).
+- **Fixed a flaky TOCTOU regression test** (#946): `internal/fileutil`'s symlink-swap tests (added in #942) intermittently failed under CI/tmpfs load because the swap was landed via a polling goroutine racing the real write — replaced with a deterministic synchronous hook (`SwapDirOnTempCreate`) that lands the swap precisely inside the write window every time.
 
 ## [v1.7.8] - 2026-08-09
 
