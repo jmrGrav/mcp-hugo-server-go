@@ -20,15 +20,17 @@ package contracttests
 // alongside the change. There is no other sanctioned way to move this golden.
 
 import (
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 
-	"context"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
@@ -44,10 +46,12 @@ var updateGolden = flag.Bool("update", false, "regenerate contract golden files 
 
 // contractToolSnapshot is one tool's stable, client-visible contract surface.
 type contractToolSnapshot struct {
-	Name          string `json:"name"`
-	RequiredScope string `json:"required_scope"`
-	Description   string `json:"description"`
-	InputSchema   any    `json:"input_schema"`
+	Name               string   `json:"name"`
+	RequiredScope      string   `json:"required_scope"`
+	Description        string   `json:"description"`
+	InputSchema        any      `json:"input_schema"`
+	OutputSchemaFields []string `json:"output_schema_fields"`
+	OutputSchemaSHA256 string   `json:"output_schema_sha256"`
 }
 
 // registerFullContractServer wires the complete write-scoped tool surface onto
@@ -92,6 +96,63 @@ func scopeByToolName() map[string]string {
 	return out
 }
 
+func outputSchemaSignature(t *testing.T, tool *mcp.Tool) ([]string, string) {
+	t.Helper()
+	raw, err := json.Marshal(tool.OutputSchema)
+	if err != nil {
+		t.Fatalf("marshal %s output schema: %v", tool.Name, err)
+	}
+	sum := sha256.Sum256(raw)
+	root, ok := tool.OutputSchema.(map[string]any)
+	if !ok {
+		t.Fatalf("%s output schema type = %T, want map[string]any", tool.Name, tool.OutputSchema)
+	}
+	fields := make([]string, 0)
+	collectOutputSchemaFields(root, "", &fields)
+	sort.Strings(fields)
+	return fields, fmt.Sprintf("%x", sum)
+}
+
+func collectOutputSchemaFields(schema map[string]any, prefix string, out *[]string) {
+	required := map[string]bool{}
+	switch values := schema["required"].(type) {
+	case []any:
+		for _, value := range values {
+			if field, ok := value.(string); ok {
+				required[field] = true
+			}
+		}
+	case []string:
+		for _, field := range values {
+			required[field] = true
+		}
+	}
+	properties, _ := schema["properties"].(map[string]any)
+	for name, raw := range properties {
+		child, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		path := name
+		if prefix != "" {
+			path = prefix + "." + name
+		}
+		typeName, _ := child["type"].(string)
+		if typeName == "" {
+			typeName = "unspecified"
+		}
+		signature := path + ":" + typeName
+		if required[name] {
+			signature += ":required"
+		}
+		*out = append(*out, signature)
+		collectOutputSchemaFields(child, path, out)
+		if items, ok := child["items"].(map[string]any); ok {
+			collectOutputSchemaFields(items, path+"[]", out)
+		}
+	}
+}
+
 func TestContractToolRegistrySnapshot(t *testing.T) {
 	// Pin build identity so nothing version-derived leaks into a description.
 	restore := setContractBuildInfo(t)
@@ -114,11 +175,14 @@ func TestContractToolRegistrySnapshot(t *testing.T) {
 		if !ok {
 			t.Fatalf("tool %q published via tools/list has no Defs() entry — every published tool must declare a required scope", tl.Name)
 		}
+		fields, hash := outputSchemaSignature(t, tl)
 		snapshots = append(snapshots, contractToolSnapshot{
-			Name:          tl.Name,
-			RequiredScope: scope,
-			Description:   tl.Description,
-			InputSchema:   tl.InputSchema,
+			Name:               tl.Name,
+			RequiredScope:      scope,
+			Description:        tl.Description,
+			InputSchema:        tl.InputSchema,
+			OutputSchemaFields: fields,
+			OutputSchemaSHA256: hash,
 		})
 	}
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Name < snapshots[j].Name })
@@ -188,6 +252,7 @@ func TestContractCriticalToolDescriptionsStable(t *testing.T) {
 		{"upload_page_asset", "asset"},
 		{"delete_page", "delete"},
 		{"generate_hero_image", "image"},
+		{"check_sri_versions", "supports sha256, sha384, and sha512"},
 	} {
 		tl, ok := byName[tc.tool]
 		if !ok {
@@ -196,6 +261,9 @@ func TestContractCriticalToolDescriptionsStable(t *testing.T) {
 		}
 		if tl.Description == "" {
 			t.Errorf("critical tool %q has empty description", tc.tool)
+		}
+		if !strings.Contains(tl.Description, tc.wantContains) {
+			t.Errorf("critical tool %q description missing %q: %s", tc.tool, tc.wantContains, tl.Description)
 		}
 	}
 	// Cross-check: every published tool carries a non-empty description, since

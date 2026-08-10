@@ -193,6 +193,65 @@ func TestVerifyPublicationSourceOnlyReportsNotYetPublished(t *testing.T) {
 	}
 }
 
+func TestVerifyPublicationLanguagePrefixedSourceOnlyDoesNotProbeDefaultPage(t *testing.T) {
+	var requests int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	siteRoot := t.TempDir()
+	writePublicHTML(t, siteRoot, "posts/hello/index.html", `<!DOCTYPE html><html lang="fr"><head>
+<title>Bonjour FR</title><link rel="canonical" href="`+upstream.URL+`/posts/hello/"></head>
+<body>French rendered body.</body></html>`)
+
+	contentRoot := t.TempDir()
+	for rel, raw := range map[string]string{
+		"posts/hello/index.fr.md": "---\ntitle: Bonjour FR\n---\nFrench source.\n",
+		"posts/hello/index.en.md": "---\ntitle: Hello EN\n---\nEnglish source.\n",
+	} {
+		full := filepath.Join(contentRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir source: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatalf("write source: %v", err)
+		}
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.SiteURL = upstream.URL
+	cfg.ContentRoot = contentRoot
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	session, done := newVerifyPublicationServer(t, cfg, srcIdx)
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "verify_publication", Arguments: map[string]any{"slug": "/en/posts/hello/"}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("verify_publication returned error: %s", resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+	if data["status"] != "not_yet_published" || data["public"] != "not_yet_available" || data["index"] != "source_only" {
+		t.Fatalf("publication state = %#v, want missing English public output", data)
+	}
+	if data["url"] != upstream.URL+"/en/posts/hello/" {
+		t.Fatalf("url = %v, want requested English URL", data["url"])
+	}
+	if data["http_checked"] != false || requests != 0 {
+		t.Fatalf("HTTP probe = %v, requests = %d; must not probe the French fallback", data["http_checked"], requests)
+	}
+}
+
 func TestVerifyPublicationDraftSourceOnlyReportsIntentionalExclusion(t *testing.T) {
 	contentRoot := t.TempDir()
 	pagePath := filepath.Join(contentRoot, "posts", "draft", "index.md")

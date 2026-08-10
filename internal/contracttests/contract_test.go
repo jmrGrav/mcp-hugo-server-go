@@ -669,7 +669,11 @@ func fixtureConfig() config.Config {
 	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
 	cfg.SiteURL = "https://example.test"
 	cfg.SiteName = "example.test"
-	cfg.DefaultLanguage = "fr"
+	// The minimal public fixture is English (index.en.html and <html lang=en>),
+	// and its legacy source files are unlabelled .md files. Treat that
+	// unlabelled source bucket as English so language-strict resolver tests do
+	// not rely on an internally contradictory FR-default fixture.
+	cfg.DefaultLanguage = "en"
 	cfg.MaxIndexEntries = 1000
 	cfg.RejectSymlinks = true
 	cfg.RejectHiddenPath = true
