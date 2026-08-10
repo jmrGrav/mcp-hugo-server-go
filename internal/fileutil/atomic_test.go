@@ -7,41 +7,28 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 )
 
-func swapDirToSymlinkOnTempWrite(t *testing.T, dir, symlinkTarget string) <-chan struct{} {
+// swapDirToSymlinkOnTempCreate lands a symlink swap deterministically inside
+// the real TOCTOU window (via fileutil.SwapDirOnTempCreate, which fires
+// synchronously right after the temp file is created, before either write
+// or the second RevalidateForWrite/link check) — see testhooks_test.go for
+// why this replaced a goroutine-plus-polling race that was flaky under load.
+func swapDirToSymlinkOnTempCreate(t *testing.T, dir, symlinkTarget string) {
 	t.Helper()
-	swapped := make(chan struct{})
-	go func() {
-		defer close(swapped)
+	fileutil.SwapDirOnTempCreate(t, func() {
 		moved := dir + "-moved"
-		deadline := time.Now().Add(3 * time.Second)
-		for time.Now().Before(deadline) {
-			matches, err := filepath.Glob(filepath.Join(dir, ".mcp-write-*.tmp"))
-			if err != nil {
-				t.Errorf("Glob() error = %v", err)
-				return
-			}
-			if len(matches) == 0 {
-				time.Sleep(2 * time.Millisecond)
-				continue
-			}
-			if err := os.Rename(dir, moved); err != nil {
-				time.Sleep(2 * time.Millisecond)
-				continue
-			}
-			if err := os.Symlink(symlinkTarget, dir); err != nil {
-				t.Errorf("os.Symlink() error = %v", err)
-			}
+		if err := os.Rename(dir, moved); err != nil {
+			t.Errorf("os.Rename() error = %v", err)
 			return
 		}
-		t.Errorf("timed out waiting for atomic temp file in %s", dir)
-	}()
-	return swapped
+		if err := os.Symlink(symlinkTarget, dir); err != nil {
+			t.Errorf("os.Symlink() error = %v", err)
+		}
+	})
 }
 
 func TestAtomicWrite(t *testing.T) {
@@ -246,9 +233,8 @@ func TestAtomicWriteCheckedRejectsSymlinkSwapBeforeRename(t *testing.T) {
 		t.Fatalf("security.New: %v", err)
 	}
 
-	swapped := swapDirToSymlinkOnTempWrite(t, dir, target)
+	swapDirToSymlinkOnTempCreate(t, dir, target)
 	err = fileutil.AtomicWriteChecked(filepath.Join(dir, "file.txt"), strings.Repeat("x", 8<<20), pg)
-	<-swapped
 	if err == nil {
 		t.Fatal("expected AtomicWriteChecked() to fail after dir was swapped to a symlink before rename")
 	}
@@ -319,9 +305,8 @@ func TestAtomicCreateCheckedRejectsSymlinkSwapBeforeLink(t *testing.T) {
 		t.Fatalf("security.New: %v", err)
 	}
 
-	swapped := swapDirToSymlinkOnTempWrite(t, dir, target)
+	swapDirToSymlinkOnTempCreate(t, dir, target)
 	err = fileutil.AtomicCreateChecked(filepath.Join(dir, "index.md"), strings.Repeat("y", 8<<20), pg)
-	<-swapped
 	if err == nil {
 		t.Fatal("expected AtomicCreateChecked() to fail after dir was swapped to a symlink before link")
 	}
@@ -472,9 +457,8 @@ func TestAtomicCreateCheckedBytesRejectsSymlinkSwapBeforeLink(t *testing.T) {
 		t.Fatalf("security.New: %v", err)
 	}
 
-	swapped := swapDirToSymlinkOnTempWrite(t, dir, target)
+	swapDirToSymlinkOnTempCreate(t, dir, target)
 	err = fileutil.AtomicCreateCheckedBytes(filepath.Join(dir, "cover.png"), []byte(strings.Repeat("z", 8<<20)), pg)
-	<-swapped
 	if err == nil {
 		t.Fatal("expected AtomicCreateCheckedBytes() to fail after dir was swapped to a symlink before link")
 	}
