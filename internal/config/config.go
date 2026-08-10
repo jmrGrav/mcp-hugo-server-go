@@ -5,8 +5,10 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"golang.org/x/mod/semver"
 	"gopkg.in/yaml.v3"
 )
 
@@ -154,6 +156,27 @@ type Config struct {
 	// default because it deliberately makes a bounded outbound request to the
 	// operator-configured issuer.
 	PreviewExternalVerification bool `yaml:"preview_external_verification"`
+	// HugoUpgrade configures the optional, operator-controlled Hugo binary
+	// lifecycle. Status checks remain read-only; staging/activation/rollback
+	// are disabled unless Enabled is true and every managed path is explicit.
+	HugoUpgrade HugoUpgradeConfig `yaml:"hugo_upgrade"`
+}
+
+// HugoUpgradeConfig constrains managed Hugo upgrades to one private directory
+// and one symlink inside it. The server never replaces a package-manager-owned
+// binary or restarts itself.
+type HugoUpgradeConfig struct {
+	Enabled           bool     `yaml:"enabled"`
+	ManagedDir        string   `yaml:"managed_dir"`
+	BinaryLink        string   `yaml:"binary_link"`
+	ReleaseAPIBaseURL string   `yaml:"release_api_base_url"`
+	AllowedHosts      []string `yaml:"allowed_hosts"`
+	MaxDownloadBytes  int64    `yaml:"max_download_bytes"`
+	CacheTTLSeconds   int      `yaml:"cache_ttl_seconds"`
+	RequireExtended   bool     `yaml:"require_extended"`
+	AllowDowngrade    bool     `yaml:"allow_downgrade"`
+	MinimumVersion    string   `yaml:"minimum_version"`
+	MaximumVersion    string   `yaml:"maximum_version"`
 }
 
 // GitBaselineConfig defines the local Git checkout model used as the trusted
@@ -281,6 +304,13 @@ func Default() Config {
 		IdempotencyTTLSeconds: DefaultIdempotencyTTLSeconds,
 		PreviewMaxPerCaller:   DefaultPreviewMaxPerCaller,
 		PreviewMaxDiskBytes:   DefaultPreviewMaxDiskBytes,
+		HugoUpgrade: HugoUpgradeConfig{
+			ReleaseAPIBaseURL: "https://api.github.com/repos/gohugoio/hugo",
+			AllowedHosts:      []string{"api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"},
+			MaxDownloadBytes:  128 * 1024 * 1024,
+			CacheTTLSeconds:   3600,
+			RequireExtended:   true,
+		},
 	}
 }
 
@@ -404,7 +434,73 @@ func (c *Config) validate() error {
 			return fmt.Errorf("config: image_gen_url: %w", err)
 		}
 	}
+	if err := c.validateHugoUpgrade(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func (c *Config) validateHugoUpgrade() error {
+	h := &c.HugoUpgrade
+	if strings.TrimSpace(h.ReleaseAPIBaseURL) == "" {
+		h.ReleaseAPIBaseURL = "https://api.github.com/repos/gohugoio/hugo"
+	}
+	if h.MaxDownloadBytes <= 0 {
+		h.MaxDownloadBytes = 128 * 1024 * 1024
+	}
+	if h.CacheTTLSeconds <= 0 {
+		h.CacheTTLSeconds = 3600
+	}
+	if len(h.AllowedHosts) == 0 {
+		h.AllowedHosts = []string{"api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"}
+	}
+	u, err := url.Parse(h.ReleaseAPIBaseURL)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("config: hugo_upgrade.release_api_base_url must be an absolute HTTPS URL")
+	}
+	if !hostAllowed(u.Hostname(), h.AllowedHosts) {
+		return fmt.Errorf("config: hugo_upgrade.release_api_base_url host is not in allowed_hosts")
+	}
+	if !h.Enabled {
+		return nil
+	}
+	for name, version := range map[string]string{"minimum_version": h.MinimumVersion, "maximum_version": h.MaximumVersion} {
+		if strings.TrimSpace(version) != "" && !validStableHugoVersion(version) {
+			return fmt.Errorf("config: hugo_upgrade.%s must be an exact stable vMAJOR.MINOR.PATCH version", name)
+		}
+	}
+	if h.MinimumVersion != "" && h.MaximumVersion != "" && compareHugoVersions(h.MinimumVersion, h.MaximumVersion) > 0 {
+		return fmt.Errorf("config: hugo_upgrade.minimum_version must not exceed maximum_version")
+	}
+	if !filepath.IsAbs(h.ManagedDir) || !filepath.IsAbs(h.BinaryLink) {
+		return fmt.Errorf("config: hugo_upgrade managed_dir and binary_link must be absolute when enabled")
+	}
+	managed := filepath.Clean(h.ManagedDir)
+	link := filepath.Clean(h.BinaryLink)
+	rel, err := filepath.Rel(managed, link)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("config: hugo_upgrade.binary_link must be inside managed_dir")
+	}
+	return nil
+}
+
+func validStableHugoVersion(version string) bool {
+	version = strings.TrimSpace(version)
+	return semver.IsValid(version) && semver.Prerelease(version) == "" && semver.Build(version) == ""
+}
+
+func compareHugoVersions(a, b string) int {
+	return semver.Compare(a, b)
+}
+
+func hostAllowed(host string, allowed []string) bool {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, candidate := range allowed {
+		if host == strings.ToLower(strings.TrimSuffix(strings.TrimSpace(candidate), ".")) {
+			return true
+		}
+	}
+	return false
 }
 
 // validateHookURL rejects non-HTTP(S) schemes and private/link-local IP ranges.

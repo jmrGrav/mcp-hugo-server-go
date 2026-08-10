@@ -32,7 +32,7 @@ import (
 //	                            get_theme_status, verify_publication, create_preview,
 //	                            publish_changes, list_previews, revoke_preview,
 //	                            revoke_all_previews, inspect_preview, get_storage_health
-const expectedToolCount = 60
+const expectedToolCount = 64
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())

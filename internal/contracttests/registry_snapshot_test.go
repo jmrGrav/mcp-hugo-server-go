@@ -187,7 +187,7 @@ func TestContractToolRegistrySnapshot(t *testing.T) {
 	}
 	sort.Slice(snapshots, func(i, j int) bool { return snapshots[i].Name < snapshots[j].Name })
 
-	// The snapshot must cover the entire registry (60 tools as of #854), so a
+	// The snapshot must cover the entire registry (64 tools as of #980), so a
 	// tool silently dropped from the published surface fails here, not only in
 	// the golden diff.
 	wantCount := len(toolsanon.Defs()) + len(toolsread.Defs()) + len(toolswrite.Defs()) + len(toolsadmin.Defs())

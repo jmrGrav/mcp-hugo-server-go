@@ -24,6 +24,9 @@ reject_hidden_paths: true
 build_timeout_seconds: 120
 preview_external_verification: false # enable only with a reachable public /preview/ ingress
 
+hugo_upgrade:
+  enabled: false
+
 rate_limit:
   anonymous_per_min: 120
   content_read_per_min: 240

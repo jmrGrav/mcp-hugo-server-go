@@ -137,6 +137,10 @@ input returns a structured `idempotency_conflict` error.
 - `check_sri_versions` - Verify SRI integrity
 - `get_runtime_status` - Get runtime status (server version/commit, hugo/git availability, source/public revision hashes, `changed_files_count` when the git baseline is dirty, overdue `test_content` advisories)
 - `get_theme_status` - Get theme status (active theme/module name, on-disk presence, Git commit/dirty state for classic themes)
+- `get_hugo_update` - Report installed Hugo and optionally compare it with the cached/latest stable official release; no network unless explicitly requested
+- `stage_hugo_upgrade` - Dry-run by default; download, checksum-verify, extract, and version-check an exact official Linux release in the private managed directory
+- `activate_hugo` - Dry-run by default; atomically switch only the configured managed symlink and preserve its previous target
+- `rollback_hugo` - Dry-run by default; restore the exact previous managed symlink target when no conflict is detected
 - `verify_publication` - Verify publication (compares source/build/public/index freshness for a page and checks the live public HTTP status; no SSH required)
 - `create_preview` - Create preview (builds source, optionally including drafts, into an isolated directory exposed at a temporary token-gated, non-indexable URL; the entry token is single-use, retired once the resulting session is confirmed in active use; see `docs/preview-workflow.md`, #853, #871)
 - `list_previews` - List previews

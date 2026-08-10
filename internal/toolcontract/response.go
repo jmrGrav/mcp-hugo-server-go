@@ -437,6 +437,12 @@ func ParseToolError(err error) ToolError {
 			}
 		}
 	case "revision_conflict":
+		if strings.Contains(message, "managed Hugo symlink") {
+			out.Retryable = false
+			out.Resolution = &ErrorResolution{Action: "contact_operator"}
+			out.Suggestion = "inspect the managed Hugo symlink and activation record before retrying rollback_hugo"
+			return out
+		}
 		out.Field = "expected_revision"
 		out.Retryable = true
 		// delete_page_asset's own revision_conflict message (#460) names
@@ -481,6 +487,10 @@ func ParseToolError(err error) ToolError {
 			RecommendedTool: "search_pages",
 		}
 	case "already_exists":
+		if strings.Contains(message, "Hugo version is already staged") {
+			out.Resolution = &ErrorResolution{Action: "use_different_tool", RecommendedTool: "activate_hugo"}
+			return out
+		}
 		// already_exists is also emitted by upload_page_asset ("asset
 		// already exists at ..."), where update_page is not the right
 		// recommendation — there's no update path for an existing asset by
@@ -493,6 +503,26 @@ func ParseToolError(err error) ToolError {
 				RecommendedTool: "update_page",
 			}
 		}
+	case "downgrade_forbidden", "version_policy_denied":
+		out.Field = "target_version"
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{Action: "retry_with_parameter", Parameter: "target_version"}
+	case "staged_artifact_missing":
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{Action: "use_different_tool", RecommendedTool: "stage_hugo_upgrade"}
+	case "checksum_mismatch", "staged_artifact_invalid", "version_mismatch", "archive_invalid", "release_invalid":
+		out.Retryable = false
+		out.Resolution = &ErrorResolution{Action: "replan_then_retry", RecommendedTool: "stage_hugo_upgrade"}
+	case "release_check_failed", "download_error":
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{Action: "retry_later"}
+	case "unmanaged_path", "activation_error", "rollback_error", "rollback_unavailable":
+		out.Retryable = false
+		out.Resolution = &ErrorResolution{Action: "contact_operator"}
+	case "permission_denied":
+		out.Retryable = false
+		out.Resolution = &ErrorResolution{Action: "contact_operator"}
+		out.Suggestion = "verify Unix ownership/mode of hugo_upgrade.managed_dir and that it is listed in the service's systemd ReadWritePaths"
 	}
 
 	return out

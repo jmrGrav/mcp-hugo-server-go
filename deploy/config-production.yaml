@@ -42,6 +42,16 @@ preview_external_verification: true
 # post_build_hooks:
 #   - https://your-webhook-host/rebuild-notify  # must be public HTTPS, no private IPs
 
+# --- Managed Hugo upgrades (disabled by default) ---
+hugo_upgrade:
+  enabled: false
+  # managed_dir: /var/lib/mcp-hugo-server-go/hugo
+  # binary_link: /var/lib/mcp-hugo-server-go/hugo/current/hugo
+  # require_extended: true
+  # allow_downgrade: false
+  # Enabling also requires this directory in systemd ReadWritePaths and the
+  # binary_link directory on the service PATH. Activation never restarts it.
+
 # --- Image generation (optional) ---
 # image_gen_url: https://your-image-api/v1/generate
 # image_gen_key: REPLACE_WITH_YOUR_IMAGE_GEN_KEY
