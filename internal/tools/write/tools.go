@@ -873,7 +873,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages)
 			return nil, newCreatePageOutput(createPageData{
-				Status:                   "ok",
+				Status:                   "unchanged",
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedLang),
@@ -993,7 +993,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		idx.Upsert(created)
 		// Do NOT insert into the public site index — the page is source-only until
 		// Hugo builds it. UpsertPage here would break allow_source_fallback detection.
-		status := "ok"
+		status := "created"
 		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(created); err != nil {
@@ -1319,7 +1319,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			dryRunChanged := content != string(raw)
 			return nil, newUpdatePageOutput(updatePageData{
-				Status:                   "ok",
+				Status:                   "unchanged",
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedSource.Lang),
@@ -1403,7 +1403,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				rt.siteIdx.UpsertPage(pubUpdated)
 			}
 		}
-		status := "ok"
+		status := "updated"
 		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {
@@ -1665,7 +1665,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			}
 			backlinksCount := len(bls)
 			return nil, newDeletePageOutput(deletePageData{
-				Status:                   "ok",
+				Status:                   "unchanged",
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedSource.Lang),
@@ -1847,7 +1847,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 
 		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
-		status := "ok"
+		status := "deleted"
 		if degradedDelete {
 			status = "partial_success"
 		}
