@@ -524,7 +524,7 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 }
 
 func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string) {
-	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication. Posts-only: this covers the /posts/ section specifically; for a site-wide digest spanning every published section (not only posts) use get_feed instead. get_feed and get_recent_posts overlap deliberately — pick get_recent_posts when you want a posts timeline and get_feed when you want a whole-site recency digest (#570, #865).",
+	addReadOnlyTool(s, "get_recent_posts", "Read recent posts", "Return the most recent published posts from the index. Use this for timeline-style summaries. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Posts-only: this covers the /posts/ section specifically; for a site-wide digest spanning every published section (not only posts) use get_feed instead. get_feed and get_recent_posts overlap deliberately — pick get_recent_posts when you want a posts timeline and get_feed when you want a whole-site recency digest (#570, #865).",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRecentPostsInput) (*mcp.CallToolResult, getRecentPostsOutput, error) {
 			if idx == nil {
 				return nil, getRecentPostsOutput{}, fmt.Errorf("index not initialized")
@@ -554,7 +554,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 			return nil, newGetRecentPostsOutput(getRecentPostsData{Pages: toPageDTOsForProfile(pages, srcIdx, aliases, site.IsReaderProfile(ctx)), Total: meta.Total, Limit: meta.Limit, Offset: meta.Offset, ReturnedCount: meta.ReturnedCount, HasMore: meta.HasMore, NextOffset: meta.NextOffset}), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 
-	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
+	addReadOnlyTool(s, "list_tags", "Browse tags", "List the tags discovered from the index. Returns a sorted tag list. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ listTagsInput) (*mcp.CallToolResult, listTagsOutput, error) {
 			if idx == nil {
 				return nil, listTagsOutput{}, fmt.Errorf("index not initialized")
@@ -570,7 +570,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 			return nil, newListTagsOutput(listTagsData{Tags: taxonomy.Slugs(taxonomy.Normalize(tags))}), nil
 		})
 
-	addReadOnlyTool(s, "list_categories", "Browse categories", "List the categories discovered from the index. Returns a sorted category list and does not require authentication.",
+	addReadOnlyTool(s, "list_categories", "Browse categories", "List the categories discovered from the index. Returns a sorted category list. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ listCategoriesInput) (*mcp.CallToolResult, listCategoriesOutput, error) {
 			if idx == nil {
 				return nil, listCategoriesOutput{}, fmt.Errorf("index not initialized")
@@ -676,7 +676,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 			}), nil
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 200) })
 
-	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want a posts-only timeline. The two tools overlap deliberately; get_feed is the whole-site recency digest, get_recent_posts is the /posts/-scoped timeline (#570, #865).",
+	addReadOnlyTool(s, "get_feed", "Read feed", "Return recent published items as a feed-like list. Use this for lightweight content digests. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want a posts-only timeline. The two tools overlap deliberately; get_feed is the whole-site recency digest, get_recent_posts is the /posts/-scoped timeline (#570, #865).",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getFeedInput) (*mcp.CallToolResult, getFeedOutput, error) {
 			if idx == nil {
 				return nil, getFeedOutput{}, fmt.Errorf("index not initialized")
@@ -712,7 +712,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 }
 
 func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index, cfg config.Config) {
-	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
+	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ getSiteInformationInput) (*mcp.CallToolResult, getSiteInformationOutput, error) {
 			if idx == nil {
 				return nil, getSiteInformationOutput{}, fmt.Errorf("index not initialized")
