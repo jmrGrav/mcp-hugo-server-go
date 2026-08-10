@@ -162,6 +162,7 @@ func TestInspectPreviewRenderedSupportsDraftPage(t *testing.T) {
 	if got := data["url"]; got == nil || !strings.Contains(got.(string), "/preview/abc123/posts/draft/") {
 		t.Fatalf("url = %v, want preview-scoped URL", got)
 	}
+	assertPreviewCheckStatus(t, data, "internal_links", "pass")
 }
 
 func TestInspectPreviewRenderedPreservesNonDefaultLanguagePath(t *testing.T) {
@@ -206,6 +207,26 @@ func TestInspectPreviewRenderedPreservesNonDefaultLanguagePath(t *testing.T) {
 	if got := data["output_path"]; got != "en/posts/draft/index.html" {
 		t.Fatalf("output_path = %v, want language-prefixed output", got)
 	}
+	assertPreviewCheckStatus(t, data, "internal_links", "pass")
+}
+
+func assertPreviewCheckStatus(t *testing.T, data map[string]any, name, want string) {
+	t.Helper()
+	checks, ok := data["checks"].([]any)
+	if !ok {
+		t.Fatalf("checks = %T, want []any", data["checks"])
+	}
+	for _, raw := range checks {
+		check, ok := raw.(map[string]any)
+		if !ok || check["check"] != name {
+			continue
+		}
+		if got := check["status"]; got != want {
+			t.Fatalf("%s status = %v, want %s", name, got, want)
+		}
+		return
+	}
+	t.Fatalf("checks missing %q", name)
 }
 
 func TestInspectPreviewRenderedRejectsReversedLanguagePreviewPrefix(t *testing.T) {

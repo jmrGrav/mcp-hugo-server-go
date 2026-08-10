@@ -119,7 +119,7 @@ for arg in "$@"; do
 done
 id="$(printf '%s' "$base" | sed -E 's#^.*/preview/([^/]+)/?$#\1#')"
 mkdir -p "$dest/en/posts/probe"
-printf '<html><head><link rel="canonical" href="https://mcp.example.test/en/preview/%s/posts/probe/"></head><body><a href="/en/preview/%s/posts/next/">next</a><img src="/en/preview/%s/assets/site.css"></body></html>' "$id" "$id" "$id" > "$dest/en/posts/probe/index.html"
+printf '<html><head><link rel="canonical" href="https://mcp.example.test/en/preview/%s/posts/probe/"><link rel="alternate" hreflang="en" href="/en/preview/%s/posts/probe/"><script src="/en/preview/%s/assets/site.js"></script></head><body><a href="/en/preview/%s/posts/next/">next</a><a href="/en/preview/%s/tags/test/">tag</a><a href="/en/preview/%s/categories/docs/">category</a><a href="/en/preview/%s/documentation/">docs</a><img src="/en/preview/%s/assets/site.css"></body></html>' "$id" "$id" "$id" "$id" "$id" "$id" "$id" "$id" > "$dest/en/posts/probe/index.html"
 exit 0
 `
 	p := filepath.Join(dir, "hugo")
@@ -274,7 +274,11 @@ func TestCreatePreviewNormalizesReversedNonDefaultLanguageURLs(t *testing.T) {
 	for _, want := range []string{
 		"/preview/" + id + "/en/posts/probe/",
 		"/preview/" + id + "/en/posts/next/",
+		"/preview/" + id + "/en/tags/test/",
+		"/preview/" + id + "/en/categories/docs/",
+		"/preview/" + id + "/en/documentation/",
 		"/preview/" + id + "/en/assets/site.css",
+		"/preview/" + id + "/en/assets/site.js",
 	} {
 		if !strings.Contains(string(raw), want) {
 			t.Errorf("normalized preview missing %q: %s", want, raw)

@@ -98,9 +98,13 @@ PY
 }
 
 run_smoke() {
+  printf '%s\n' '[{"name":"fixture"}]' > "$TMP/tool-registry.json"
   MCP_SMOKE_LIVE=1 \
   MCP_BASE_URL="http://127.0.0.1:$(cat "$TMP/port")" \
   MCP_ACCESS_TOKEN="fixture-token" \
+  MCP_WRITE_ACCESS_TOKEN="fixture-write-token" \
+  MCP_SMOKE_VERIFY_WRITE_CATALOGUE=1 \
+  MCP_TOOL_REGISTRY_MANIFEST="$TMP/tool-registry.json" \
   MCP_SMOKE_DELAY=0 \
   MCP_SMOKE_VERIFY_DEPLOY=1 \
   bash "$ROOT/scripts/smoke-mcp-live.sh"
