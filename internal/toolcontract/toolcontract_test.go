@@ -513,3 +513,33 @@ func TestParseToolErrorHugoUpgradeResolutions(t *testing.T) {
 		})
 	}
 }
+
+// TestParseToolErrorPlanConflictResolutions is a regression test for #1001:
+// apply_content_plan and apply_bundle_plan don't accept expected_revision,
+// so their conflict errors must not recommend it (the generic
+// revision_conflict branch's get_page_for_edit/expected_revision) — they
+// must point back at the plan tool that produced the preserved plan.
+func TestParseToolErrorPlanConflictResolutions(t *testing.T) {
+	tests := []struct {
+		err             string
+		action          string
+		recommendedTool string
+	}{
+		{"revision_conflict: page changed since the plan was created; call plan_content_change again", "replan_then_retry", "plan_content_change"},
+		{"bundle_conflict: bundle changed since the plan was created; call plan_bundle_change again", "replan_then_retry", "plan_bundle_change"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.err, func(t *testing.T) {
+			got := ParseToolError(fmt.Errorf("%s", tc.err))
+			if got.Resolution == nil || got.Resolution.Action != tc.action || got.Resolution.RecommendedTool != tc.recommendedTool {
+				t.Fatalf("ParseToolError = %#v", got.Resolution)
+			}
+			if got.Field == "expected_revision" {
+				t.Fatalf("plan-based conflict must not recommend expected_revision, which these tools don't accept: %#v", got)
+			}
+			if !got.Retryable {
+				t.Fatalf("plan-based conflict should be retryable: %#v", got)
+			}
+		})
+	}
+}

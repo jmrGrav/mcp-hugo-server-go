@@ -443,6 +443,19 @@ func ParseToolError(err error) ToolError {
 			out.Suggestion = "inspect the managed Hugo symlink and activation record before retrying rollback_hugo"
 			return out
 		}
+		// apply_content_plan's own revision_conflict (#1001) doesn't accept
+		// expected_revision at all — recommending it (the generic branch
+		// below) misguides the caller. The plan itself is preserved on this
+		// error, so the fix is either to retry the same plan_id once the
+		// page is re-read, or to replan.
+		if strings.Contains(message, "plan_content_change") {
+			out.Retryable = true
+			out.Resolution = &ErrorResolution{
+				Action:          "replan_then_retry",
+				RecommendedTool: "plan_content_change",
+			}
+			return out
+		}
 		out.Field = "expected_revision"
 		out.Retryable = true
 		// delete_page_asset's own revision_conflict message (#460) names
@@ -461,6 +474,15 @@ func ParseToolError(err error) ToolError {
 			Action:          "reread_then_retry",
 			Parameter:       parameter,
 			RecommendedTool: recommendedTool,
+		}
+	case "bundle_conflict":
+		// apply_bundle_plan's whole-bundle optimistic-concurrency gate
+		// (#854 AC2/AC3); the plan is preserved on this error (#1001), same
+		// as apply_content_plan's revision_conflict above.
+		out.Retryable = true
+		out.Resolution = &ErrorResolution{
+			Action:          "replan_then_retry",
+			RecommendedTool: "plan_bundle_change",
 		}
 	case "asset_referenced":
 		// delete_page_asset's guard against deleting an asset still linked

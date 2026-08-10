@@ -286,6 +286,24 @@ func TestApplyContentPlanRevisionConflict(t *testing.T) {
 		t.Fatalf("apply_content_plan stale plan error = %s", raw)
 	}
 
+	// request_context must carry the slug/lang the plan resolved (#1001) —
+	// apply_content_plan's only input is plan_id, so without this the
+	// caller has no page identity on the error at all.
+	m := decodeWriteContent(t, res)
+	reqCtx, ok := m["request_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_context type = %T, want populated object", m["request_context"])
+	}
+	if got := reqCtx["slug"]; got != "posts/article" {
+		t.Fatalf("request_context.slug = %v, want posts/article", got)
+	}
+
+	// The rejected apply must not have written anything beyond the setup
+	// mutation above (#1001's "absence of write" criterion).
+	if body := readFileString(t, contentRoot, "posts/article/index.md"); !strings.Contains(body, "Changed Elsewhere") || strings.Contains(body, "hugo") {
+		t.Fatalf("apply_content_plan wrote despite revision_conflict: %s", body)
+	}
+
 	// A retryable conflict must leave the plan available for the caller to
 	// inspect/retry or explicitly replace (#1001).
 	retry := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})

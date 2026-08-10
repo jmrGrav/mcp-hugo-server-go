@@ -738,16 +738,18 @@ func registerContentPlanTools(
 			}
 		}
 
-		var entry planEntry
-		var ok bool
-		if in.DryRun {
-			entry, ok = plans.get(in.PlanID, isolationCallerKey(ctx))
-		} else {
-			// Keep retryable revision conflicts from consuming the plan (#1001).
-			entry, ok = plans.get(in.PlanID, isolationCallerKey(ctx))
-		}
+		// Keep retryable revision conflicts from consuming the plan (#1001):
+		// look the plan up without consuming it, and only consume it once
+		// the revision check below has passed.
+		entry, ok := plans.get(in.PlanID, isolationCallerKey(ctx))
 		if !ok {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_content_change again"))
+		}
+		// From here on, errors carry the slug/lang the plan resolved (#1001)
+		// — a caller reading request_context on a revision_conflict/
+		// build_in_progress/read_error no longer has to guess which page.
+		wrapErr = func(err error) error {
+			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: entry.Slug, RequestedLang: entry.Lang})
 		}
 
 		const lockWait = 10 * time.Second
