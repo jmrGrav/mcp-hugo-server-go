@@ -243,15 +243,16 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
   described above will not change again without a major version bump —
   clients should key on `release_version` going forward.
 - Production deploys always run from `main` and are tagged only
-  afterward, once the deployment is live and verified (see
-  `.github/workflows/release.yml`'s ancestry check) — so a deploy must be
+  afterward, once the deployment is live and verified — `.github/workflows/
+  deploy.yml`'s own `release` job creates the tag and GitHub release right
+  after its `deploy` job succeeds, in the same run — so a deploy must be
   told which release it belongs to explicitly, via the `release_version`
-  input to `.github/workflows/deploy.yml`, rather than deriving it from a
-  tag that doesn't exist yet. That workflow input name is unchanged across
-  all three field-name changes above; it feeds `meta.release_version` and
-  `meta.build_channel` directly. A deploy triggered without that input (or
-  targeting a ref that isn't the intended release commit) reports
-  `meta.release_version = "main-<sha>"`, `meta.build_channel = "main"`.
+  input, rather than deriving it from a tag that doesn't exist yet. That
+  workflow input name is unchanged across all three field-name changes
+  above; it feeds `meta.release_version` and `meta.build_channel` directly.
+  A deploy triggered without that input (or targeting a ref that isn't the
+  intended release commit) reports `meta.release_version = "main-<sha>"`,
+  `meta.build_channel = "main"`, and skips the tag/release job entirely.
 - `meta.commit` is the VCS revision embedded by Go's build info.
 - `meta.build_channel` identifies the deployment line (for example
   `release`, `main`, `staging`).

@@ -255,28 +255,29 @@ This script:
 
 ### Production Deploy + Release (GitHub Actions)
 
-Production deploys go through `.github/workflows/deploy.yml` (`workflow_dispatch`),
-followed by `.github/workflows/release.yml` once the deployment is confirmed live:
+Production deploys and releases both go through `.github/workflows/deploy.yml`
+(`workflow_dispatch`) — a single call, with `release_version` set, builds,
+deploys, tags, and publishes the GitHub release together:
 
 ```bash
 gh workflow run deploy.yml -f ref=main -f release_version=v1.5.5 -f dry_run=false
-# ...wait for it to succeed, approve the production environment gate...
-gh workflow run release.yml -f version=v1.5.5 -f ref=main
+# ...approve the production environment gate when prompted...
 ```
 
-Always pass `release_version` on the deploy step matching the version you're
-about to tag. The tag itself is only created by `release.yml`, after it
-verifies the target commit already has a successful production deployment —
-so at deploy time the tag doesn't exist yet and `meta.release_version` can't
-be derived from `git describe`. The explicit `release_version` input lets the
-deployed build report its intended release identity immediately, instead of
-waiting for the tag to exist: it sets `meta.release_version` to the given
-value and `meta.build_channel` to `"release"` (see `docs/mcp-contract.md` §5
-for this field's naming history — it was briefly called `server_version`
-between v1.5.7 and v1.5.8, #560/#563). Omit it for an untagged mainline
-deploy (a hotfix ahead of the next release, for example); the server then
-reports `meta.release_version = "main-<sha>"` and `meta.build_channel =
-"main"`, as before.
+Always pass `release_version` matching the version you're about to tag; the
+workflow's `validate` job gates on `CHANGELOG.md`/`npm/package.json`/
+`manifest.json` already carrying that version before building anything, so
+merge the changelog/version-bump PR first. The tag itself is created only
+after the `deploy` job succeeds — so at build time the tag doesn't exist yet
+and `meta.release_version` can't be derived from `git describe`. The explicit
+`release_version` input lets the deployed build report its intended release
+identity immediately, instead of waiting for the tag to exist: it sets
+`meta.release_version` to the given value and `meta.build_channel` to
+`"release"` (see `docs/mcp-contract.md` §5 for this field's naming history —
+it was briefly called `server_version` between v1.5.7 and v1.5.8, #560/#563).
+Omit it for an untagged mainline deploy (a hotfix ahead of the next release,
+for example); the server then reports `meta.release_version = "main-<sha>"`
+and `meta.build_channel = "main"`, and the `release` job is skipped entirely.
 
 ### Systemd Hardening and Override
 
@@ -728,7 +729,12 @@ client disconnects mid-run.
 
 ### Overview
 
-The project now uses a three-workflow promotion model:
+The project uses a two-workflow promotion model. `deploy.yml` absorbed the
+former standalone `release.yml` — one `workflow_dispatch` call with
+`release_version` set now builds, deploys, tags, and publishes the GitHub
+release together, so version numbers can't drift apart across the tag,
+`npm/package.json`, and `manifest.json` the way they could when the two
+were separately-triggered workflows.
 
 ```
 main branch merge
@@ -743,18 +749,18 @@ main branch merge
       ▼  (manually: run deploy.yml)
   deploy.yml
   ├── validate (build + tests)
+  │   └── release-notes gate (only when release_version is set): fails
+  │       fast, before anything is built, unless CHANGELOG.md/
+  │       npm/package.json/manifest.json already carry that version
   ├── deploy (environment: production — requires reviewer approval)
   │   ├── self-hosted runner promotes the selected ref on the VM
   │   ├── systemctl restart
   │   └── post-deploy smoke (smoke-mcp-live.sh)
-  └── dry-run validation (no production environment, no deployment record)
-      │
-      ▼  (manually: run release.yml)
-  release.yml
-  ├── requires current origin/main HEAD
-  ├── requires successful production deployment for that SHA
-  ├── checks CHANGELOG.md and README release metadata
-  └── creates tag + GitHub release
+  ├── release (only when release_version is set, after deploy succeeds)
+  │   ├── creates tag + GitHub release
+  │   └── attaches GoReleaser binaries + the .mcpb bundle
+  └── dry-run validation (no production environment, no deployment record,
+      no release)
       │
       ▼  (optional/manual)
   Live Smoke workflow
@@ -780,21 +786,30 @@ main branch merge
 2. **CI runs automatically** — watch the `test`, `boot-check`, local staging smoke,
    secret scans, and CodeQL checks for green.
 
-3. **Trigger `deploy.yml` from GitHub Actions → Run workflow:**
-   - Input the git ref to promote (default: `main`; SHA allowed)
-   - The workflow rejects refs that are not reachable from `origin/main`
-   - Approve the `production` environment gate in the Actions UI
-   - The workflow builds the selected ref, deploys it on the self-hosted runner,
-     restarts the service, and runs the post-deploy smoke
+3. **For a real release, merge the release-notes PR first** — a `CHANGELOG.md`
+   entry (`## [vX.Y.Z] - date`) plus matching `version` fields in
+   `npm/package.json` and `manifest.json`. `deploy.yml`'s gate checks these
+   exist and match *before* building anything; it never writes this content
+   itself. Skip this step for an ad-hoc hotfix deploy with no release cut.
 
-4. **Trigger `release.yml` only after the deploy succeeds:**
-   - Input the release version (for example `v1.3.5`)
-   - Input the release ref (normally `main`)
-   - The workflow refuses to publish unless the target ref:
-     - resolves to the current `origin/main` HEAD;
-     - already has a successful `production` deployment record;
-     - passes the `CHANGELOG.md` gate;
-     - passes the machine-checkable README release metadata gate.
+4. **Trigger `deploy.yml` from GitHub Actions → Run workflow:**
+   - Input the git ref to promote (default: `main`; SHA allowed)
+   - Input `release_version` (e.g. `v1.7.9`) to cut a real release, or leave
+     it empty for an ad-hoc mainline deploy with no tag/GitHub release
+   - The workflow rejects refs that are not reachable from `origin/main`,
+     and — when `release_version` is set — refuses to build at all unless
+     `CHANGELOG.md`/`npm/package.json`/`manifest.json` already carry that
+     version
+   - Approve the `production` environment gate in the Actions UI
+   - The workflow builds the selected ref, deploys it on the self-hosted
+     runner, restarts the service, and runs the post-deploy smoke
+   - If `release_version` was set, it then tags, creates the GitHub release,
+     and attaches the GoReleaser binaries + `.mcpb` bundle — all in the same
+     run, no second workflow to remember
+
+   ```bash
+   gh workflow run deploy.yml -f ref=main -f release_version=v1.7.9
+   ```
 
 5. **Close the milestone** on GitHub once the release is published.
 

@@ -58,7 +58,7 @@ jobs:
       # This is the gate that actually matters: the npm wrapper's
       # postinstall downloads GitHub Release assets by this exact tag. If
       # GoReleaser silently failed on that release (still possible even
-      # after release.yml's own steps succeeded — see the .goreleaser.yaml
+      # after deploy.yml's release job succeeded — see the .goreleaser.yaml
       # rollout notes), publishing now would ship a package that 404s for
       # every real installer. Fail closed instead of trusting the tag exists.
       - name: Verify release assets exist
@@ -83,7 +83,7 @@ jobs:
             fi
           done
           if [[ "$missing" -ne 0 ]]; then
-            echo "Release $TAG is missing expected binary assets — refusing to publish. Re-run the GoReleaser step of release.yml, or investigate why it didn't attach them." >&2
+            echo "Release $TAG is missing expected binary assets — refusing to publish. Re-run deploy.yml's release job (or the whole workflow) for this ref, or investigate why it didn't attach them." >&2
             exit 1
           fi
           echo "All expected assets present on release $TAG."
