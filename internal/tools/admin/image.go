@@ -280,6 +280,7 @@ func Defs() []tools.ToolDef {
 		{Name: "stage_hugo_upgrade", RequiredScope: "write"},
 		{Name: "activate_hugo", RequiredScope: "write"},
 		{Name: "rollback_hugo", RequiredScope: "write"},
+		{Name: "bootstrap_hugo", RequiredScope: "write"},
 	}
 }
 

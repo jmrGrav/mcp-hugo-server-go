@@ -27,12 +27,14 @@ import (
 //	                            plan_content_change (no scope gate — see #450), apply_content_plan,
 //	                            rollback_change, plan_bundle_change (no scope gate — see #854/#450),
 //	                            apply_bundle_plan, rollback_bundle
-//	site.admin:          15  — build_site, preview_build, run_post_build_hooks,
+//	site.admin:          20  — build_site, preview_build, run_post_build_hooks,
 //	                            generate_hero_image, check_sri_versions, get_runtime_status,
 //	                            get_theme_status, verify_publication, create_preview,
 //	                            publish_changes, list_previews, revoke_preview,
-//	                            revoke_all_previews, inspect_preview, get_storage_health
-const expectedToolCount = 64
+//	                            revoke_all_previews, inspect_preview, get_storage_health,
+//	                            get_hugo_update, stage_hugo_upgrade, activate_hugo,
+//	                            rollback_hugo, bootstrap_hugo
+const expectedToolCount = 65
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())

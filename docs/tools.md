@@ -141,6 +141,7 @@ input returns a structured `idempotency_conflict` error.
 - `stage_hugo_upgrade` - Dry-run by default; download, checksum-verify, extract, and version-check an exact official Linux release in the private managed directory
 - `activate_hugo` - Dry-run by default; atomically switch only the configured managed symlink and preserve its previous target
 - `rollback_hugo` - Dry-run by default; restore the exact previous managed symlink target when no conflict is detected
+- `bootstrap_hugo` - Dry-run by default; one-time setup that re-downloads, checksum-verifies, stages, and activates the currently-installed Hugo version as the initial managed baseline, so the first real upgrade afterward has a legitimate `rollback_hugo` target; refuses if a managed version is already active
 - `verify_publication` - Verify publication (compares source/build/public/index freshness for a page and checks the live public HTTP status; no SSH required)
 - `create_preview` - Create preview (builds source, optionally including drafts, into an isolated directory exposed at a temporary token-gated, non-indexable URL; the entry token is single-use, retired once the resulting session is confirmed in active use; see `docs/preview-workflow.md`, #853, #871)
 - `list_previews` - List previews

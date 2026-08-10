@@ -147,7 +147,19 @@ previous managed target, and returns an explicit supervisor restart action.
 Ensure the link's directory is on the service `PATH` and add `managed_dir` to
 the unit's `ReadWritePaths`; the MCP never edits systemd or restarts itself.
 
-Recommended flow:
+On a deployment that has never activated a managed Hugo version, `rollback_hugo`
+has nothing to restore on the very first real upgrade — the pre-existing
+unmanaged binary was never itself a managed version, so that first
+activation's record has no `previous_target`. Run `bootstrap_hugo` once,
+before your first real upgrade, to close that gap:
+
+```text
+bootstrap_hugo(dry_run=false)   # re-downloads/verifies the currently-installed
+                                 # version and activates it as the baseline
+# operator restarts and confirms get_hugo_update still reports the same version
+```
+
+Recommended flow for every upgrade after bootstrapping:
 
 ```text
 get_hugo_update(check_latest=true)

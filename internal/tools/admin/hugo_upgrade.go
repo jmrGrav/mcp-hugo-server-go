@@ -141,6 +141,24 @@ type rollbackHugoUpgradeOutput struct {
 	toolcontract.ToolResponse[rollbackHugoUpgradeData]
 }
 
+type bootstrapHugoInput struct {
+	DryRun *bool `json:"dry_run,omitempty"`
+}
+
+type bootstrapHugoData struct {
+	DryRun          bool   `json:"dry_run"`
+	DetectedVersion string `json:"detected_version"`
+	Staged          bool   `json:"staged"`
+	Activated       bool   `json:"activated"`
+	Checksum        string `json:"checksum,omitempty"`
+	RestartRequired bool   `json:"restart_required"`
+	OperatorAction  string `json:"operator_action,omitempty"`
+}
+
+type bootstrapHugoOutput struct {
+	toolcontract.ToolResponse[bootstrapHugoData]
+}
+
 type hugoStageRecord struct {
 	Version         string `json:"version"`
 	ArchiveChecksum string `json:"archive_checksum"`
@@ -246,6 +264,21 @@ func RegisterHugoUpgradeTools(s *mcp.Server, cfg config.Config) {
 		}
 		mgr.audit(ctx, "rollback_hugo", "success", data.RestoredVersion, data.Checksum, nil)
 		return nil, rollbackHugoUpgradeOutput{ToolResponse: hugoUpgradeSuccess(data)}, nil
+	}))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "bootstrap_hugo", Title: "Bootstrap managed Hugo",
+		Description: "One-time setup for a deployment that has never used managed Hugo upgrades: detects the currently installed Hugo version, then re-downloads and checksum-verifies that exact version from the official release (never trusts the existing binary on disk directly), stages it, and activates it as the initial managed baseline. dry_run defaults to true. Refuses to run if a managed version is already active — use stage_hugo_upgrade/activate_hugo for every upgrade after this. Without this step, rollback_hugo has no target to restore on a system's very first activation, because the pre-existing unmanaged binary was never itself a managed version. Requires write.",
+		InputSchema: tools.MustSchema[bootstrapHugoInput](), OutputSchema: tools.MustSchema[bootstrapHugoOutput](),
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false), IdempotentHint: false, OpenWorldHint: fileutil.BoolPtr(true)},
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in bootstrapHugoInput) (*mcp.CallToolResult, bootstrapHugoOutput, error) {
+		data, err := mgr.bootstrap(ctx, in)
+		if err != nil {
+			mgr.audit(ctx, "bootstrap_hugo", "failed", data.DetectedVersion, "", err)
+			return nil, bootstrapHugoOutput{}, err
+		}
+		mgr.audit(ctx, "bootstrap_hugo", "success", data.DetectedVersion, data.Checksum, nil)
+		return nil, bootstrapHugoOutput{ToolResponse: hugoUpgradeSuccess(data)}, nil
 	}))
 }
 
@@ -363,6 +396,13 @@ func validateStableRelease(rel hugoRelease) error {
 func (m *hugoUpgradeManager) stage(ctx context.Context, in stageHugoUpgradeInput) (stageHugoUpgradeData, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.stageLocked(ctx, in)
+}
+
+// stageLocked is stage's body, factored out so bootstrap can call it and
+// activateLocked in the same critical section without deadlocking on m.mu
+// (sync.Mutex is not reentrant). Callers must already hold m.mu.
+func (m *hugoUpgradeManager) stageLocked(ctx context.Context, in stageHugoUpgradeInput) (stageHugoUpgradeData, error) {
 	if !m.cfg.HugoUpgrade.Enabled {
 		return stageHugoUpgradeData{}, fmt.Errorf("config_error: managed Hugo upgrades are disabled")
 	}
@@ -475,6 +515,13 @@ func (m *hugoUpgradeManager) stage(ctx context.Context, in stageHugoUpgradeInput
 func (m *hugoUpgradeManager) activate(ctx context.Context, in activateHugoUpgradeInput) (activateHugoUpgradeData, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.activateLocked(ctx, in)
+}
+
+// activateLocked is activate's body, factored out so bootstrap can call it
+// after stageLocked in the same critical section. Callers must already hold
+// m.mu.
+func (m *hugoUpgradeManager) activateLocked(ctx context.Context, in activateHugoUpgradeInput) (activateHugoUpgradeData, error) {
 	if !m.cfg.HugoUpgrade.Enabled {
 		return activateHugoUpgradeData{}, fmt.Errorf("config_error: managed Hugo upgrades are disabled")
 	}
@@ -538,6 +585,62 @@ func (m *hugoUpgradeManager) activate(ctx context.Context, in activateHugoUpgrad
 		return data, fmt.Errorf("activation_error: activation record could not be persisted; symlink was restored")
 	}
 	data.Activated = true
+	return data, nil
+}
+
+// bootstrap gives a fresh deployment (no managed Hugo version has ever been
+// activated) a legitimate rollback target from the very first real upgrade.
+// Without this, rollback_hugo has nothing to restore on that first upgrade's
+// activation: currentManagedTarget() reports no prior managed target (the
+// pre-existing unmanaged binary was never staged/activated through this
+// feature), so activate's own activation record has an empty
+// previous_target — by design, since it has never lied about a rollback
+// target existing when it didn't.
+//
+// This does not adopt or trust the binary already on disk. It re-downloads
+// and checksum-verifies the detected version fresh from the official
+// release, through the exact same stageLocked path stage_hugo_upgrade uses,
+// so every managed binary's provenance stays uniformly verified — the whole
+// point of this feature. The redundant download (you already have this
+// exact version installed) is the accepted cost of that guarantee.
+func (m *hugoUpgradeManager) bootstrap(ctx context.Context, in bootstrapHugoInput) (bootstrapHugoData, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.cfg.HugoUpgrade.Enabled {
+		return bootstrapHugoData{}, fmt.Errorf("config_error: managed Hugo upgrades are disabled")
+	}
+	existingTarget, _, err := m.currentManagedTarget()
+	if err != nil {
+		return bootstrapHugoData{}, err
+	}
+	if existingTarget != "" {
+		return bootstrapHugoData{}, fmt.Errorf("bootstrap_unavailable: a managed Hugo version is already active; use stage_hugo_upgrade/activate_hugo instead")
+	}
+	installed := probeHugo(ctx, m.cfg)
+	version := comparableInstalledVersion(installed.Version)
+	if !installed.Available || version == "" {
+		return bootstrapHugoData{}, fmt.Errorf("config_error: no installed Hugo binary with a recognizable version was detected to bootstrap from")
+	}
+	if installed.Extended != m.cfg.HugoUpgrade.RequireExtended {
+		return bootstrapHugoData{}, fmt.Errorf("config_error: installed Hugo is extended=%t but hugo_upgrade.require_extended=%t; align require_extended with the installed binary before bootstrapping", installed.Extended, m.cfg.HugoUpgrade.RequireExtended)
+	}
+	data := bootstrapHugoData{DryRun: dryRunDefaultTrue(in.DryRun), DetectedVersion: version, RestartRequired: true}
+	if data.DryRun {
+		return data, nil
+	}
+	notDryRun := false
+	stageData, err := m.stageLocked(ctx, stageHugoUpgradeInput{TargetVersion: version, DryRun: &notDryRun})
+	if err != nil {
+		return data, err
+	}
+	data.Staged = stageData.Staged
+	activateData, err := m.activateLocked(ctx, activateHugoUpgradeInput{TargetVersion: version, DryRun: &notDryRun})
+	if err != nil {
+		return data, err
+	}
+	data.Activated = activateData.Activated
+	data.Checksum = activateData.Checksum
+	data.OperatorAction = activateData.OperatorAction
 	return data, nil
 }
 

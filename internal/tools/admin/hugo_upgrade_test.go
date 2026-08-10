@@ -471,3 +471,142 @@ func TestHugoUpgradeAuditUsesStableCallerAndNoSecret(t *testing.T) {
 		t.Fatalf("audit event leaked credentials: %s", logLine)
 	}
 }
+
+// TestHugoBootstrapDetectsStagesActivatesAndUnblocksRollback is the full
+// end-to-end guard for #980's rollback-bootstrap gap: on a fresh deployment
+// (no managed version ever activated), rollback_hugo has nothing to restore
+// on the very first real activation. bootstrap_hugo re-downloads and
+// checksum-verifies the currently-installed version, activates it as the
+// initial managed baseline, and only *then* does the first real upgrade's
+// activation get a legitimate previous_target for rollback_hugo to use.
+func TestHugoBootstrapDetectsStagesActivatesAndUnblocksRollback(t *testing.T) {
+	installFakeCurrentHugo(t, "v1.0.0")
+	fake := newFakeHugoReleaseServer(t, "v1.0.0", fakeHugoArchive(t, "v1.0.0", false), nil)
+	defer fake.Close()
+	cfg := testHugoUpgradeConfig(t, fake.server.URL)
+	mgr := newHugoUpgradeManager(cfg)
+
+	got, err := mgr.bootstrap(context.Background(), bootstrapHugoInput{DryRun: boolPointer(false)})
+	if err != nil {
+		t.Fatalf("bootstrap() error = %v", err)
+	}
+	if got.DetectedVersion != "v1.0.0" || !got.Staged || !got.Activated || got.Checksum == "" {
+		t.Fatalf("bootstrap() = %#v, want detected/staged/activated v1.0.0", got)
+	}
+	active, activeVersion, err := mgr.currentManagedTarget()
+	if err != nil || activeVersion != "v1.0.0" {
+		t.Fatalf("currentManagedTarget() after bootstrap = (%q, %q, %v)", active, activeVersion, err)
+	}
+
+	// Rollback must still correctly refuse: bootstrap created a baseline,
+	// but there is still no *second* activation to roll back to yet.
+	if _, err := mgr.rollback(context.Background(), rollbackHugoUpgradeInput{DryRun: boolPointer(false)}); err == nil || !strings.Contains(err.Error(), "rollback_unavailable") {
+		t.Fatalf("rollback immediately after bootstrap = %v, want rollback_unavailable", err)
+	}
+
+	// Now perform the first real upgrade after bootstrapping. Reuse a fresh
+	// server pinned to a new version so stage/activate resolve against it.
+	fakeV2 := newFakeHugoReleaseServer(t, "v2.0.0", fakeHugoArchive(t, "v2.0.0", false), nil)
+	defer fakeV2.Close()
+	mgr.cfg.HugoUpgrade.ReleaseAPIBaseURL = fakeV2.server.URL
+	u, err := url.Parse(fakeV2.server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr.cfg.HugoUpgrade.AllowedHosts = []string{u.Hostname()}
+	if _, err := mgr.stage(context.Background(), stageHugoUpgradeInput{TargetVersion: "v2.0.0", DryRun: boolPointer(false)}); err != nil {
+		t.Fatalf("stage(v2.0.0) error = %v", err)
+	}
+	if _, err := mgr.activate(context.Background(), activateHugoUpgradeInput{TargetVersion: "v2.0.0", DryRun: boolPointer(false)}); err != nil {
+		t.Fatalf("activate(v2.0.0) error = %v", err)
+	}
+
+	// This is the whole point: rollback now has a legitimate target,
+	// because bootstrap gave the *first* activation a real previous_target.
+	rolledBack, err := mgr.rollback(context.Background(), rollbackHugoUpgradeInput{DryRun: boolPointer(false)})
+	if err != nil {
+		t.Fatalf("rollback after bootstrap+upgrade error = %v", err)
+	}
+	if !rolledBack.RolledBack || rolledBack.RestoredVersion != "v1.0.0" {
+		t.Fatalf("rollback() = %#v, want restored v1.0.0", rolledBack)
+	}
+}
+
+func TestHugoBootstrapRefusesWhenAlreadyManaged(t *testing.T) {
+	installFakeCurrentHugo(t, "v1.0.0")
+	fake := newFakeHugoReleaseServer(t, "v1.0.0", fakeHugoArchive(t, "v1.0.0", false), nil)
+	defer fake.Close()
+	cfg := testHugoUpgradeConfig(t, fake.server.URL)
+	mgr := newHugoUpgradeManager(cfg)
+
+	if _, err := mgr.bootstrap(context.Background(), bootstrapHugoInput{DryRun: boolPointer(false)}); err != nil {
+		t.Fatalf("first bootstrap() error = %v", err)
+	}
+	_, err := mgr.bootstrap(context.Background(), bootstrapHugoInput{DryRun: boolPointer(false)})
+	if err == nil || !strings.Contains(err.Error(), "bootstrap_unavailable") {
+		t.Fatalf("second bootstrap() error = %v, want bootstrap_unavailable", err)
+	}
+}
+
+// TestHugoBootstrapRefusesExtendedVariantMismatch guards the gap advisor
+// flagged in review: bootstrap must compare the installed binary's extended
+// variant against hugo_upgrade.require_extended before staging, because
+// stageLocked picks the release asset from config alone and would otherwise
+// surface a confusing version_mismatch instead of the real cause.
+func TestHugoBootstrapRefusesExtendedVariantMismatch(t *testing.T) {
+	dir := t.TempDir()
+	nonExtended := []byte("#!/bin/sh\nprintf 'hugo v1.0.0 linux/amd64 BuildDate=test\\n'\n")
+	if err := os.WriteFile(filepath.Join(dir, "hugo"), nonExtended, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fake := newFakeHugoReleaseServer(t, "v1.0.0", fakeHugoArchive(t, "v1.0.0", false), nil)
+	defer fake.Close()
+	cfg := testHugoUpgradeConfig(t, fake.server.URL)
+	cfg.HugoUpgrade.RequireExtended = true
+	mgr := newHugoUpgradeManager(cfg)
+
+	_, err := mgr.bootstrap(context.Background(), bootstrapHugoInput{DryRun: boolPointer(false)})
+	if err == nil || !strings.Contains(err.Error(), "config_error") || !strings.Contains(err.Error(), "extended") {
+		t.Fatalf("bootstrap() with extended mismatch error = %v, want config_error mentioning extended", err)
+	}
+	if fake.archiveRequests.Load() != 0 {
+		t.Fatalf("bootstrap() with extended mismatch made an archive request, want none")
+	}
+}
+
+func TestHugoBootstrapDryRunMakesNoNetworkRequestOrWrite(t *testing.T) {
+	installFakeCurrentHugo(t, "v1.0.0")
+	fake := newFakeHugoReleaseServer(t, "v1.0.0", fakeHugoArchive(t, "v1.0.0", false), nil)
+	defer fake.Close()
+	cfg := testHugoUpgradeConfig(t, fake.server.URL)
+	mgr := newHugoUpgradeManager(cfg)
+
+	got, err := mgr.bootstrap(context.Background(), bootstrapHugoInput{})
+	if err != nil {
+		t.Fatalf("bootstrap(dry_run default) error = %v", err)
+	}
+	if !got.DryRun || got.Staged || got.Activated || got.DetectedVersion != "v1.0.0" {
+		t.Fatalf("dry-run bootstrap() = %#v, want dry_run detection only", got)
+	}
+	if fake.archiveRequests.Load() != 0 || fake.manifestRequests.Load() != 0 {
+		t.Fatalf("dry-run bootstrap made network requests: archive=%d manifest=%d", fake.archiveRequests.Load(), fake.manifestRequests.Load())
+	}
+	if _, _, err := mgr.currentManagedTarget(); err != nil {
+		t.Fatalf("currentManagedTarget() after dry-run bootstrap error = %v", err)
+	}
+	if active, _, _ := mgr.currentManagedTarget(); active != "" {
+		t.Fatalf("dry-run bootstrap created a managed target: %q", active)
+	}
+}
+
+func TestHugoBootstrapFailsWithoutInstalledHugo(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	fake := newFakeHugoReleaseServer(t, "v1.0.0", fakeHugoArchive(t, "v1.0.0", false), nil)
+	defer fake.Close()
+	cfg := testHugoUpgradeConfig(t, fake.server.URL)
+	_, err := newHugoUpgradeManager(cfg).bootstrap(context.Background(), bootstrapHugoInput{DryRun: boolPointer(false)})
+	if err == nil || !strings.Contains(err.Error(), "config_error") {
+		t.Fatalf("bootstrap() without installed hugo error = %v, want config_error", err)
+	}
+}
