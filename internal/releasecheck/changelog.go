@@ -20,6 +20,25 @@ func CheckChangelogVersion(changelog, version string) error {
 	return nil
 }
 
+// CheckChangelogVersionIsLatest verifies that version is not merely present
+// somewhere in CHANGELOG.md, but is the first versioned release heading.
+// Release deploys use this to reject binaries that would announce vX.Y.Z while
+// still embedding an older top changelog section.
+func CheckChangelogVersionIsLatest(changelog, version string) error {
+	version = normalizeVersion(version)
+	if version == "" {
+		return fmt.Errorf("version is required")
+	}
+	entries := ListReleaseEntries(changelog, 1)
+	if len(entries) == 0 {
+		return fmt.Errorf("CHANGELOG.md has no versioned release headings")
+	}
+	if entries[0].Version != version {
+		return fmt.Errorf("CHANGELOG.md top release is %s, want %s", entries[0].Version, version)
+	}
+	return nil
+}
+
 // ExtractChangelogReleaseNotes returns the exact release section for version,
 // including its heading and body, without adjacent versions.
 func ExtractChangelogReleaseNotes(changelog, version string) (string, error) {

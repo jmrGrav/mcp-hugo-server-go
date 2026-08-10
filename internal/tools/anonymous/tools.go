@@ -153,6 +153,7 @@ type pageDetailDTO struct {
 	ResolvedSourcePath string                  `json:"resolved_source_path"`
 	Revision           string                  `json:"revision,omitempty"`
 	HTML               string                  `json:"html"`
+	HTMLOmittedReason  string                  `json:"html_omitted_reason,omitempty"`
 	HTMLOrigin         string                  `json:"html_origin"`
 	RenderedHTMLAvail  bool                    `json:"rendered_html_available"`
 	State              site.LifecycleState     `json:"state"`
@@ -378,7 +379,7 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 			"`content_only` defaults to true (BREAKING as of this release — previously defaulted to false): the `html` field returns just the article body (prefers the theme's id=\"content\" wrapper when present, excluding title, TOC, post metadata, share buttons, and prev/next navigation; falls back to <article>/<main>/<body>-minus-chrome otherwise) rather than the full rendered page including theme chrome (nav, footer, search widgets, share buttons, scripts) — the old default ran to several thousand tokens for a short article. Pass content_only=false explicitly to opt back into the full-page HTML. "+
 			"Cost note (#865): content_only=true only strips theme chrome — it still returns the page's entire article body, so on a long article the `html` field can still be very large (many thousands of tokens). The name bounds the *shape* (body vs full page), not the *size*. When you need a size-bounded read, prefer get_page_frontmatter (metadata only, no body) or get_page_markdown for the raw source, or pass `max_body_chars: N` to truncate the returned `html` to N characters (#896, same model as build_agent_context/get_page_for_edit): omitting it preserves the full untruncated body (unchanged default), an explicit positive value truncates with an explicit warning in the response, and N must be greater than 0 when provided. "+
 			"(source-only fallback normally carries raw Markdown rather than rendered HTML; `lang` and `url` are empty until the page is built; with the default content_only=true, the `html` field is returned empty for source-only fallback results). "+
-			"`html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. "+
+			"`html_origin` and `rendered_html_available` make that distinction explicit: published reads return `rendered_public`/`true`, source fallback returns `source_fallback`/`false`, and source-only `content_only=true` returns `none`/`false`. When `response_mode:\"compact\"` intentionally omits the html payload, `html` is empty and `html_omitted_reason` is `compact_mode` so callers can distinguish deliberate omission from a missing render. "+
 			"The response includes a `state` object with explicit source/build/public/index visibility hints so agents do not have to infer lifecycle state from empty fields alone. "+
 			"For the raw Markdown source, use get_page_markdown (reader token on OAuth-enabled deployments); for metadata only (no body), use get_page_frontmatter; if you're about to edit or delete this page, use get_page_for_edit instead — it bundles frontmatter, markdown, revision, and quality signals in one call. "+
 			"`include_terms` defaults to true: `tag_terms`/`category_terms` are richer `{label,slug,source}` objects returned alongside the plainer `tags`/`categories` string arrays — the same information at 3-4x the size (#618). Pass include_terms=false to omit them when you only need the plain names. "+
@@ -426,6 +427,7 @@ func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosi
 			dto.State = site.StateForResolvedPage(resolved, cfg.SiteRoot)
 			if mode == toolcontract.ResponseModeCompact {
 				dto.HTML = ""
+				dto.HTMLOmittedReason = "compact_mode"
 				if resolved.Public != nil {
 					dto.HTMLOrigin = "rendered_public"
 					dto.RenderedHTMLAvail = true

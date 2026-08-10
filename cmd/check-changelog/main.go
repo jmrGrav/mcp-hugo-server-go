@@ -34,6 +34,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	if err := releasecheck.CheckChangelogVersionIsLatest(string(data), *version); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	fmt.Fprintf(stdout, "CHANGELOG.md contains %s\n", normalizeForPrint(*version))
 	return 0
 }

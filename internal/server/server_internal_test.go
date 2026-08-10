@@ -718,7 +718,7 @@ func TestMCPBearerAuthMiddlewareValidBearerReachesNextWithoutCorruption(t *testi
 		Resource:              "https://mcp.test/mcp",
 		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
 	}, store)
-	if err := store.AddAccessToken(oauth.HashToken("token-valid"), "reader", time.Now().Add(time.Hour)); err != nil {
+	if err := store.AddAccessToken(oauth.HashToken("token-valid"), "reader", "reader-client", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("AddAccessToken() error = %v", err)
 	}
 
@@ -745,8 +745,8 @@ func TestMCPBearerAuthMiddlewareValidBearerReachesNextWithoutCorruption(t *testi
 	if !gotOK {
 		t.Fatal("bearerResultFromContext() = not ok, want ok")
 	}
-	if gotBR.scope != "read" || !gotBR.legacy || gotBR.tokenHash != oauth.HashToken("token-valid") {
-		t.Fatalf("bearerResultFromContext() = %#v, want canonical scope, legacy alias marker, and token hash", gotBR)
+	if gotBR.scope != "read" || !gotBR.legacy || gotBR.tokenHash != oauth.HashToken("token-valid") || gotBR.principal != "reader-client" {
+		t.Fatalf("bearerResultFromContext() = %#v, want canonical scope, legacy alias marker, token hash, and principal", gotBR)
 	}
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusCreated)

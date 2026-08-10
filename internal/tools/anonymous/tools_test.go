@@ -1808,6 +1808,9 @@ func TestGetPageCompactOmitsRenderedHTMLAndTermPayloads(t *testing.T) {
 	if html, _ := page["html"].(string); html != "" {
 		t.Fatalf("get_page compact html = %q, want empty string", html)
 	}
+	if got := page["html_omitted_reason"]; got != "compact_mode" {
+		t.Fatalf("get_page compact html_omitted_reason = %v, want compact_mode", got)
+	}
 	if _, ok := page["tag_terms"]; ok {
 		t.Fatal("get_page compact tag_terms present, want omitted")
 	}

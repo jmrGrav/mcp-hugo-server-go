@@ -158,7 +158,7 @@ func (s *Service) exchangeAgentAssertion(assertion string) (*TokenResponse, erro
 	if reg.IssuedScope == "" {
 		reg.IssuedScope = "read"
 	}
-	if err := s.store.AddAccessToken(HashToken(token), reg.IssuedScope, time.Now().Add(ttl)); err != nil {
+	if err := s.store.AddAccessToken(HashToken(token), reg.IssuedScope, reg.RegistrationID, time.Now().Add(ttl)); err != nil {
 		return nil, fmt.Errorf("server_error: store token: %w", err)
 	}
 

@@ -12,7 +12,9 @@ type simpleStore struct {
 	ok    bool
 }
 
-func (s *simpleStore) AddAccessToken(token, scope string, expiresAt time.Time) error { return nil }
+func (s *simpleStore) AddAccessToken(token, scope, principal string, expiresAt time.Time) error {
+	return nil
+}
 func (s *simpleStore) ValidateAccessToken(token string) (string, bool) {
 	return s.scope, s.ok
 }
@@ -31,11 +33,11 @@ func (s *simpleStore) Close() error              { return nil }
 func TestValidateBearerInfoWithDetailedStore(t *testing.T) {
 	svc, store := newAgentTestService()
 	future := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
-	if err := store.AddAccessToken(HashToken("token-detailed"), "reader", future); err != nil {
+	if err := store.AddAccessToken(HashToken("token-detailed"), "reader", "reader-client", future); err != nil {
 		t.Fatalf("AddAccessToken() error = %v", err)
 	}
 
-	scope, expiresAt, legacy, ok := svc.ValidateBearerInfo("token-detailed")
+	scope, expiresAt, principal, legacy, ok := svc.ValidateBearerInfo("token-detailed")
 	if !ok {
 		t.Fatal("ValidateBearerInfo() = not ok, want ok")
 	}
@@ -48,21 +50,24 @@ func TestValidateBearerInfoWithDetailedStore(t *testing.T) {
 	if !expiresAt.Equal(future) {
 		t.Fatalf("ValidateBearerInfo().expiresAt = %v, want %v", expiresAt, future)
 	}
+	if principal != "reader-client" {
+		t.Fatalf("ValidateBearerInfo().principal = %q, want reader-client", principal)
+	}
 }
 
 func TestValidateBearerInfoWithoutDetailedStore(t *testing.T) {
 	svc := NewService(newAgentTestServiceConfig(), &simpleStore{scope: "content.read", ok: true})
-	scope, expiresAt, legacy, ok := svc.ValidateBearerInfo("token-no-details")
-	if ok || scope != "" || !expiresAt.IsZero() || legacy {
-		t.Fatalf("ValidateBearerInfo() = (%q, %v, %v, %v), want zero values and ok=false when store lacks details", scope, expiresAt, legacy, ok)
+	scope, expiresAt, principal, legacy, ok := svc.ValidateBearerInfo("token-no-details")
+	if ok || scope != "" || !expiresAt.IsZero() || principal != "" || legacy {
+		t.Fatalf("ValidateBearerInfo() = (%q, %v, %q, %v, %v), want zero values and ok=false when store lacks details", scope, expiresAt, principal, legacy, ok)
 	}
 }
 
 func TestValidateBearerInfoInvalidToken(t *testing.T) {
 	svc, _ := newAgentTestService()
-	scope, expiresAt, legacy, ok := svc.ValidateBearerInfo("missing")
-	if ok || scope != "" || !expiresAt.IsZero() || legacy {
-		t.Fatalf("ValidateBearerInfo(missing) = (%q, %v, %v, %v), want zero values and ok=false", scope, expiresAt, legacy, ok)
+	scope, expiresAt, principal, legacy, ok := svc.ValidateBearerInfo("missing")
+	if ok || scope != "" || !expiresAt.IsZero() || principal != "" || legacy {
+		t.Fatalf("ValidateBearerInfo(missing) = (%q, %v, %q, %v, %v), want zero values and ok=false", scope, expiresAt, principal, legacy, ok)
 	}
 }
 

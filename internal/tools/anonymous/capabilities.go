@@ -34,6 +34,7 @@ type capabilitiesServer struct {
 
 type capabilitiesLanguages struct {
 	Default   string   `json:"default,omitempty"`
+	Mode      string   `json:"mode"`
 	Available []string `json:"available"`
 }
 
@@ -63,16 +64,18 @@ type capabilitiesLimits struct {
 // as booleans/counts only — deliberately not the configuration values
 // themselves (URLs, keys, hook commands are secrets or host detail).
 type capabilitiesFeatures struct {
-	ImageGenerationAvailable  bool   `json:"image_generation_available"`
-	PostBuildHooksConfigured  bool   `json:"post_build_hooks_configured"`
-	PostBuildHooksCount       int    `json:"post_build_hooks_count"`
-	StreamingEnabled          bool   `json:"streaming_enabled"`
-	OAuthEnabled              bool   `json:"oauth_enabled"`
-	ForceDryRunAll            bool   `json:"force_dry_run_all"`
-	CloudflarePurgeConfigured bool   `json:"cloudflare_purge_configured"`
-	IndexNowConfigured        bool   `json:"indexnow_configured"`
-	GoogleIndexingConfigured  bool   `json:"google_indexing_configured"`
-	GitBaselineMode           string `json:"git_baseline_mode,omitempty"`
+	ImageGenerationAvailable         bool   `json:"image_generation_available"`
+	LocalHeroGenerationAvailable     bool   `json:"local_hero_generation_available"`
+	ExternalImageGenerationAvailable bool   `json:"external_image_generation_available"`
+	PostBuildHooksConfigured         bool   `json:"post_build_hooks_configured"`
+	PostBuildHooksCount              int    `json:"post_build_hooks_count"`
+	StreamingEnabled                 bool   `json:"streaming_enabled"`
+	OAuthEnabled                     bool   `json:"oauth_enabled"`
+	ForceDryRunAll                   bool   `json:"force_dry_run_all"`
+	CloudflarePurgeConfigured        bool   `json:"cloudflare_purge_configured"`
+	IndexNowConfigured               bool   `json:"indexnow_configured"`
+	GoogleIndexingConfigured         bool   `json:"google_indexing_configured"`
+	GitBaselineMode                  string `json:"git_baseline_mode,omitempty"`
 }
 
 type getCapabilitiesData struct {
@@ -136,12 +139,18 @@ func availableLanguages(idx *site.Index, defaultLang string, configuredLangs []s
 func registerGetCapabilities(s *mcp.Server, idx *site.Index, cfg config.Config) {
 	addReadOnlyTool(s, "get_capabilities", "Get capabilities",
 		"Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): "+
-			"`server` (release version, commit, build channel, schema version); `languages` (default plus, when the operator has set configured_languages, exactly that authoritative set — otherwise the languages present in the index, #899); "+
+			"`server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); "+
 			"`limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); "+
-			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (image generation, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
+			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
 			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. Anonymous: no authentication needed, so capabilities can be discovered before obtaining a token.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
 			pMin, pDef, pMax := adminpkg.PreviewTTLBoundsSeconds()
+			localHeroGenerationAvailable := strings.TrimSpace(cfg.HugoRoot) != ""
+			externalImageGenerationAvailable := strings.TrimSpace(cfg.ImageGenURL) != ""
+			languageMode := "observed"
+			if len(cfg.ConfiguredLanguages) > 0 {
+				languageMode = "configured"
+			}
 			data := getCapabilitiesData{
 				Server: capabilitiesServer{
 					ReleaseVersion: buildinfo.Version,
@@ -151,6 +160,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, cfg config.Config) 
 				},
 				Languages: capabilitiesLanguages{
 					Default:   strings.TrimSpace(cfg.DefaultLanguage),
+					Mode:      languageMode,
 					Available: availableLanguages(idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages),
 				},
 				Limits: capabilitiesLimits{
@@ -169,16 +179,18 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, cfg config.Config) 
 				AllowedImageFormats: writepkg.AllowedAssetExtensions(),
 				BlockedShortcodes:   append([]string(nil), cfg.BlockedShortcodes...),
 				Features: capabilitiesFeatures{
-					ImageGenerationAvailable:  strings.TrimSpace(cfg.ImageGenURL) != "",
-					PostBuildHooksConfigured:  len(cfg.PostBuildHooks) > 0,
-					PostBuildHooksCount:       len(cfg.PostBuildHooks),
-					StreamingEnabled:          cfg.StreamingEnabled,
-					OAuthEnabled:              cfg.OAuth.Enabled,
-					ForceDryRunAll:            cfg.ForceDryRunAll,
-					CloudflarePurgeConfigured: cfg.Cloudflare.Enabled(),
-					IndexNowConfigured:        cfg.IndexNow.Enabled(),
-					GoogleIndexingConfigured:  cfg.GoogleIndex.Enabled(),
-					GitBaselineMode:           strings.TrimSpace(cfg.GitBaseline.Mode),
+					ImageGenerationAvailable:         localHeroGenerationAvailable || externalImageGenerationAvailable,
+					LocalHeroGenerationAvailable:     localHeroGenerationAvailable,
+					ExternalImageGenerationAvailable: externalImageGenerationAvailable,
+					PostBuildHooksConfigured:         len(cfg.PostBuildHooks) > 0,
+					PostBuildHooksCount:              len(cfg.PostBuildHooks),
+					StreamingEnabled:                 cfg.StreamingEnabled,
+					OAuthEnabled:                     cfg.OAuth.Enabled,
+					ForceDryRunAll:                   cfg.ForceDryRunAll,
+					CloudflarePurgeConfigured:        cfg.Cloudflare.Enabled(),
+					IndexNowConfigured:               cfg.IndexNow.Enabled(),
+					GoogleIndexingConfigured:         cfg.GoogleIndex.Enabled(),
+					GitBaselineMode:                  strings.TrimSpace(cfg.GitBaseline.Mode),
 				},
 			}
 			if data.BlockedShortcodes == nil {

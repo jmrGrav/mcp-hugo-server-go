@@ -8,9 +8,14 @@ import (
 )
 
 // Key returns the strongest stable caller identity currently present in ctx.
-// For OAuth requests this is the per-bearer token hash; without OAuth it
-// falls back to caller IP, and finally to "" when neither exists.
+// For OAuth requests this prefers the stable principal identity (client_id,
+// agent registration id, etc.), then falls back to the per-bearer token hash;
+// without OAuth it falls back to caller IP, and finally to "" when neither
+// exists.
 func Key(ctx context.Context) string {
+	if principal, _ := ctx.Value(oauth.CtxPrincipal).(string); strings.TrimSpace(principal) != "" {
+		return principal
+	}
 	if id, _ := ctx.Value(oauth.CtxTokenID).(string); strings.TrimSpace(id) != "" {
 		return id
 	}

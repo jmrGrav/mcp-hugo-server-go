@@ -175,7 +175,7 @@ func TestPurgeExpired(t *testing.T) {
 		TrustedAuthorizeCIDRs: []string{"127.0.0.1/32"},
 	}, store)
 	token := HashToken("token")
-	if err := store.AddAccessToken(token, "content.read", time.Now().Add(-time.Hour)); err != nil {
+	if err := store.AddAccessToken(token, "content.read", "expired-client", time.Now().Add(-time.Hour)); err != nil {
 		t.Fatalf("AddAccessToken() error = %v", err)
 	}
 	svc.PurgeExpired()

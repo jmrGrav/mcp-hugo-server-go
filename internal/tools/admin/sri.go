@@ -97,7 +97,7 @@ func RegisterSRI(s *mcp.Server, cfg config.Config) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "check_sri_versions",
 		Title:        "Verify SRI integrity",
-		Description:  "Scan Hugo layouts for CDN integrity attributes and verify each URL's current SHA-384 hash matches the template.",
+		Description:  "Scan Hugo layouts and public HTML for CDN integrity attributes, then verify each URL's current content still matches the exact SRI hash declared in the template or data file (supports sha256, sha384, and sha512).",
 		InputSchema:  tools.MustSchema[sriCheckInput](),
 		OutputSchema: tools.MustSchema[sriCheckOutput](),
 		Annotations: &mcp.ToolAnnotations{

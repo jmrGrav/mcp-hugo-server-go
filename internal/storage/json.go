@@ -10,6 +10,7 @@ import (
 )
 
 type jsonEntry struct {
+	Principal string `json:"principal,omitempty"`
 	Scope     string `json:"scope"`
 	ExpiresAt int64  `json:"expires_at"`
 }
@@ -94,10 +95,10 @@ func saveJSONState(path string, state jsonState) error {
 	return os.Rename(tmp, path)
 }
 
-func (s *jsonStore) AddAccessToken(token, scope string, expiresAt time.Time) error {
+func (s *jsonStore) AddAccessToken(token, scope, principal string, expiresAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.tokens[token] = jsonEntry{Scope: scope, ExpiresAt: expiresAt.Unix()}
+	s.tokens[token] = jsonEntry{Principal: principal, Scope: scope, ExpiresAt: expiresAt.Unix()}
 	return s.save()
 }
 
@@ -111,14 +112,18 @@ func (s *jsonStore) ValidateAccessToken(token string) (string, bool) {
 	return e.Scope, true
 }
 
-func (s *jsonStore) ValidateAccessTokenDetails(token string) (string, time.Time, bool) {
+func (s *jsonStore) ValidateAccessTokenDetails(token string) (AccessTokenDetails, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, ok := s.tokens[token]
 	if !ok || time.Now().Unix() >= e.ExpiresAt {
-		return "", time.Time{}, false
+		return AccessTokenDetails{}, false
 	}
-	return e.Scope, time.Unix(e.ExpiresAt, 0), true
+	return AccessTokenDetails{
+		Scope:     e.Scope,
+		Principal: e.Principal,
+		ExpiresAt: time.Unix(e.ExpiresAt, 0),
+	}, true
 }
 
 func (s *jsonStore) AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error {
@@ -154,7 +159,7 @@ func (s *jsonStore) ExchangeRefreshToken(oldToken, clientID, newRefreshToken, ne
 		nextRefresh[k] = v
 	}
 	delete(nextRefresh, oldToken)
-	nextTokens[newAccessToken] = jsonEntry{Scope: e.Scope, ExpiresAt: accessExpiresAt.Unix()}
+	nextTokens[newAccessToken] = jsonEntry{Principal: clientID, Scope: e.Scope, ExpiresAt: accessExpiresAt.Unix()}
 	nextRefresh[newRefreshToken] = jsonRefreshEntry{
 		ClientID:  clientID,
 		Scope:     e.Scope,

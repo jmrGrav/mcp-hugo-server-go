@@ -6,7 +6,7 @@ import (
 )
 
 type Store interface {
-	AddAccessToken(token, scope string, expiresAt time.Time) error
+	AddAccessToken(token, scope, principal string, expiresAt time.Time) error
 	ValidateAccessToken(token string) (scope string, ok bool)
 	AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error
 	ValidateRefreshToken(token, clientID string) (scope string, ok bool)
@@ -16,8 +16,15 @@ type Store interface {
 }
 
 type memoryEntry struct {
+	principal string
 	scope     string
 	expiresAt time.Time
+}
+
+type AccessTokenDetails struct {
+	Scope     string
+	Principal string
+	ExpiresAt time.Time
 }
 
 type memoryRefreshEntry struct {
@@ -39,10 +46,10 @@ func NewMemory() Store {
 	}
 }
 
-func (m *memoryStore) AddAccessToken(token, scope string, expiresAt time.Time) error {
+func (m *memoryStore) AddAccessToken(token, scope, principal string, expiresAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.tokens[token] = memoryEntry{scope: scope, expiresAt: expiresAt}
+	m.tokens[token] = memoryEntry{principal: principal, scope: scope, expiresAt: expiresAt}
 	return nil
 }
 
@@ -56,14 +63,18 @@ func (m *memoryStore) ValidateAccessToken(token string) (string, bool) {
 	return e.scope, true
 }
 
-func (m *memoryStore) ValidateAccessTokenDetails(token string) (string, time.Time, bool) {
+func (m *memoryStore) ValidateAccessTokenDetails(token string) (AccessTokenDetails, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	e, ok := m.tokens[token]
 	if !ok || !time.Now().Before(e.expiresAt) {
-		return "", time.Time{}, false
+		return AccessTokenDetails{}, false
 	}
-	return e.scope, e.expiresAt, true
+	return AccessTokenDetails{
+		Scope:     e.scope,
+		Principal: e.principal,
+		ExpiresAt: e.expiresAt,
+	}, true
 }
 
 func (m *memoryStore) AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error {
@@ -95,7 +106,7 @@ func (m *memoryStore) ExchangeRefreshToken(oldToken, clientID, newRefreshToken, 
 		return "", false, nil
 	}
 	delete(m.refreshTokens, oldToken)
-	m.tokens[newAccessToken] = memoryEntry{scope: e.scope, expiresAt: accessExpiresAt}
+	m.tokens[newAccessToken] = memoryEntry{principal: clientID, scope: e.scope, expiresAt: accessExpiresAt}
 	m.refreshTokens[newRefreshToken] = memoryRefreshEntry{
 		clientID:  clientID,
 		scope:     e.scope,

@@ -12,6 +12,7 @@ import (
 )
 
 type mcpBearerResult struct {
+	principal string
 	scope     string
 	legacy    bool
 	tokenHash string
@@ -141,7 +142,7 @@ func newMCPBearerAuthMiddleware(verifier sdkauth.TokenVerifier, realm, resourceM
 
 func oauthTokenVerifier(oauthSvc *oauth.Service) sdkauth.TokenVerifier {
 	return func(ctx context.Context, token string, req *http.Request) (*sdkauth.TokenInfo, error) {
-		scope, expiresAt, legacy, ok := oauthSvc.ValidateBearerInfo(token)
+		scope, expiresAt, principal, legacy, ok := oauthSvc.ValidateBearerInfo(token)
 		if !ok {
 			return nil, sdkauth.ErrInvalidToken
 		}
@@ -150,6 +151,7 @@ func oauthTokenVerifier(oauthSvc *oauth.Service) sdkauth.TokenVerifier {
 			Expiration: expiresAt,
 			Extra: map[string]any{
 				"mcp_bearer": mcpBearerResult{
+					principal: principal,
 					scope:     scope,
 					legacy:    legacy,
 					tokenHash: oauth.HashToken(token),

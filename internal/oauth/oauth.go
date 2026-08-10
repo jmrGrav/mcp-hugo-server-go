@@ -23,7 +23,7 @@ import (
 )
 
 type accessTokenDetailsStore interface {
-	ValidateAccessTokenDetails(token string) (scope string, expiresAt time.Time, ok bool)
+	ValidateAccessTokenDetails(token string) (storage.AccessTokenDetails, bool)
 }
 
 type ctxKey string
@@ -47,6 +47,12 @@ const CtxCallerIP ctxKey = "caller_ip"
 // than failing, since some deployments run with OAuth off entirely.
 // #nosec G101 -- this is a context-key label, not a credential or token.
 const CtxTokenID ctxKey = "oauth_token_id"
+
+// CtxPrincipal carries the most stable authenticated caller identity available
+// for this request (for example an OAuth client_id or agent registration id).
+// Unlike CtxTokenID, it is intended to survive access-token rotation so tools
+// can key per-principal state such as rate limits across refreshes.
+const CtxPrincipal ctxKey = "oauth_principal"
 
 var cryptoRandReader io.Reader = rand.Reader
 
@@ -233,16 +239,16 @@ func (s *Service) ValidateBearerDetails(token string) (string, bool, bool) {
 // was accepted. It is the richer variant used by the SDK bearer adapter in
 // internal/server when TokenInfo.Expiration must reflect the actual access
 // token TTL instead of a synthetic value.
-func (s *Service) ValidateBearerInfo(token string) (string, time.Time, bool, bool) {
+func (s *Service) ValidateBearerInfo(token string) (string, time.Time, string, bool, bool) {
 	detailedStore, ok := s.store.(accessTokenDetailsStore)
 	if !ok {
-		return "", time.Time{}, false, false
+		return "", time.Time{}, "", false, false
 	}
-	scope, expiresAt, ok := detailedStore.ValidateAccessTokenDetails(HashToken(token))
+	details, ok := detailedStore.ValidateAccessTokenDetails(HashToken(token))
 	if !ok {
-		return "", time.Time{}, false, false
+		return "", time.Time{}, "", false, false
 	}
-	return CanonicalScope(scope), expiresAt, IsLegacyScope(scope), true
+	return CanonicalScope(details.Scope), details.ExpiresAt, strings.TrimSpace(details.Principal), IsLegacyScope(details.Scope), true
 }
 
 func firstNonEmpty(values ...string) string {
@@ -525,7 +531,7 @@ func (s *Service) issueBearerPair(clientID, scope string) (*TokenResponse, error
 		return nil, fmt.Errorf("server_error: generate access token: %w", err)
 	}
 	accessTTL := time.Duration(s.cfg.AccessTokenTTLSeconds) * time.Second
-	if err := s.store.AddAccessToken(HashToken(token), scope, time.Now().Add(accessTTL)); err != nil {
+	if err := s.store.AddAccessToken(HashToken(token), scope, clientID, time.Now().Add(accessTTL)); err != nil {
 		return nil, fmt.Errorf("server_error: store token: %w", err)
 	}
 	refreshToken, err := randomString(32)

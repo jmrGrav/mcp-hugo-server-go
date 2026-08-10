@@ -231,6 +231,7 @@ func newMCPToolHandler(
 			ctx := context.WithValue(r.Context(), oauth.CtxScope, callerScope)
 			ctx = context.WithValue(ctx, oauth.CtxCallerIP, callerIP)
 			ctx = context.WithValue(ctx, oauth.CtxTokenID, bearerResult.tokenHash)
+			ctx = context.WithValue(ctx, oauth.CtxPrincipal, bearerResult.principal)
 			if callerScope == site.AccessProfileReader {
 				ctx = site.WithAccessProfile(ctx, site.AccessProfileReader)
 			}

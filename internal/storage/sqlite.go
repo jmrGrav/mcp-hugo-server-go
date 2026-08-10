@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -29,12 +30,17 @@ func NewSQLite(path string) (Store, error) {
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS access_tokens (
 			token TEXT PRIMARY KEY,
+			principal TEXT NOT NULL DEFAULT '',
 			scope TEXT NOT NULL,
 			expires_at INTEGER NOT NULL
 		)
 	`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
+	}
+	if _, err := db.Exec(`ALTER TABLE access_tokens ADD COLUMN principal TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		db.Close()
+		return nil, fmt.Errorf("migrate access_tokens principal: %w", err)
 	}
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -96,10 +102,10 @@ func boolToInt(v bool) int {
 	return 0
 }
 
-func (s *sqliteStore) AddAccessToken(token, scope string, expiresAt time.Time) error {
+func (s *sqliteStore) AddAccessToken(token, scope, principal string, expiresAt time.Time) error {
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO access_tokens (token, scope, expires_at) VALUES (?, ?, ?)`,
-		token, scope, expiresAt.Unix(),
+		`INSERT OR REPLACE INTO access_tokens (token, principal, scope, expires_at) VALUES (?, ?, ?, ?)`,
+		token, principal, scope, expiresAt.Unix(),
 	)
 	return err
 }
@@ -116,17 +122,22 @@ func (s *sqliteStore) ValidateAccessToken(token string) (string, bool) {
 	return scope, true
 }
 
-func (s *sqliteStore) ValidateAccessTokenDetails(token string) (string, time.Time, bool) {
+func (s *sqliteStore) ValidateAccessTokenDetails(token string) (AccessTokenDetails, bool) {
 	var scope string
+	var principal string
 	var expiresAtUnix int64
 	err := s.db.QueryRow(
-		`SELECT scope, expires_at FROM access_tokens WHERE token = ? AND expires_at > ?`,
+		`SELECT scope, principal, expires_at FROM access_tokens WHERE token = ? AND expires_at > ?`,
 		token, time.Now().Unix(),
-	).Scan(&scope, &expiresAtUnix)
+	).Scan(&scope, &principal, &expiresAtUnix)
 	if err != nil {
-		return "", time.Time{}, false
+		return AccessTokenDetails{}, false
 	}
-	return scope, time.Unix(expiresAtUnix, 0), true
+	return AccessTokenDetails{
+		Scope:     scope,
+		Principal: principal,
+		ExpiresAt: time.Unix(expiresAtUnix, 0),
+	}, true
 }
 
 func (s *sqliteStore) AddRefreshToken(token, clientID, scope string, expiresAt time.Time) error {
@@ -171,8 +182,8 @@ func (s *sqliteStore) ExchangeRefreshToken(oldToken, clientID, newRefreshToken, 
 		return "", false, err
 	}
 	if _, err := tx.Exec(
-		`INSERT OR REPLACE INTO access_tokens (token, scope, expires_at) VALUES (?, ?, ?)`,
-		newAccessToken, scope, accessExpiresAt.Unix(),
+		`INSERT OR REPLACE INTO access_tokens (token, principal, scope, expires_at) VALUES (?, ?, ?, ?)`,
+		newAccessToken, clientID, scope, accessExpiresAt.Unix(),
 	); err != nil {
 		return "", false, err
 	}

@@ -159,13 +159,17 @@ func mustOAuthSQLiteServerWithConfig(t *testing.T, cfg config.Config, storePath 
 }
 
 func addBearerToken(t *testing.T, storePath, rawToken, scope string) {
+	addBearerTokenWithPrincipal(t, storePath, rawToken, scope, rawToken)
+}
+
+func addBearerTokenWithPrincipal(t *testing.T, storePath, rawToken, scope, principal string) {
 	t.Helper()
 	store, err := storage.NewSQLite(storePath)
 	if err != nil {
 		t.Fatalf("NewSQLite() error = %v", err)
 	}
 	defer store.Close()
-	if err := store.AddAccessToken(oauthHashForTest(rawToken), scope, time.Now().Add(time.Hour)); err != nil {
+	if err := store.AddAccessToken(oauthHashForTest(rawToken), scope, principal, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("AddAccessToken() error = %v", err)
 	}
 }
@@ -2363,6 +2367,60 @@ func TestApplyContentPlanIsolatedByCallerAcrossHTTP(t *testing.T) {
 	}
 	if !strings.Contains(string(applied), "Changed by plan owner") {
 		t.Fatalf("owner apply did not write planned body: %q", string(applied))
+	}
+}
+
+func TestGetRateLimitsSharesQuotaAcrossTokensForSamePrincipal(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	cfg.RateLimit.CreateUpdatePerMin = 2
+	cfg.OAuth = config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		AccessTokenTTLSeconds: 3600,
+		StorageBackend:        "sqlite",
+		StoragePath:           storePath,
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+
+	addBearerTokenWithPrincipal(t, storePath, "token-a1", "write", "client-a")
+	addBearerTokenWithPrincipal(t, storePath, "token-a2", "write", "client-a")
+	addBearerTokenWithPrincipal(t, storePath, "token-b1", "write", "client-b")
+
+	createRec := doMCPCall(t, srv, "token-a1", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/shared-bucket","title":"Shared","body":"Body","tags":[],"categories":[]}}}`))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+
+	samePrincipalRec := doMCPCall(t, srv, "token-a2", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_rate_limits","arguments":{}}}`))
+	if samePrincipalRec.Code != http.StatusOK {
+		t.Fatalf("get_rate_limits same principal status = %d body = %q", samePrincipalRec.Code, samePrincipalRec.Body.String())
+	}
+	samePrincipalData := toolCallResultData(t, samePrincipalRec.Body.String())
+	createBucket := samePrincipalData["data"].(map[string]any)["create_update_upload"].(map[string]any)
+	if got := int(createBucket["remaining"].(float64)); got != 1 {
+		t.Fatalf("same-principal remaining = %d, want 1 after one create consumed the shared bucket", got)
+	}
+
+	otherPrincipalRec := doMCPCall(t, srv, "token-b1", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_rate_limits","arguments":{}}}`))
+	if otherPrincipalRec.Code != http.StatusOK {
+		t.Fatalf("get_rate_limits other principal status = %d body = %q", otherPrincipalRec.Code, otherPrincipalRec.Body.String())
+	}
+	otherPrincipalData := toolCallResultData(t, otherPrincipalRec.Body.String())
+	otherBucket := otherPrincipalData["data"].(map[string]any)["create_update_upload"].(map[string]any)
+	if got := int(otherBucket["remaining"].(float64)); got != 2 {
+		t.Fatalf("other-principal remaining = %d, want full independent bucket of 2", got)
 	}
 }
 
