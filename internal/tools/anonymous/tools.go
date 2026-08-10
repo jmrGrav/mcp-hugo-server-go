@@ -775,6 +775,14 @@ func newListPagesOutput(data listPagesData) listPagesOutput {
 
 func newGetPageOutput(data getPageData, warnings []string) getPageOutput {
 	resp := success(data)
+	// get_page can carry either bytes rendered from the public site or raw
+	// source fallback. Mark the origin consistently with source readers so an
+	// agent never mistakes site-controlled content for server authority (#1006).
+	if data.Page != nil && data.Page.HTMLOrigin == "rendered_public" {
+		resp.Meta.ContentProvenance = "site_rendered_public_untrusted"
+	} else {
+		resp.Meta.ContentProvenance = "site_source_untrusted"
+	}
 	if len(warnings) > 0 {
 		resp.Warnings = warnings
 	}
