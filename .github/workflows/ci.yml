@@ -52,6 +52,69 @@ jobs:
           echo "Coverage: ${COVERAGE}%"
           awk -v cov="$COVERAGE" 'BEGIN { if (cov + 0 < 85) { print "Coverage " cov "% is below 85%"; exit 1 } }'
 
+  source-loc:
+    name: Production Go LOC
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+      - name: Verify exclusions
+        run: make check-loc-badge
+      - name: Generate Shields endpoint payload
+        run: make source-loc-badge BADGE_JSON=source-loc.json
+      - name: Upload badge payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-loc-badge
+          path: source-loc.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-source-loc:
+    name: Publish Production Go LOC badge
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: source-loc
+    runs-on: ubuntu-latest
+    concurrency:
+      group: production-go-loc-badge
+      cancel-in-progress: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: source-loc-badge
+          path: /tmp/source-loc-badge
+      - name: Publish payload to badges branch
+        run: |
+          set -euo pipefail
+          current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+          if [[ "${current_main}" != "$GITHUB_SHA" ]]; then
+            echo "Skipping superseded badge payload for $GITHUB_SHA"
+            exit 0
+          fi
+          parent=()
+          if git ls-remote --exit-code --heads origin badges >/dev/null 2>&1; then
+            git fetch --depth=1 origin badges
+            if git cat-file -e FETCH_HEAD:source-loc.json 2>/dev/null && \
+               cmp -s /tmp/source-loc-badge/source-loc.json <(git show FETCH_HEAD:source-loc.json); then
+              echo "Badge payload is unchanged"
+              exit 0
+            fi
+            parent=(-p FETCH_HEAD)
+          fi
+          blob=$(git hash-object -w /tmp/source-loc-badge/source-loc.json)
+          tree=$(printf '100644 blob %s\tsource-loc.json\n' "$blob" | git mktree)
+          export GIT_AUTHOR_NAME="github-actions[bot]"
+          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          commit=$(printf 'chore: update production Go LOC badge\n' | git commit-tree "$tree" "${parent[@]}")
+          git push origin "$commit:refs/heads/badges"
+
   # Boot the real binary with a synthetic config and assert all 7 IsItAgentReady
   # discovery endpoints respond correctly, and that scopes_supported contains
   # exactly read/write (#450) and none of the pre-#450 scope strings. This
