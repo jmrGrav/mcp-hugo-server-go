@@ -174,6 +174,13 @@ func canonicalPublicSlugForSourceLang(sourceSlug, lang, defaultLang string) stri
 	return normalizeSlug("/" + lang + "/" + sourceSlug)
 }
 
+// PublicSlugForSourceLang returns the rendered URL slug Hugo uses for a
+// source translation. Non-default languages receive their language prefix;
+// the default language keeps the bare source slug.
+func PublicSlugForSourceLang(sourceSlug, lang, defaultLang string) string {
+	return canonicalPublicSlugForSourceLang(sourceSlug, lang, defaultLang)
+}
+
 func pageMatchesExplicitLang(p *Page, lang, defaultLang string) bool {
 	if p == nil {
 		return false

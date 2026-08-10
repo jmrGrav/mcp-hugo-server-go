@@ -43,11 +43,12 @@ type createPreviewInput struct {
 
 // createPreviewData is the canonical data.* payload (#552).
 type createPreviewData struct {
-	PreviewID           string `json:"preview_id"`
-	URL                 string `json:"url"`
-	ExpiresAt           string `json:"expires_at"`
-	Build               string `json:"build"`
-	EffectiveTTLSeconds int    `json:"effective_ttl_seconds"`
+	PreviewID            string `json:"preview_id"`
+	URL                  string `json:"url"`
+	ExpiresAt            string `json:"expires_at"`
+	Build                string `json:"build"`
+	EffectiveTTLSeconds  int    `json:"effective_ttl_seconds"`
+	ExternalVerification string `json:"external_verification"`
 }
 
 // createPreviewOutput's payload lives only under data.* as of v1.5.9 (#573)
@@ -105,7 +106,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		Description: "Build the current source (optionally including drafts) into an isolated, non-public directory and " +
 			"expose it at a temporary preview entry URL for visual inspection. The entry URL is opaque (not a raw process ID), " +
 			"non-indexable (X-Robots-Tag: noindex), isolated from the public site (a dedicated build, never cfg.SiteRoot), " +
-			"and expires after ttl_seconds (default 900s, min 60s, max 3600s). On first open, the entry URL exchanges its token for an HttpOnly preview session cookie and redirects the browser to a clean `/preview/{id}/...` URL so internal asset and link requests no longer carry the bearer secret in every path. Preview builds run Hugo with `--environment preview` so templates can suppress preview-unsafe features such as share links. The response always echoes the actual applied TTL as `data.effective_ttl_seconds`; values outside the allowed range are clamped with a warning. Requires write.",
+			"and expires after ttl_seconds (default 900s, min 60s, max 3600s). On first open, the entry URL exchanges its token for an HttpOnly preview session cookie and redirects the browser to a clean `/preview/{id}/...` URL so internal asset and link requests no longer carry the bearer secret in every path. Preview builds run Hugo with `--environment preview` so templates can suppress preview-unsafe features such as share links. When preview_external_verification is enabled, success additionally proves that the public ingress serves a nested page and asset byte-for-byte and returns 404 for a missing route; failures revoke the preview and return preview_unreachable. The response always echoes the verification state and actual applied TTL as `data.external_verification` and `data.effective_ttl_seconds`; values outside the allowed TTL range are clamped with a warning. Requires write.",
 		InputSchema:  tools.MustSchema[createPreviewInput](),
 		OutputSchema: tools.MustSchema[createPreviewOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -240,6 +241,21 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			Owner:       owner,
 		})
 
+		externalVerification := "not_configured"
+		if cfg.PreviewExternalVerification {
+			if err := verifyExternalPreview(tctx, store, previewID, previewAccessURL, previewBrowseURL, destDir); err != nil {
+				store.Revoke(previewID)
+				slog.Error("create_preview external verification failed",
+					"tool", "create_preview",
+					"user", currentUserForLog(),
+					"preview_id", previewID,
+					"error", err,
+				)
+				return nil, createPreviewOutput{}, fmt.Errorf("preview_unreachable: public preview ingress did not preserve the isolated build: %w", err)
+			}
+			externalVerification = "passed"
+		}
+
 		slog.Info("create_preview completed",
 			"tool", "create_preview",
 			"user", currentUserForLog(),
@@ -249,11 +265,12 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		)
 
 		out := newCreatePreviewOutput(createPreviewData{
-			PreviewID:           previewID,
-			URL:                 previewAccessURL,
-			ExpiresAt:           expiresAt.UTC().Format(time.RFC3339),
-			Build:               "passed",
-			EffectiveTTLSeconds: int(ttl.Seconds()),
+			PreviewID:            previewID,
+			URL:                  previewAccessURL,
+			ExpiresAt:            expiresAt.UTC().Format(time.RFC3339),
+			Build:                "passed",
+			EffectiveTTLSeconds:  int(ttl.Seconds()),
+			ExternalVerification: externalVerification,
 		})
 		if clamped {
 			out.Warnings = append(out.Warnings, fmt.Sprintf("ttl_seconds was clamped to %d", int(ttl.Seconds())))

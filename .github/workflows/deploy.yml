@@ -193,12 +193,18 @@ jobs:
             echo "- service_version: \`$(/usr/local/bin/mcp-hugo-server-go --version)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Post-deploy smoke (read-only)
+      - name: Post-deploy smoke (build and edge integrity)
         env:
           MCP_SMOKE_LIVE: "1"
           MCP_BASE_URL: ${{ secrets.PRODUCTION_URL }}
           MCP_ACCESS_TOKEN: ${{ secrets.MCP_ACCESS_TOKEN }}
           MCP_SMOKE_DELAY: "3"
+          # This workflow runs after the binary has been installed and the
+          # production environment approval has been granted. Exercise the
+          # real systemd sandbox, atomic output swap, callbacks, public index,
+          # and Cloudflare-facing EN/FR routes rather than stopping at a
+          # read-only MCP handshake (#986).
+          MCP_SMOKE_VERIFY_DEPLOY: "1"
         run: bash scripts/smoke-mcp-live.sh
 
   release:

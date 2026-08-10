@@ -92,12 +92,13 @@ func RegisterInspectPreviewRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *
 			return nil, inspectPreviewRenderedOutput{}, fmt.Errorf("content_not_found: no source page found for slug %q", slug)
 		}
 
+		previewSlug := site.PublicSlugForSourceLang(resolved.Source.Slug, resolved.Source.Lang, cfg.DefaultLanguage)
 		page := site.Page{
-			Slug:       "/" + strings.Trim(resolved.Source.Slug, "/") + "/",
+			Slug:       previewSlug,
 			Title:      resolved.Source.Title,
-			URL:        strings.TrimRight(baseURL, "/") + previewURLPath(previewID, resolved.Source.Slug),
+			URL:        strings.TrimRight(baseURL, "/") + previewURLPath(previewID, previewSlug),
 			Lang:       resolved.Source.Lang,
-			OutputPath: filepath.ToSlash(filepath.Join(resolved.Source.Slug, "index.html")),
+			OutputPath: filepath.ToSlash(filepath.Join(strings.Trim(previewSlug, "/"), "index.html")),
 		}
 		previewCfg := cfg
 		previewCfg.SiteRoot = entry.Dir

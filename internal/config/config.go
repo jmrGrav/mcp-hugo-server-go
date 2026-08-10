@@ -146,6 +146,14 @@ type Config struct {
 	// Defaults to 512 MiB. Non-positive -> default (clampPreviewLimits), so the
 	// disk protection can't be silently disabled by a zeroed/omitted value.
 	PreviewMaxDiskBytes int64 `yaml:"preview_max_disk_bytes"`
+	// PreviewExternalVerification makes create_preview verify its returned URL
+	// through the configured public OAuth issuer before reporting success. The
+	// probe follows the real entry-token/cookie flow and compares a nested HTML
+	// page plus an asset with the isolated build, so a reverse-proxy homepage
+	// fallback cannot pass merely because it returned HTTP 200. Disabled by
+	// default because it deliberately makes a bounded outbound request to the
+	// operator-configured issuer.
+	PreviewExternalVerification bool `yaml:"preview_external_verification"`
 }
 
 // GitBaselineConfig defines the local Git checkout model used as the trusted

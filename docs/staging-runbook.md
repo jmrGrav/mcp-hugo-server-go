@@ -123,6 +123,22 @@ MCP_SMOKE_WRITE_SLUG=codex-mcp-live-audit-$(date -u +%Y%m%d-%H%M%S) \
 bash scripts/smoke-mcp-live.sh
 ```
 
+For the post-deploy integrity gate used by the production deployment workflow,
+set `MCP_SMOKE_VERIFY_DEPLOY=1` instead. This mode performs a real `build_site`,
+requires every build/output-swap/index/callback stage to be clean, checks public
+output completeness, then dynamically selects one published English page and
+one French page and verifies their canonical URL and HTML language through the
+real edge. It does not create or edit content, but it is intentionally not a
+read-only smoke because the build and configured callbacks are real:
+
+```bash
+MCP_SMOKE_LIVE=1 \
+MCP_BASE_URL=https://mcp.example.com \
+MCP_ACCESS_TOKEN='<redacted>' \
+MCP_SMOKE_VERIFY_DEPLOY=1 \
+bash scripts/smoke-mcp-live.sh
+```
+
 If `generate_hero_image` is intentionally disabled because `image_gen_url`
 is absent, the tool should return a structured `config_error`. That is expected
 operator feedback, not a secret or a crash.

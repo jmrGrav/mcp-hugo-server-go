@@ -141,6 +141,19 @@ func TestParseToolErrorAmbiguousLanguage(t *testing.T) {
 	}
 }
 
+func TestParseToolErrorPreviewUnreachableIsOperatorActionable(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("preview_unreachable: public preview ingress returned the wrong page"))
+	if got.Code != "preview_unreachable" || got.Retryable {
+		t.Fatalf("ParseToolError = %#v, want non-retryable preview_unreachable", got)
+	}
+	if got.Resolution == nil || got.Resolution.Action != "contact_operator" {
+		t.Fatalf("resolution = %#v, want contact_operator", got.Resolution)
+	}
+	if !strings.Contains(got.Suggestion, "/preview/") || !strings.Contains(got.Suggestion, "index.html") {
+		t.Fatalf("suggestion = %q, want concrete proxy guidance", got.Suggestion)
+	}
+}
+
 func TestParseToolErrorMissingRequiredParameter(t *testing.T) {
 	got := ParseToolError(fmt.Errorf("invalid_params: slug must not be empty"))
 	if got.Code != "missing_required_parameter" {

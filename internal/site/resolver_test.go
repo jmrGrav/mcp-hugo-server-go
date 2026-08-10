@@ -43,6 +43,15 @@ func TestPageResolverResolvesPublicAndSourceSlugs(t *testing.T) {
 	}
 }
 
+func TestPublicSlugForSourceLangPrefixesOnlyNonDefaultLanguage(t *testing.T) {
+	if got := PublicSlugForSourceLang("posts/hello", "fr", "fr"); got != "/posts/hello/" {
+		t.Fatalf("default-language public slug = %q", got)
+	}
+	if got := PublicSlugForSourceLang("posts/hello", "en", "fr"); got != "/en/posts/hello/" {
+		t.Fatalf("non-default-language public slug = %q", got)
+	}
+}
+
 func TestPageResolverResolvesLanguagePrefixedPublicSlugToSource(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeSourcePage(t, contentRoot, "posts/hello/index.md", "---\ntitle: Hello\n---\nClean source body\n")

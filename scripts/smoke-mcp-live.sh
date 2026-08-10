@@ -15,6 +15,7 @@ SESSION_TOOL="${MCP_SMOKE_SESSION_TOOL:-get_site_information}"
 SESSION_ARGS="${MCP_SMOKE_SESSION_ARGS:-{}}"
 SESSION_DELAY="${MCP_SMOKE_SESSION_DELAY:-$SMOKE_DELAY}"
 ENABLE_WRITES="${MCP_SMOKE_ENABLE_WRITES:-0}"
+VERIFY_DEPLOY="${MCP_SMOKE_VERIFY_DEPLOY:-0}"
 WRITE_SLUG="${MCP_SMOKE_WRITE_SLUG:-codex-mcp-live-audit-$(date -u +%Y%m%d-%H%M%S)}"
 
 need() {
@@ -213,6 +214,27 @@ call_tool() {
   mcp_request "$label" "tools/call" "$params" "$expect_success"
 }
 
+tool_payload() {
+	local label="$1"
+	jq -r '.result.content[0].text // empty' "$TMPDIR/last-$label.json" | jq -e .
+}
+
+probe_edge_page() {
+	local page_json="$1"
+	local label="$2"
+	local url lang body status effective
+	url="$(jq -r '.url' <<<"$page_json")"
+	lang="$(jq -r '.lang' <<<"$page_json")"
+	body="$TMPDIR/edge-$label.html"
+	read -r status effective < <(curl -sS -L --max-time 30 --connect-timeout 10 --max-filesize 5242880 -o "$body" -w '%{http_code} %{url_effective}\n' "$url")
+	[[ "$status" == "200" ]] || fail "$label edge URL returned HTTP $status"
+	[[ "$effective" == "$url" ]] || fail "$label edge URL redirected to $effective instead of preserving $url"
+	[[ "$(wc -c < "$body" | tr -d ' ')" -ge 256 ]] || fail "$label edge response is implausibly small"
+	grep -Fq "$url" "$body" || fail "$label edge response does not contain its own canonical URL"
+	grep -Eiq "<html[^>]+lang=[\"']${lang}([\"'-])" "$body" || fail "$label edge response does not identify language $lang"
+	pass "$label edge page identity verified ($url)"
+}
+
 if [[ -z "$ACCESS_TOKEN" ]]; then
   warn "MCP_ACCESS_TOKEN is not set; authenticated tools/list and tools/call checks will be skipped"
   printf '%s' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' > "$TMPDIR/noauth-list.json"
@@ -226,6 +248,7 @@ echo "MCP live smoke"
 echo "  MCP_BASE_URL=$BASE_URL"
 echo "  MCP_ACCESS_TOKEN=<redacted>"
 echo "  MCP_SMOKE_ENABLE_WRITES=$ENABLE_WRITES"
+echo "  MCP_SMOKE_VERIFY_DEPLOY=$VERIFY_DEPLOY"
 echo "  MCP_SMOKE_DELAY=$SMOKE_DELAY"
 echo "  MCP_SMOKE_SESSION_CALLS=$SESSION_CALLS"
 echo "  MCP_SMOKE_SESSION_DELAY=$SESSION_DELAY"
@@ -263,6 +286,55 @@ sleep "$SMOKE_DELAY"
 call_tool "get_site_health" "get_site_health" "{}"
 sleep "$SMOKE_DELAY"
 call_tool "validate_site" "validate_site" "{}"
+
+if [[ "$VERIFY_DEPLOY" == "1" ]]; then
+	echo "Deploy-integrity checks enabled"
+	sleep "$SMOKE_DELAY"
+	call_tool "deploy_build_site" "build_site" "{}"
+	build_payload="$(tool_payload deploy_build_site)"
+	jq -e '
+		.data.publish_ready == true and
+		.data.stages.hugo_build == "ok" and
+		.data.stages.output_swap == "ok" and
+		.data.stages.source_index_reload == "ok" and
+		.data.stages.public_index_reload == "ok" and
+		.data.stages.callbacks_status == "ok" and
+		((.warnings // []) | length == 0) and
+		((.data.warning // "") == "")
+	' >/dev/null <<<"$build_payload" || fail "build_site did not report a clean, publish-ready output swap and index reload"
+	pass "build_site completed with clean output and callbacks"
+
+	sleep "$SMOKE_DELAY"
+	call_tool "deploy_site_health" "get_site_health" "{}"
+	health_payload="$(tool_payload deploy_site_health)"
+	jq -e '
+		.data.public_output_complete == true and
+		.data.missing_public_pages == 0 and
+		.data.published_pages == .data.publishable_source_pages and
+		(.data.runtime_degraded != true) and
+		((.data.draft_pages > 0) or (.data.published_pages == .data.source_pages))
+	' >/dev/null <<<"$health_payload" || fail "post-build source/public invariants are not satisfied"
+	pass "post-build source/public invariants are complete"
+
+	pages='[]'
+	offset=0
+	while :; do
+		sleep "$SMOKE_DELAY"
+		label="deploy_list_pages_$offset"
+		call_tool "$label" "list_pages" "$(jq -nc --argjson offset "$offset" '{limit:50,offset:$offset}')"
+		page_payload="$(tool_payload "$label")"
+		pages="$(jq -nc --argjson current "$pages" --argjson batch "$(jq '.data.pages // []' <<<"$page_payload")" '$current + $batch')"
+		next="$(jq -r '.data.next_offset // empty' <<<"$page_payload")"
+		[[ -n "$next" ]] || break
+		offset="$next"
+	done
+	en_page="$(jq -c 'first(.[] | select(.lang == "en" and (.url // "") != "")) // empty' <<<"$pages" || true)"
+	fr_page="$(jq -c 'first(.[] | select(.lang == "fr" and (.url // "") != "")) // empty' <<<"$pages" || true)"
+	[[ -n "$en_page" ]] || fail "published page inventory has no English edge probe candidate"
+	[[ -n "$fr_page" ]] || fail "published page inventory has no French edge probe candidate"
+	probe_edge_page "$en_page" "English"
+	probe_edge_page "$fr_page" "French"
+fi
 
 if [[ "${MCP_SMOKE_BURST:-0}" == "1" ]]; then
   echo "Burst probe: $BURST_COUNT calls without pacing"

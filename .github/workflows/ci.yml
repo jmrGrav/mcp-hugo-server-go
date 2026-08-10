@@ -251,6 +251,8 @@ jobs:
         run: bash scripts/test-check-agent-ready.sh
       - name: Agent-ready www reference surface stays coherent
         run: bash scripts/test-agent-ready-www-surface.sh
+      - name: Deploy-integrity smoke rejects homepage fallbacks
+        run: bash scripts/test-smoke-deploy-integrity.sh
       - name: Stop server
         if: always()
         run: kill "$SERVER_PID" 2>/dev/null || true

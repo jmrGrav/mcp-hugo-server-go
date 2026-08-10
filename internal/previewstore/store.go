@@ -232,6 +232,23 @@ func (s *Store) EstablishSession(id, token string) (*Entry, string, bool) {
 	return entry, sessionToken, true
 }
 
+// ResetSessionForProbe clears the cookie session used by create_preview's
+// optional external reachability probe. create_preview calls this only before
+// returning the entry URL to its caller, so the real browser can subsequently
+// exchange the still-secret entry token for a fresh session. It deliberately
+// does not change the entry token, expiry, owner, or built files.
+func (s *Store) ResetSessionForProbe(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[id]
+	if !ok || entry == nil {
+		return false
+	}
+	entry.SessionToken = ""
+	entry.sessionActivated = false
+	return true
+}
+
 // Sweep removes every expired entry and deletes its directory. Called
 // opportunistically from create_preview before registering a new entry, so
 // storage doesn't accumulate indefinitely even if nobody ever re-visits an
@@ -464,7 +481,12 @@ func CleanPath(id, assetPath string) string {
 	if assetPath == "" {
 		return "/preview/" + id + "/"
 	}
-	return "/preview/" + id + "/" + path.Clean(assetPath)
+	directoryRoute := strings.HasSuffix(assetPath, "/")
+	cleaned := path.Clean(assetPath)
+	if directoryRoute && cleaned != "." {
+		cleaned += "/"
+	}
+	return "/preview/" + id + "/" + cleaned
 }
 
 // HTTPHandler serves preview content at either the signed entry URL
@@ -487,7 +509,31 @@ func (s *Store) HTTPHandler() http.Handler {
 			return
 		}
 		id := parts[0]
-		if len(parts) >= 2 && parts[1] != "" {
+		var sessionEntry *Entry
+		var sessionCookie *http.Cookie
+		if c, err := r.Cookie(CookieName(id)); err == nil && strings.TrimSpace(c.Value) != "" {
+			if entry, ok := s.GetBySession(id, c.Value); ok {
+				sessionEntry = entry
+				sessionCookie = c
+			}
+		}
+
+		if sessionEntry != nil {
+			// A clean nested path such as /preview/{id}/en/posts/... must be
+			// served verbatim. Only treat the first segment as an entry token
+			// when it exactly matches this preview's token; the previous
+			// "try every segment as a token" flow dropped `en`/`posts` from
+			// valid cookie-backed routes and could trigger an ingress homepage
+			// fallback (#978).
+			if len(parts) >= 2 && parts[1] != "" && subtle.ConstantTimeCompare([]byte(sessionEntry.Token), []byte(parts[1])) == 1 {
+				target := CleanPath(id, "")
+				if len(parts) == 3 && parts[2] != "" {
+					target = CleanPath(id, parts[2])
+				}
+				http.Redirect(w, r, target, http.StatusFound)
+				return
+			}
+		} else if len(parts) >= 2 && parts[1] != "" {
 			if entry, sessionToken, ok := s.EstablishSession(id, parts[1]); ok {
 				http.SetCookie(w, &http.Cookie{
 					Name:     CookieName(id),
@@ -505,39 +551,14 @@ func (s *Store) HTTPHandler() http.Handler {
 				http.Redirect(w, r, target, http.StatusFound)
 				return
 			}
-			// The entry token was refused. If this is a spent single-use token
-			// (#871) but the same browser already holds a valid session cookie
-			// — its Path (/preview/{id}/) prefix-matches this entry URL, so it
-			// is sent here — gracefully redirect to the clean URL instead of
-			// letting the request fall through to the file server, where the
-			// token still in the path would 404 as a bogus filename. A
-			// token-only attacker with no cookie gets the 404 below, so this
-			// costs no security: it only smooths a legitimate re-click after
-			// the flow already completed.
-			if c, err := r.Cookie(CookieName(id)); err == nil && strings.TrimSpace(c.Value) != "" {
-				if _, ok := s.GetBySession(id, c.Value); ok {
-					target := CleanPath(id, "")
-					if len(parts) == 3 && parts[2] != "" {
-						target = CleanPath(id, parts[2])
-					}
-					http.Redirect(w, r, target, http.StatusFound)
-					return
-				}
-			}
 		}
 
-		cookie, err := r.Cookie(CookieName(id))
-		if err != nil || strings.TrimSpace(cookie.Value) == "" {
-			http.Error(w, "preview not found or expired", http.StatusNotFound)
-			return
-		}
-		entry, ok := s.GetBySession(id, cookie.Value)
-		if !ok {
+		if sessionEntry == nil || sessionCookie == nil {
 			http.Error(w, "preview not found or expired", http.StatusNotFound)
 			return
 		}
 
 		prefix := "/preview/" + id
-		http.StripPrefix(prefix, http.FileServer(http.Dir(entry.Dir))).ServeHTTP(w, r)
+		http.StripPrefix(prefix, http.FileServer(http.Dir(sessionEntry.Dir))).ServeHTTP(w, r)
 	})
 }
