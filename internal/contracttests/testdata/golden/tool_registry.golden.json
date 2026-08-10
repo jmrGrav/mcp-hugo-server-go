@@ -1618,6 +1618,10 @@
       "data.limits.test_content_max_ttl_hours:integer:required",
       "data.limits.title_max_runes:integer:required",
       "data.limits:object:required",
+      "data.masked_tools.count:integer:required",
+      "data.masked_tools.reason:string",
+      "data.masked_tools.required_scopes:unspecified",
+      "data.masked_tools:object",
       "data.server.build_channel:string",
       "data.server.commit:string",
       "data.server.release_version:string:required",
@@ -1653,7 +1657,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "8dae020b36eb5ebfe7c0ffebf1738fcca4a3466168b9b73c2c024e24f0d704b6"
+    "output_schema_sha256": "c22e27a394c707fde11575f9944d0112037c853ecaf8d647be269c2edbd385b8"
   },
   {
     "name": "get_changelog",

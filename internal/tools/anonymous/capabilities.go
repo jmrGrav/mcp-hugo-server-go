@@ -12,6 +12,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	adminpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
+	readpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	writepkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -81,13 +82,20 @@ type capabilitiesFeatures struct {
 }
 
 type getCapabilitiesData struct {
-	EffectiveScopes     []string              `json:"effective_scopes,omitempty"`
-	Server              capabilitiesServer    `json:"server"`
-	Languages           capabilitiesLanguages `json:"languages"`
-	Limits              capabilitiesLimits    `json:"limits"`
-	AllowedImageFormats []string              `json:"allowed_image_formats"`
-	BlockedShortcodes   []string              `json:"blocked_shortcodes"`
-	Features            capabilitiesFeatures  `json:"features"`
+	EffectiveScopes     []string                `json:"effective_scopes,omitempty"`
+	MaskedTools         capabilitiesMaskedTools `json:"masked_tools,omitempty"`
+	Server              capabilitiesServer      `json:"server"`
+	Languages           capabilitiesLanguages   `json:"languages"`
+	Limits              capabilitiesLimits      `json:"limits"`
+	AllowedImageFormats []string                `json:"allowed_image_formats"`
+	BlockedShortcodes   []string                `json:"blocked_shortcodes"`
+	Features            capabilitiesFeatures    `json:"features"`
+}
+
+type capabilitiesMaskedTools struct {
+	Count  int      `json:"count"`
+	Reason string   `json:"reason,omitempty"`
+	Scopes []string `json:"required_scopes,omitempty"`
 }
 
 type getCapabilitiesOutput struct {
@@ -169,6 +177,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}
 			data := getCapabilitiesData{
 				EffectiveScopes: effectiveCapabilityScopes(ctx),
+				MaskedTools:     maskedCapabilityTools(ctx),
 				Server: capabilitiesServer{
 					ReleaseVersion: buildinfo.Version,
 					Commit:         buildinfo.Commit,
@@ -222,4 +231,21 @@ func effectiveCapabilityScopes(ctx context.Context) []string {
 		return []string{strings.TrimSpace(scope)}
 	}
 	return []string{"anonymous"}
+}
+
+func maskedCapabilityTools(ctx context.Context) capabilitiesMaskedTools {
+	scope, _ := ctx.Value(oauth.CtxScope).(string)
+	if strings.TrimSpace(scope) == "write" {
+		return capabilitiesMaskedTools{}
+	}
+	count := 0
+	for _, def := range append(append(writepkg.Defs(), adminpkg.Defs()...), readpkg.Defs()...) {
+		if def.RequiredScope == "write" {
+			count++
+		}
+	}
+	if strings.TrimSpace(scope) == "read" {
+		return capabilitiesMaskedTools{Count: count, Reason: "missing_scope", Scopes: []string{"write"}}
+	}
+	return capabilitiesMaskedTools{Count: count + len(readpkg.Defs()), Reason: "missing_scope", Scopes: []string{"read", "write"}}
 }
