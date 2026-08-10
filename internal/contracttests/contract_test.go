@@ -707,7 +707,7 @@ func mustSourceIndexFromRoot(t *testing.T, root string) *hugosite.SourceIndex {
 func newAnonymousSession(t *testing.T, idx *site.Index, cfg config.Config, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	toolsanon.Register(s, idx, cfg, srcIdx)
+	toolsanon.Register(s, idx, cfg, "", srcIdx)
 	return connectClient(t, s)
 }
 

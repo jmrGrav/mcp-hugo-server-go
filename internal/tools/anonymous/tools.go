@@ -326,7 +326,13 @@ type getSiteInformationOutput struct {
 	toolcontract.ToolResponse[getSiteInformationData]
 }
 
-func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hugosite.SourceIndex) {
+// scopeName identifies which physical server tier is registering these
+// tools ("write", "read", or "" for the anonymous/public tier). It is used
+// only as a fallback for get_capabilities' effective-scope reporting when no
+// OAuth token scope is present in context (OAuth disabled, or stdio
+// transport) — on those deployments there is no per-call scope check, so the
+// tier a caller reached is itself the caller's effective access.
+func Register(s *mcp.Server, idx *site.Index, cfg config.Config, scopeName string, sources ...*hugosite.SourceIndex) {
 	if s == nil {
 		return
 	}
@@ -339,7 +345,7 @@ func Register(s *mcp.Server, idx *site.Index, cfg config.Config, sources ...*hug
 	RegisterGetChangelog(s)
 	registerAnonymousBrowseTools(s, idx, srcIdx, resolver, cfg, aliases)
 	registerAnonymousTaxonomyAndFeedTools(s, idx, srcIdx, aliases)
-	registerAnonymousSiteMetadataTools(s, idx, srcIdx, cfg)
+	registerAnonymousSiteMetadataTools(s, idx, srcIdx, cfg, scopeName)
 }
 
 func registerAnonymousBrowseTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config, aliases map[string]string) {
@@ -716,7 +722,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 		}, func(s any) any { return tools.WithMaxLimit(s, "limit", 50) })
 }
 
-func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
+func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, scopeName string) {
 	addReadOnlyTool(s, "get_site_information", "Read site metadata", "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
 		func(_ context.Context, _ *mcp.CallToolRequest, _ getSiteInformationInput) (*mcp.CallToolResult, getSiteInformationOutput, error) {
 			if idx == nil {
@@ -730,7 +736,10 @@ func registerAnonymousSiteMetadataTools(s *mcp.Server, idx *site.Index, srcIdx *
 			}}), nil
 		})
 
-	registerGetCapabilities(s, idx, srcIdx, cfg)
+	// Matches server.initWriteBootstrap's writeEnabled computation exactly —
+	// write tools only ever register when content_root is set.
+	writeEnabled := strings.TrimSpace(cfg.ContentRoot) != ""
+	registerGetCapabilities(s, idx, srcIdx, cfg, scopeName, writeEnabled)
 }
 
 // schemaOpts, when provided, post-process the inferred input schema (#418) —

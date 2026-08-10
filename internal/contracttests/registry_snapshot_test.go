@@ -69,7 +69,7 @@ func registerFullContractServer(t *testing.T) *mcp.Server {
 	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	toolsanon.Register(s, idx, cfg, srcIdx)
+	toolsanon.Register(s, idx, cfg, "", srcIdx)
 	toolsread.Register(s, idx, cfg, srcIdx)
 	toolsread.RegisterWithSourceIndex(s, idx, srcIdx, cfg)
 	toolswrite.Register(s, pg, srcIdx, cfg, nil, idx)

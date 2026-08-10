@@ -1578,7 +1578,7 @@
   {
     "name": "get_capabilities",
     "required_scope": "",
-    "description": "Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): `server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); `limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); `allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). `features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool.",
+    "description": "Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): `server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); `limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); `allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). `features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool. `effective_scopes` names the caller's own scope (`write` or `read` — the only two the server ever grants) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools, or `not_configured` when a write-scoped caller has them but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `feature_disabled` is not yet implemented (#1029).",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"
@@ -1586,6 +1586,7 @@
     "output_schema_fields": [
       "data.allowed_image_formats:unspecified:required",
       "data.blocked_shortcodes:unspecified:required",
+      "data.effective_scopes:unspecified",
       "data.features.cloudflare_purge_configured:boolean:required",
       "data.features.external_image_generation_available:boolean:required",
       "data.features.force_dry_run_all:boolean:required",
@@ -1617,6 +1618,10 @@
       "data.limits.test_content_max_ttl_hours:integer:required",
       "data.limits.title_max_runes:integer:required",
       "data.limits:object:required",
+      "data.masked_tools.count:integer:required",
+      "data.masked_tools.reason:string",
+      "data.masked_tools.required_scopes:unspecified",
+      "data.masked_tools:unspecified",
       "data.server.build_channel:string",
       "data.server.commit:string",
       "data.server.release_version:string:required",
@@ -1652,7 +1657,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "50b45722b3d1cef2273d3d10f46e7710444ba16bfbf51ea2ca983196198a027b"
+    "output_schema_sha256": "82e8ec4e9f178486ab47300e5029a82f55f5f3b64c4874711bebb097df8a349e"
   },
   {
     "name": "get_changelog",
