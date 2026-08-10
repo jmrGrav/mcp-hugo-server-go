@@ -214,6 +214,11 @@ jobs:
           ref: ${{ inputs.ref }}
           fetch-depth: 0
 
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
       - name: Extract release notes from changelog
         run: go run ./cmd/extract-changelog-release -version "${{ inputs.release_version }}" > /tmp/release-notes.md
 
@@ -255,11 +260,6 @@ jobs:
             --verify-tag \
             --title "${VERSION}" \
             --notes-file /tmp/release-notes.md
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: 'go.mod'
 
       # Builds and attaches macOS/Windows/Linux binaries (#782 Phase 2/4) to
       # the release created above. .goreleaser.yaml's release.mode is
