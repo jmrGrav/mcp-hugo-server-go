@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 )
@@ -147,5 +148,40 @@ func TestGetRateLimitsDestructiveAndCreateUpdateAreIndependent(t *testing.T) {
 	}
 	if got := destructive["retry_after_seconds"].(float64); got <= 0 {
 		t.Errorf("destructive.retry_after_seconds = %v, want > 0 since the destructive budget is exhausted", got)
+	}
+}
+
+func TestGetRateLimitsResetAtMovesIntoTheFutureAfterQuotaConsumption(t *testing.T) {
+	contentRoot := t.TempDir()
+	rl := config.Default().RateLimit
+	rl.CreateUpdatePerMin = 5
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "reset-at-check", "title": "T", "body": "B", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page expected success, got error: %s", raw)
+	}
+
+	res = callTool(t, session, "get_rate_limits", map[string]any{})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("get_rate_limits expected success, got error: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	cuu := data["create_update_upload"].(map[string]any)
+	resetAtRaw, _ := cuu["reset_at"].(string)
+	if resetAtRaw == "" {
+		t.Fatal("reset_at missing")
+	}
+	resetAt, err := time.Parse(time.RFC3339, resetAtRaw)
+	if err != nil {
+		t.Fatalf("parse reset_at: %v", err)
+	}
+	if !resetAt.After(time.Now().UTC().Add(-time.Second)) {
+		t.Fatalf("reset_at = %v, want a future refill time after quota consumption", resetAt)
 	}
 }

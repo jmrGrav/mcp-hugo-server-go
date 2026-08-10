@@ -23,6 +23,16 @@ func TestNormalizeVersionAcceptsOptionalLeadingV(t *testing.T) {
 	}
 }
 
+func TestCheckChangelogVersionIsLatest(t *testing.T) {
+	changelog := "# Changelog\n\n## [v1.2.10] - 2026-07-05\n\n- fixed\n\n## [v1.2.9] - 2026-07-04\n\n- older\n"
+	if err := CheckChangelogVersionIsLatest(changelog, "v1.2.10"); err != nil {
+		t.Fatalf("CheckChangelogVersionIsLatest() error = %v", err)
+	}
+	if err := CheckChangelogVersionIsLatest(changelog, "v1.2.9"); err == nil {
+		t.Fatal("CheckChangelogVersionIsLatest() error = nil, want mismatch for non-top release")
+	}
+}
+
 func TestExtractReleaseNotesReturnsOnlyRequestedSection(t *testing.T) {
 	changelog := "# Changelog\n\n## [Unreleased]\n\n- wip\n\n## [v1.2.10] - 2026-07-05\n\n### Fixed\n- shipped\n\n## [v1.2.9] - 2026-07-04\n\n- previous\n"
 	got, err := ExtractChangelogReleaseNotes(changelog, "v1.2.10")

@@ -159,13 +159,17 @@ func mustOAuthSQLiteServerWithConfig(t *testing.T, cfg config.Config, storePath 
 }
 
 func addBearerToken(t *testing.T, storePath, rawToken, scope string) {
+	addBearerTokenWithPrincipal(t, storePath, rawToken, scope, rawToken)
+}
+
+func addBearerTokenWithPrincipal(t *testing.T, storePath, rawToken, scope, principal string) {
 	t.Helper()
 	store, err := storage.NewSQLite(storePath)
 	if err != nil {
 		t.Fatalf("NewSQLite() error = %v", err)
 	}
 	defer store.Close()
-	if err := store.AddAccessToken(oauthHashForTest(rawToken), scope, time.Now().Add(time.Hour)); err != nil {
+	if err := store.AddAccessToken(oauthHashForTest(rawToken), scope, principal, time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("AddAccessToken() error = %v", err)
 	}
 }
@@ -2362,6 +2366,137 @@ func TestApplyContentPlanIsolatedByCallerAcrossHTTP(t *testing.T) {
 		t.Fatalf("read file after owner apply: %v", err)
 	}
 	if !strings.Contains(string(applied), "Changed by plan owner") {
+		t.Fatalf("owner apply did not write planned body: %q", string(applied))
+	}
+}
+
+func TestGetRateLimitsSharesQuotaAcrossTokensForSamePrincipal(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	cfg.RateLimit.CreateUpdatePerMin = 2
+	cfg.OAuth = config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		AccessTokenTTLSeconds: 3600,
+		StorageBackend:        "sqlite",
+		StoragePath:           storePath,
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+
+	addBearerTokenWithPrincipal(t, storePath, "token-a1", "write", "client-a")
+	addBearerTokenWithPrincipal(t, storePath, "token-a2", "write", "client-a")
+	addBearerTokenWithPrincipal(t, storePath, "token-b1", "write", "client-b")
+
+	createRec := doMCPCall(t, srv, "token-a1", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/shared-bucket","title":"Shared","body":"Body","tags":[],"categories":[]}}}`))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+
+	samePrincipalRec := doMCPCall(t, srv, "token-a2", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_rate_limits","arguments":{}}}`))
+	if samePrincipalRec.Code != http.StatusOK {
+		t.Fatalf("get_rate_limits same principal status = %d body = %q", samePrincipalRec.Code, samePrincipalRec.Body.String())
+	}
+	samePrincipalData := toolCallResultData(t, samePrincipalRec.Body.String())
+	createBucket := samePrincipalData["data"].(map[string]any)["create_update_upload"].(map[string]any)
+	if got := int(createBucket["remaining"].(float64)); got != 1 {
+		t.Fatalf("same-principal remaining = %d, want 1 after one create consumed the shared bucket", got)
+	}
+
+	otherPrincipalRec := doMCPCall(t, srv, "token-b1", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_rate_limits","arguments":{}}}`))
+	if otherPrincipalRec.Code != http.StatusOK {
+		t.Fatalf("get_rate_limits other principal status = %d body = %q", otherPrincipalRec.Code, otherPrincipalRec.Body.String())
+	}
+	otherPrincipalData := toolCallResultData(t, otherPrincipalRec.Body.String())
+	otherBucket := otherPrincipalData["data"].(map[string]any)["create_update_upload"].(map[string]any)
+	if got := int(otherBucket["remaining"].(float64)); got != 2 {
+		t.Fatalf("other-principal remaining = %d, want full independent bucket of 2", got)
+	}
+}
+
+// TestApplyContentPlanIsolatedByTokenEvenUnderSharedPrincipal guards the
+// boundary #950's principal-preferring caller.Key() must not cross: two
+// tokens issued to the same OAuth principal (e.g. one token refreshed into
+// another) must not be able to consume, inspect, or roll back each other's
+// plans/snapshots. That per-caller binding is what #932/#934 fixed; widening
+// it to principal-level sharing — as a naive read of #950's "share rate
+// limits across a principal's tokens" would suggest applying everywhere —
+// would silently reopen it.
+func TestApplyContentPlanIsolatedByTokenEvenUnderSharedPrincipal(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const sharedPrincipal = "client-shared"
+	addBearerTokenWithPrincipal(t, storePath, "token-p1", "write", sharedPrincipal)
+	addBearerTokenWithPrincipal(t, storePath, "token-p2", "write", sharedPrincipal)
+
+	createRec := doMCPCall(t, srv, "token-p1", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/e2e-shared-principal","title":"Title","body":"Original body","tags":[],"categories":[]}}}`))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+	filePath := filepath.Join(contentRoot, "posts", "e2e-shared-principal", "index.md")
+	beforeAttempt, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read created file: %v", err)
+	}
+
+	planRec := doMCPCall(t, srv, "token-p1", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plan_content_change","arguments":{"slug":"posts/e2e-shared-principal","operations":[{"op":"update_body","body":"Changed by token-p1"}]}}}`))
+	if planRec.Code != http.StatusOK {
+		t.Fatalf("plan_content_change status = %d body = %q", planRec.Code, planRec.Body.String())
+	}
+	planEnvelope := toolCallResultData(t, planRec.Body.String())
+	planID := planEnvelope["data"].(map[string]any)["plan_id"].(string)
+	if planID == "" {
+		t.Fatal("plan_content_change returned empty plan_id")
+	}
+
+	applyPayload := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_content_plan","arguments":{"plan_id":"%s"}}}`, planID))
+
+	// token-p2 shares token-p1's OAuth principal but is a distinct bearer;
+	// it must still be treated as an intruder for plan ownership.
+	otherTokenRec := doMCPCall(t, srv, "token-p2", applyPayload)
+	if otherTokenRec.Code != http.StatusOK {
+		t.Fatalf("apply_content_plan same-principal-other-token status = %d body = %q", otherTokenRec.Code, otherTokenRec.Body.String())
+	}
+	if !toolCallBodyHasError(otherTokenRec, "plan_not_found") {
+		t.Fatalf("apply_content_plan same-principal-other-token body = %q, want plan_not_found", otherTokenRec.Body.String())
+	}
+	afterRejected, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after rejected apply: %v", err)
+	}
+	if string(afterRejected) != string(beforeAttempt) {
+		t.Fatalf("same-principal-other-token apply changed file:\nbefore=%q\nafter=%q", string(beforeAttempt), string(afterRejected))
+	}
+
+	ownerRec := doMCPCall(t, srv, "token-p1", applyPayload)
+	if ownerRec.Code != http.StatusOK {
+		t.Fatalf("apply_content_plan owner status = %d body = %q", ownerRec.Code, ownerRec.Body.String())
+	}
+	ownerData := toolCallResultData(t, ownerRec.Body.String())["data"].(map[string]any)
+	if got, _ := ownerData["status"].(string); got != "ok" {
+		t.Fatalf("apply_content_plan owner status = %q, want ok: %#v", got, ownerData)
+	}
+	applied, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after owner apply: %v", err)
+	}
+	if !strings.Contains(string(applied), "Changed by token-p1") {
 		t.Fatalf("owner apply did not write planned body: %q", string(applied))
 	}
 }

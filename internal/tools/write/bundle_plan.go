@@ -604,7 +604,7 @@ func registerPlanBundleChange(
 		}
 		now := time.Now().UTC()
 		plans.put(planID, bundlePlanEntry{
-			CallerKey: principalCallerKey(ctx),
+			CallerKey: isolationCallerKey(ctx),
 			Slug:      in.Slug, BundleDir: dir, BundleRevision: bundleRev,
 			Translations: planTranslations, CreatedAt: now,
 		})
@@ -690,9 +690,9 @@ func registerApplyBundlePlan(
 		var entry bundlePlanEntry
 		var ok bool
 		if in.DryRun {
-			entry, ok = plans.get(in.PlanID, principalCallerKey(ctx))
+			entry, ok = plans.get(in.PlanID, isolationCallerKey(ctx))
 		} else {
-			entry, ok = plans.consume(in.PlanID, principalCallerKey(ctx))
+			entry, ok = plans.consume(in.PlanID, isolationCallerKey(ctx))
 		}
 		if !ok {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_bundle_change again"))
@@ -750,7 +750,7 @@ func registerApplyBundlePlan(
 		}
 		// Snapshot the whole pre-apply bundle, keyed by the revision it is
 		// about to stop being, so rollback_bundle can restore it (#854 AC).
-		snapshots.put(entry.BundleDir, entry.BundleRevision, principalCallerKey(ctx), priorContent)
+		snapshots.put(entry.BundleDir, entry.BundleRevision, isolationCallerKey(ctx), priorContent)
 
 		var warnings []string
 		outcomes := make([]bundleTranslationOutcomeDTO, 0, len(entry.Translations))
@@ -892,7 +892,7 @@ func registerRollbackBundle(
 			}
 		}
 
-		restore, ok := snapshots.get(dir, in.ToBundleRevision, principalCallerKey(ctx))
+		restore, ok := snapshots.get(dir, in.ToBundleRevision, isolationCallerKey(ctx))
 		if !ok {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no bundle snapshot recorded for revision %q — only revisions produced by a prior apply_bundle_plan (last 24h) can be rolled back to", in.ToBundleRevision))
 		}

@@ -102,7 +102,7 @@ func TestHandleAgentVerifyPOST(t *testing.T) {
 
 	// Operator must authenticate with a site.admin token.
 	adminRaw := "admin-token-site-admin"
-	_ = store.AddAccessToken(oauth.HashToken(adminRaw), "site.admin", time.Now().Add(time.Hour))
+	_ = store.AddAccessToken(oauth.HashToken(adminRaw), "site.admin", "admin-client", time.Now().Add(time.Hour))
 
 	form := "claim_token=" + resp.ClaimToken
 	req := httptest.NewRequest(http.MethodPost, "/agent/identity/verify", strings.NewReader(form))
@@ -190,7 +190,7 @@ func TestHandleAgentVerifyPOSTInsufficientScope(t *testing.T) {
 
 	// content.read is not enough — must be site.admin or system.admin.
 	lowRaw := "low-scope-token"
-	_ = store.AddAccessToken(oauth.HashToken(lowRaw), "content.read", time.Now().Add(time.Hour))
+	_ = store.AddAccessToken(oauth.HashToken(lowRaw), "content.read", "low-client", time.Now().Add(time.Hour))
 
 	form := "claim_token=" + resp.ClaimToken
 	req := httptest.NewRequest(http.MethodPost, "/agent/identity/verify", strings.NewReader(form))
@@ -208,7 +208,7 @@ func TestHandleAgentVerifyPOSTInvalidClaimToken(t *testing.T) {
 	svc, store := newTestService(t)
 
 	adminRaw := "admin-token-for-bad-claim"
-	_ = store.AddAccessToken(oauth.HashToken(adminRaw), "site.admin", time.Now().Add(time.Hour))
+	_ = store.AddAccessToken(oauth.HashToken(adminRaw), "site.admin", "admin-client", time.Now().Add(time.Hour))
 
 	form := "claim_token=invalid_token_xyz"
 	req := httptest.NewRequest(http.MethodPost, "/agent/identity/verify", strings.NewReader(form))

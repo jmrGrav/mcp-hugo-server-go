@@ -2974,6 +2974,27 @@ func TestCreatePageStillWarnsWithoutConfiguredLanguages(t *testing.T) {
 	}
 }
 
+func TestCreatePageDryRunWarnsWithoutConfiguredLanguages(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/zz-dry-run-warns", "lang": "zz", "title": "T", "body": "B",
+		"tags": []any{}, "categories": []any{}, "dry_run": true,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page dry_run without configured_languages must warn (not reject): %s", raw)
+	}
+	if w, _ := decodeWriteData(t, res)["warning"].(string); !strings.Contains(w, "zz") || !strings.Contains(w, "get_capabilities") {
+		t.Fatalf("create_page dry_run must surface the same unknown-lang warning, got warning=%q", w)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "zz-dry-run-warns")); !os.IsNotExist(err) {
+		t.Fatal("create_page dry_run must not write any file")
+	}
+}
+
 // TestUpdatePageCannotMintUnconfiguredLangTranslation is a confirmation test
 // for #899's acceptance criterion naming update_page alongside create_page:
 // update_page never mints a new file — resolveExistingSource fails
@@ -3087,6 +3108,9 @@ func TestDeletePageOneLanguageSurvivesTheOther(t *testing.T) {
 	}
 	if _, present := data["bundle_fully_removed"]; !present {
 		t.Fatal("bundle_fully_removed missing, want explicit false on partial multilingual delete")
+	}
+	if warning, _ := data["warning"].(string); warning != "" {
+		t.Fatalf("partial multilingual delete without any public output must not warn about untouched public output, got warning=%q", warning)
 	}
 
 	if _, err := os.Stat(filepath.Join(pageDir, "index.en.md")); !os.IsNotExist(err) {

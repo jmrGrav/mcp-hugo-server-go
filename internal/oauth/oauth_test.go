@@ -1172,7 +1172,7 @@ func TestBearerValidation(t *testing.T) {
 		t.Fatal("unknown token must not validate")
 	}
 
-	_ = store.AddAccessToken(oauth.HashToken("validtoken"), "mcp", time.Now().Add(time.Hour))
+	_ = store.AddAccessToken(oauth.HashToken("validtoken"), "mcp", "valid-client", time.Now().Add(time.Hour))
 	scope, ok := svc.ValidateBearer("validtoken")
 	if !ok {
 		t.Fatal("valid token must validate")
@@ -1188,7 +1188,7 @@ func TestBearerValidation(t *testing.T) {
 		t.Fatalf("ValidateBearerDetails returned scope=%q legacy=%v; want read true", scope, legacy)
 	}
 
-	_ = store.AddAccessToken(oauth.HashToken("expiredtoken"), "mcp", time.Now().Add(-time.Second))
+	_ = store.AddAccessToken(oauth.HashToken("expiredtoken"), "mcp", "expired-client", time.Now().Add(-time.Second))
 	if _, ok := svc.ValidateBearer("expiredtoken"); ok {
 		t.Fatal("expired token must not validate")
 	}

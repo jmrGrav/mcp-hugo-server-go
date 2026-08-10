@@ -69,6 +69,12 @@ func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
 	if features["image_generation_available"] != true {
 		t.Errorf("image_generation_available = %v, want true (ImageGenURL set)", features["image_generation_available"])
 	}
+	if features["external_image_generation_available"] != true {
+		t.Errorf("external_image_generation_available = %v, want true (ImageGenURL set)", features["external_image_generation_available"])
+	}
+	if features["local_hero_generation_available"] != false {
+		t.Errorf("local_hero_generation_available = %v, want false when HugoRoot is empty in this test config", features["local_hero_generation_available"])
+	}
 	if features["post_build_hooks_configured"] != true {
 		t.Errorf("post_build_hooks_configured = %v, want true", features["post_build_hooks_configured"])
 	}
@@ -115,6 +121,9 @@ func TestGetCapabilitiesAdvertisesConfiguredLanguagesWhenSet(t *testing.T) {
 	if !ok {
 		t.Fatalf("languages.available missing/wrong type: %#v", languages["available"])
 	}
+	if got := languages["mode"]; got != "configured" {
+		t.Fatalf("languages.mode = %v, want configured", got)
+	}
 	got := make([]string, len(available))
 	for i, v := range available {
 		got[i], _ = v.(string)
@@ -122,6 +131,34 @@ func TestGetCapabilitiesAdvertisesConfiguredLanguagesWhenSet(t *testing.T) {
 	want := []string{"de", "en", "fr"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("languages.available = %v, want exactly configured_languages %v (including the configured-but-content-empty \"de\")", got, want)
+	}
+}
+
+func TestGetCapabilitiesReportsObservedLanguageModeAndLocalHeroGeneration(t *testing.T) {
+	idx := mustTestIndex(t)
+
+	cfg := config.Default()
+	cfg.DefaultLanguage = "en"
+	cfg.HugoRoot = t.TempDir()
+
+	session, done := newTestClientWithCfg(t, idx, cfg, nil)
+	defer done()
+
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	data := decodeContent(t, res)
+	languages := data["languages"].(map[string]any)
+	if got := languages["mode"]; got != "observed" {
+		t.Fatalf("languages.mode = %v, want observed when configured_languages is empty", got)
+	}
+	features := data["features"].(map[string]any)
+	if got := features["local_hero_generation_available"]; got != true {
+		t.Fatalf("local_hero_generation_available = %v, want true when HugoRoot is configured", got)
+	}
+	if got := features["image_generation_available"]; got != true {
+		t.Fatalf("image_generation_available = %v, want true when local hero generation is available", got)
 	}
 }
 

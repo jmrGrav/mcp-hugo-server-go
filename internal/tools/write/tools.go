@@ -477,21 +477,25 @@ func reservedSlugConflict(slug string) (string, bool) {
 
 var validLangPattern = regexp.MustCompile(`^[A-Za-z0-9-]{2,5}$`)
 
-// mutationCallerKey builds a rate-limit key that isolates mutation budgets
-// by caller IP. Falls back to "unknown" when context carries no IP (e.g. in
-// tests). Shared by every per-tool-class caller limiter (delete, create/
-// update/upload) — same identity signal, same "IP is the only caller
-// identity available in context today" limitation noted in #378.
+// mutationCallerKey builds the stable per-principal rate-limit key shared by
+// every mutation quota bucket. OAuth-backed requests prefer the authenticated
+// principal identity carried in context (client_id / agent registration id),
+// then fall back to the bearer-token hash, and finally to caller IP on
+// bearerless deployments or low-level tests.
 func mutationCallerKey(ctx context.Context) string {
-	ip, _ := ctx.Value(oauth.CtxCallerIP).(string)
-	if ip == "" {
-		ip = "unknown"
+	if key := caller.Key(ctx); key != "" {
+		return key
 	}
-	return ip
+	return "unknown"
 }
 
-func principalCallerKey(ctx context.Context) string {
-	if key := caller.Key(ctx); key != "" {
+// isolationCallerKey scopes plan/rollback-snapshot ownership to the exact
+// bearer token (see caller.TokenKey), not the broader OAuth principal that
+// caller.Key() now prefers for rate-limit quotas (#950) — otherwise a token
+// refresh or a second session under the same principal could consume or
+// roll back another session's plan, reopening #932/#934.
+func isolationCallerKey(ctx context.Context) string {
+	if key := caller.TokenKey(ctx); key != "" {
 		return key
 	}
 	return "unknown"
@@ -849,6 +853,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to inspect destination path"))
 			}
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+			langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages)
 			return nil, newCreatePageOutput(createPageData{
 				Status:                   "ok",
 				Slug:                     canonicalPublicSlug(in.Slug),
@@ -857,6 +862,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				ResolvedSourcePath:       strPtr(logicalPath),
 				DryRun:                   true,
 				Content:                  content,
+				Warning:                  langWarning,
 				RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 				TaxonomyCasingNormalized: taxonomyNormalized,
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
@@ -1328,7 +1334,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// file, so there's nothing new to roll back from. create_page is
 		// deliberately not snapshotted — there's no meaningful "pre-create"
 		// state to restore to.
-		rt.snapshots.put(filePath, currentRevision, principalCallerKey(ctx), string(raw))
+		rt.snapshots.put(filePath, currentRevision, isolationCallerKey(ctx), string(raw))
 		updated := *currentSource
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang
@@ -1751,7 +1757,10 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			// public-output mapping exactly right is a separate, harder
 			// problem; for now, surface that a rebuild is needed instead of
 			// silently deleting the surviving language's public page.
-			deleteWarning = "public output for the removed language was not touched — the page bundle still has other language(s); run build_site/publish_changes to reconcile public output"
+			publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
+			if _, statErr := os.Stat(publicPath); statErr == nil {
+				deleteWarning = "public output for the removed language was not touched — the page bundle still has other language(s); run build_site/publish_changes to reconcile public output"
+			}
 		} else if cfg.SiteRoot != "" {
 			publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
 			if rmErr := os.RemoveAll(publicPath); rmErr != nil {

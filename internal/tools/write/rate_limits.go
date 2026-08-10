@@ -2,6 +2,7 @@ package write
 
 import (
 	"context"
+	"math"
 	"sync"
 	"time"
 
@@ -87,10 +88,7 @@ const (
 // unbound label supplied by the caller.
 func newRateLimitBucket(l *rate.Limiter, limit int, scope string, now time.Time) rateLimitBucket {
 	retryAfter := rateLimitRetryAfterSeconds(l)
-	resetAt := now.UTC()
-	if retryAfter > 0 {
-		resetAt = resetAt.Add(time.Duration(retryAfter * float64(time.Second)))
-	}
+	resetAt := rateLimitResetAt(l, limit, now)
 	return rateLimitBucket{
 		Remaining:         rateLimitRemaining(l),
 		Limit:             limit,
@@ -99,6 +97,25 @@ func newRateLimitBucket(l *rate.Limiter, limit int, scope string, now time.Time)
 		ResetAt:           resetAt.Format(time.RFC3339),
 		RetryAfterSeconds: retryAfter,
 	}
+}
+
+func rateLimitResetAt(l *rate.Limiter, limit int, now time.Time) time.Time {
+	if l == nil || limit <= 0 {
+		return now.UTC()
+	}
+	tokens := l.Tokens()
+	if tokens < 0 {
+		tokens = 0
+	}
+	if tokens >= float64(limit) {
+		return now.UTC()
+	}
+	deficit := float64(limit) - tokens
+	secondsUntilFull := math.Ceil(deficit * float64(rateLimitWindowSeconds) / float64(limit))
+	if secondsUntilFull < 0 {
+		secondsUntilFull = 0
+	}
+	return now.UTC().Add(time.Duration(secondsUntilFull * float64(time.Second)))
 }
 
 func rateLimitRootFields(l *rate.Limiter) map[string]any {
