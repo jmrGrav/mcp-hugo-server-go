@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
+
+var misplacedFrontmatterRE = regexp.MustCompile(`(?m)^\s*(?:aliases|title|draft|tags|categories|date|description):\s*(?:\n\s*-\s+|\S)`)
 
 type searchContentInput struct {
 	Query        string `json:"query,omitempty"`
@@ -1621,6 +1624,9 @@ func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) [
 		if _, ok := p.FrontmatterRaw["date"]; !ok {
 			issues = append(issues, "front matter missing date field")
 		}
+	}
+	if misplacedFrontmatterRE.MatchString(strings.TrimSpace(p.Body)) {
+		issues = append(issues, "possible misplaced front matter at start of markdown body")
 	}
 	if len(aliases) > 0 {
 		for _, raw := range p.Tags {

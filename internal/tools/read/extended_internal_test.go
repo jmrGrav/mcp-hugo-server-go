@@ -904,3 +904,16 @@ func TestDetectTaxonomyInconsistenciesDoesNotFlagDisjointLanguageCasing(t *testi
 		}
 	}
 }
+
+func TestValidateFrontMatterPageDetectsOnlyFrontmatterLikeBodyPrefix(t *testing.T) {
+	page := hugosite.SourcePage{Title: "Valid", Date: "2026-08-10", FrontmatterRaw: map[string]any{"title": "Valid", "date": "2026-08-10"}, Body: "aliases:\n- /old/\n\nBody."}
+	issues := validateFrontMatterPage(page, nil)
+	if !containsString(issues, "possible misplaced front matter at start of markdown body") {
+		t.Fatalf("issues = %#v, want misplaced front matter finding", issues)
+	}
+	page.Body = "The aliases: field is explained in this paragraph."
+	issues = validateFrontMatterPage(page, nil)
+	if containsString(issues, "possible misplaced front matter at start of markdown body") {
+		t.Fatalf("ordinary markdown must not be flagged: %#v", issues)
+	}
+}
