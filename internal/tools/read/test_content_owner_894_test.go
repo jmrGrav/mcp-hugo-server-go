@@ -37,7 +37,7 @@ func setupOwnerFilterSite(t *testing.T) (*site.Index, *hugosite.SourceIndex) {
 	// An ordinary published page that is not test content at all.
 	write("real-article", "---\ntitle: Real article\ndate: 2026-08-07\n---\nBody.\n")
 
-	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	root := filepath.Join("testdata", "public", "minimal")
 	cfg := config.Default()
 	cfg.SiteRoot = root
 	cfg.SiteURL = "https://example.test"
@@ -130,7 +130,7 @@ func TestValidateSiteOwnerFilterDoesNotMaskDetailRows(t *testing.T) {
 	// must NOT vanish from the invalid count or the detail rows.
 	write("owned-by-b-invalid", "---\ndate: 2026-08-07\ntest_content: true\ntest_content_owner: agent-b\n---\nBody.\n")
 
-	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	root := filepath.Join("testdata", "public", "minimal")
 	cfg := config.Default()
 	cfg.SiteRoot = root
 	cfg.SiteURL = "https://example.test"

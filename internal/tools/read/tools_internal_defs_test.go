@@ -108,7 +108,7 @@ func TestRegisterWithSourceIndexPublishesExpectedExtendedToolCatalog(t *testing.
 
 func mustReadIndex(t *testing.T) *site.Index {
 	t.Helper()
-	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	root := filepath.Join("testdata", "public", "minimal")
 	cfg := config.Default()
 	cfg.SiteRoot = root
 	cfg.SiteURL = "https://example.test"
