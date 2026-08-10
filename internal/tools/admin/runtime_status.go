@@ -93,17 +93,19 @@ type lastBuildRuntimeStatus struct {
 type runtimeStatusData struct {
 	// ReleaseVersion — see the comment on toolcontract.ResponseMeta.ReleaseVersion.
 	// Named ServerVersion/server_version through v1.5.7; renamed (#563).
-	ReleaseVersion string                  `json:"release_version"`
-	SchemaVersion  string                  `json:"schema_version"`
-	Commit         string                  `json:"commit,omitempty"`
-	CommitTime     string                  `json:"commit_time,omitempty"`
-	BuildChannel   string                  `json:"build_channel,omitempty"`
-	BuildDirty     bool                    `json:"build_dirty"`
-	Hugo           hugoRuntimeStatus       `json:"hugo"`
-	Git            gitRuntimeStatus        `json:"git"`
-	Site           siteRuntimeStatus       `json:"site"`
-	LastBuild      *lastBuildRuntimeStatus `json:"last_build,omitempty"`
-	Degraded       []string                `json:"degraded,omitempty"`
+	ReleaseVersion    string                  `json:"release_version"`
+	SchemaVersion     string                  `json:"schema_version"`
+	Commit            string                  `json:"commit,omitempty"`
+	CommitTime        string                  `json:"commit_time,omitempty"`
+	BuildChannel      string                  `json:"build_channel,omitempty"`
+	BuildDirty        bool                    `json:"build_dirty"`
+	BinaryBuildDirty  bool                    `json:"binary_build_dirty"`
+	SiteWorktreeDirty bool                    `json:"site_worktree_dirty"`
+	Hugo              hugoRuntimeStatus       `json:"hugo"`
+	Git               gitRuntimeStatus        `json:"git"`
+	Site              siteRuntimeStatus       `json:"site"`
+	LastBuild         *lastBuildRuntimeStatus `json:"last_build,omitempty"`
+	Degraded          []string                `json:"degraded,omitempty"`
 }
 
 type getRuntimeStatusOutput struct {
@@ -142,12 +144,13 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in getRuntimeStatusInput) (*mcp.CallToolResult, getRuntimeStatusOutput, error) {
 		data := runtimeStatusData{
-			ReleaseVersion: buildinfo.Version,
-			SchemaVersion:  buildinfo.SchemaVersion,
-			Commit:         buildinfo.Commit,
-			CommitTime:     buildinfo.CommitTime,
-			BuildChannel:   buildinfo.EffectiveBuildChannel(),
-			BuildDirty:     buildinfo.Dirty,
+			ReleaseVersion:   buildinfo.Version,
+			SchemaVersion:    buildinfo.SchemaVersion,
+			Commit:           buildinfo.Commit,
+			CommitTime:       buildinfo.CommitTime,
+			BuildChannel:     buildinfo.EffectiveBuildChannel(),
+			BuildDirty:       buildinfo.Dirty,
+			BinaryBuildDirty: buildinfo.Dirty,
 			Site: siteRuntimeStatus{
 				ContentRootConfigured: strings.TrimSpace(cfg.ContentRoot) != "",
 				HugoRootConfigured:    strings.TrimSpace(cfg.HugoRoot) != "",
@@ -156,6 +159,7 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 
 		data.Hugo = probeHugo(ctx, cfg)
 		data.Git = probeGitBaseline(ctx, cfg)
+		data.SiteWorktreeDirty = data.Git.Dirty
 
 		if !data.Hugo.Available {
 			data.Degraded = append(data.Degraded, "build_site/preview_build: hugo binary is unavailable — "+data.Hugo.Error)
