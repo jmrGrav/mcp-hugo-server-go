@@ -24,7 +24,7 @@ func TestPostBuildCallbacksReloadsSourceIndexForTaxonomyHealth(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.ContentRoot = contentRoot
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 
 	idx, err := site.NewIndex(cfg)
 	if err != nil {
