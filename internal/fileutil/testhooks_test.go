@@ -14,13 +14,19 @@ import (
 // goroutine against filesystem polling: on a fast filesystem (tmpfs) the
 // write can complete before a poller's first glob call ever runs, which
 // made the polling version genuinely flaky under load, not just slow.
-func SwapDirOnTempCreate(t testing.TB, fn func()) {
+//
+// fn receives the temp file's full path so a caller can place a decoy file
+// with the identical basename at the symlink-swap target (#947): without
+// that, the swapped-to path never has a file with the stale tmp name on it,
+// so the eventual os.Link/os.Rename call fails on ENOENT alone and the
+// second RevalidateForWrite check is never actually exercised.
+func SwapDirOnTempCreate(t testing.TB, fn func(tmpName string)) {
 	t.Helper()
 	orig := createTmp
 	createTmp = func(dir, pattern string) (*os.File, error) {
 		f, err := orig(dir, pattern)
 		if err == nil {
-			fn()
+			fn(f.Name())
 		}
 		return f, err
 	}
