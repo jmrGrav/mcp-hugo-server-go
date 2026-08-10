@@ -621,6 +621,9 @@ func (m *hugoUpgradeManager) bootstrap(ctx context.Context, in bootstrapHugoInpu
 	if !installed.Available || version == "" {
 		return bootstrapHugoData{}, fmt.Errorf("config_error: no installed Hugo binary with a recognizable version was detected to bootstrap from")
 	}
+	if installed.Extended != m.cfg.HugoUpgrade.RequireExtended {
+		return bootstrapHugoData{}, fmt.Errorf("config_error: installed Hugo is extended=%t but hugo_upgrade.require_extended=%t; align require_extended with the installed binary before bootstrapping", installed.Extended, m.cfg.HugoUpgrade.RequireExtended)
+	}
 	data := bootstrapHugoData{DryRun: dryRunDefaultTrue(in.DryRun), DetectedVersion: version, RestartRequired: true}
 	if data.DryRun {
 		return data, nil

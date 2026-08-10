@@ -548,6 +548,33 @@ func TestHugoBootstrapRefusesWhenAlreadyManaged(t *testing.T) {
 	}
 }
 
+// TestHugoBootstrapRefusesExtendedVariantMismatch guards the gap advisor
+// flagged in review: bootstrap must compare the installed binary's extended
+// variant against hugo_upgrade.require_extended before staging, because
+// stageLocked picks the release asset from config alone and would otherwise
+// surface a confusing version_mismatch instead of the real cause.
+func TestHugoBootstrapRefusesExtendedVariantMismatch(t *testing.T) {
+	dir := t.TempDir()
+	nonExtended := []byte("#!/bin/sh\nprintf 'hugo v1.0.0 linux/amd64 BuildDate=test\\n'\n")
+	if err := os.WriteFile(filepath.Join(dir, "hugo"), nonExtended, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	fake := newFakeHugoReleaseServer(t, "v1.0.0", fakeHugoArchive(t, "v1.0.0", false), nil)
+	defer fake.Close()
+	cfg := testHugoUpgradeConfig(t, fake.server.URL)
+	cfg.HugoUpgrade.RequireExtended = true
+	mgr := newHugoUpgradeManager(cfg)
+
+	_, err := mgr.bootstrap(context.Background(), bootstrapHugoInput{DryRun: boolPointer(false)})
+	if err == nil || !strings.Contains(err.Error(), "config_error") || !strings.Contains(err.Error(), "extended") {
+		t.Fatalf("bootstrap() with extended mismatch error = %v, want config_error mentioning extended", err)
+	}
+	if fake.archiveRequests.Load() != 0 {
+		t.Fatalf("bootstrap() with extended mismatch made an archive request, want none")
+	}
+}
+
 func TestHugoBootstrapDryRunMakesNoNetworkRequestOrWrite(t *testing.T) {
 	installFakeCurrentHugo(t, "v1.0.0")
 	fake := newFakeHugoReleaseServer(t, "v1.0.0", fakeHugoArchive(t, "v1.0.0", false), nil)
