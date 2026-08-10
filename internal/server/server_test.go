@@ -2863,6 +2863,49 @@ func TestToolResponseCarriesRequestIDAndDurationMeta(t *testing.T) {
 	}
 }
 
+// TestRawHTTPToolErrorKeepsContentNotFoundInStructuredResult covers #991 at
+// the last server-controlled boundary. A bridge may label every MCP tool
+// failure INVALID_ARGUMENT, but the server itself returns a normal JSON-RPC
+// result whose structured semantic code remains content_not_found.
+func TestRawHTTPToolErrorKeepsContentNotFoundInStructuredResult(t *testing.T) {
+	srv := mustTestServer(t)
+	rec := doMCPCall(t, srv, "", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_page","arguments":{"slug":"/posts/guaranteed-missing-991/"}}}`))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get_page transport status = %d body = %q", rec.Code, rec.Body.String())
+	}
+	payload := rec.Body.String()
+	if i := strings.Index(payload, "{"); i > 0 {
+		payload = payload[i:]
+	}
+	var rpc struct {
+		Error  json.RawMessage `json:"error"`
+		Result struct {
+			IsError           bool           `json:"isError"`
+			StructuredContent map[string]any `json:"structuredContent"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(payload), &rpc); err != nil {
+		t.Fatalf("unmarshal tools/call response: %v\nbody=%q", err, rec.Body.String())
+	}
+	if len(rpc.Error) != 0 && string(rpc.Error) != "null" {
+		t.Fatalf("business failure became JSON-RPC error: %s", rpc.Error)
+	}
+	if !rpc.Result.IsError {
+		t.Fatalf("result.isError = false, want true; body=%q", rec.Body.String())
+	}
+	if _, exists := rpc.Result.StructuredContent["error_code"]; exists {
+		t.Fatalf("server added non-canonical error_code: %#v", rpc.Result.StructuredContent)
+	}
+	errors, ok := rpc.Result.StructuredContent["errors"].([]any)
+	if !ok || len(errors) != 1 {
+		t.Fatalf("structured errors = %#v, want one entry", rpc.Result.StructuredContent["errors"])
+	}
+	entry, ok := errors[0].(map[string]any)
+	if !ok || entry["code"] != "content_not_found" {
+		t.Fatalf("structured error = %#v, want content_not_found", errors[0])
+	}
+}
+
 // extractResultMeta parses an MCP tools/call HTTP response (JSON or SSE
 // framed) and returns result.structuredContent.meta.
 func extractResultMeta(t *testing.T, body string) map[string]any {

@@ -147,6 +147,16 @@ may see it, but JSON callers should rely on the structured envelope instead:
 The server must not mirror `IsError` into the JSON body as a separate
 `is_error` field.
 
+Some connector or bridge layers expose an additional generic field such as
+`error_code: INVALID_ARGUMENT` for any tool result whose MCP `isError` flag is
+true. That field is not emitted by this server and is not authoritative for
+tool semantics. Clients MUST use `errors[0].code` from `structuredContent`
+(or the equivalent canonical JSON envelope) to distinguish
+`content_not_found`, `invalid_params`, `revision_conflict`, and other tool
+errors. Raw MCP responses from this server keep `tools/call` at the JSON-RPC
+result layer with `isError:true`; they do not convert a business failure into a
+JSON-RPC `error` object or add a top-level `error_code`.
+
 ### In-band errors
 
 Structured-envelope tools may include degraded results with error strings in
@@ -382,7 +392,7 @@ content, including drafts, for every tool in this table.
 | `check_ai_readiness` | structured  | `data.status`, `data.checks`, `data.warnings`, `data.suggestions`; deterministic Markdown/frontmatter-only audit for heading hierarchy, section lengths, paragraph lengths, metadata presence, internal-link density, and citation structure. Explicitly does **not** cover rendered HTML, SEO, build freshness, or broken-link correctness (#437); does not yet support `response_mode` compact shaping (#526) |
 | `search_content`        | structured  | `data.pages[*].state`, `data.total`, pagination echo; supports `response_mode` compact envelope shaping (§5.2, #526); opt-in `include_terms` (default `true`, non-breaking) — pass `include_terms=false` to omit `data.pages[*].tag_terms`/`category_terms`; `response_mode=compact` implies the same omission (#618, #720); top-level duplication removed (#495) |
 | `explain_structure`| structured  | `data.sections`, `data.languages`, `data.summary`, `data.recent_pages[*].state`; supports `response_mode` compact envelope shaping (§5.2, #526); `response_mode:"compact"` keeps only the structural overview (`summary`, `sections`, `languages`, taxonomy counts) and omits `recent_pages` example rows (including their `tag_terms`/`category_terms`, #618) and the long `notes` list entirely for a lower-token first pass (#720); a non-default-language page's route prefix (e.g. `en` in `/en/posts/foo/`) is stripped before section counting and only ever surfaced via `data.languages`, never as a `data.sections[*].name` (#459); top-level duplication removed (#495) |
-| `get_site_health`       | structured  | `data.score`, `data.status`, counts; supports `response_mode` compact envelope shaping (§5.2, #526); `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); `data.advisories_count` is the total count of `data.taxonomy_inconsistency_details` findings across *both* `info` and `warning` severity, at the top level next to `score`/`status` — never moves `score`; deliberately broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings (#591); `data.status` is `"healthy_with_advisories"` rather than `"healthy"` on an otherwise-healthy site only when at least one taxonomy finding is actionable (`severity: "warning"`) — a pure `translation_pair`/`info` finding remains visible via `advisories_count` and `taxonomy_inconsistency_details`, but no longer degrades the top-level status on its own (#761); info-only taxonomy findings still leave `data.score` untouched, but warning-level taxonomy findings now cap an otherwise-perfect top-level score at `99` so the payload no longer advertises a perfect `100` while surfacing actionable drift (#719); top-level duplication removed (#495) |
+| `get_site_health`       | structured  | `data.score`, `data.status`, counts; supports `response_mode` compact envelope shaping (§5.2, #526); `data.publication_coverage` explains why all sources, publishable ordinary content, section indexes, and rendered content pages can have different counts while output remains complete (#992); `data.score_breakdown` explains the score per category, `data.taxonomy_inconsistency_details[*].severity` explains per finding (#419); `data.taxonomy_inconsistency_details[*]` gives affected page slugs per finding (`data.taxonomy_inconsistencies` string list kept for compat) (#324); `data.advisories_count` is the total count of `data.taxonomy_inconsistency_details` findings across *both* `info` and `warning` severity, at the top level next to `score`/`status` — never moves `score`; deliberately broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings (#591); `data.status` is `"healthy_with_advisories"` rather than `"healthy"` on an otherwise-healthy site only when at least one taxonomy finding is actionable (`severity: "warning"`) — a pure `translation_pair`/`info` finding remains visible via `advisories_count` and `taxonomy_inconsistency_details`, but no longer degrades the top-level status on its own (#761); info-only taxonomy findings still leave `data.score` untouched, but warning-level taxonomy findings now cap an otherwise-perfect top-level score at `99` so the payload no longer advertises a perfect `100` while surfacing actionable drift (#719); top-level duplication removed (#495) |
 | `get_broken_links`      | structured  | `data.links`, `data.broken_links`; supports `response_mode` compact envelope shaping (§5.2, #526); `data.index_staleness` (`newest_edit`, `likely_source`) is present only on the in-memory fallback path (not the `db_path` pre-computed-graph path) when the index is behind on-disk content — absent means current (#583); `likely_source` is `"mcp_pending_build"` or `"external_or_unknown"`, a coarse best-effort hint (#617); top-level duplication removed (#495) |
 | `get_backlinks`         | structured  | `data.backlinks`, `data.count`; supports `response_mode` compact envelope shaping (§5.2, #526); `data.index_staleness` (`newest_edit`, `likely_source`) is present only when the index is behind on-disk content — absent means current (#583); `likely_source` is `"mcp_pending_build"` or `"external_or_unknown"`, a coarse best-effort hint (#617); top-level duplication removed (#495) |
 | `suggest_links`         | structured  | `data.suggested_links` is canonical; supports `response_mode` compact envelope shaping (§5.2, #526); the deprecated `data.suggestions` alias (#453) was removed once #433/#454 resolved the live-client-verification question; when `data.suggested_links` is empty, `data.empty_reason` (`reason`, `candidates_evaluated`, `minimum_score`) explains why — additive only, never replaces the empty array (#458); top-level duplication removed (#495); when tag/category taxonomy overlap yields zero candidates but `body` is provided, falls back to lexical term matching against the same indexed page fields `search_pages`/`search_content` already score against (via the existing `scoreContentPage` matcher) — reused rather than a new search subsystem, so it works on reader-only deployments without a `db_path`/FTS dependency; taxonomy-based candidates always take precedence and suppress the lexical fallback entirely whenever any exist (#680) |
@@ -730,6 +740,39 @@ Behavior summary today:
   local issue, `status` becomes `healthy_with_advisories`, and a would-be
   perfect top-level `score: 100` is capped to `99`
 - frontmatter issues still drive the underlying weighted score as before
+
+### Publication counter populations (#992)
+
+The publication counters intentionally describe different populations and
+therefore are not expected to be equal:
+
+- `source_pages` counts every indexed source document, including ordinary
+  content, drafts, headless/future/expired content, and `_index` documents.
+- `publishable_source_pages` is the backward-compatible count of ordinary
+  source content expected to resolve to its own public page. New clients should
+  prefer the identically valued, clearer `publishable_content_pages`.
+- `section_index_pages` counts `_index.md` and `_index.<lang>.md` source
+  documents. They are excluded from publishable ordinary content because their
+  route is the containing section. The rendered section route is classified
+  separately and is not assumed to contribute to `published_pages`.
+- `published_pages` counts routes classified as rendered content in the public
+  index. It is an independent public population and can include routes that do
+  not match the publishable ordinary source population; clients must not infer
+  that the numerical difference corresponds to `_index` sources.
+- `missing_public_pages` checks only publishable ordinary content.
+  `public_output_complete:true` means that count is zero; it does not assert
+  that `source_pages == publishable_source_pages == published_pages`.
+
+`publication_coverage` repeats these populations in one typed object:
+`source_documents`, `publishable_content_sources`, `section_index_sources`,
+`other_excluded_sources`, `published_content_pages`,
+`missing_publishable_content_pages`, `completeness_basis`,
+`counters_directly_comparable`, and `complete`. `completeness_basis` is
+`publishable_content_sources`; `counters_directly_comparable` is `false` because
+the source categories and rendered public population are independently
+classified. This is the preferred surface for new agents because an
+82-source/80-publishable/82-published shape is explicit without claiming that
+two equal residual counts represent the same documents.
 
 ### `status: "healthy_with_advisories"` (#681)
 

@@ -1074,6 +1074,17 @@
       "data.pages[].title:string:required",
       "data.pages[].url:string:required",
       "data.public_output_complete:unspecified",
+      "data.publication_coverage.complete:boolean:required",
+      "data.publication_coverage.completeness_basis:string:required",
+      "data.publication_coverage.counters_directly_comparable:boolean:required",
+      "data.publication_coverage.missing_publishable_content_pages:integer:required",
+      "data.publication_coverage.other_excluded_sources:integer:required",
+      "data.publication_coverage.publishable_content_sources:integer:required",
+      "data.publication_coverage.published_content_pages:integer:required",
+      "data.publication_coverage.section_index_sources:integer:required",
+      "data.publication_coverage.source_documents:integer:required",
+      "data.publication_coverage:unspecified",
+      "data.publishable_content_pages:integer",
       "data.publishable_source_pages:integer",
       "data.published_pages:integer",
       "data.query:string",
@@ -1116,6 +1127,7 @@
       "data.score_breakdown.taxonomy.weight:integer:required",
       "data.score_breakdown.taxonomy:object:required",
       "data.score_breakdown:unspecified",
+      "data.section_index_pages:integer",
       "data.sections:unspecified",
       "data.sections[].count:integer:required",
       "data.sections[].name:string:required",
@@ -1168,7 +1180,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "39a974116b9643dad02984a0d3094a631ce556c5d2783520c71b8a2a57808a72"
+    "output_schema_sha256": "3645b4024cb98c2a1b545c60cf67fec971be96de49fc6d29bfc96908015e8330"
   },
   {
     "name": "export_agent_context",
@@ -2611,7 +2623,7 @@
   {
     "name": "get_site_health",
     "required_scope": "",
-    "description": "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true; `runtime_degraded_reasons`, `publishable_source_pages`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "description": "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. Counter populations are intentionally distinct: `source_pages` includes every indexed source document; `publishable_source_pages` is the backward-compatible count of ordinary content expected to resolve individually and excludes `_index` documents and other non-publishable sources; `published_pages` is the independently classified rendered content-page population and can include public routes not matched to publishable ordinary sources. New clients should use `publishable_content_pages`, `section_index_pages`, and the typed `publication_coverage` breakdown instead of comparing the three legacy counters directly. `public_output_complete` means every publishable ordinary content source has a public match, not that all three counters must be equal. `publication_coverage.completeness_basis` identifies that source population explicitly, while `counters_directly_comparable:false` warns agents not to subtract the independent source and public counters. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true; `runtime_degraded_reasons`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -2663,6 +2675,17 @@
       "data.pages[].title:string:required",
       "data.pages[].url:string:required",
       "data.public_output_complete:unspecified",
+      "data.publication_coverage.complete:boolean:required",
+      "data.publication_coverage.completeness_basis:string:required",
+      "data.publication_coverage.counters_directly_comparable:boolean:required",
+      "data.publication_coverage.missing_publishable_content_pages:integer:required",
+      "data.publication_coverage.other_excluded_sources:integer:required",
+      "data.publication_coverage.publishable_content_sources:integer:required",
+      "data.publication_coverage.published_content_pages:integer:required",
+      "data.publication_coverage.section_index_sources:integer:required",
+      "data.publication_coverage.source_documents:integer:required",
+      "data.publication_coverage:unspecified",
+      "data.publishable_content_pages:integer",
       "data.publishable_source_pages:integer",
       "data.published_pages:integer",
       "data.query:string",
@@ -2705,6 +2728,7 @@
       "data.score_breakdown.taxonomy.weight:integer:required",
       "data.score_breakdown.taxonomy:object:required",
       "data.score_breakdown:unspecified",
+      "data.section_index_pages:integer",
       "data.sections:unspecified",
       "data.sections[].count:integer:required",
       "data.sections[].name:string:required",
@@ -2757,7 +2781,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "39a974116b9643dad02984a0d3094a631ce556c5d2783520c71b8a2a57808a72"
+    "output_schema_sha256": "3645b4024cb98c2a1b545c60cf67fec971be96de49fc6d29bfc96908015e8330"
   },
   {
     "name": "get_site_information",

@@ -394,6 +394,41 @@ func TestErrorResultPopulatesStructuredContent(t *testing.T) {
 	}
 }
 
+func TestErrorResultKeepsSemanticCodeAuthoritative(t *testing.T) {
+	meta := NewMeta("test", time.Unix(0, 0))
+	for _, tc := range []struct {
+		name string
+		err  error
+		code string
+	}{
+		{name: "invalid parameters", err: fmt.Errorf("invalid_params: response_mode must be one of: standard, compact"), code: "invalid_params"},
+		{name: "missing content", err: fmt.Errorf("content_not_found: page not found"), code: "content_not_found"},
+		{name: "revision conflict", err: fmt.Errorf("revision_conflict: page changed since it was read"), code: "revision_conflict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			res := ErrorResult(tc.err, meta, nil, nil, nil)
+			payload, ok := res.StructuredContent.(ToolResponse[map[string]any])
+			if !ok {
+				t.Fatalf("StructuredContent type = %T", res.StructuredContent)
+			}
+			if len(payload.Errors) != 1 || payload.Errors[0].Code != tc.code {
+				t.Fatalf("errors = %#v, want code %q", payload.Errors, tc.code)
+			}
+			raw, err := json.Marshal(res.StructuredContent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var root map[string]any
+			if err := json.Unmarshal(raw, &root); err != nil {
+				t.Fatal(err)
+			}
+			if _, exists := root["error_code"]; exists {
+				t.Fatalf("non-canonical error_code appeared in server payload: %s", raw)
+			}
+		})
+	}
+}
+
 func TestErrorResultUsesHumanReadableTextContent(t *testing.T) {
 	meta := NewMeta("1.4.0", time.Date(2026, 7, 14, 8, 0, 0, 0, time.UTC))
 	res := ErrorResult(fmt.Errorf("not_found: page not found"), meta, nil, nil, nil)
