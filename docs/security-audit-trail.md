@@ -71,7 +71,7 @@ of which line it's attached to, carries:
 - **`admin_operation`** — a `write`-scoped tool call outcome on a site-operation tool (`build_site`,
   `preview_build`, `run_post_build_hooks`, `generate_hero_image`,
   `check_sri_versions`, `get_runtime_status`, `get_theme_status`,
-  `stage_hugo_upgrade`, `activate_hugo`, `rollback_hugo`). Same
+  `stage_hugo_upgrade`, `activate_hugo`, `rollback_hugo`, `bootstrap_hugo`). Same
   tagging mechanism as `mutation`. Also carries `"degraded":true` when a
   successful call's structured result reports a `partial_success` status
   (e.g. `build_site` succeeding with a failed post-build callback) — this

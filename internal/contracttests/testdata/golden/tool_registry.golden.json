@@ -236,6 +236,62 @@
     "output_schema_sha256": "c547c63eb1714b75df26f55e82fa340b433ed71bcb94fd766ce1bae0d9646495"
   },
   {
+    "name": "bootstrap_hugo",
+    "required_scope": "write",
+    "description": "One-time setup for a deployment that has never used managed Hugo upgrades: detects the currently installed Hugo version, then re-downloads and checksum-verifies that exact version from the official release (never trusts the existing binary on disk directly), stages it, and activates it as the initial managed baseline. dry_run defaults to true. Refuses to run if a managed version is already active — use stage_hugo_upgrade/activate_hugo for every upgrade after this. Without this step, rollback_hugo has no target to restore on a system's very first activation, because the pre-existing unmanaged binary was never itself a managed version. Requires write.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.activated:boolean:required",
+      "data.checksum:string",
+      "data.detected_version:string:required",
+      "data.dry_run:boolean:required",
+      "data.operator_action:string",
+      "data.restart_required:boolean:required",
+      "data.staged:boolean:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "1531ff77cb563e411831ad2484d1cbdfdfaff0475b12525e7d96e65f7e53e2f4"
+  },
+  {
     "name": "build_agent_context",
     "required_scope": "",
     "description": "Build a complete context bundle for a published page: metadata, reading time, full Markdown content, related pages, and explicit lifecycle `state`. Use this before summarizing or discussing a page. If you're about to mutate this page instead, prefer get_page_for_edit — it adds `revision` and `quality` (needed for create_page/update_page/delete_page) but omits translations/related_pages. Supports response shaping: `response_mode: \"compact\"` drops translations/related_pages and returns only frontmatter, markdown, and state; `max_body_chars: N` truncates the Markdown body to N characters (applies in either mode, N must be greater than 0 when provided). `include_terms` defaults to true: pass `include_terms=false` to omit nested `frontmatter.tag_terms`/`frontmatter.category_terms`; `response_mode:\"compact\"` implies the same omission. For multilingual content, pass `lang` to resolve one translation explicitly; URL-based language selection (`/en/posts/.../`) remains accepted as a compatibility path. Omitting both preserves the full default shape. `lang` is now populated immediately for a source-only page read back before the next Hugo build — it no longer lags behind `resolved_lang` until the page is built. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",

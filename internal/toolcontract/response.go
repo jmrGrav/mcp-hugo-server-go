@@ -523,6 +523,9 @@ func ParseToolError(err error) ToolError {
 		out.Retryable = false
 		out.Resolution = &ErrorResolution{Action: "contact_operator"}
 		out.Suggestion = "verify Unix ownership/mode of hugo_upgrade.managed_dir and that it is listed in the service's systemd ReadWritePaths"
+	case "bootstrap_unavailable":
+		out.Retryable = false
+		out.Resolution = &ErrorResolution{Action: "use_different_tool", RecommendedTool: "stage_hugo_upgrade"}
 	}
 
 	return out

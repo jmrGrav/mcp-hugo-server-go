@@ -76,6 +76,7 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"stage_hugo_upgrade":   "write",
 		"activate_hugo":        "write",
 		"rollback_hugo":        "write",
+		"bootstrap_hugo":       "write",
 	}
 
 	got := make(map[string]string, len(want))
@@ -106,8 +107,8 @@ func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
 	if got := len(writepkg.Defs()); got != 13 {
 		t.Fatalf("write tool count = %d, want 13", got)
 	}
-	if got := len(adminpkg.Defs()); got != 19 {
-		t.Fatalf("admin (folded into write) tool count = %d, want 19", got)
+	if got := len(adminpkg.Defs()); got != 20 {
+		t.Fatalf("admin (folded into write) tool count = %d, want 20", got)
 	}
 
 	if got := tools.ScopeRank(""); got != 0 {
