@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
@@ -290,8 +289,6 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 	}))
 }
 
-var malformedPreviewLanguageURL = regexp.MustCompile(`/([A-Za-z]{2,8}(?:-[A-Za-z0-9]+)?)/preview/([a-f0-9]+)/`)
-
 // normalizePreviewLanguageURLs fixes the known reversed preview-language
 // prefix in generated HTML. The preview id in a URL must equal previewID;
 // another id is never rewritten. This covers href/src/canonical/hreflang and
@@ -308,8 +305,8 @@ func normalizePreviewLanguageURLs(destDir, previewID string) error {
 		if err != nil {
 			return err
 		}
-		rewritten := malformedPreviewLanguageURL.ReplaceAllFunc(raw, func(match []byte) []byte {
-			parts := malformedPreviewLanguageURL.FindSubmatch(match)
+		rewritten := previewstore.MalformedLanguagePrefixPattern.ReplaceAllFunc(raw, func(match []byte) []byte {
+			parts := previewstore.MalformedLanguagePrefixPattern.FindSubmatch(match)
 			if len(parts) != 3 || string(parts[2]) != previewID {
 				return match
 			}

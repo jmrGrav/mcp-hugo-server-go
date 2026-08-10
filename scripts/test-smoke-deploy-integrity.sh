@@ -20,25 +20,42 @@ import json, os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 fallback = os.environ.get("FIXTURE_FALLBACK") == "1"
+sessions_by_token = {}
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
-    def send_json(self, payload):
+    def send_json(self, payload, session_id=None):
         raw = json.dumps(payload).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Mcp-Session-Id", "fixture-session")
+        if session_id:
+            self.send_header("Mcp-Session-Id", session_id)
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
+
+    def bearer_token(self):
+        auth = self.headers.get("Authorization", "")
+        return auth[len("Bearer "):] if auth.startswith("Bearer ") else ""
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", "0"))
         request = json.loads(self.rfile.read(length) or b"{}")
         method = request.get("method")
         req_id = request.get("id")
+        token = self.bearer_token()
+        if method == "initialize":
+            session_id = f"fixture-session-{len(sessions_by_token)}-{token}"
+            sessions_by_token[token] = session_id
+            self.send_json({"jsonrpc":"2.0", "id":req_id, "result":{}}, session_id=session_id)
+            return
+        expected_session = sessions_by_token.get(token)
+        got_session = self.headers.get("Mcp-Session-Id")
+        if expected_session is not None and got_session != expected_session:
+            self.send_json({"jsonrpc":"2.0", "id":req_id, "error":{"code":-32000, "message":"session/token mismatch"}})
+            return
         if method == "tools/list":
             self.send_json({"jsonrpc":"2.0", "id":req_id, "result":{"tools":[{"name":"fixture"}]}})
             return

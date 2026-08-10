@@ -283,6 +283,7 @@ if [[ "$VERIFY_WRITE_CATALOGUE" == "1" ]]; then
   jq -r '.[].name' "$TOOL_REGISTRY_MANIFEST" | LC_ALL=C sort -u > "$TMPDIR/expected-write-tools.txt"
   [[ -s "$TMPDIR/expected-write-tools.txt" ]] || fail "tool registry manifest contains no tools"
 
+  READ_SESSION_ID="$MCP_SESSION_ID"
   ACCESS_TOKEN="$WRITE_ACCESS_TOKEN"
   MCP_SESSION_ID=""
   post_mcp "$TMPDIR/initialize.json"
@@ -299,6 +300,7 @@ if [[ "$VERIFY_WRITE_CATALOGUE" == "1" ]]; then
   expected_write_tools_count="$(wc -l < "$TMPDIR/expected-write-tools.txt" | tr -d ' ')"
   pass "fresh write tools/list matches all $expected_write_tools_count registry tools including managed-Hugo tools"
   ACCESS_TOKEN="${MCP_ACCESS_TOKEN:-}"
+  MCP_SESSION_ID="$READ_SESSION_ID"
 fi
 
 call_tool "unknown_tool" "codex_unknown_tool" "{}" 0
