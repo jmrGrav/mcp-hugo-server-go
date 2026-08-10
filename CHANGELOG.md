@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.1] - 2026-08-10
+
+Response to Sol's second live v1.8.0 audit (2026-08-10): a production build/publish outage plus the remaining v1.8.0 follow-up findings. Delivered as #973 and #974.
+
+### Reliability
+- **`build_site`/`publish_changes` no longer build directly into the live `public/` tree** (#965): Hugo now renders into a temporary sibling directory and the result is installed only via an atomic rename after a fully successful build, with the previous output retained and restored if the install step itself fails. A permissions/ownership preflight also runs before any build work starts, so a `permission_denied` fails fast and clearly instead of surfacing mid-build. This closes the class of bug behind the incident that triggered this audit: an operator-created backup file with the wrong ownership inside `public/` broke every subsequent build with an opaque `chtimes` error, and — before this fix — could have left `public/` partially regenerated on failure.
+- **`delete_page_asset` no longer consumes the destructive quota on a non-forced `asset_referenced` refusal** (#963): a rejected "still referenced by another translation" attempt is a precondition failure, not a destructive attempt; `revision_conflict` and `force=true`/successful deletes still consume it as before.
+
+### Contract
+- **`build_site`/`publish_changes` failures now expose a structured error** (#966): `error_class`, `build_id`, `stage`, `retryable`, and `log_hint`/`suggestion` are promoted into the typed MCP error contract instead of being buried in a JSON-encoded message string.
+- **`get_capabilities`/`get_changelog`/`get_recent_posts`/`list_tags`/`list_categories`/`get_feed`/`get_site_information` no longer claim "no authentication needed"** (#969): all seven anonymous-tier tool descriptions now state that a Bearer token is still required for every `/mcp` call on OAuth-enabled deployments, matching the `auth.md` contract fixed in v1.8.0.
+- **`tags`/`categories` are now consistently normalized slugs across every tool** (#970): `list_pages`, `get_recent_posts`, `search_pages`, and `search_content` previously returned title-cased display labels while `get_page`, `get_page_markdown`, `get_page_frontmatter`, `build_agent_context`, and `list_tags` returned normalized slugs for the same page — an agent comparing tags across tool calls saw two different values for the same term.
+- **`warnings[]` is now the canonical warning channel everywhere** (#971): the unknown-language and stale-failed-build advisories previously only appeared in `data.warning`, invisible to a caller that only reads `warnings[]`. Also fixed a duplicate entry in the unknown-language warning's known-languages list.
+- **`get_site_health` exposes `runtime_degraded`** (#972) so a caller doesn't mistake a healthy content score for an all-clear during an active build/deploy outage — the two tools measure different things and previously had no shared signal.
+
+### Internal
+- Confirmed (not a bug): the v1.8.0 mutation-quota fix (#950) holds under a decisive re-test controlling for elapsed time — the earlier `59 -> 60` observation was the bucket's normal one-token-per-second refill, not a principal-identity regression.
+- Confirmed (not a bug): `test_content.owner`'s destructive-quota exemption is intentionally absent since v1.7.9 (#927, #936); both `delete_page`'s and `delete_page_asset`'s descriptions already document `owner` as advisory-only.
+- Fixed a pre-existing test-isolation flake: `internal/tools/read` tests shared a tracked fixture directory with `internal/server` build tests, racing when run in parallel; `internal/tools/read` now has its own private copy.
+
 ## [v1.8.0] - 2026-08-10
 
 Response to Sol's 2026-08-10 live audit of v1.7.9 (60/60 tools exercised, 7.8/10). Delivered as #959 plus a follow-up hardening fix caught during review.
