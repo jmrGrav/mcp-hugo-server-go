@@ -296,7 +296,7 @@ Edit it after the first deploy to match your installation. At minimum you need:
 ```ini
 [Service]
 ReadOnlyPaths=/etc/mcp-hugo-server-go
-ReadWritePaths=/var/lib/mcp-hugo-server-go /path/to/hugo-site/content /path/to/hugo-site/resources /path/to/hugo-site/public
+ReadWritePaths=/var/lib/mcp-hugo-server-go /path/to/hugo-site/content /path/to/hugo-site/resources /path/to/hugo-site
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 ```
 
@@ -322,9 +322,21 @@ Required writable paths for each tool:
 
 | Tool | Paths that must be writable |
 |------|----------------------------|
-| `build_site` | `site_root` (site root), `{hugo_root}/resources` |
+| `build_site` | **the parent directory of `site_root`** (not `site_root` itself), `{hugo_root}/resources` |
 | `preview_build` | `{hugo_root}/resources` (render-to-memory; no writes to `public/`) |
 | `generate_hero_image` | `{hugo_root}/static/images` |
+
+`build_site` builds atomically (#965): Hugo renders into a temporary
+directory created as a *sibling* of `site_root` (`.mcp-build-output-*`), then
+swaps it into place via `rename`, keeping the previous output as
+`.mcp-public-backup-*` until cleanup. Both the create and the rename are
+directory-entry operations on `site_root`'s **parent**, not on `site_root`
+itself — under `ProtectSystem=strict`, listing `site_root` (e.g. `.../public`)
+alone in `ReadWritePaths` is not sufficient; you must list its parent (e.g.
+`.../hugo-site`, not `.../hugo-site/public`). This bit a production deploy
+once (#981/#983) — the preflight check historically probed `site_root` only,
+which passed while the actual rename against the unlisted parent failed with
+`permission_denied`.
 
 Add the missing paths to `ReadWritePaths` in the systemd override and reload:
 
@@ -380,6 +392,20 @@ Note: `site_root` (the build output, `{hugo_root}/public`) is always nested unde
 `hugo_root`, so a `ReadWritePaths` entry covering `hugo_root` already covers `site_root`
 too — but `static/images` under `hugo_root` is a distinct path outside `site_root` that
 needs its own entry regardless.
+
+#### `build_site` succeeds but the site 403s afterward
+
+`build_site`'s atomic swap (#965) builds into a temp directory created with
+`os.MkdirTemp`, which defaults to mode `0700` — owner-only. Since v1.8.2
+(#984), the server chmods that directory to `0755` immediately after
+creating it, and self-heals any world-unreadable file or directory left
+inside the swapped-in output before returning. If `build_site`'s response
+ever includes an `output_unreadable: ...` warning, it names the exact paths
+the server could not fix itself (its own chmod failed) — usually an
+ownership mismatch, fixable with the `chown` command the warning suggests.
+Prior to #984, this bit a production deploy: `build_site` reported success
+while `site_root` ended up `0700`, and a reverse proxy running as a
+different Unix user got `403` on every page until manually `chmod`'d.
 
 #### `get_broken_links` (and other index tools) return stale results after `build_site`
 
