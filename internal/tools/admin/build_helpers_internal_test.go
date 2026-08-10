@@ -3,6 +3,7 @@ package admin
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -44,5 +45,46 @@ func TestBuildHelperBranches(t *testing.T) {
 
 	if got := buildPreflightChownError("/tmp/site"); !strings.Contains(got.Error(), "ownership") && !strings.Contains(got.Error(), "build_precondition_failed") {
 		t.Fatalf("buildPreflightChownError() = %v", got)
+	}
+}
+
+// TestCheckDirWritableIgnoresOwnershipMismatch guards the #981 production
+// incident: SiteRoot's parent only needs to be writable (this process
+// creates its own siblings there, so it always owns what it creates) — it
+// must not be rejected merely because a *different* uid happens to own the
+// directory itself. checkBuildWritable enforces ownership (correct for
+// directories whose pre-existing files get chtimes'd, like the Hugo
+// resources cache); checkDirWritable deliberately does not.
+func TestCheckDirWritableIgnoresOwnershipMismatch(t *testing.T) {
+	orig := geteuid
+	geteuid = func() int { return -1 } // guaranteed not to match any real owner uid
+	defer func() { geteuid = orig }()
+
+	dir := t.TempDir() // owned by the real test-process uid, not -1
+	if err := checkDirWritable(dir); err != nil {
+		t.Fatalf("checkDirWritable() = %v, want nil (ownership must not be checked)", err)
+	}
+}
+
+// TestCheckBuildWritableRejectsOwnershipMismatch is the converse of the
+// above: checkBuildWritable's ownership enforcement must still fire for
+// directories that do need it (e.g. the Hugo resources cache), or the
+// chtimes-EPERM class of failure this preflight exists to catch would go
+// undetected.
+func TestCheckBuildWritableRejectsOwnershipMismatch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ownershipMismatch is a no-op on windows (build_ownership_windows.go)")
+	}
+	orig := geteuid
+	geteuid = func() int { return -1 }
+	defer func() { geteuid = orig }()
+
+	dir := t.TempDir()
+	err := checkBuildWritable(dir)
+	if err == nil {
+		t.Fatal("checkBuildWritable() = nil, want ownership-mismatch error")
+	}
+	if !strings.Contains(err.Error(), "build_precondition_failed") {
+		t.Fatalf("checkBuildWritable() = %v, want build_precondition_failed", err)
 	}
 }

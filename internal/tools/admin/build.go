@@ -146,6 +146,26 @@ type buildPreflightPayload struct {
 
 const buildDocsURL = "docs/operator-guide.md#build-permissions"
 
+// checkDirWritable verifies only that a directory is writable (via a real
+// CreateTemp probe), without requiring the process to own it. Use this for
+// directories Hugo never chtimes pre-existing files inside directly — e.g.
+// the parent of SiteRoot, which #965's atomic build only needs write access
+// to in order to create sibling .mcp-build-output-*/.mcp-public-backup-*
+// temp directories. Those temp directories are created by this process and
+// are therefore always owned by it, regardless of who owns the parent.
+func checkDirWritable(dir string) error {
+	if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G301 -- these are configured service-owned build paths
+		return buildPreflightError(dir)
+	}
+	f, err := os.CreateTemp(dir, ".mcp-preflight-*.tmp")
+	if err != nil {
+		return buildPreflightError(dir)
+	}
+	_ = f.Close()
+	_ = os.Remove(f.Name())
+	return nil
+}
+
 // checkBuildWritable verifies that the directories Hugo must write to are
 // accessible before invoking the build. Returns a structured JSON error on
 // the first problematic path found.
@@ -156,18 +176,25 @@ const buildDocsURL = "docs/operator-guide.md#build-permissions"
 //     copies into the output directory; POSIX requires ownership (not just
 //     write) for non-NULL timestamps. A dir owned by a different user means
 //     its existing files will trigger EPERM on chtimes.
+//
+// Only call this on directories Hugo actually reuses/rewrites pre-existing
+// files inside across builds (e.g. the resources cache) — not on a
+// directory this process merely needs to create fresh siblings under; use
+// checkDirWritable for that (#981 production incident: the parent of
+// SiteRoot passed the writability probe but is legitimately owned by a
+// different operator account, which incorrectly failed preflight here even
+// though nothing under it gets chtimes'd directly).
+// geteuid is a test seam: real UID mismatches can't be reproduced in CI
+// without root, so tests override this to exercise ownershipMismatch
+// deterministically.
+var geteuid = os.Geteuid
+
 func checkBuildWritable(paths ...string) error {
-	euid := os.Geteuid()
+	euid := geteuid()
 	for _, dir := range paths {
-		if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G301 -- these are configured service-owned build paths
-			return buildPreflightError(dir)
+		if err := checkDirWritable(dir); err != nil {
+			return err
 		}
-		f, err := os.CreateTemp(dir, ".mcp-preflight-*.tmp")
-		if err != nil {
-			return buildPreflightError(dir)
-		}
-		_ = f.Close()
-		_ = os.Remove(f.Name())
 		// Check ownership: chtimes on pre-existing files requires the process
 		// to own them. If the directory itself belongs to a different uid,
 		// its pre-existing files are almost certainly owned by that uid too.
@@ -514,7 +541,11 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 	}
 	defer hugosite.ContentMu.Unlock()
 
-	if err := checkBuildWritable(filepath.Dir(cfg.SiteRoot), filepath.Join(cfg.HugoRoot, "resources")); err != nil {
+	if err := checkDirWritable(filepath.Dir(cfg.SiteRoot)); err != nil {
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildSiteData{}, err
+	}
+	if err := checkBuildWritable(filepath.Join(cfg.HugoRoot, "resources")); err != nil {
 		buildstatus.RecordFailure("permission_denied", time.Now())
 		return buildSiteData{}, err
 	}
