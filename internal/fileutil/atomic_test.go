@@ -17,9 +17,26 @@ import (
 // synchronously right after the temp file is created, before either write
 // or the second RevalidateForWrite/link check) — see testhooks_test.go for
 // why this replaced a goroutine-plus-polling race that was flaky under load.
+// swapDirToSymlinkOnTempCreate lands the attack precisely inside the real
+// TOCTOU window: it swaps dir for a symlink to symlinkTarget right after the
+// temp file is created, and — #947 — plants a same-named decoy file at
+// symlinkTarget first, so the stale tmp path still resolves to a real file
+// after the swap. Without that decoy, the eventual os.Link/os.Rename call
+// fails on plain ENOENT (the swapped-to path never had a file with the
+// stale tmp name), which passes the test regardless of whether the second
+// pg.RevalidateForWrite check ran at all — proven by mutation-testing that
+// check away and watching these tests stay green. With the decoy in place,
+// only that RevalidateForWrite call stands between the attack and a real
+// write through the symlink, so the test actually exercises the guard it
+// claims to.
 func swapDirToSymlinkOnTempCreate(t *testing.T, dir, symlinkTarget string) {
 	t.Helper()
-	fileutil.SwapDirOnTempCreate(t, func() {
+	fileutil.SwapDirOnTempCreate(t, func(tmpName string) {
+		decoy := filepath.Join(symlinkTarget, filepath.Base(tmpName))
+		if err := os.WriteFile(decoy, []byte("decoy"), 0o644); err != nil {
+			t.Errorf("os.WriteFile(decoy) error = %v", err)
+			return
+		}
 		moved := dir + "-moved"
 		if err := os.Rename(dir, moved); err != nil {
 			t.Errorf("os.Rename() error = %v", err)
