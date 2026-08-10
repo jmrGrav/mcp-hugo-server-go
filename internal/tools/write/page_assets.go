@@ -381,7 +381,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		if in.DryRun {
 			return nil, newUploadPageAssetOutput(uploadPageAssetData{
-				Status:      "ok",
+				Status:      "unchanged",
 				Slug:        canonicalPublicSlug(slug),
 				SourceKey:   slug,
 				Filename:    filename,
@@ -408,7 +408,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		out := newUploadPageAssetOutput(uploadPageAssetData{
-			Status:      "ok",
+			Status:      "created",
 			Slug:        canonicalPublicSlug(slug),
 			SourceKey:   slug,
 			Filename:    filename,
