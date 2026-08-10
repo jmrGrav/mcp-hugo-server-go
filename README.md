@@ -3,6 +3,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.25.11-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Latest Release](https://img.shields.io/github/v/release/jmrGrav/mcp-hugo-server-go)](https://github.com/jmrGrav/mcp-hugo-server-go/releases/latest)
 [![CI](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/ci.yml/badge.svg)](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/ci.yml)
+[![Production Go LOC](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FjmrGrav%2Fmcp-hugo-server-go%2Fbadges%2Fsource-loc.json&logo=go&logoColor=white)](#production-go-loc)
 [![Deploy to Production](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/deploy.yml/badge.svg)](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/security-policy-green.svg)](SECURITY.md)
@@ -24,6 +25,10 @@ This MCP is far more than a remote Markdown editor for [Hugo](https://gohugo.io)
 Ce MCP est bien plus qu'un éditeur à distance de Markdown pour [Hugo](https://gohugo.io) : il est une interface de gestion intelligente du contenu. Il donne aux agents IA une compréhension structurée et des opérations sûres sur un site Hugo. Exemple de site utilisant ce MCP : [www.arleo.eu](https://www.arleo.eu).
 
 Content mostly written with Claude Code and Codex. / Contenu majoritairement codé avec Claude Code et Codex.
+
+### Production Go LOC
+
+The badge counts `scc` code lines from Git-tracked production `.go` files. It excludes comments, blank lines, untracked files, and every `*_test.go` file. CI recalculates and publishes the badge payload automatically after every push to `main`; contributors never edit the count in this README.
 
 ## What it does
 
