@@ -159,7 +159,7 @@ const buildDocsURL = "docs/operator-guide.md#build-permissions"
 func checkBuildWritable(paths ...string) error {
 	euid := os.Geteuid()
 	for _, dir := range paths {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil { // #nosec G301 -- these are configured service-owned build paths
 			return buildPreflightError(dir)
 		}
 		f, err := os.CreateTemp(dir, ".mcp-preflight-*.tmp")
@@ -530,7 +530,7 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		timeout = 120
 	}
 	cacheDir := hugoCacheDir(cfg)
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil { // #nosec G301 -- Hugo cache is a configured service-owned path
 		return buildSiteData{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
 	}
 	tctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
