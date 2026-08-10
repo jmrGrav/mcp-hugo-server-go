@@ -226,6 +226,74 @@ func TestBuildSiteHealthRecognizesCustomPublicURL(t *testing.T) {
 	}
 }
 
+// TestBuildSiteHealthIgnoresSectionIndexBundles guards a false-positive found
+// by running this check against arleo.eu's real production content: Hugo
+// homepage/section bundles (_index.md, _index.<lang>.md) route to their
+// section's own URL ("/", "/posts/"), not to a slug derived from their own
+// filename. SlugFromRel gives "_index.en.md" the literal slug "_index.en",
+// which the public index never contains under that name — so without this
+// exclusion, every real site using Hugo section indexes at all would have
+// get_site_health flip to "degraded" immediately, even with 100% of content
+// actually published.
+func TestBuildSiteHealthIgnoresSectionIndexBundles(t *testing.T) {
+	buildstatus.ResetForTest()
+	defer buildstatus.ResetForTest()
+
+	siteRoot := t.TempDir()
+	for rel, html := range map[string]string{
+		"index.html":       `<!DOCTYPE html><html lang="en"><head><title>Home</title></head><body>Home</body></html>`,
+		"posts/index.html": `<!DOCTYPE html><html lang="en"><head><title>Posts</title></head><body>Posts</body></html>`,
+	} {
+		full := filepath.Join(siteRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll public: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile public: %v", err)
+		}
+	}
+
+	contentRoot := t.TempDir()
+	for rel, raw := range map[string]string{
+		"_index.en.md":       "---\ntitle: Home\ndate: 2026-08-10\n---\nHome\n",
+		"posts/_index.en.md": "---\ntitle: Posts\ndate: 2026-08-10\n---\nPosts\n",
+	} {
+		full := filepath.Join(contentRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll source: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatalf("WriteFile source: %v", err)
+		}
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg)
+	if health.PublishableSourcePages != 0 || health.MissingPublicPages != 0 {
+		t.Fatalf("publishable/missing = %d/%d, want 0/0 (section indexes excluded)", health.PublishableSourcePages, health.MissingPublicPages)
+	}
+	if health.PublicOutputComplete == nil || !*health.PublicOutputComplete {
+		t.Fatalf("public_output_complete = %#v, want true", health.PublicOutputComplete)
+	}
+	if health.Status != "healthy" {
+		t.Fatalf("status = %q, want healthy", health.Status)
+	}
+}
+
 func slicesContain(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

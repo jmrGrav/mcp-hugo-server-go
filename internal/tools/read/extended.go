@@ -1880,6 +1880,17 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 }
 
 func sourceExpectedInPublic(p hugosite.SourcePage, now time.Time) bool {
+	// Hugo section/homepage bundles (_index.md, _index.<lang>.md at any
+	// directory depth) route to their section's own URL (e.g. "/", "/posts/"),
+	// not to a slug derived from the bundle's own filename — SlugFromRel gives
+	// them a literal slug like "_index.en" that the public index never uses.
+	// Checking these against the resolver as if they were ordinary content
+	// pages always "fails" even when the section is fully published, which
+	// would flip get_site_health to degraded on every real site that uses
+	// Hugo section indexes at all.
+	if strings.HasPrefix(filepath.Base(p.FilePath), "_index.") {
+		return false
+	}
 	if p.Draft {
 		return false
 	}
