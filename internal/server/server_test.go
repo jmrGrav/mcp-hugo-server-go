@@ -813,7 +813,7 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 			t.Fatalf("reader tools/list missing %q; got %v", name, names)
 		}
 	}
-	for _, forbidden := range []string{"create_page", "update_page", "delete_page", "build_site", "preview_build", "run_post_build_hooks"} {
+	for _, forbidden := range []string{"create_page", "update_page", "delete_page", "build_site", "preview_build", "run_post_build_hooks", "get_hugo_update", "stage_hugo_upgrade", "activate_hugo", "rollback_hugo", "bootstrap_hugo"} {
 		for _, got := range names {
 			if got == forbidden {
 				t.Fatalf("reader tools/list must not include %q; got %v", forbidden, names)

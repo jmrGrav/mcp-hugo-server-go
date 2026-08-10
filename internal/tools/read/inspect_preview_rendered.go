@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -114,6 +115,7 @@ func RegisterInspectPreviewRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *
 			checkCanonical(doc, previewCfg.SiteURL, page.Slug),
 			checkHreflang(doc, idx, page),
 			checkInternalLinks(idx, page, doc),
+			checkPreviewLanguagePrefix(raw, previewID),
 			checkMissingImages(previewCfg, page, doc),
 			checkFeaturedImage(previewCfg, resolved, doc),
 			checkRenderedTitleMarkup(raw),
@@ -148,6 +150,19 @@ func RegisterInspectPreviewRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *
 			Checks:           checks,
 		}, time.Now().UTC()), nil
 	}))
+}
+
+var malformedPreviewLanguagePrefixRe = regexp.MustCompile(`/[A-Za-z]{2,8}(?:-[A-Za-z0-9]+)?/preview/([a-f0-9]+)/`)
+
+// checkPreviewLanguagePrefix catches the impossible preview path ordering
+// before a caller follows a link out of the authenticated preview mount.
+func checkPreviewLanguagePrefix(raw []byte, previewID string) renderCheckResult {
+	for _, match := range malformedPreviewLanguagePrefixRe.FindAllSubmatch(raw, -1) {
+		if len(match) == 2 && string(match[1]) == previewID {
+			return renderCheckResult{Check: "preview_url_prefixes", Status: "fail", Detail: "rendered preview contains /{lang}/preview/{preview_id}/ URL(s); expected /preview/{preview_id}/{lang}/"}
+		}
+	}
+	return renderCheckResult{Check: "preview_url_prefixes", Status: "pass"}
 }
 
 func previewURLPath(previewID, sourceSlug string) string {

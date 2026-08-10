@@ -208,6 +208,46 @@ func TestInspectPreviewRenderedPreservesNonDefaultLanguagePath(t *testing.T) {
 	}
 }
 
+func TestInspectPreviewRenderedRejectsReversedLanguagePreviewPrefix(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "draft", "index.en.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: English draft\ndate: 2026-08-10\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previewRoot := t.TempDir()
+	full := filepath.Join(previewRoot, "en", "posts", "draft", "index.html")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	html := `<!doctype html><html lang="en"><head><title>English draft</title><meta name="description" content="Preview"><link rel="canonical" href="https://mcp.example.test/en/preview/abc123/posts/draft/"></head><body><a href="/en/preview/abc123/tags/test/">tag</a></body></html>`
+	if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.DefaultLanguage = "fr"
+	session, store, done := newPreviewInspectionServer(t, cfg)
+	defer done()
+	store.Put("abc123", &previewstore.Entry{Dir: previewRoot, Token: "entry-token", ExpiresAt: time.Now().Add(time.Hour), BuildStatus: "passed"})
+	res, err := callTool(t, session, "inspect_preview", map[string]any{"slug": "/en/posts/draft/", "preview_id": "abc123"})
+	if err != nil || res.IsError {
+		t.Fatalf("inspect_preview = %v, %s", err, resultText(res))
+	}
+	checks := decodeStructuredResult(t, res)["data"].(map[string]any)["checks"].([]any)
+	for _, raw := range checks {
+		check := raw.(map[string]any)
+		if check["check"] == "preview_url_prefixes" && check["status"] == "fail" {
+			return
+		}
+	}
+	t.Fatal("inspect_preview must fail preview_url_prefixes for /{lang}/preview/{id}/")
+}
+
 func TestInspectPreviewRenderedPreviewExpiredReturnsStableCode(t *testing.T) {
 	contentRoot := t.TempDir()
 	writePreviewInspectionPage(t, contentRoot)

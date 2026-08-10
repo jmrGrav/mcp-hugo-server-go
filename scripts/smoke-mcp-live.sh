@@ -287,7 +287,7 @@ if [[ -n "$WRITE_ACCESS_TOKEN" ]]; then
   pass "fresh write tools/list returned all 65 tools including managed-Hugo tools"
   ACCESS_TOKEN="${MCP_ACCESS_TOKEN:-}"
 else
-  warn "MCP_WRITE_ACCESS_TOKEN is not set; write catalogue parity check skipped"
+	  fail "MCP_WRITE_ACCESS_TOKEN is required for write catalogue parity checks"
 fi
 
 call_tool "unknown_tool" "codex_unknown_tool" "{}" 0
