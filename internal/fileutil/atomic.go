@@ -9,15 +9,22 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 )
 
+var (
+	mkdirAll  = os.MkdirAll
+	createTmp = os.CreateTemp
+	rename    = os.Rename
+	link      = os.Link
+)
+
 // AtomicWrite writes content to path atomically using a unique temp file in the
 // same directory. On failure the temp file is removed; partial writes are never
 // promoted to the target path.
 func AtomicWrite(path, content string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".mcp-write-*.tmp")
+	tmp, err := createTmp(dir, ".mcp-write-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -30,7 +37,7 @@ func AtomicWrite(path, content string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return rename(tmpName, path)
 }
 
 // AtomicWriteChecked writes content to path atomically, calling
@@ -42,14 +49,14 @@ func AtomicWrite(path, content string) error {
 // behaves identically to AtomicWrite.
 func AtomicWriteChecked(path, content string, pg *security.PathGuard) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	// Pre-CreateTemp check: fail if dir became a symlink after MkdirAll.
 	if err := pg.RevalidateForWrite(dir); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".mcp-write-*.tmp")
+	tmp, err := createTmp(dir, ".mcp-write-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -66,7 +73,7 @@ func AtomicWriteChecked(path, content string, pg *security.PathGuard) error {
 	if err := pg.RevalidateForWrite(dir); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return rename(tmpName, path)
 }
 
 // AtomicCreateChecked writes content to a newly created path atomically. The
@@ -75,13 +82,13 @@ func AtomicWriteChecked(path, content string, pg *security.PathGuard) error {
 // existing file.
 func AtomicCreateChecked(path, content string, pg *security.PathGuard) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	if err := pg.RevalidateForWrite(dir); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".mcp-write-*.tmp")
+	tmp, err := createTmp(dir, ".mcp-write-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -97,7 +104,7 @@ func AtomicCreateChecked(path, content string, pg *security.PathGuard) error {
 	if err := pg.RevalidateForWrite(dir); err != nil {
 		return err
 	}
-	if err := os.Link(tmpName, path); err != nil {
+	if err := link(tmpName, path); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return fs.ErrExist
 		}
@@ -114,13 +121,13 @@ func AtomicCreateChecked(path, content string, pg *security.PathGuard) error {
 // silently overwriting the existing file.
 func AtomicCreateCheckedBytes(path string, data []byte, pg *security.PathGuard) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	if err := pg.RevalidateForWrite(dir); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".mcp-write-*.tmp")
+	tmp, err := createTmp(dir, ".mcp-write-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -136,7 +143,7 @@ func AtomicCreateCheckedBytes(path string, data []byte, pg *security.PathGuard) 
 	if err := pg.RevalidateForWrite(dir); err != nil {
 		return err
 	}
-	if err := os.Link(tmpName, path); err != nil {
+	if err := link(tmpName, path); err != nil {
 		if errors.Is(err, fs.ErrExist) {
 			return fs.ErrExist
 		}
@@ -149,10 +156,10 @@ func AtomicCreateCheckedBytes(path string, data []byte, pg *security.PathGuard) 
 // On failure the temp file is removed.
 func AtomicWriteBytes(path string, data []byte) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(dir, ".mcp-write-*.tmp")
+	tmp, err := createTmp(dir, ".mcp-write-*.tmp")
 	if err != nil {
 		return err
 	}
@@ -165,7 +172,7 @@ func AtomicWriteBytes(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return rename(tmpName, path)
 }
 
 func BoolPtr(v bool) *bool { return &v }

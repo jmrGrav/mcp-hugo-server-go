@@ -37,6 +37,10 @@ var (
 
 func init() {
 	info, ok := debug.ReadBuildInfo()
+	applyBuildInfo(info, ok)
+}
+
+func applyBuildInfo(info *debug.BuildInfo, ok bool) {
 	if !ok {
 		return
 	}

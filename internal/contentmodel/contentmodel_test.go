@@ -134,6 +134,49 @@ func TestResolvePageSourceRejectsTraversal(t *testing.T) {
 	}
 }
 
+func TestResolvePageSourceRejectsBlankSlug(t *testing.T) {
+	root := t.TempDir()
+	_, err := ResolvePageSource("   ", "", root)
+	if err == nil || !strings.Contains(err.Error(), "slug_not_found") {
+		t.Fatalf("ResolvePageSource(blank) error = %v, want slug_not_found", err)
+	}
+}
+
+func TestResolvePageSourceLocalizedLeafExplicitLang(t *testing.T) {
+	root := t.TempDir()
+	full := filepath.Join(root, "posts", "hello.fr.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(full, []byte("bonjour"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	got, err := ResolvePageSource("posts/hello", "fr", root)
+	if err != nil {
+		t.Fatalf("ResolvePageSource() error = %v", err)
+	}
+	if got.Lang != "fr" || got.SourcePath != full {
+		t.Fatalf("ResolvePageSource() = %#v, want lang=fr path=%q", got, full)
+	}
+}
+
+func TestResolvePageSourceExplicitLangNotFound(t *testing.T) {
+	root := t.TempDir()
+	full := filepath.Join(root, "posts", "hello", "index.en.md")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(full, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := ResolvePageSource("posts/hello", "fr", root)
+	if err == nil || !strings.Contains(err.Error(), "source_file_not_found") {
+		t.Fatalf("ResolvePageSource() error = %v, want source_file_not_found", err)
+	}
+}
+
 func TestSourceRevisionBytesAndSourceRevision(t *testing.T) {
 	raw := []byte("---\ntitle: demo\n---\nbody\n")
 	sum := sha256.Sum256(raw)
@@ -198,5 +241,53 @@ func TestExtractLang(t *testing.T) {
 		if got := extractLang(tt.path); got != tt.want {
 			t.Fatalf("extractLang(%q) = %q, want %q", tt.path, got, tt.want)
 		}
+	}
+}
+
+func TestBundleTranslations(t *testing.T) {
+	dir := t.TempDir()
+	files := []string{
+		"index.md",
+		"index.fr.md",
+		"index.en.md",
+		"cover.png",
+		"notes.txt",
+	}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "assets"), 0o755); err != nil {
+		t.Fatalf("Mkdir(assets) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "assets", "nested.md"), []byte("nested"), 0o644); err != nil {
+		t.Fatalf("WriteFile(nested) error = %v", err)
+	}
+
+	got, err := BundleTranslations(dir)
+	if err != nil {
+		t.Fatalf("BundleTranslations() error = %v", err)
+	}
+	want := map[string]string{
+		"":   filepath.Join(dir, "index.md"),
+		"fr": filepath.Join(dir, "index.fr.md"),
+		"en": filepath.Join(dir, "index.en.md"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("BundleTranslations() len = %d, want %d; got=%#v", len(got), len(want), got)
+	}
+	for lang, path := range want {
+		if got[lang] != path {
+			t.Fatalf("BundleTranslations()[%q] = %q, want %q", lang, got[lang], path)
+		}
+	}
+}
+
+func TestBundleTranslationsReadFailure(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	_, err := BundleTranslations(missing)
+	if err == nil || !strings.Contains(err.Error(), "read bundle dir") {
+		t.Fatalf("BundleTranslations() error = %v, want wrapped read bundle dir failure", err)
 	}
 }
