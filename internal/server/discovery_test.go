@@ -410,9 +410,7 @@ func TestPublishedAuthAndToolSurfacesStayConvergedOnCanonicalReadWrite(t *testin
 	parsed := false
 	for _, line := range strings.Split(body, "\n") {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "data: ") {
-			line = strings.TrimPrefix(line, "data: ")
-		}
+		line = strings.TrimPrefix(line, "data: ")
 		if err := json.Unmarshal([]byte(line), &result); err == nil && len(result.Result.Tools) > 0 {
 			parsed = true
 			break
