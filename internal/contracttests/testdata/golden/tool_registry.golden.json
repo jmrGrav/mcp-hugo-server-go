@@ -2624,6 +2624,7 @@
       "type": "object"
     },
     "output_schema_fields": [
+      "data.binary_build_dirty:boolean:required",
       "data.build_channel:string",
       "data.build_dirty:boolean:required",
       "data.commit:string",
@@ -2660,6 +2661,7 @@
       "data.site.public_revision:string",
       "data.site.source_revision:string",
       "data.site:object:required",
+      "data.site_worktree_dirty:boolean:required",
       "data:object:required",
       "errors:unspecified:required",
       "errors[].build_id:string",
@@ -2690,7 +2692,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "1a2773d805a17d9d7b9f0ec86a116073bb5376fad49d1ab5988cb0dce90ebeb8"
+    "output_schema_sha256": "4c398b0c3e7eaff54ffe3c375b31b7d02d8eea7a23395d43101d936806a4df93"
   },
   {
     "name": "get_site_health",
