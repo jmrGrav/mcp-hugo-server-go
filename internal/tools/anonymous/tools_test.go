@@ -1462,6 +1462,12 @@ func TestGetSitemapSummaryOnlyOmitsEntriesAndPreservesCounts(t *testing.T) {
 	if got := int(m["returned_count"].(float64)); got != 0 {
 		t.Fatalf("get_sitemap summary_only returned_count = %d, want 0", got)
 	}
+	if got, ok := m["entries_omitted"].(bool); !ok || !got {
+		t.Fatalf("get_sitemap summary_only entries_omitted = %v (present=%v), want true", m["entries_omitted"], ok)
+	}
+	if got, ok := m["pagination_applies"].(bool); !ok || got {
+		t.Fatalf("get_sitemap summary_only pagination_applies = %v (present=%v), want false", m["pagination_applies"], ok)
+	}
 	if got := int(m["content_pages"].(float64)); got != 2 {
 		t.Fatalf("get_sitemap summary_only content_pages = %d, want 2", got)
 	}
