@@ -493,6 +493,7 @@
       "data.resolved_lang:string:required",
       "data.resolved_source_path:string:required",
       "data.revision:string",
+      "data.scope:string:required",
       "data.slug:string:required",
       "data.state.build_state:string:required",
       "data.state.index_state:string:required",
@@ -532,7 +533,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "c7ff69f3fea316e6aa2260bebc71ad8276e8522781dc28b77a8c6d6244553ec6"
+    "output_schema_sha256": "9fd54aea29c952b794809f1b446f1e320ac5661b0c996e65768d1d0fc2b1fbbb"
   },
   {
     "name": "check_sri_versions",

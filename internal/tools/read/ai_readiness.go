@@ -25,6 +25,7 @@ type validateAIReadinessInput struct {
 }
 
 type validateAIReadinessData struct {
+	Scope              string              `json:"scope"`
 	Slug               string              `json:"slug"`
 	ResolvedLang       string              `json:"resolved_lang"`
 	ResolvedSourcePath string              `json:"resolved_source_path"`
@@ -79,6 +80,7 @@ func RegisterAIReadiness(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Source
 				relPath = fileutil.LogicalContentPath(cfg.ContentRoot, resolved.SourcePath)
 			}
 			data := validateAIReadinessData{
+				Scope:              "structure_only",
 				Slug:               canonicalResolvedSlug(resolved),
 				ResolvedLang:       resolvedLang(resolved),
 				ResolvedSourcePath: relPath,
