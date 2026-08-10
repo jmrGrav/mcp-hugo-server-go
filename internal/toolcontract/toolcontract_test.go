@@ -466,6 +466,7 @@ func TestParseToolErrorHugoUpgradeResolutions(t *testing.T) {
 		{"download_error: request failed", "retry_later", "", ""},
 		{"version_policy_denied: target_version is above maximum", "retry_with_parameter", "", "target_version"},
 		{"revision_conflict: managed Hugo symlink changed after activation", "contact_operator", "", ""},
+		{"permission_denied: managed Hugo directory could not be created", "contact_operator", "", ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.err, func(t *testing.T) {

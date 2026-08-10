@@ -519,6 +519,10 @@ func ParseToolError(err error) ToolError {
 	case "unmanaged_path", "activation_error", "rollback_error", "rollback_unavailable":
 		out.Retryable = false
 		out.Resolution = &ErrorResolution{Action: "contact_operator"}
+	case "permission_denied":
+		out.Retryable = false
+		out.Resolution = &ErrorResolution{Action: "contact_operator"}
+		out.Suggestion = "verify Unix ownership/mode of hugo_upgrade.managed_dir and that it is listed in the service's systemd ReadWritePaths"
 	}
 
 	return out
