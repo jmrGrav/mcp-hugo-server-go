@@ -452,3 +452,27 @@ func TestParseToolErrorPromotesStructuredBuildFailure(t *testing.T) {
 		t.Fatalf("build error message lost compatibility payload: %q", got.Message)
 	}
 }
+
+func TestParseToolErrorHugoUpgradeResolutions(t *testing.T) {
+	tests := []struct {
+		err             string
+		action          string
+		recommendedTool string
+		field           string
+	}{
+		{"already_exists: target Hugo version is already staged", "use_different_tool", "activate_hugo", ""},
+		{"staged_artifact_missing: verification record is missing", "use_different_tool", "stage_hugo_upgrade", ""},
+		{"checksum_mismatch: staged Hugo executable changed", "replan_then_retry", "stage_hugo_upgrade", ""},
+		{"download_error: request failed", "retry_later", "", ""},
+		{"version_policy_denied: target_version is above maximum", "retry_with_parameter", "", "target_version"},
+		{"revision_conflict: managed Hugo symlink changed after activation", "contact_operator", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.err, func(t *testing.T) {
+			got := ParseToolError(fmt.Errorf("%s", tc.err))
+			if got.Resolution == nil || got.Resolution.Action != tc.action || got.Resolution.RecommendedTool != tc.recommendedTool || got.Field != tc.field {
+				t.Fatalf("ParseToolError = %#v", got)
+			}
+		})
+	}
+}

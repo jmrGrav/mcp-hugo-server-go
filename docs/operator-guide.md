@@ -115,6 +115,50 @@ tool returns `write_error`, verify:
 | `post_build_hooks` | array of strings | (empty) | URLs to POST a `{"event":"post_build"}` webhook to after successful site build. Only HTTPS endpoints and public DNS hostnames are allowed (SSRF protected); redirects are not followed and response bodies are bounded. |
 | `preview_external_verification` | bool | `false` | When enabled, `create_preview` verifies its signed entry redirect, cookie-backed nested HTML route, one asset, and strict missing-route 404 through `oauth.issuer` before returning success. Served bytes must match the isolated build; a homepage fallback is rejected as `preview_unreachable` and the failed preview is revoked. |
 
+### Managed Hugo Upgrade Configuration
+
+Managed Hugo upgrades are disabled by default. `get_hugo_update` can report the
+installed version without network access and only queries the official release
+API when `check_latest:true` is explicit. Staging, activation, and rollback all
+require `write` plus `hugo_upgrade.enabled:true`.
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `hugo_upgrade.enabled` | `false` | Enables staging and symlink activation. Status remains available when disabled. |
+| `hugo_upgrade.managed_dir` | empty | Private root containing versioned binaries and verification records. Must be absolute and real, without symlink components. |
+| `hugo_upgrade.binary_link` | empty | Symlink switched atomically by activation. Must be strictly inside `managed_dir`. |
+| `hugo_upgrade.release_api_base_url` | official Hugo GitHub API | Release metadata source. Configuration loading requires HTTPS and an allowlisted host. |
+| `hugo_upgrade.allowed_hosts` | official GitHub API/download hosts | Exact host allowlist applied to initial requests and every redirect. |
+| `hugo_upgrade.max_download_bytes` | 128 MiB | Hard response bound for the release archive. |
+| `hugo_upgrade.cache_ttl_seconds` | 3600 | Latest-release metadata cache lifetime. |
+| `hugo_upgrade.require_extended` | `true` | Select and verify the official extended archive. |
+| `hugo_upgrade.allow_downgrade` | `false` | Allows staging a version older than the installed version only when explicitly enabled. |
+| `hugo_upgrade.minimum_version` / `maximum_version` | empty | Optional inclusive stable-version policy bounds, written as exact `vMAJOR.MINOR.PATCH` values. |
+
+The initial managed installer supports official Linux `amd64` and `arm64`
+`.tar.gz` releases. macOS releases use signed `.pkg` installers and are
+intentionally rejected rather than unpacked incorrectly. A real stage verifies
+the official SHA-256 manifest before extracting only the `hugo` executable,
+then executes only `hugo version` against that staged path.
+
+Activation never replaces `/usr/bin/hugo`, `/usr/local/bin/hugo`, or another
+package-manager path. It only atomically changes `binary_link`, records the
+previous managed target, and returns an explicit supervisor restart action.
+Ensure the link's directory is on the service `PATH` and add `managed_dir` to
+the unit's `ReadWritePaths`; the MCP never edits systemd or restarts itself.
+
+Recommended flow:
+
+```text
+get_hugo_update(check_latest=true)
+stage_hugo_upgrade(target_version="vX.Y.Z")
+stage_hugo_upgrade(target_version="vX.Y.Z", dry_run=false)
+activate_hugo(target_version="vX.Y.Z")
+activate_hugo(target_version="vX.Y.Z", dry_run=false)
+# operator restarts and validates the service
+rollback_hugo(dry_run=false) # only if rollback is required
+```
+
 ### Idempotency Configuration
 
 | Field | Type | Default | Purpose |

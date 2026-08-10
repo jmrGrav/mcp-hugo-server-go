@@ -9,6 +9,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/pelletier/go-toml/v2 v2.4.3
 	golang.org/x/image v0.44.0
+	golang.org/x/mod v0.37.0
 	golang.org/x/net v0.56.0
 	golang.org/x/oauth2 v0.35.0
 	golang.org/x/time v0.15.0

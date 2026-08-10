@@ -345,3 +345,59 @@ func TestLoadEnvOverlayFillsGapsWithNoFile(t *testing.T) {
 		t.Fatalf("env overlay should fill every field when there's no file: %+v", cfg)
 	}
 }
+
+func TestHugoUpgradeDefaultsAreDisabledAndOfficial(t *testing.T) {
+	cfg, err := config.Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HugoUpgrade.Enabled {
+		t.Fatal("managed Hugo upgrades must be disabled by default")
+	}
+	if cfg.HugoUpgrade.ReleaseAPIBaseURL != "https://api.github.com/repos/gohugoio/hugo" {
+		t.Fatalf("release API = %q", cfg.HugoUpgrade.ReleaseAPIBaseURL)
+	}
+	if cfg.HugoUpgrade.MaxDownloadBytes <= 0 || len(cfg.HugoUpgrade.AllowedHosts) == 0 {
+		t.Fatalf("unsafe Hugo upgrade defaults: %+v", cfg.HugoUpgrade)
+	}
+}
+
+func TestHugoUpgradeEnabledRequiresManagedContainedPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{"relative paths", "hugo_upgrade:\n  enabled: true\n  managed_dir: relative\n  binary_link: relative/hugo\n"},
+		{"link outside root", "hugo_upgrade:\n  enabled: true\n  managed_dir: /srv/mcp-hugo\n  binary_link: /usr/local/bin/hugo\n"},
+		{"non HTTPS API", "hugo_upgrade:\n  release_api_base_url: http://api.github.com/repos/gohugoio/hugo\n"},
+		{"API host outside allowlist", "hugo_upgrade:\n  release_api_base_url: https://example.test/hugo\n"},
+		{"invalid version policy", "hugo_upgrade:\n  enabled: true\n  managed_dir: /srv/mcp-hugo\n  binary_link: /srv/mcp-hugo/current/hugo\n  minimum_version: latest\n"},
+		{"reversed version policy", "hugo_upgrade:\n  enabled: true\n  managed_dir: /srv/mcp-hugo\n  binary_link: /srv/mcp-hugo/current/hugo\n  minimum_version: v2.0.0\n  maximum_version: v1.0.0\n"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := config.Load(path); err == nil {
+				t.Fatal("Load succeeded, want fail-closed Hugo upgrade validation")
+			}
+		})
+	}
+}
+
+func TestHugoUpgradeManagedConfigurationLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := "hugo_upgrade:\n  enabled: true\n  managed_dir: /srv/mcp-hugo\n  binary_link: /srv/mcp-hugo/current/hugo\n  require_extended: true\n"
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.HugoUpgrade.Enabled || cfg.HugoUpgrade.BinaryLink != "/srv/mcp-hugo/current/hugo" {
+		t.Fatalf("loaded Hugo upgrade config = %+v", cfg.HugoUpgrade)
+	}
+}

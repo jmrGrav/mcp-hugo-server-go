@@ -1,5 +1,67 @@
 [
   {
+    "name": "activate_hugo",
+    "required_scope": "write",
+    "description": "Atomically point the configured managed Hugo symlink at an already staged and re-verified exact version. dry_run defaults to true. Refuses package-manager or arbitrary paths, preserves the previous managed target for rollback, writes an audit event, and never restarts the service implicitly. Requires write.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "target_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_version"
+      ],
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.activated:boolean:required",
+      "data.checksum:string:required",
+      "data.dry_run:boolean:required",
+      "data.operator_action:string:required",
+      "data.previous_version:string",
+      "data.restart_required:boolean:required",
+      "data.target_version:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "55f39909a2e33eee4ed0c2784e2b8a59cb25ddb33dcdf3c88854270dc667dcf5"
+  },
+  {
     "name": "apply_bundle_plan",
     "required_scope": "write",
     "description": "Write every translation a prior plan_bundle_change previewed, atomically as one editorial unit. Fails whole with `bundle_conflict` if the bundle changed since the plan (BundleRevision mismatch), `plan_not_found` if unknown/expired/consumed, or a validation error on ANY translation — in all cases nothing is written. A write interrupted partway through is rolled back in-process so the bundle never lands partially (see rollback_bundle for crash recovery). Returns per-translation outcomes plus one `bundle_status`. Single-use; `idempotency_key` safely replays; `dry_run` re-verifies without writing. Writes source only — call publish_changes to build/deploy.",
@@ -1639,6 +1701,70 @@
       "warnings:unspecified:required"
     ],
     "output_schema_sha256": "63ad223a1d58ec60d62a3d4bdab5b65df135b64e1cf7f19266b844274d23d10e"
+  },
+  {
+    "name": "get_hugo_update",
+    "required_scope": "write",
+    "description": "Report the installed Hugo version and optionally compare it with the latest stable official Hugo release. No network request is made unless check_latest=true; a bounded cached result may be returned otherwise. This read-only status call never downloads, installs, activates, or restarts anything. Requires write on this operator deployment.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "check_latest": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.architecture:string:required",
+      "data.extended_required:boolean:required",
+      "data.installed.available:boolean:required",
+      "data.installed.error:string",
+      "data.installed.extended:boolean:required",
+      "data.installed.version:string",
+      "data.installed:object:required",
+      "data.latest.cache_age_seconds:integer",
+      "data.latest.compatibility_reason:string:required",
+      "data.latest.compatible:boolean:required",
+      "data.latest.published_at:string",
+      "data.latest.source:string:required",
+      "data.latest.update_available:boolean:required",
+      "data.latest.version:string:required",
+      "data.latest:unspecified",
+      "data.managed_upgrades_enabled:boolean:required",
+      "data.network_checked:boolean:required",
+      "data.platform:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "e308a44d4d0b5abfc92c3de1c4bfe8900850755c8a504d4dda5e2ecca4018acb"
   },
   {
     "name": "get_mutation_status",
@@ -4156,6 +4282,61 @@
     "output_schema_sha256": "b83396d1cd9185f40804ab52d994a884f350c066f80f65eb729a099ecdbd2e79"
   },
   {
+    "name": "rollback_hugo",
+    "required_scope": "write",
+    "description": "Atomically restore the exact previous managed Hugo symlink target recorded by activate_hugo. dry_run defaults to true. Refuses unmanaged or changed targets and never restarts the service implicitly. Requires write.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.checksum:string:required",
+      "data.dry_run:boolean:required",
+      "data.operator_action:string:required",
+      "data.restart_required:boolean:required",
+      "data.restored_version:string:required",
+      "data.rolled_back:boolean:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "9a3040240aff40798495413c64c2007cc5d622b3e8ad30274a4f996f61592d01"
+  },
+  {
     "name": "run_post_build_hooks",
     "required_scope": "write",
     "description": "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Set `dry_run:true` to inspect the configured hook targets without contacting them; this returns the same `results[]` URL list plus `configured_count`, making `no hooks configured` distinguishable from `hooks configured but intentionally not executed`. `data.status` is `no_hooks_configured` when zero hooks are configured, `dry_run` when hooks are configured but intentionally not contacted, and `completed` when one or more hooks were actually attempted. Only configured URLs are ever reported or contacted.",
@@ -4409,6 +4590,74 @@
       "warnings:unspecified:required"
     ],
     "output_schema_sha256": "44a7bdd706e487c83314bd9f16d78143fff6102e325481b8e002ae39320dfc23"
+  },
+  {
+    "name": "stage_hugo_upgrade",
+    "required_scope": "write",
+    "description": "Resolve and verify an exact official Hugo release without replacing the active binary. dry_run defaults to true. A real stage is disabled unless hugo_upgrade.enabled=true, downloads only allowlisted release assets with a bounded size, verifies the official SHA-256 manifest, extracts only the Hugo executable into the managed directory, and runs only the staged binary's version command. Requires write.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": [
+            "null",
+            "boolean"
+          ]
+        },
+        "target_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_version"
+      ],
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.activation_restart_required:boolean:required",
+      "data.activation_tool:string:required",
+      "data.asset_name:string:required",
+      "data.checksum:string",
+      "data.checksum_verified:boolean:required",
+      "data.dry_run:boolean:required",
+      "data.extended:boolean:required",
+      "data.rollback_preserved_on_activation:boolean:required",
+      "data.rollback_target:string:required",
+      "data.staged:boolean:required",
+      "data.staged_artifact:string:required",
+      "data.target_version:string:required",
+      "data.version_verified:boolean:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "e01942454d474a975bff63da4f3f92cf5fad021187b472aec4c35f1c4a532112"
   },
   {
     "name": "suggest_links",

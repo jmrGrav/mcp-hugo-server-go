@@ -250,6 +250,7 @@ func Register(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, si
 	RegisterSRI(s, cfg)
 	RegisterRuntimeStatus(s, cfg, srcIdx)
 	RegisterThemeStatus(s, cfg)
+	RegisterHugoUpgradeTools(s, cfg)
 }
 
 // RegisterSiteAdmin is an alias for Register kept for compatibility.
@@ -275,6 +276,10 @@ func Defs() []tools.ToolDef {
 		{Name: "inspect_preview", RequiredScope: "write"},
 		{Name: "publish_changes", RequiredScope: "write"},
 		{Name: "get_storage_health", RequiredScope: "write"},
+		{Name: "get_hugo_update", RequiredScope: "write"},
+		{Name: "stage_hugo_upgrade", RequiredScope: "write"},
+		{Name: "activate_hugo", RequiredScope: "write"},
+		{Name: "rollback_hugo", RequiredScope: "write"},
 	}
 }
 
