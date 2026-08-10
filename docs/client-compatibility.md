@@ -62,6 +62,9 @@ metadata, OAuth redirect behavior, scoped `tools/list` visibility, and a
 representative structured tool result. It must be run with the exact connector
 redirect URI and token used by the release environment; multi-day soak testing
 is intentionally out of scope because the service is already live-tested.
+Gemini, JSON Schema validation, response-mode coverage, structured business
+errors, mutation dry-run/apply behavior, and per-result client/runtime
+version publishing are not yet covered — see #1031.
 
 ## Known Behavior: OAuth Enabled Requires Bearer for All Requests
 
