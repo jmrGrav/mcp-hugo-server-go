@@ -42,6 +42,10 @@ func NewSQLite(path string) (Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate access_tokens principal: %w", err)
 	}
+	if _, err := db.Exec(`DELETE FROM access_tokens WHERE TRIM(principal) = ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("purge legacy access_tokens without principal: %w", err)
+	}
 	if _, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS refresh_tokens (
 			token TEXT PRIMARY KEY,

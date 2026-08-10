@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -56,6 +57,75 @@ func TestMemoryValidateAccessTokenDetails(t *testing.T) {
 	}
 	if details, ok := s.ValidateAccessTokenDetails("tok-missing"); ok || details != (AccessTokenDetails{}) {
 		t.Fatalf("ValidateAccessTokenDetails(missing) = (%#v, %v), want zero values and ok=false", details, ok)
+	}
+}
+
+func TestRefreshTokenLifecycleAllStoresPreservesPrincipalOnNewAccessToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		open func(t *testing.T) Store
+	}{
+		{
+			name: "memory",
+			open: func(t *testing.T) Store { return NewMemory() },
+		},
+		{
+			name: "json",
+			open: func(t *testing.T) Store {
+				s, err := NewJSON(filepath.Join(t.TempDir(), "tokens.json"))
+				if err != nil {
+					t.Fatalf("NewJSON() error = %v", err)
+				}
+				return s
+			},
+		},
+		{
+			name: "sqlite",
+			open: func(t *testing.T) Store {
+				s, err := NewSQLite(filepath.Join(t.TempDir(), "tokens.sqlite"))
+				if err != nil {
+					t.Fatalf("NewSQLite() error = %v", err)
+				}
+				return s
+			},
+		},
+	}
+
+	future := time.Now().Add(time.Hour)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := tc.open(t)
+			defer func() {
+				if err := s.Close(); err != nil {
+					t.Fatalf("Close() error = %v", err)
+				}
+			}()
+			if err := s.AddRefreshToken("rtok-principal", "client-a", "content.read", future); err != nil {
+				t.Fatalf("AddRefreshToken() error = %v", err)
+			}
+			scope, ok, err := s.ExchangeRefreshToken("rtok-principal", "client-a", "rtok-principal-next", "atok-principal-next", future, future)
+			if err != nil {
+				t.Fatalf("ExchangeRefreshToken() error = %v", err)
+			}
+			if !ok || scope != "content.read" {
+				t.Fatalf("ExchangeRefreshToken() = %q, %v", scope, ok)
+			}
+			detailed, ok := s.(interface {
+				ValidateAccessTokenDetails(token string) (AccessTokenDetails, bool)
+			})
+			if !ok {
+				t.Fatal("store does not expose ValidateAccessTokenDetails")
+			}
+			details, ok := detailed.ValidateAccessTokenDetails("atok-principal-next")
+			if !ok {
+				t.Fatal("ValidateAccessTokenDetails(next) = not ok, want ok")
+			}
+			if details.Principal != "client-a" {
+				t.Fatalf("ValidateAccessTokenDetails(next).Principal = %q, want client-a", details.Principal)
+			}
+		})
 	}
 }
 
@@ -202,6 +272,50 @@ func TestJSONStoreLoadsLegacyFlatFormat(t *testing.T) {
 	}
 	if scope, ok := s.ValidateAccessToken("tok1"); !ok || scope != "content.read" {
 		t.Fatalf("ValidateAccessToken(legacy) = %q, %v", scope, ok)
+	}
+}
+
+func TestSQLiteStartupPurgesLegacyPrincipalLessAccessTokens(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tokens.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	if _, err := db.Exec(`
+		CREATE TABLE access_tokens (
+			token TEXT PRIMARY KEY,
+			scope TEXT NOT NULL,
+			expires_at INTEGER NOT NULL
+		)
+	`); err != nil {
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO access_tokens (token, scope, expires_at) VALUES (?, ?, ?)`, "tok-legacy", "write", time.Now().Add(time.Hour).Unix()); err != nil {
+		t.Fatalf("seed legacy token: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close legacy db: %v", err)
+	}
+
+	sAny, err := NewSQLite(path)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer func() {
+		if err := sAny.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	}()
+	s := sAny.(*sqliteStore)
+	if scope, ok := s.ValidateAccessToken("tok-legacy"); ok || scope != "" {
+		t.Fatalf("ValidateAccessToken(legacy purged) = %q, %v, want empty/false", scope, ok)
+	}
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM access_tokens`).Scan(&count); err != nil {
+		t.Fatalf("count access_tokens: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("access_tokens rows after startup purge = %d, want 0", count)
 	}
 }
 

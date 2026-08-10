@@ -71,6 +71,19 @@ func TestValidateBearerInfoInvalidToken(t *testing.T) {
 	}
 }
 
+func TestValidateBearerInfoRejectsEmptyPrincipal(t *testing.T) {
+	svc, store := newAgentTestService()
+	future := time.Now().Add(time.Hour).UTC().Truncate(time.Second)
+	if err := store.AddAccessToken(HashToken("token-empty-principal"), "write", "", future); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
+	}
+
+	scope, expiresAt, principal, legacy, ok := svc.ValidateBearerInfo("token-empty-principal")
+	if ok || scope != "" || !expiresAt.IsZero() || principal != "" || legacy {
+		t.Fatalf("ValidateBearerInfo(empty principal) = (%q, %v, %q, %v, %v), want zero values and ok=false", scope, expiresAt, principal, legacy, ok)
+	}
+}
+
 func newAgentTestServiceConfig() config.OAuthConfig {
 	return config.OAuthConfig{
 		Enabled:               true,

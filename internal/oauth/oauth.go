@@ -248,7 +248,11 @@ func (s *Service) ValidateBearerInfo(token string) (string, time.Time, string, b
 	if !ok {
 		return "", time.Time{}, "", false, false
 	}
-	return CanonicalScope(details.Scope), details.ExpiresAt, strings.TrimSpace(details.Principal), IsLegacyScope(details.Scope), true
+	principal := strings.TrimSpace(details.Principal)
+	if principal == "" {
+		return "", time.Time{}, "", false, false
+	}
+	return CanonicalScope(details.Scope), details.ExpiresAt, principal, IsLegacyScope(details.Scope), true
 }
 
 func firstNonEmpty(values ...string) string {

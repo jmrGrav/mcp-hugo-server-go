@@ -2424,6 +2424,48 @@ func TestGetRateLimitsSharesQuotaAcrossTokensForSamePrincipal(t *testing.T) {
 	}
 }
 
+func TestLegacyBearerWithoutPrincipalIsRejectedOverHTTP(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
+	cfg.HugoRoot = t.TempDir()
+	cfg.OAuth = config.OAuthConfig{
+		Enabled:               true,
+		Issuer:                "https://mcp.test",
+		AccessTokenTTLSeconds: 3600,
+		StorageBackend:        "sqlite",
+		StoragePath:           storePath,
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+	srv, err := server.New(cfg, idx)
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+
+	db, err := sql.Open("sqlite", storePath)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	if _, err := db.Exec(`INSERT OR REPLACE INTO access_tokens (token, principal, scope, expires_at) VALUES (?, ?, ?, ?)`, oauthHashForTest("token-legacy"), "", "write", time.Now().Add(time.Hour).Unix()); err != nil {
+		t.Fatalf("seed legacy access token: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"legacy-token-test","version":"1.0"}}}`))
+	req.Header.Set("Authorization", "Bearer token-legacy")
+	req.Header.Set("Content-Type", "application/json")
+	req.RemoteAddr = "192.0.2.1:1234"
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy token status = %d body = %q, want 401 unauthorized", rec.Code, rec.Body.String())
+	}
+}
+
 // TestApplyContentPlanIsolatedByTokenEvenUnderSharedPrincipal guards the
 // boundary #950's principal-preferring caller.Key() must not cross: two
 // tokens issued to the same OAuth principal (e.g. one token refreshed into
