@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,12 @@ type snapshotEntry struct {
 	CallerKey string
 	Content   string
 	CreatedAt time.Time
+}
+
+type snapshotListing struct {
+	Revision  string
+	CreatedAt time.Time
+	ExpiresAt time.Time
 }
 
 // snapshotStore mirrors idempotencyStore/planStore's shape (map + mutex +
@@ -90,6 +97,23 @@ func (s *snapshotStore) get(filePath, revision, callerKey string) (string, bool)
 	return entry.Content, true
 }
 
+func (s *snapshotStore) list(filePath, callerKey string) []snapshotListing {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now()
+	s.pruneLocked(now)
+	items := make([]snapshotListing, 0)
+	prefix := filePath + "\x00"
+	for key, entry := range s.entries {
+		if !strings.HasPrefix(key, prefix) || (entry.CallerKey != "" && entry.CallerKey != callerKey) {
+			continue
+		}
+		items = append(items, snapshotListing{Revision: strings.TrimPrefix(key, prefix), CreatedAt: entry.CreatedAt, ExpiresAt: entry.CreatedAt.Add(s.ttl)})
+	}
+	slices.SortFunc(items, func(a, b snapshotListing) int { return b.CreatedAt.Compare(a.CreatedAt) })
+	return items
+}
+
 func (s *snapshotStore) pruneLocked(now time.Time) {
 	if s.ttl <= 0 {
 		return
@@ -127,6 +151,29 @@ type rollbackChangeInput struct {
 	ExpectedRevision string `json:"expected_revision,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
 	DryRun           bool   `json:"dry_run,omitempty"`
+}
+
+type listPageSnapshotsInput struct {
+	Slug string `json:"slug"`
+	Lang string `json:"lang,omitempty"`
+}
+
+type pageSnapshotDTO struct {
+	RevisionKind string `json:"revision_kind"`
+	Revision     string `json:"revision"`
+	CreatedAt    string `json:"created_at"`
+	ExpiresAt    string `json:"expires_at"`
+}
+
+type listPageSnapshotsData struct {
+	Slug      string            `json:"slug"`
+	SourceKey string            `json:"source_key"`
+	Lang      string            `json:"lang,omitempty"`
+	Snapshots []pageSnapshotDTO `json:"snapshots"`
+}
+
+type listPageSnapshotsOutput struct {
+	toolcontract.ToolResponse[listPageSnapshotsData]
 }
 
 type rollbackChangeData struct {
@@ -453,5 +500,35 @@ func registerRollbackChange(
 			}
 		}
 		return nil, out, nil
+	}))
+}
+
+func registerListPageSnapshots(s *mcp.Server, cfg config.Config, snapshots *snapshotStore) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:         "list_page_snapshots",
+		Title:        "List rollback snapshots",
+		Description:  "List live rollback snapshots captured by this server for one page. Entries are caller-isolated, expire after 24 hours, and carry revision_kind=content_snapshot; unlike list_page_revisions git commits, these revisions can be passed to rollback_change.",
+		InputSchema:  tools.MustSchema[listPageSnapshotsInput](),
+		OutputSchema: tools.MustSchema[listPageSnapshotsOutput](),
+		Annotations:  &mcp.ToolAnnotations{ReadOnlyHint: true, DestructiveHint: fileutil.BoolPtr(false), IdempotentHint: true},
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in listPageSnapshotsInput) (*mcp.CallToolResult, listPageSnapshotsOutput, error) {
+		in.Slug = normalizeInputSlug(in.Slug)
+		if in.Slug == "" {
+			return nil, listPageSnapshotsOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
+		}
+		lang, err := validateLangParam(in.Lang)
+		if err != nil {
+			return nil, listPageSnapshotsOutput{}, err
+		}
+		resolved, err := contentmodel.ResolvePageSource(in.Slug, lang, cfg.ContentRoot)
+		if err != nil {
+			return nil, listPageSnapshotsOutput{}, err
+		}
+		items := snapshots.list(resolved.SourcePath, isolationCallerKey(ctx))
+		out := make([]pageSnapshotDTO, 0, len(items))
+		for _, item := range items {
+			out = append(out, pageSnapshotDTO{RevisionKind: "content_snapshot", Revision: item.Revision, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339), ExpiresAt: item.ExpiresAt.UTC().Format(time.RFC3339)})
+		}
+		return nil, listPageSnapshotsOutput{ToolResponse: writeSuccessEnvelope(listPageSnapshotsData{Slug: canonicalPublicSlug(in.Slug), SourceKey: in.Slug, Lang: resolved.Lang, Snapshots: out})}, nil
 	}))
 }

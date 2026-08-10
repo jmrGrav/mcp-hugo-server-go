@@ -96,6 +96,7 @@ type createPageData struct {
 	Content            string               `json:"content,omitempty"`
 	Warning            string               `json:"warning,omitempty"`
 	NewRevision        string               `json:"new_revision,omitempty"`
+	RevisionKind       string               `json:"revision_kind,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
 	RateLimit          *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// TaxonomyCasingNormalized/TaxonomyCasingAmbiguous — see the comment on
@@ -170,11 +171,12 @@ type updatePageData struct {
 	// the false case) rather than being elided by omitempty — an agent must
 	// be able to tell "succeeded, no change" apart from "succeeded, changed"
 	// without diffing revisions itself.
-	Changed     *bool                `json:"changed,omitempty"`
-	Warning     string               `json:"warning,omitempty"`
-	NewRevision string               `json:"new_revision,omitempty"`
-	State       *site.LifecycleState `json:"state,omitempty"`
-	RateLimit   *rateLimitBucket     `json:"rate_limit,omitempty"`
+	Changed      *bool                `json:"changed,omitempty"`
+	Warning      string               `json:"warning,omitempty"`
+	NewRevision  string               `json:"new_revision,omitempty"`
+	RevisionKind string               `json:"revision_kind,omitempty"`
+	State        *site.LifecycleState `json:"state,omitempty"`
+	RateLimit    *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// TaxonomyCasingNormalized lists tags/categories rewritten to match a
 	// casing already present elsewhere in the index (#589), populated only
 	// when the caller opted in via normalize_taxonomy_casing. Present only
@@ -710,6 +712,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	rt := newWriteRegisterRuntime(cfg, siteIdxs...)
 	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots)
 	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots)
+	registerListPageSnapshots(s, cfg, rt.snapshots)
 	registerBundleTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.bundlePlans, rt.bundleSnapshots)
 	registerCreatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerUpdatePageTool(s, pg, idx, cfg, siteDB, rt)
@@ -1020,6 +1023,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			ResolvedLang:             strPtr(resolvedLang),
 			ResolvedSourcePath:       strPtr(logicalPath),
 			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
+			RevisionKind:             "content_snapshot",
 			Warning:                  appendLastBuildWarning(warning),
 			State:                    &state,
 			RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -1444,6 +1448,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			ResolvedSourcePath:       strPtr(logicalPath),
 			Changed:                  &realChanged,
 			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
+			RevisionKind:             "content_snapshot",
 			Warning:                  appendLastBuildWarning(warning),
 			State:                    &state,
 			RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -2311,6 +2316,7 @@ func Defs() []tools.ToolDef {
 		{Name: "plan_content_change", RequiredScope: ""},
 		{Name: "apply_content_plan", RequiredScope: "write"},
 		{Name: "rollback_change", RequiredScope: "write"},
+		{Name: "list_page_snapshots", RequiredScope: "write"},
 		{Name: "plan_bundle_change", RequiredScope: ""},
 		{Name: "apply_bundle_plan", RequiredScope: "write"},
 		{Name: "rollback_bundle", RequiredScope: "write"},

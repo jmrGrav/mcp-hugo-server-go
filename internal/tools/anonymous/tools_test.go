@@ -1618,6 +1618,9 @@ func TestGetSiteInformation(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("get_site_information returned error: %v", res.Content)
 	}
+	if got := decodeEnvelope(t, res)["meta"].(map[string]any)["content_provenance"]; got != "server_generated_trusted" {
+		t.Fatalf("get_site_information provenance = %v, want server_generated_trusted", got)
+	}
 	m := decodeContent(t, res)
 	siteVal, ok := m["site"]
 	if !ok {

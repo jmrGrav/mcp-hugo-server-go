@@ -518,19 +518,21 @@ type deletePageAssetOutput struct {
 }
 
 type deletePageAssetData struct {
-	Status       string           `json:"status,omitempty"`
-	Slug         string           `json:"slug,omitempty"`
-	SourceKey    string           `json:"source_key,omitempty"`
-	Scope        string           `json:"scope,omitempty"`
-	Path         string           `json:"path,omitempty"`
-	Kind         string           `json:"kind,omitempty"`
-	Filename     string           `json:"filename,omitempty"`
-	Sha256       string           `json:"sha256,omitempty"`
-	DryRun       bool             `json:"dry_run,omitempty"`
-	Referenced   *bool            `json:"referenced,omitempty"`
-	ReferencedIn []string         `json:"referenced_in,omitempty"`
-	Warning      string           `json:"warning,omitempty"`
-	RateLimit    *rateLimitBucket `json:"rate_limit,omitempty"`
+	Status              string           `json:"status,omitempty"`
+	Slug                string           `json:"slug,omitempty"`
+	SourceKey           string           `json:"source_key,omitempty"`
+	Scope               string           `json:"scope,omitempty"`
+	Path                string           `json:"path,omitempty"`
+	Kind                string           `json:"kind,omitempty"`
+	Filename            string           `json:"filename,omitempty"`
+	Sha256              string           `json:"sha256,omitempty"`
+	DryRun              bool             `json:"dry_run,omitempty"`
+	Referenced          *bool            `json:"referenced,omitempty"`
+	ReferencedIn        []string         `json:"referenced_in,omitempty"`
+	Warning             string           `json:"warning,omitempty"`
+	PublicCopyMayRemain bool             `json:"public_copy_may_remain,omitempty"`
+	FollowUpAction      string           `json:"follow_up_action,omitempty"`
+	RateLimit           *rateLimitBucket `json:"rate_limit,omitempty"`
 	// RateLimitRemaining — see the comment on createPageData's field of the
 	// same name (#520, #605).
 	RateLimitRemaining int `json:"rate_limit_remaining,omitempty"`
@@ -909,18 +911,20 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		out := newDeletePageAssetOutput(deletePageAssetData{
-			Status:       "deleted",
-			Slug:         canonicalPublicSlug(slug),
-			SourceKey:    slug,
-			Scope:        target.scope,
-			Path:         target.logicalPath,
-			Kind:         target.kind,
-			Filename:     filename,
-			Sha256:       actualHash,
-			Referenced:   fileutil.BoolPtr(len(referencedIn) > 0),
-			ReferencedIn: referencedIn,
-			Warning:      warning,
-			RateLimit:    ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
+			Status:              "deleted",
+			Slug:                canonicalPublicSlug(slug),
+			SourceKey:           slug,
+			Scope:               target.scope,
+			Path:                target.logicalPath,
+			Kind:                target.kind,
+			Filename:            filename,
+			Sha256:              actualHash,
+			Referenced:          fileutil.BoolPtr(len(referencedIn) > 0),
+			ReferencedIn:        referencedIn,
+			Warning:             warning,
+			PublicCopyMayRemain: true,
+			FollowUpAction:      "run build_site (and publish_changes if applicable) to reconcile public output/CDN copies",
+			RateLimit:           ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "delete_page_asset", in.IdempotencyKey, idemHash, out); err != nil {

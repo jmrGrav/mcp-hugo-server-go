@@ -189,6 +189,7 @@
       "data.rate_limit.window_seconds:integer:required",
       "data.rate_limit:unspecified",
       "data.rate_limit_remaining:integer",
+      "data.revision_kind:string",
       "data.slug:string",
       "data.state.build_state:string:required",
       "data.state.index_state:string:required",
@@ -233,7 +234,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "c547c63eb1714b75df26f55e82fa340b433ed71bcb94fd766ce1bae0d9646495"
+    "output_schema_sha256": "b8e351b53e0e19dbcc2d428d6da10058cb7093e916b43666377430f292e44a0e"
   },
   {
     "name": "bootstrap_hugo",
@@ -688,6 +689,7 @@
       "data.rate_limit_remaining:integer",
       "data.resolved_lang:unspecified",
       "data.resolved_source_path:unspecified",
+      "data.revision_kind:string",
       "data.slug:string",
       "data.source_key:string",
       "data.state.build_state:string:required",
@@ -740,7 +742,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "de0dcb47d8c7af72d1964c4b93666c55b891972e07ebc66f12eeb0263154c502"
+    "output_schema_sha256": "b6eb5d047a2d381a4a4e7fba61605e21fc7156c50433036bda4d00447b435a72"
   },
   {
     "name": "create_preview",
@@ -952,8 +954,10 @@
     "output_schema_fields": [
       "data.dry_run:boolean",
       "data.filename:string",
+      "data.follow_up_action:string",
       "data.kind:string",
       "data.path:string",
+      "data.public_copy_may_remain:boolean",
       "data.rate_limit.limit:integer:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
@@ -1005,7 +1009,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "78a0a2d8df0c443fe09cfeed3cebb54f2147e6e72e484943cbc884d274e5d05b"
+    "output_schema_sha256": "a36e5c73fc2045a0ebf44bafab3cf504a1425be6ba19cc75ab581de0ba07b337"
   },
   {
     "name": "diff_page",
@@ -3000,6 +3004,9 @@
       "data.findings[].detail:string:required",
       "data.findings[].logical_path:string",
       "data.findings[].reason:string",
+      "data.findings[].recommended_action.arguments:object:required",
+      "data.findings[].recommended_action.recommended_tool:string:required",
+      "data.findings[].recommended_action:unspecified",
       "data.findings[].ref:string",
       "data.findings[].referenced_by:unspecified",
       "data.findings[].resource_class:string:required",
@@ -3040,7 +3047,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "dfa67563cead6e47555292e112a6e441350993317fed5ae8f544c3d309aab841"
+    "output_schema_sha256": "5e51a22e306027ab4af6d6207767fd591afa08c7d8c4d57363c7a9751c74426a"
   },
   {
     "name": "get_theme_status",
@@ -3479,6 +3486,66 @@
       "warnings:unspecified:required"
     ],
     "output_schema_sha256": "be187874142b577dc1d6c4175698ba63d3ce01a56535cab06cb963730c01d8d4"
+  },
+  {
+    "name": "list_page_snapshots",
+    "required_scope": "write",
+    "description": "List live rollback snapshots captured by this server for one page. Entries are caller-isolated, expire after 24 hours, and carry revision_kind=content_snapshot; unlike list_page_revisions git commits, these revisions can be passed to rollback_change.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "lang": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.lang:string",
+      "data.slug:string:required",
+      "data.snapshots:unspecified:required",
+      "data.snapshots[].created_at:string:required",
+      "data.snapshots[].expires_at:string:required",
+      "data.snapshots[].revision:string:required",
+      "data.snapshots[].revision_kind:string:required",
+      "data.source_key:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "5415ec00135806d764894a488d53c011bc28adf9e7bdcbdbce7d5b6754be23da"
   },
   {
     "name": "list_pages",
@@ -4962,6 +5029,7 @@
       "data.rate_limit_remaining:integer",
       "data.resolved_lang:unspecified",
       "data.resolved_source_path:unspecified",
+      "data.revision_kind:string",
       "data.slug:string",
       "data.source_key:string",
       "data.state.build_state:string:required",
@@ -5017,7 +5085,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "a135f6bffcc83bea807d1fda5db757f5c33a369f2c96e17462e6b43c0863ed99"
+    "output_schema_sha256": "0cc43bd46e2af1db0e409ff3447645f9a4e5a4f2b42f307f8bf9b33c0dc2280c"
   },
   {
     "name": "upload_page_asset",

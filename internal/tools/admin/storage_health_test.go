@@ -106,6 +106,12 @@ func TestStorageHealthCatchesOrphanedGeneratedAssetAndPreviewResidue(t *testing.
 		case "orphaned_generated_asset":
 			if fm["slug"] == "posts/orphan" {
 				orphanFound = true
+				action, ok := fm["recommended_action"].(map[string]any)
+				if !ok || action["recommended_tool"] != "delete_page_asset" {
+					t.Errorf("orphan action = %v, want delete_page_asset", fm["recommended_action"])
+				} else if args, ok := action["arguments"].(map[string]any); !ok || args["scope"] != "generated" || args["slug"] != "posts/orphan" || args["filename"] != "orphan-featured.jpg" {
+					t.Errorf("orphan action arguments = %v", action["arguments"])
+				}
 			}
 			if fm["slug"] == "posts/kept" {
 				keptFlagged = true

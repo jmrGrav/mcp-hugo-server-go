@@ -74,8 +74,14 @@ type storageFinding struct {
 	Confidence string `json:"confidence,omitempty"`
 	// Reason is the machine-readable explanation for why this candidate was
 	// or was not considered a real orphan.
-	Reason string `json:"reason,omitempty"`
-	Detail string `json:"detail"`
+	Reason            string                    `json:"reason,omitempty"`
+	RecommendedAction *storageRecommendedAction `json:"recommended_action,omitempty"`
+	Detail            string                    `json:"detail"`
+}
+
+type storageRecommendedAction struct {
+	RecommendedTool string            `json:"recommended_tool"`
+	Arguments       map[string]string `json:"arguments"`
 }
 
 type storageHealthSummary struct {
@@ -187,7 +193,11 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 			Slug:          slug,
 			Confidence:    "high",
 			Reason:        "no_frontmatter_reference_or_source_owner",
-			Detail:        "generated hero image has no explicit featured image reference and no owning page in the source index; remove with delete_page_asset (scope=generated) only after confirming the page was deleted",
+			RecommendedAction: &storageRecommendedAction{
+				RecommendedTool: "delete_page_asset",
+				Arguments:       map[string]string{"scope": "generated", "slug": slug, "filename": filepath.Base(logicalPath)},
+			},
+			Detail: "generated hero image has no explicit featured image reference and no owning page in the source index; remove with delete_page_asset (scope=generated) only after confirming the page was deleted",
 		})
 		return nil
 	})

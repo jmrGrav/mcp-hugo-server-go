@@ -224,6 +224,7 @@ type applyContentPlanData struct {
 	DryRun         bool                 `json:"dry_run,omitempty"`
 	BeforeRevision string               `json:"before_revision,omitempty"`
 	AfterRevision  string               `json:"after_revision,omitempty"`
+	RevisionKind   string               `json:"revision_kind,omitempty"`
 	Validation     string               `json:"validation,omitempty"`
 	Warning        string               `json:"warning,omitempty"`
 	State          *site.LifecycleState `json:"state,omitempty"`
@@ -879,6 +880,7 @@ func registerContentPlanTools(
 			Slug:           canonicalPublicSlug(entry.Slug),
 			BeforeRevision: entry.Revision,
 			AfterRevision:  contentmodel.SourceRevisionBytes([]byte(entry.Content)),
+			RevisionKind:   "content_snapshot",
 			Validation:     "passed",
 			Warning:        appendLastBuildWarning(warning),
 			State:          &state,
