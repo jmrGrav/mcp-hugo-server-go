@@ -52,8 +52,8 @@ func TestRollbackChangeRestoresApplyContentPlanSnapshot(t *testing.T) {
 		t.Fatalf("rollback_change failed: %s", marshalContent(t, rollbackRes))
 	}
 	rollbackData := decodeWriteData(t, rollbackRes)
-	if rollbackData["status"] != "ok" {
-		t.Fatalf("rollback_change status = %v, want ok", rollbackData["status"])
+	if rollbackData["status"] != "restored" {
+		t.Fatalf("rollback_change status = %v, want restored", rollbackData["status"])
 	}
 	if rollbackData["after_revision"] != beforeRevision {
 		t.Fatalf("rollback_change after_revision = %v, want %v", rollbackData["after_revision"], beforeRevision)
@@ -694,8 +694,8 @@ func TestRollbackChangeRestoresUpdatePageSnapshot(t *testing.T) {
 		t.Fatalf("rollback_change failed: %s", marshalContent(t, rollbackRes))
 	}
 	rollbackData := decodeWriteData(t, rollbackRes)
-	if rollbackData["status"] != "ok" {
-		t.Fatalf("rollback_change status = %v, want ok", rollbackData["status"])
+	if rollbackData["status"] != "restored" {
+		t.Fatalf("rollback_change status = %v, want restored", rollbackData["status"])
 	}
 	if rollbackData["after_revision"] != beforeUpdateRevision {
 		t.Fatalf("rollback_change after_revision = %v, want %v", rollbackData["after_revision"], beforeUpdateRevision)

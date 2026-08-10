@@ -50,8 +50,8 @@ func TestPlanContentChangeAndApplyRoundTrip(t *testing.T) {
 		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
 	}
 	applyData := decodeWriteData(t, applyRes)
-	if applyData["status"] != "ok" {
-		t.Fatalf("apply_content_plan status = %v, want ok", applyData["status"])
+	if applyData["status"] != "updated" {
+		t.Fatalf("apply_content_plan status = %v, want updated", applyData["status"])
 	}
 	if applyData["after_revision"] == "" || applyData["after_revision"] == nil {
 		t.Fatal("apply_content_plan did not return after_revision")

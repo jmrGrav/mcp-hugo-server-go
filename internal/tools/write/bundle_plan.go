@@ -734,7 +734,7 @@ func registerApplyBundlePlan(
 		if in.DryRun {
 			state := updatePageState(siteIdx != nil, bundleHasPublic(siteIdx, entry.Slug))
 			return nil, newApplyBundlePlanOutput(applyBundlePlanData{
-				Status: "ok", PlanID: in.PlanID, Slug: canonicalPublicSlug(entry.Slug), DryRun: true,
+				Status: "unchanged", PlanID: in.PlanID, Slug: canonicalPublicSlug(entry.Slug), DryRun: true,
 				BundleStatus: "valid", BeforeRevision: entry.BundleRevision,
 				Translations: bundleDryRunOutcomes(cfg.ContentRoot, entry.Translations), State: &state,
 				RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -774,7 +774,7 @@ func registerApplyBundlePlan(
 
 		afterRev, _ := contentmodel.BundleRevision(entry.BundleDir)
 		bundleStatus := "applied"
-		status := "ok"
+		status := "updated"
 		warning := ""
 		if len(warnings) > 0 {
 			status = "partial_success"
@@ -928,7 +928,7 @@ func registerRollbackBundle(
 				})
 			}
 			return nil, newRollbackBundleOutput(rollbackBundleData{
-				Status: "ok", Slug: canonicalPublicSlug(in.Slug), DryRun: true, BundleStatus: "restorable",
+				Status: "unchanged", Slug: canonicalPublicSlug(in.Slug), DryRun: true, BundleStatus: "restorable",
 				BeforeRevision: currentRev, Translations: outcomes,
 				RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
@@ -960,7 +960,7 @@ func registerRollbackBundle(
 			})
 		}
 		afterRev, _ := contentmodel.BundleRevision(dir)
-		status := "ok"
+		status := "restored"
 		warning := ""
 		if len(warnings) > 0 {
 			status = "partial_success"
