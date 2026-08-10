@@ -815,6 +815,9 @@ func TestDeletePageAssetDeletesGeneratedHeroImageWhenScopeIsGenerated(t *testing
 		t.Fatalf("delete_page_asset generated hero failed: %s", raw)
 	}
 	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["status"]; got != "deleted" {
+		t.Fatalf("delete_page_asset data.status = %v, want deleted", got)
+	}
 	if got := dataEnvelope["scope"]; got != "generated" {
 		t.Fatalf("delete_page_asset data.scope = %v, want generated", got)
 	}
@@ -853,6 +856,9 @@ func TestDeletePageAssetDryRunPreviewsGeneratedHeroImage(t *testing.T) {
 		t.Fatalf("delete_page_asset generated dry_run failed: %s", raw)
 	}
 	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["status"]; got != "ok" {
+		t.Fatalf("delete_page_asset dry_run data.status = %v, want ok", got)
+	}
 	if got := dataEnvelope["scope"]; got != "generated" {
 		t.Fatalf("delete_page_asset dry_run data.scope = %v, want generated", got)
 	}

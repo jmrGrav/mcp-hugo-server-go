@@ -771,7 +771,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				}
 			}
 			return nil, newDeletePageAssetOutput(deletePageAssetData{
-				Status:       "unchanged",
+				Status:       "ok",
 				Slug:         canonicalPublicSlug(slug),
 				SourceKey:    slug,
 				Scope:        target.scope,
