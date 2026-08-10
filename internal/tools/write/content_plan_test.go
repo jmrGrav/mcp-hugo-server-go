@@ -286,10 +286,11 @@ func TestApplyContentPlanRevisionConflict(t *testing.T) {
 		t.Fatalf("apply_content_plan stale plan error = %s", raw)
 	}
 
-	// The plan should have been consumed even though the apply failed.
+	// A retryable conflict must leave the plan available for the caller to
+	// inspect/retry or explicitly replace (#1001).
 	retry := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
-	if !retry.IsError || !strings.Contains(marshalContent(t, retry), "plan_not_found") {
-		t.Fatalf("plan should be consumed after a failed apply attempt, got: %s", marshalContent(t, retry))
+	if !retry.IsError || !strings.Contains(marshalContent(t, retry), "revision_conflict") {
+		t.Fatalf("retryable conflict should preserve the plan, got: %s", marshalContent(t, retry))
 	}
 }
 

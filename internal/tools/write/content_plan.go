@@ -743,7 +743,8 @@ func registerContentPlanTools(
 		if in.DryRun {
 			entry, ok = plans.get(in.PlanID, isolationCallerKey(ctx))
 		} else {
-			entry, ok = plans.consume(in.PlanID, isolationCallerKey(ctx))
+			// Keep retryable revision conflicts from consuming the plan (#1001).
+			entry, ok = plans.get(in.PlanID, isolationCallerKey(ctx))
 		}
 		if !ok {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_content_change again"))
@@ -775,6 +776,11 @@ func registerContentPlanTools(
 		currentRevision := contentmodel.SourceRevisionBytes(raw)
 		if entry.Revision != currentRevision {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since the plan was created; call plan_content_change again"))
+		}
+		if !in.DryRun {
+			if _, ok := plans.consume(in.PlanID, isolationCallerKey(ctx)); !ok {
+				return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_content_change again"))
+			}
 		}
 
 		if err := validateFrontmatterRoundTrip(entry.Content); err != nil {
