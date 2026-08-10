@@ -2,6 +2,21 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.2] - 2026-08-10
+
+Response to Sol's second live v1.8.1 audit (2026-08-10) plus two production incidents found during this release's own review/verification cycle. Delivered as #985, #983, and #984.
+
+### Correctness / contract
+- **Language-prefixed public URLs no longer silently fall back to another translation** (#976, #985): requesting `/en/...` for a page whose English translation doesn't exist (or doesn't render) could previously resolve to the default-language page instead of reporting not-found. The resolver's implicit and explicit-language paths are now strict — an unlabelled legacy source bundle is only borrowed for a requested language when that language provably matches the page it's actually serving.
+- **`get_site_health` now detects and surfaces incomplete public output** (#977, #985): a failed or partial build could previously leave `get_site_health` reporting a perfect score while the live site was serving stale or missing pages. `content_status` preserves the existing source/front-matter health classification; top-level `status` becomes `degraded` — with `runtime_degraded_reasons`, `publishable_source_pages`, `missing_public_pages`, and `public_output_complete` explaining why — whenever the last build failed or the rendered tree doesn't match publishable source.
+- **Published tool schemas are now pinned in the contract golden**, not just input schemas (#979, #985): every tool's output schema shape and a content hash are captured, so a future change to a response's field set is caught in review instead of only observed live.
+
+### Reliability
+- **Fixed a false positive in #985's own public-output-completeness check, found before merge by testing against a full copy of arleo.eu's real production content** (not just synthetic fixtures): Hugo section/homepage bundles (`_index.md`, `_index.<lang>.md`) were being checked as if they were ordinary content pages, which would have flipped `get_site_health` to `degraded` on the very first call after upgrading — for effectively every Hugo installation, not just this one, since virtually all of them use section indexes.
+- **`build_site`/`publish_changes` preflight now checks writability separately from ownership** (#981, #983): a production incident showed the preflight rejecting `site_root`'s parent directory for an ownership mismatch it never needed to check — this process only needs write access there to create its own self-owned atomic-swap sibling directories, never to rewrite a file it doesn't own. Ownership is still enforced where it's actually required (the Hugo resources cache, whose pre-existing files get `chtimes`'d).
+- **`build_site`'s atomic-swap output is now always world-readable, and self-heals if it isn't** (#984): `os.MkdirTemp`'s default `0700` mode was silently surviving into the live `public/` tree on every single build, leaving the site inaccessible to a reverse proxy running as a different Unix user until manually `chmod`'d. The build directory is now explicitly set to `0755` on creation, and the swapped-in output is walked post-build to self-heal any unreadable file or directory left by a theme/build step — scoped to paths this process just wrote in the same build, never a pre-existing file it doesn't own. Any path it can't fix itself is surfaced by name in a `output_unreadable` warning with a suggested `chown` fix.
+- **`docs/operator-guide.md`'s Build Permissions section corrected**: it previously said `build_site` needs `site_root` writable; since #965's atomic swap it actually needs `site_root`'s *parent* writable — the exact gap behind the #981 incident.
+
 ## [v1.8.1] - 2026-08-10
 
 Response to Sol's second live v1.8.0 audit (2026-08-10): a production build/publish outage plus the remaining v1.8.0 follow-up findings. Delivered as #973 and #974.
