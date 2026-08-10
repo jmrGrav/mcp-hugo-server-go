@@ -44,6 +44,9 @@ This section stays short and segmented.
 		t.Fatalf("check_ai_readiness returned error: %v", res.Content)
 	}
 	data := decodeContent(t, res)
+	if got := data["scope"]; got != "structure_only" {
+		t.Fatalf("scope = %v, want structure_only", got)
+	}
 	if got := data["status"]; got != "pass" {
 		t.Fatalf("status = %v, want pass", got)
 	}
