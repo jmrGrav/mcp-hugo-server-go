@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -535,5 +536,126 @@ func TestStoreCountByOwnerAndDiskUsage(t *testing.T) {
 	}
 	if got := s.DiskUsageBytes(); got != 15 {
 		t.Fatalf("DiskUsageBytes = %d, want 15 (10+5, expired excluded)", got)
+	}
+}
+
+func TestStoreListAndListOwnedFilterAndCleanupExpired(t *testing.T) {
+	freshAlice := t.TempDir()
+	freshBob := t.TempDir()
+	expired := t.TempDir()
+	writePreviewFile(t, freshAlice, "index.html", "alice")
+	writePreviewFile(t, freshBob, "index.html", "bob")
+	writePreviewFile(t, expired, "index.html", "expired")
+
+	s := previewstore.New()
+	s.Put("alice-1", &previewstore.Entry{Dir: freshAlice, Token: "a", ExpiresAt: time.Now().Add(time.Hour), BuildStatus: "passed", Owner: "alice"})
+	s.Put("bob-1", &previewstore.Entry{Dir: freshBob, Token: "b", ExpiresAt: time.Now().Add(time.Hour), BuildStatus: "failed", Owner: "bob"})
+	s.Put("old-1", &previewstore.Entry{Dir: expired, Token: "x", ExpiresAt: time.Now().Add(-time.Minute), Owner: "alice"})
+
+	all := s.List()
+	if len(all) != 2 {
+		t.Fatalf("List() len = %d, want 2 live entries", len(all))
+	}
+	gotIDs := []string{all[0].ID, all[1].ID}
+	sort.Strings(gotIDs)
+	if strings.Join(gotIDs, ",") != "alice-1,bob-1" {
+		t.Fatalf("List() ids = %v, want [alice-1 bob-1]", gotIDs)
+	}
+	if _, err := os.Stat(expired); !os.IsNotExist(err) {
+		t.Fatalf("List() should cleanup expired dir, stat err = %v", err)
+	}
+
+	owned := s.ListOwned("alice")
+	if len(owned) != 1 || owned[0].ID != "alice-1" || owned[0].Owner != "alice" {
+		t.Fatalf("ListOwned(alice) = %#v, want only alice-1", owned)
+	}
+	owned = s.ListOwned("nobody")
+	if len(owned) != 0 {
+		t.Fatalf("ListOwned(nobody) = %#v, want empty", owned)
+	}
+	allViaOwned := s.ListOwned("")
+	if len(allViaOwned) != len(all) {
+		t.Fatalf("ListOwned(\"\") len = %d, want %d like List()", len(allViaOwned), len(all))
+	}
+}
+
+func TestStoreActiveDirsIsPureReadAndIgnoresExpiredNilAndEmpty(t *testing.T) {
+	liveDir := t.TempDir()
+	expiredDir := t.TempDir()
+	writePreviewFile(t, liveDir, "index.html", "live")
+	writePreviewFile(t, expiredDir, "index.html", "expired")
+
+	s := previewstore.New()
+	s.Put("live", &previewstore.Entry{Dir: liveDir, Token: "a", ExpiresAt: time.Now().Add(time.Hour)})
+	s.Put("expired", &previewstore.Entry{Dir: expiredDir, Token: "b", ExpiresAt: time.Now().Add(-time.Minute)})
+	s.Put("empty", &previewstore.Entry{Dir: "", Token: "c", ExpiresAt: time.Now().Add(time.Hour)})
+	s.Put("nil-dir", nil)
+
+	dirs := s.ActiveDirs()
+	if len(dirs) != 1 {
+		t.Fatalf("ActiveDirs() len = %d, want 1 live dir", len(dirs))
+	}
+	if _, ok := dirs[liveDir]; !ok {
+		t.Fatalf("ActiveDirs() missing live dir %q", liveDir)
+	}
+	if _, ok := dirs[expiredDir]; ok {
+		t.Fatalf("ActiveDirs() must not include expired dir %q", expiredDir)
+	}
+	if _, err := os.Stat(expiredDir); err != nil {
+		t.Fatalf("ActiveDirs() must be a pure read and keep expired dir on disk, stat err = %v", err)
+	}
+}
+
+func TestStoreRevokeOwnedRevokeAllAndRevokeAllOwned(t *testing.T) {
+	aliceDir := t.TempDir()
+	bobDir := t.TempDir()
+	aliceDir2 := t.TempDir()
+	writePreviewFile(t, aliceDir, "index.html", "alice-1")
+	writePreviewFile(t, bobDir, "index.html", "bob-1")
+	writePreviewFile(t, aliceDir2, "index.html", "alice-2")
+
+	s := previewstore.New()
+	s.Put("alice-1", &previewstore.Entry{Dir: aliceDir, Token: "a", ExpiresAt: time.Now().Add(time.Hour), Owner: "alice"})
+	s.Put("bob-1", &previewstore.Entry{Dir: bobDir, Token: "b", ExpiresAt: time.Now().Add(time.Hour), Owner: "bob"})
+	s.Put("alice-2", &previewstore.Entry{Dir: aliceDir2, Token: "c", ExpiresAt: time.Now().Add(time.Hour), Owner: "alice"})
+
+	if s.RevokeOwned("bob-1", "alice") {
+		t.Fatal("RevokeOwned() must reject owner mismatch")
+	}
+	if _, ok := s.GetByToken("bob-1", "b"); !ok {
+		t.Fatal("owner-mismatch revoke must not delete the entry")
+	}
+	if !s.RevokeOwned("alice-1", "alice") {
+		t.Fatal("RevokeOwned() must delete matching owner entry")
+	}
+	if _, err := os.Stat(aliceDir); !os.IsNotExist(err) {
+		t.Fatalf("RevokeOwned() should remove alice dir, stat err = %v", err)
+	}
+
+	if got := s.RevokeAllOwned("alice"); got != 1 {
+		t.Fatalf("RevokeAllOwned(alice) = %d, want 1", got)
+	}
+	if _, err := os.Stat(aliceDir2); !os.IsNotExist(err) {
+		t.Fatalf("RevokeAllOwned(alice) should remove second alice dir, stat err = %v", err)
+	}
+	if _, err := os.Stat(bobDir); err != nil {
+		t.Fatalf("RevokeAllOwned(alice) must not remove bob dir, stat err = %v", err)
+	}
+
+	if got := s.RevokeAll(); got != 1 {
+		t.Fatalf("RevokeAll() = %d, want 1 remaining bob entry", got)
+	}
+	if _, err := os.Stat(bobDir); !os.IsNotExist(err) {
+		t.Fatalf("RevokeAll() should remove bob dir, stat err = %v", err)
+	}
+
+	dir3 := t.TempDir()
+	writePreviewFile(t, dir3, "index.html", "bob-2")
+	s.Put("bob-2", &previewstore.Entry{Dir: dir3, Token: "d", ExpiresAt: time.Now().Add(time.Hour), Owner: "bob"})
+	if got := s.RevokeAllOwned(""); got != 1 {
+		t.Fatalf("RevokeAllOwned(\"\") = %d, want RevokeAll() behavior over the last entry", got)
+	}
+	if _, err := os.Stat(dir3); !os.IsNotExist(err) {
+		t.Fatalf("RevokeAllOwned(\"\") should remove the remaining dir, stat err = %v", err)
 	}
 }
