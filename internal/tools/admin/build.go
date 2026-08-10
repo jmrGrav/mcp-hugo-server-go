@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -347,6 +348,61 @@ func swapBuildOutput(tempDir, siteRoot string) (string, error) {
 	return "", nil
 }
 
+// maxUnreadableOutputPathsReported bounds how many still-unfixable paths
+// fixUnreadableOutputPaths reports before stopping, so a pathological case
+// (e.g. an entire tree owned by a different uid) still returns quickly and
+// produces a usable, not overwhelming, diagnostic.
+const maxUnreadableOutputPathsReported = 20
+
+// fixUnreadableOutputPaths walks root and, for every directory missing the
+// "other" execute bit or file missing the "other" read bit, attempts to add
+// it via os.Chmod. That permission shape is exactly what makes a path
+// invisible to a reverse proxy running as a different uid/gid than the
+// build process, even though the file was written successfully and the
+// build itself reports success.
+//
+// Every path under root was just written by this same process as part of
+// this same build, so correcting a permission bit here is not new
+// privilege — it is finishing a write this process already owns (the same
+// reasoning as swapBuildOutput's own chmod on the top-level directory).
+// Chmod can still legitimately fail — e.g. a file this process does not
+// itself own, left behind by something else — and those genuine failures
+// are what gets returned, capped at maxUnreadableOutputPathsReported, so an
+// operator only ever hears about problems that actually need their
+// attention rather than ones this process already fixed silently.
+//
+// Walk/stat errors are otherwise ignored: this is a best-effort safety net
+// layered on top of the real fix in swapBuildOutput, not a build-blocking
+// check, and must never itself turn a successful build into a failure.
+func fixUnreadableOutputPaths(root string) []string {
+	var stillBad []string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if len(stillBad) >= maxUnreadableOutputPathsReported {
+			return filepath.SkipAll
+		}
+		if err != nil {
+			return nil
+		}
+		fi, infoErr := d.Info()
+		if infoErr != nil {
+			return nil
+		}
+		mode := fi.Mode().Perm()
+		want := os.FileMode(0o004) // other:r--
+		if d.IsDir() {
+			want = 0o005 // other:r-x, needed to traverse/list a directory
+		}
+		if mode&want == want {
+			return nil
+		}
+		if chmodErr := os.Chmod(path, mode|want); chmodErr != nil {
+			stillBad = append(stillBad, fmt.Sprintf("%s (mode %04o): %v", path, mode, chmodErr))
+		}
+		return nil
+	})
+	return stillBad
+}
+
 func commandString(name string, args []string) string {
 	if len(args) == 0 {
 		return name
@@ -555,6 +611,17 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		return buildSiteData{}, buildPreflightError(filepath.Dir(cfg.SiteRoot))
 	}
 	defer func() { _ = os.RemoveAll(buildDir) }()
+	// os.MkdirTemp creates directories with mode 0700 (owner-only), and that
+	// mode survives the rename into place unchanged — swapBuildOutput moves
+	// this exact directory to become the new SiteRoot. Left at 0700, every
+	// build silently makes the public site 403 to its own reverse proxy
+	// (different uid/gid) until an operator notices and chmods it by hand.
+	// Match the 0755 this codebase already uses for every other
+	// operator-facing directory it creates (see checkDirWritable above).
+	if err := os.Chmod(buildDir, 0o755); err != nil { // #nosec G302 -- public build output must be world-readable
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildSiteData{}, buildPreflightError(buildDir)
+	}
 
 	timeout := cfg.BuildTimeoutSeconds
 	if timeout <= 0 {
@@ -648,6 +715,35 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 	if swapErr != nil {
 		buildstatus.RecordFailure("output_swap", time.Now())
 		return buildSiteData{}, swapErr
+	}
+	// Post-swap servability self-check (#983 incident): swapBuildOutput's
+	// chmod is the actual fix for MkdirTemp's 0700 default, but a *future*
+	// regression (a refactor that drops that chmod, an unusual mount option,
+	// an operator-run manual build) could silently reintroduce an
+	// unreadable output tree — and nothing else in this response would ever
+	// say so, because hugo_build/output_swap both legitimately report "ok":
+	// the content is correctly built and installed, it just isn't reachable
+	// by whatever serves it (a reverse proxy running as a different uid).
+	// That's exactly the shape of the incident that caused this: a
+	// structurally successful build silently taking the live site offline.
+	//
+	// Every path under SiteRoot was just written by this same process as
+	// part of this same build, so self-healing a permission bit here is not
+	// new privilege — it's finishing a write this process already owns, the
+	// same way swapBuildOutput's own chmod does. fixUnreadableOutputPaths
+	// attempts exactly that and reports only what it could NOT fix (e.g. a
+	// genuine ownership mismatch on a file this process doesn't own), so an
+	// operator only ever hears about problems that need their attention.
+	if stillUnreadable := fixUnreadableOutputPaths(cfg.SiteRoot); len(stillUnreadable) > 0 {
+		msg := fmt.Sprintf(
+			"output_unreadable: %d path(s) under the published output could not be made servable (likely owned by a different uid) and will 403 for a reverse proxy running as a different user: %s. Fix: sudo chown -R <service-account> %s",
+			len(stillUnreadable), strings.Join(stillUnreadable, "; "), cfg.SiteRoot,
+		)
+		if swapWarning != "" {
+			swapWarning = swapWarning + "; " + msg
+		} else {
+			swapWarning = msg
+		}
 	}
 
 	// Capture the page-aware "changed set" BEFORE the callback loop runs: the

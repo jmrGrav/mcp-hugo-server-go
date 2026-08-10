@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -193,6 +194,110 @@ func TestBuildSiteSwapsOnlyAfterSuccessfulTemporaryBuild(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(siteRoot, "index.html"))
 	if err != nil || string(content) != "new-build" {
 		t.Fatalf("new output = %q, err=%v", content, err)
+	}
+}
+
+// TestBuildSiteSwappedOutputIsWorldReadable guards a production incident:
+// os.MkdirTemp creates directories at mode 0700, and that mode survives
+// unchanged through swapBuildOutput's rename into SiteRoot. Left at 0700,
+// the site's own reverse proxy (a different uid/gid than the MCP service)
+// gets a blanket 403 on every path after every single build, until an
+// operator notices and chmods SiteRoot by hand.
+func TestBuildSiteSwappedOutputIsWorldReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on windows")
+	}
+	root := t.TempDir()
+	siteRoot := filepath.Join(root, "public")
+	if err := os.MkdirAll(siteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hugoRoot := filepath.Join(root, "hugo")
+	if err := os.MkdirAll(hugoRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := writeMockHugo(t, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'new-build' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = hugoRoot
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("build_site failed: err=%v result=%s", err, resultText(res))
+	}
+	fi, statErr := os.Stat(siteRoot)
+	if statErr != nil {
+		t.Fatalf("Stat(siteRoot) error = %v", statErr)
+	}
+	if got := fi.Mode().Perm(); got&0o005 == 0 {
+		t.Fatalf("SiteRoot mode = %v, want world-readable (e.g. 0755) so the reverse proxy can serve it", got)
+	}
+}
+
+// TestBuildSiteSelfHealsUnreadableNestedOutput guards the general case
+// TestBuildSiteSwappedOutputIsWorldReadable doesn't reach: a file or
+// subdirectory somewhere *inside* the tree ending up unreadable (e.g. a
+// theme/build step that sets its own restrictive mode on one file), not
+// just the top-level directory MkdirTemp controls. fixUnreadableOutputPaths
+// must silently correct this — every path here was just written by this
+// same build, so there's nothing for an operator to be told about, and no
+// warning should appear once it's fixed.
+func TestBuildSiteSelfHealsUnreadableNestedOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not meaningful on windows")
+	}
+	root := t.TempDir()
+	siteRoot := filepath.Join(root, "public")
+	if err := os.MkdirAll(siteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hugoRoot := filepath.Join(root, "hugo")
+	if err := os.MkdirAll(hugoRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := writeMockHugo(t, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    mkdir -p \"$1/posts/secret\"\n    printf 'restricted' > \"$1/posts/secret/index.html\"\n    chmod 600 \"$1/posts/secret/index.html\"\n    chmod 700 \"$1/posts/secret\"\n  fi\n  shift\ndone\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = hugoRoot
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("build_site failed: err=%v result=%s", err, resultText(res))
+	}
+	text := resultText(res)
+	var out map[string]any
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		t.Fatalf("response not JSON: %v — %q", err, text)
+	}
+	if warnings, _ := out["warnings"].([]any); len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none — the nested permission problem should have been self-healed, not reported", warnings)
+	}
+	if warning, _ := out["warning"].(string); warning != "" {
+		t.Fatalf("warning = %q, want empty — the nested permission problem should have been self-healed, not reported", warning)
+	}
+
+	nestedFile := filepath.Join(siteRoot, "posts", "secret", "index.html")
+	fi, statErr := os.Stat(nestedFile)
+	if statErr != nil {
+		t.Fatalf("Stat(nested file) error = %v", statErr)
+	}
+	if got := fi.Mode().Perm(); got&0o004 == 0 {
+		t.Fatalf("nested file mode = %v, want world-readable after self-heal", got)
+	}
+	dirFi, statErr := os.Stat(filepath.Join(siteRoot, "posts", "secret"))
+	if statErr != nil {
+		t.Fatalf("Stat(nested dir) error = %v", statErr)
+	}
+	if got := dirFi.Mode().Perm(); got&0o005 == 0 {
+		t.Fatalf("nested dir mode = %v, want world-traversable after self-heal", got)
 	}
 }
 
