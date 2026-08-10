@@ -325,7 +325,7 @@ func registerRollbackChange(
 			diffLabel := in.Slug + "/" + filepath.Base(filePath)
 			diff := simpleDiff(diffLabel, string(raw), snapshotContent)
 			return nil, newRollbackChangeOutput(rollbackChangeData{
-				Status:         "ok",
+				Status:         "unchanged",
 				Slug:           canonicalPublicSlug(in.Slug),
 				DryRun:         true,
 				Diff:           diff,
@@ -427,7 +427,7 @@ func registerRollbackChange(
 			}
 		}
 
-		status := "ok"
+		status := "restored"
 		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {

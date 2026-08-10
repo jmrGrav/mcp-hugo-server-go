@@ -798,7 +798,7 @@ func registerContentPlanTools(
 			}
 			state := updatePageState(siteIdx != nil, hadPublic)
 			return nil, newApplyContentPlanOutput(applyContentPlanData{
-				Status:         "ok",
+				Status:         "unchanged",
 				PlanID:         in.PlanID,
 				Slug:           canonicalPublicSlug(entry.Slug),
 				DryRun:         true,
@@ -871,7 +871,7 @@ func registerContentPlanTools(
 			}
 		}
 
-		status := "ok"
+		status := "updated"
 		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {
