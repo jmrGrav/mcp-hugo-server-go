@@ -3416,7 +3416,7 @@
   {
     "name": "list_page_revisions",
     "required_scope": "",
-    "description": "List the prior git commits that touched a page's source file, most recent first — the read-side \"what could I revert to\" answer, independently useful (e.g. to compare diff_page against an older revision, not just HEAD) and a smaller, lower-risk first step before any write-path rollback tool. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "description": "List the prior git commits that touched a page's source file, most recent first. Each row is explicitly `revision_kind:\"git_commit\"`: it is suitable for git history and diff_page, but is not an apply_content_plan snapshot and cannot be passed to rollback_change. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -3441,6 +3441,7 @@
       "data.revisions:unspecified:required",
       "data.revisions[].commit:string:required",
       "data.revisions[].date:string:required",
+      "data.revisions[].revision_kind:string:required",
       "data.revisions[].short_commit:string:required",
       "data.revisions[].subject:string:required",
       "data.slug:string:required",
@@ -3477,7 +3478,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "30610289f3bed08a7b5a0a9f06e41454d87ea52fb650b46b7ee8905fa4fc3dc4"
+    "output_schema_sha256": "be187874142b577dc1d6c4175698ba63d3ce01a56535cab06cb963730c01d8d4"
   },
   {
     "name": "list_pages",
@@ -4302,7 +4303,7 @@
   {
     "name": "rollback_change",
     "required_scope": "write",
-    "description": "Restore a page's source to a prior revision this server's own apply_content_plan produced. `to_revision` must be a revision apply_content_plan previously wrote — not arbitrary git history (this deployment has no controlled git-commit capability; see #379). Fails with `snapshot_not_found` if no snapshot was captured for that revision of this page (only revisions produced by apply_content_plan are ever snapshotted, with a 24-hour retention) or the resolved file/language doesn't match what the snapshot was captured for. Non-dry-run calls require `expected_revision`, the page's *current* revision — a stale value fails with `revision_conflict`, the same optimistic-concurrency guard every other write tool uses, so this can never silently undo a newer, unrelated change. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run rollback after a timeout or uncertain delivery. `dry_run` previews the diff without writing. Writes source only — like apply_content_plan, does not build/publish; call publish_changes afterward. `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
+    "description": "Restore a page's source to a prior revision this server's own apply_content_plan produced. `to_revision` must be a revision apply_content_plan previously wrote — not arbitrary git history (this deployment has no controlled git-commit capability; see #379). Fails with `snapshot_not_found` if no snapshot was captured for that revision of this page (only revisions produced by apply_content_plan are ever snapshotted, with a 24-hour retention) or the resolved file/language doesn't match what the snapshot was captured for. Non-dry-run calls require `expected_revision`, the page's *current* revision — a stale value fails with `revision_conflict`, the same optimistic-concurrency guard every other write tool uses, so this can never silently undo a newer, unrelated change. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run rollback after a timeout or uncertain delivery. `dry_run` previews the diff without writing. Writes source only — like apply_content_plan, does not build/publish; call publish_changes afterward. `slug` must not carry a language prefix when `lang` is also given — passing both (e.g. `slug:\"fr/posts/x\", lang:\"fr\"`) fails fast with `language_prefixed_slug_with_explicit_lang` naming the slug to use instead, rather than double-applying the language and surfacing a confusing not_found. `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
