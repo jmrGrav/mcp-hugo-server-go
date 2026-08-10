@@ -642,7 +642,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		Name:  "delete_page_asset",
 		Title: "Delete page asset",
 		Description: "Delete a file previously written into a Hugo page bundle directory by upload_page_asset. " +
-			"By default this targets bundle-local files only; set `scope:\"generated\"` to explicitly target the generated hero image at {HugoRoot}/static/images/{slug}-featured.jpg instead of the bundle directory. " +
+			"By default this targets bundle-local files only; set `scope:\"generated\"` to explicitly target the generated hero image at {HugoRoot}/static/images/{slug}-featured.jpg instead of the bundle directory. For generated assets, `filename` must be the complete basename returned by get_storage_health/list_page_assets (for example `posts-example-featured.jpg`), not merely `featured.jpg`. " +
 			"Non-dry-run calls require expected_sha256 (from upload_page_asset/list_page_assets) or expected_revision (the page bundle's own revision) as a concurrency guard; a mismatch fails with revision_conflict, telling the agent to re-check the current hash/revision via list_page_assets and retry. " +
 			"Before deleting, the asset reference is checked against every index.<lang>.md file in the bundle: if referenced, the call fails with asset_referenced unless force=true is passed, so a still-linked image isn't silently broken. " +
 			"A non-forced asset_referenced refusal does not consume the destructive quota; force=true is a genuine deletion attempt and does consume it. " +
@@ -771,7 +771,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				}
 			}
 			return nil, newDeletePageAssetOutput(deletePageAssetData{
-				Status:       "ok",
+				Status:       "unchanged",
 				Slug:         canonicalPublicSlug(slug),
 				SourceKey:    slug,
 				Scope:        target.scope,
@@ -909,7 +909,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		}
 
 		out := newDeletePageAssetOutput(deletePageAssetData{
-			Status:       "ok",
+			Status:       "deleted",
 			Slug:         canonicalPublicSlug(slug),
 			SourceKey:    slug,
 			Scope:        target.scope,
