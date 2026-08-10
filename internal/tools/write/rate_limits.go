@@ -3,13 +3,12 @@ package write
 import (
 	"context"
 	"math"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/caller"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -185,22 +184,10 @@ func registerGetRateLimits(s *mcp.Server, cfg config.Config, mutationMu *sync.Mu
 		deleteLimiter := callerLimiter(deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 
 		return nil, newGetRateLimitsOutput(getRateLimitsData{
-			IdentitySource:     rateLimitIdentitySource(ctx),
+			IdentitySource:     caller.Source(ctx),
 			CreateUpdateUpload: newRateLimitBucket(createLimiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
 			Destructive:        newRateLimitBucket(deleteLimiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
 		}), nil
 	}))
 }
 
-func rateLimitIdentitySource(ctx context.Context) string {
-	if principal, _ := ctx.Value(oauth.CtxPrincipal).(string); strings.TrimSpace(principal) != "" {
-		return "principal"
-	}
-	if token, _ := ctx.Value(oauth.CtxTokenID).(string); strings.TrimSpace(token) != "" {
-		return "token"
-	}
-	if ip, _ := ctx.Value(oauth.CtxCallerIP).(string); strings.TrimSpace(ip) != "" {
-		return "ip"
-	}
-	return "unknown"
-}
