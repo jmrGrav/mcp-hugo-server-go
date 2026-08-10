@@ -541,14 +541,14 @@ type deletePageAssetData struct {
 // parameter, not read off data, since data never carries this field.
 func newUploadPageAssetOutput(data uploadPageAssetData, rateLimitRemaining int) uploadPageAssetOutput {
 	return uploadPageAssetOutput{
-		ToolResponse:       writeSuccessEnvelope(data),
+		ToolResponse:       writeSuccessEnvelopeWithWarning(data, data.Warning),
 		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
 func newDeletePageAssetOutput(data deletePageAssetData, rateLimitRemaining int) deletePageAssetOutput {
 	return deletePageAssetOutput{
-		ToolResponse:       writeSuccessEnvelope(data),
+		ToolResponse:       writeSuccessEnvelopeWithWarning(data, data.Warning),
 		RateLimitRemaining: rateLimitRemaining,
 	}
 }

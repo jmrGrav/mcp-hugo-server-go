@@ -41,6 +41,33 @@ func mustTestServer(t *testing.T) *server.Server {
 	return srv
 }
 
+func copyServerFixtureTree(t *testing.T, source string) string {
+	t.Helper()
+	destination := t.TempDir()
+	err := filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
+	if err != nil {
+		t.Fatalf("copyServerFixtureTree(%q): %v", source, err)
+	}
+	return destination
+}
+
 func mustOAuthServer(t *testing.T) *server.Server {
 	t.Helper()
 	// Bake in a read client for http://localhost:9999/cb. Since #497, DCR
@@ -59,7 +86,7 @@ func mustOAuthServer(t *testing.T) *server.Server {
 		t.Fatalf("write test registry: %v", err)
 	}
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth = config.OAuthConfig{
@@ -85,7 +112,7 @@ func mustOAuthServer(t *testing.T) *server.Server {
 func mustOAuthServerWithRegistry(t *testing.T, registryPath string) *server.Server {
 	t.Helper()
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth = config.OAuthConfig{
@@ -111,7 +138,7 @@ func mustOAuthServerWithRegistry(t *testing.T, registryPath string) *server.Serv
 func mustOAuthSQLiteServer(t *testing.T, storePath string) *server.Server {
 	t.Helper()
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth = config.OAuthConfig{
@@ -968,7 +995,7 @@ func TestReaderTokenListPagesExposeSourceDerivedMetadata(t *testing.T) {
 	// Per #450, "read" grants full visibility: source-derived taxonomy
 	// (categories not present in the public rendered HTML) is now
 	// expected to be visible, not stripped.
-	if !strings.Contains(rec.Body.String(), "SourceCat") {
+	if !strings.Contains(rec.Body.String(), "sourcecat") {
 		t.Fatalf("read list_pages must expose source-derived taxonomy (full visibility per #450); body = %q", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), "\"slug\":\"/posts/demo/\"") {
@@ -1731,7 +1758,7 @@ func TestAnonymousServerExposesReadTools(t *testing.T) {
 	// those tools would be absent regardless of scope, and this test would
 	// not actually exercise the #450 scope boundary.
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	idx, err := site.NewIndex(cfg)
@@ -2240,7 +2267,7 @@ func toolCallBodyHasError(rec *httptest.ResponseRecorder, want string) bool {
 func TestGetMutationStatusIsolatedByCallerAcrossHTTP(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = t.TempDir()
 	cfg.HugoRoot = t.TempDir()
 	cfg.OAuth = config.OAuthConfig{
@@ -2306,7 +2333,7 @@ func TestApplyContentPlanIsolatedByCallerAcrossHTTP(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	contentRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = contentRoot
 	cfg.HugoRoot = t.TempDir()
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
@@ -2374,7 +2401,7 @@ func TestGetRateLimitsSharesQuotaAcrossTokensForSamePrincipal(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	contentRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = contentRoot
 	cfg.HugoRoot = t.TempDir()
 	cfg.RateLimit.CreateUpdatePerMin = 2
@@ -2436,7 +2463,7 @@ func TestApplyContentPlanIsolatedByTokenEvenUnderSharedPrincipal(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	contentRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = contentRoot
 	cfg.HugoRoot = t.TempDir()
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
@@ -2505,7 +2532,7 @@ func TestRollbackChangeSnapshotIsolatedByCallerAcrossHTTP(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	contentRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = contentRoot
 	cfg.HugoRoot = t.TempDir()
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
@@ -2570,7 +2597,7 @@ func TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	contentRoot := t.TempDir()
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = contentRoot
 	cfg.HugoRoot = t.TempDir()
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
@@ -2669,7 +2696,7 @@ func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.HugoRoot = t.TempDir()
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
@@ -2758,7 +2785,7 @@ func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 func mustBearerlessServerWithWriteEnabled(t *testing.T) *server.Server {
 	t.Helper()
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth.Enabled = false

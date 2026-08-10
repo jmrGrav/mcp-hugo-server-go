@@ -451,7 +451,7 @@
   {
     "name": "get_capabilities",
     "required_scope": "",
-    "description": "Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): `server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); `limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); `allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). `features` reports only booleans/counts, never secrets, hook command strings, or host paths. Anonymous: no authentication needed, so capabilities can be discovered before obtaining a token.",
+    "description": "Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): `server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); `limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); `allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). `features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool.",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"
@@ -460,7 +460,7 @@
   {
     "name": "get_changelog",
     "required_scope": "",
-    "description": "Return CHANGELOG.md entries from the copy embedded in this running binary at build time. Release CI verifies that the deployed release version is the first versioned heading before shipping, so release builds expose the matching top entry rather than silently drifting to an older section. Without arguments, returns the 5 most recent versioned releases (bounded by default rather than dumping the entire file). Pass `since_version` (e.g. \"v1.5.9\", with or without the leading \"v\") to get every release strictly newer than that version instead — an agent that last audited at v1.5.9 can request exactly what changed since then rather than re-testing the full tool surface. `limit` caps how many entries are returned either way (default 5, max 20). `response_mode:\"compact\"` is audit-oriented: when `limit` is omitted it defaults to 1 entry instead of 5, and omits each entry's raw Markdown `body`. Standard mode keeps each entry's `body` as the release section's raw Markdown (its own `###` subsections like Added/Fixed/Security, verbatim) rather than further parsed into structured fields — CHANGELOG.md's own formatting is the source of truth. Fails with `invalid_params` if `since_version` doesn't match any release heading in the file. Usable without authentication.",
+    "description": "Return CHANGELOG.md entries from the copy embedded in this running binary at build time. Release CI verifies that the deployed release version is the first versioned heading before shipping, so release builds expose the matching top entry rather than silently drifting to an older section. Without arguments, returns the 5 most recent versioned releases (bounded by default rather than dumping the entire file). Pass `since_version` (e.g. \"v1.5.9\", with or without the leading \"v\") to get every release strictly newer than that version instead — an agent that last audited at v1.5.9 can request exactly what changed since then rather than re-testing the full tool surface. `limit` caps how many entries are returned either way (default 5, max 20). `response_mode:\"compact\"` is audit-oriented: when `limit` is omitted it defaults to 1 entry instead of 5, and omits each entry's raw Markdown `body`. Standard mode keeps each entry's `body` as the release section's raw Markdown (its own `###` subsections like Added/Fixed/Security, verbatim) rather than further parsed into structured fields — CHANGELOG.md's own formatting is the source of truth. Fails with `invalid_params` if `since_version` doesn't match any release heading in the file. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -481,7 +481,7 @@
   {
     "name": "get_feed",
     "required_scope": "",
-    "description": "Return recent published items as a feed-like list. Use this for lightweight content digests without authentication. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want a posts-only timeline. The two tools overlap deliberately; get_feed is the whole-site recency digest, get_recent_posts is the /posts/-scoped timeline (#570, #865).",
+    "description": "Return recent published items as a feed-like list. Use this for lightweight content digests. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Site-wide: covers every published section, not only /posts/ — use get_recent_posts instead if you specifically want a posts-only timeline. The two tools overlap deliberately; get_feed is the whole-site recency digest, get_recent_posts is the /posts/-scoped timeline (#570, #865).",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -675,7 +675,7 @@
   {
     "name": "get_recent_posts",
     "required_scope": "",
-    "description": "Return the most recent published posts from the index. Use this for timeline-style summaries without authentication. Posts-only: this covers the /posts/ section specifically; for a site-wide digest spanning every published section (not only posts) use get_feed instead. get_feed and get_recent_posts overlap deliberately — pick get_recent_posts when you want a posts timeline and get_feed when you want a whole-site recency digest (#570, #865).",
+    "description": "Return the most recent published posts from the index. Use this for timeline-style summaries. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. Posts-only: this covers the /posts/ section specifically; for a site-wide digest spanning every published section (not only posts) use get_feed instead. get_feed and get_recent_posts overlap deliberately — pick get_recent_posts when you want a posts timeline and get_feed when you want a whole-site recency digest (#570, #865).",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -757,7 +757,7 @@
   {
     "name": "get_site_information",
     "required_scope": "",
-    "description": "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery without authentication.",
+    "description": "Return basic metadata for the indexed site, including name, URL, and language. Useful for onboarding and discovery. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -860,7 +860,7 @@
   {
     "name": "list_categories",
     "required_scope": "",
-    "description": "List the categories discovered from the index. Returns a sorted category list and does not require authentication.",
+    "description": "List the categories discovered from the index. Returns a sorted category list. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -962,7 +962,7 @@
   {
     "name": "list_tags",
     "required_scope": "",
-    "description": "List the tags discovered from the index. Returns a sorted tag list and does not require authentication.",
+    "description": "List the tags discovered from the index. Returns a sorted tag list. Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {

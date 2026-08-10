@@ -154,7 +154,7 @@ type rollbackChangeOutput struct {
 // #605): rateLimitRemaining is an explicit parameter, not read off data.
 func newRollbackChangeOutput(data rollbackChangeData, rateLimitRemaining int) rollbackChangeOutput {
 	return rollbackChangeOutput{
-		ToolResponse:       writeSuccessEnvelope(data),
+		ToolResponse:       writeSuccessEnvelopeWithWarning(data, data.Warning),
 		RateLimitRemaining: rateLimitRemaining,
 	}
 }

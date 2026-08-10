@@ -8,7 +8,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -93,6 +95,21 @@ func TestContentHelperFunctions(t *testing.T) {
 	}
 	if got := uniqueLanguages(pages); len(got) != 2 {
 		t.Fatalf("uniqueLanguages() = %#v", got)
+	}
+}
+
+func TestBuildSiteHealthSurfacesRuntimeDegraded(t *testing.T) {
+	buildstatus.ResetForTest()
+	defer buildstatus.ResetForTest()
+	buildstatus.RecordFailure("permission_denied", time.Now())
+	health := buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{})
+	if health.RuntimeDegraded == nil || !*health.RuntimeDegraded {
+		t.Fatalf("runtime_degraded after failed build = %#v, want true", health.RuntimeDegraded)
+	}
+	buildstatus.RecordSuccess(time.Now())
+	health = buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{})
+	if health.RuntimeDegraded == nil || *health.RuntimeDegraded {
+		t.Fatalf("runtime_degraded after successful build = %#v, want false", health.RuntimeDegraded)
 	}
 }
 

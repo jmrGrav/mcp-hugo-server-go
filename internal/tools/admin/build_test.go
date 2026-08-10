@@ -161,6 +161,76 @@ func TestBuildSitePassesCleanDestinationDirFlag(t *testing.T) {
 	}
 }
 
+func TestBuildSiteSwapsOnlyAfterSuccessfulTemporaryBuild(t *testing.T) {
+	root := t.TempDir()
+	siteRoot := filepath.Join(root, "public")
+	if err := os.MkdirAll(siteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(siteRoot, "old.txt"), []byte("last-known-good"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hugoRoot := filepath.Join(root, "hugo")
+	if err := os.MkdirAll(hugoRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	dir := writeMockHugo(t, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'new-build' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = hugoRoot
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("build_site failed: err=%v result=%s", err, resultText(res))
+	}
+	if _, err := os.Stat(filepath.Join(siteRoot, "old.txt")); !os.IsNotExist(err) {
+		t.Fatalf("old output still present after successful swap: %v", err)
+	}
+	content, err := os.ReadFile(filepath.Join(siteRoot, "index.html"))
+	if err != nil || string(content) != "new-build" {
+		t.Fatalf("new output = %q, err=%v", content, err)
+	}
+}
+
+func TestBuildSiteFailurePreservesPreviousOutput(t *testing.T) {
+	root := t.TempDir()
+	siteRoot := filepath.Join(root, "public")
+	if err := os.MkdirAll(siteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(siteRoot, "old.txt")
+	if err := os.WriteFile(oldPath, []byte("last-known-good"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := writeMockHugo(t, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'partial-build' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 1\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = t.TempDir()
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("build_site transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("build_site unexpectedly succeeded")
+	}
+	content, readErr := os.ReadFile(oldPath)
+	if readErr != nil || string(content) != "last-known-good" {
+		t.Fatalf("previous output changed after failed build: %q, err=%v", content, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(siteRoot, "index.html")); !os.IsNotExist(statErr) {
+		t.Fatalf("partial output leaked into public tree: %v", statErr)
+	}
+}
+
 func TestBuildSiteConcurrentReject(t *testing.T) {
 	startedFile := filepath.Join(t.TempDir(), "hugo-started")
 	dir := writeMockHugo(t, "#!/bin/sh\ntouch \""+startedFile+"\"\nsleep 5\nexit 0\n")
@@ -476,11 +546,12 @@ func TestBuildSitePreflightFailsWhenNotWritable(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("skipping permission test as root")
 	}
-	siteRoot := filepath.Join(t.TempDir(), "readonly")
-	if err := os.MkdirAll(siteRoot, 0o555); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o555); err != nil {
+		t.Fatalf("Chmod parent: %v", err)
 	}
-	defer func() { _ = os.Chmod(siteRoot, 0o755) }()
+	defer func() { _ = os.Chmod(parent, 0o755) }()
+	siteRoot := filepath.Join(parent, "readonly")
 
 	cfg := config.Default()
 	cfg.SiteRoot = siteRoot

@@ -356,6 +356,14 @@ func writeSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
+func writeSuccessEnvelopeWithWarning[T any](data T, warning string) toolcontract.ToolResponse[T] {
+	envelope := writeSuccessEnvelope(data)
+	if warning = strings.TrimSpace(warning); warning != "" {
+		envelope.Warnings = []string{warning}
+	}
+	return envelope
+}
+
 // newCreatePageOutput/newUpdatePageOutput/newDeletePageOutput take
 // rateLimitRemaining as an explicit parameter rather than reading it off
 // data (#520, #605): data itself never carries this field — it is
@@ -363,21 +371,21 @@ func writeSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 // mirror from, and the two copies previously silently duplicated the value.
 func newCreatePageOutput(data createPageData, rateLimitRemaining int) createPageOutput {
 	return createPageOutput{
-		ToolResponse:       writeSuccessEnvelope(data),
+		ToolResponse:       writeSuccessEnvelopeWithWarning(data, data.Warning),
 		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
 func newUpdatePageOutput(data updatePageData, rateLimitRemaining int) updatePageOutput {
 	return updatePageOutput{
-		ToolResponse:       writeSuccessEnvelope(data),
+		ToolResponse:       writeSuccessEnvelopeWithWarning(data, data.Warning),
 		RateLimitRemaining: rateLimitRemaining,
 	}
 }
 
 func newDeletePageOutput(data deletePageData, rateLimitRemaining int) deletePageOutput {
 	return deletePageOutput{
-		ToolResponse:       writeSuccessEnvelope(data),
+		ToolResponse:       writeSuccessEnvelopeWithWarning(data, data.Warning),
 		RateLimitRemaining: rateLimitRemaining,
 	}
 }
@@ -645,11 +653,21 @@ func unknownLangWarning(lang string, idx *hugosite.SourceIndex, defaultLang stri
 			return ""
 		}
 	}
-	knownSet := known
+	knownSet := append([]string(nil), known...)
 	if d := strings.TrimSpace(defaultLang); d != "" {
-		knownSet = append([]string{d}, known...)
-		sort.Strings(knownSet)
+		knownSet = append(knownSet, d)
 	}
+	seen := make(map[string]bool, len(knownSet))
+	deduped := knownSet[:0]
+	for _, value := range knownSet {
+		value = strings.TrimSpace(value)
+		if value != "" && !seen[value] {
+			seen[value] = true
+			deduped = append(deduped, value)
+		}
+	}
+	knownSet = deduped
+	sort.Strings(knownSet)
 	return fmt.Sprintf("lang %q has no existing content and is not this site's default language (known languages: %s); if this is a typo the page will become an orphan Hugo never builds, if it is a deliberately new language it must be added to the Hugo site config to build — call get_capabilities to see recognized languages", lang, strings.Join(knownSet, ", "))
 }
 

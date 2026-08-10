@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
@@ -141,6 +142,11 @@ type contentEnvelopeData struct {
 	// of deliberately drilling into score_breakdown.<category>. Never moves
 	// score/status.
 	AdvisoriesCount int `json:"advisories_count,omitempty"`
+	// RuntimeDegraded is populated only by get_site_health. Content health and
+	// operational/build health are separate signals, so expose the latest
+	// failed build state without requiring an agent to infer it from a second
+	// tool name (#972).
+	RuntimeDegraded *bool `json:"runtime_degraded,omitempty"`
 	// ScoreBreakdown is additive to get_site_health (#419): per-category
 	// score/weight/issues so an agent can see why `score` is what it is,
 	// without re-deriving the scoring logic. Nil for tools other than
@@ -1711,6 +1717,11 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	health := contentEnvelopeData{
 		Status: "healthy",
 	}
+	snapshot := buildstatus.Last()
+	if snapshot.Attempted {
+		degraded := snapshot.Status == "failed"
+		health.RuntimeDegraded = &degraded
+	}
 	if count, ok := untrackedSourcePageCount(ctx, srcIdx, cfg.ContentRoot); ok {
 		health.UntrackedSourcePages = &count
 	}
@@ -2139,8 +2150,8 @@ func toPageDTO(p site.Page, aliases map[string]string, siteRoot string, includeT
 		Slug:       p.Slug,
 		Title:      p.Title,
 		Summary:    p.Summary,
-		Tags:       tags,
-		Categories: cats,
+		Tags:       canonicalTaxonomyStrings(tags),
+		Categories: canonicalTaxonomyStrings(cats),
 		Date:       p.Date,
 		URL:        p.URL,
 		Lang:       p.Lang,

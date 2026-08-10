@@ -6,6 +6,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 )
 
@@ -49,4 +50,12 @@ func toContentmodelTerms(terms []site.TaxonomyTerm) []contentmodel.TaxonomyTerm 
 		}
 	}
 	return out
+}
+
+// canonicalTaxonomyStrings is the stable plain-array representation used by
+// read tools. Rich tag_terms/category_terms retain source and label; the
+// legacy string arrays are normalized slugs so agents can compare them across
+// tools without casing-dependent mismatches (#970).
+func canonicalTaxonomyStrings(values []string) []string {
+	return taxonomy.Slugs(taxonomy.Normalize(values))
 }

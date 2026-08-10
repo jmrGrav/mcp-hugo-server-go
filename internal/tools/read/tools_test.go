@@ -18,7 +18,7 @@ import (
 
 func mustTestIndex(t *testing.T) *site.Index {
 	t.Helper()
-	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	root := filepath.Join("testdata", "public", "minimal")
 	cfg := config.Default()
 	cfg.SiteRoot = root
 	cfg.SiteURL = "https://example.test"
@@ -3505,7 +3505,7 @@ func TestValidateSiteTestContentSlugsIsAdvisoryOnly(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	root := filepath.Join("testdata", "public", "minimal")
 	cfg := config.Default()
 	cfg.SiteRoot = root
 	cfg.SiteURL = "https://example.test"
@@ -3588,7 +3588,7 @@ func mustSiteWithOneInvalidPage(t *testing.T) (*site.Index, *hugosite.SourceInde
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	root := filepath.Join("..", "..", "..", "testdata", "fixtures", "public", "minimal")
+	root := filepath.Join("testdata", "public", "minimal")
 	cfg := config.Default()
 	cfg.SiteRoot = root
 	cfg.SiteURL = "https://example.test"

@@ -24,7 +24,7 @@ import (
 // requirement into an enforced invariant instead of a one-time audit.
 func TestAllToolsHaveAnnotations(t *testing.T) {
 	cfg := config.Default()
-	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.HugoRoot = t.TempDir()
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.OAuth.Enabled = false

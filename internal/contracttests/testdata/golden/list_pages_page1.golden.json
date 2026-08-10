@@ -14,24 +14,24 @@
         "source_key": "posts/hello",
         "summary": "Minimal English article",
         "tags": [
-          "Hugo",
-          "Read-only"
+          "hugo",
+          "read-only"
         ],
         "title": "Hello",
         "url": "https://example.test/posts/hello/"
       },
       {
         "categories": [
-          "Homelab",
-          "Infrastructure"
+          "homelab",
+          "infrastructure"
         ],
         "date": "2026-01-02T03:04:05Z",
         "lang": "fr",
         "slug": "/posts/bonjour/",
         "summary": "Article français minimal",
         "tags": [
-          "Hugo",
-          "Security"
+          "hugo",
+          "security"
         ],
         "title": "Bonjour",
         "url": "https://example.test/posts/bonjour/"
