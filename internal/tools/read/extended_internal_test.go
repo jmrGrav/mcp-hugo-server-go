@@ -904,3 +904,42 @@ func TestDetectTaxonomyInconsistenciesDoesNotFlagDisjointLanguageCasing(t *testi
 		}
 	}
 }
+
+func TestValidateFrontMatterPageDetectsOnlyFrontmatterLikeBodyPrefix(t *testing.T) {
+	page := hugosite.SourcePage{Title: "Valid", Date: "2026-08-10", FrontmatterRaw: map[string]any{"title": "Valid", "date": "2026-08-10"}, Body: "aliases:\n- /old/\n\nBody."}
+	issues := validateFrontMatterPage(page, nil)
+	if !containsString(issues, "possible misplaced front matter at start of markdown body") {
+		t.Fatalf("issues = %#v, want misplaced front matter finding", issues)
+	}
+	page.Body = "The aliases: field is explained in this paragraph."
+	issues = validateFrontMatterPage(page, nil)
+	if containsString(issues, "possible misplaced front matter at start of markdown body") {
+		t.Fatalf("ordinary markdown must not be flagged: %#v", issues)
+	}
+}
+
+// TestValidateFrontMatterPageDoesNotFlagFrontmatterLikeLinesMidBody is a
+// regression test for false-positives away from the true start of the
+// body: a legitimate mid-article line that happens to start with a known
+// key (e.g. explaining frontmatter syntax) must not be flagged — #1004
+// asks for detection "at the beginning of Markdown bodies" specifically.
+func TestValidateFrontMatterPageDoesNotFlagFrontmatterLikeLinesMidBody(t *testing.T) {
+	page := hugosite.SourcePage{
+		Title: "Valid", Date: "2026-08-10",
+		FrontmatterRaw: map[string]any{"title": "Valid", "date": "2026-08-10"},
+		Body:           "This article explains Hugo front matter.\n\nFor example:\n\ntags: this is just prose demonstrating the syntax\n\nMore prose after.",
+	}
+	issues := validateFrontMatterPage(page, nil)
+	if containsString(issues, "possible misplaced front matter at start of markdown body") {
+		t.Fatalf("a frontmatter-like line mid-body must not be flagged: %#v", issues)
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
