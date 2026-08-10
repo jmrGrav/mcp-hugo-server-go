@@ -82,7 +82,7 @@ func RegisterInspectPreviewRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *
 		case previewstore.LookupExpired:
 			return nil, inspectPreviewRenderedOutput{}, fmt.Errorf("preview_expired: preview %q has expired", previewID)
 		}
-		if ownerKey := caller.Key(ctx); ownerKey != "" && entry.Owner != "" && entry.Owner != ownerKey {
+		if ownerKey := caller.TokenKey(ctx); ownerKey != "" && entry.Owner != "" && entry.Owner != ownerKey {
 			return nil, inspectPreviewRenderedOutput{}, fmt.Errorf("preview_not_found: preview %q not found", previewID)
 		}
 

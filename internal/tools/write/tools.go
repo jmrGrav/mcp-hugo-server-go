@@ -489,8 +489,13 @@ func mutationCallerKey(ctx context.Context) string {
 	return "unknown"
 }
 
-func principalCallerKey(ctx context.Context) string {
-	if key := caller.Key(ctx); key != "" {
+// isolationCallerKey scopes plan/rollback-snapshot ownership to the exact
+// bearer token (see caller.TokenKey), not the broader OAuth principal that
+// caller.Key() now prefers for rate-limit quotas (#950) — otherwise a token
+// refresh or a second session under the same principal could consume or
+// roll back another session's plan, reopening #932/#934.
+func isolationCallerKey(ctx context.Context) string {
+	if key := caller.TokenKey(ctx); key != "" {
 		return key
 	}
 	return "unknown"
@@ -1329,7 +1334,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// file, so there's nothing new to roll back from. create_page is
 		// deliberately not snapshotted — there's no meaningful "pre-create"
 		// state to restore to.
-		rt.snapshots.put(filePath, currentRevision, principalCallerKey(ctx), string(raw))
+		rt.snapshots.put(filePath, currentRevision, isolationCallerKey(ctx), string(raw))
 		updated := *currentSource
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang

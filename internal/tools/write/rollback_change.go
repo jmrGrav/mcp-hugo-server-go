@@ -292,7 +292,7 @@ func registerRollbackChange(
 			}
 		}
 
-		snapshotContent, ok := snapshots.get(filePath, in.ToRevision, principalCallerKey(ctx))
+		snapshotContent, ok := snapshots.get(filePath, in.ToRevision, isolationCallerKey(ctx))
 		if !ok {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no snapshot recorded for revision %q of this page — only revisions produced by a prior apply_content_plan call, within the last 24 hours, can be rolled back to", in.ToRevision))
 		}

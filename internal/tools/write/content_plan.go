@@ -636,7 +636,7 @@ func registerContentPlanTools(
 		}
 		now := time.Now().UTC()
 		plans.put(planID, planEntry{
-			CallerKey:  principalCallerKey(ctx),
+			CallerKey:  isolationCallerKey(ctx),
 			Slug:       in.Slug,
 			Lang:       resolvedSource.Lang,
 			FilePath:   filePath,
@@ -741,9 +741,9 @@ func registerContentPlanTools(
 		var entry planEntry
 		var ok bool
 		if in.DryRun {
-			entry, ok = plans.get(in.PlanID, principalCallerKey(ctx))
+			entry, ok = plans.get(in.PlanID, isolationCallerKey(ctx))
 		} else {
-			entry, ok = plans.consume(in.PlanID, principalCallerKey(ctx))
+			entry, ok = plans.consume(in.PlanID, isolationCallerKey(ctx))
 		}
 		if !ok {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_content_change again"))
@@ -814,7 +814,7 @@ func registerContentPlanTools(
 		// design.md §4). Only captured on a successful write: a failed
 		// write never changed the file, so there's nothing new to roll
 		// back from.
-		snapshots.put(entry.FilePath, entry.Revision, principalCallerKey(ctx), string(raw))
+		snapshots.put(entry.FilePath, entry.Revision, isolationCallerKey(ctx), string(raw))
 
 		var updated hugosite.SourcePage
 		if existing, hasExisting := idx.GetBySlug(entry.Slug); hasExisting {

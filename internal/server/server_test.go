@@ -2424,6 +2424,83 @@ func TestGetRateLimitsSharesQuotaAcrossTokensForSamePrincipal(t *testing.T) {
 	}
 }
 
+// TestApplyContentPlanIsolatedByTokenEvenUnderSharedPrincipal guards the
+// boundary #950's principal-preferring caller.Key() must not cross: two
+// tokens issued to the same OAuth principal (e.g. one token refreshed into
+// another) must not be able to consume, inspect, or roll back each other's
+// plans/snapshots. That per-caller binding is what #932/#934 fixed; widening
+// it to principal-level sharing — as a naive read of #950's "share rate
+// limits across a principal's tokens" would suggest applying everywhere —
+// would silently reopen it.
+func TestApplyContentPlanIsolatedByTokenEvenUnderSharedPrincipal(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal")
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const sharedPrincipal = "client-shared"
+	addBearerTokenWithPrincipal(t, storePath, "token-p1", "write", sharedPrincipal)
+	addBearerTokenWithPrincipal(t, storePath, "token-p2", "write", sharedPrincipal)
+
+	createRec := doMCPCall(t, srv, "token-p1", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/e2e-shared-principal","title":"Title","body":"Original body","tags":[],"categories":[]}}}`))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+	filePath := filepath.Join(contentRoot, "posts", "e2e-shared-principal", "index.md")
+	beforeAttempt, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read created file: %v", err)
+	}
+
+	planRec := doMCPCall(t, srv, "token-p1", []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plan_content_change","arguments":{"slug":"posts/e2e-shared-principal","operations":[{"op":"update_body","body":"Changed by token-p1"}]}}}`))
+	if planRec.Code != http.StatusOK {
+		t.Fatalf("plan_content_change status = %d body = %q", planRec.Code, planRec.Body.String())
+	}
+	planEnvelope := toolCallResultData(t, planRec.Body.String())
+	planID := planEnvelope["data"].(map[string]any)["plan_id"].(string)
+	if planID == "" {
+		t.Fatal("plan_content_change returned empty plan_id")
+	}
+
+	applyPayload := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_content_plan","arguments":{"plan_id":"%s"}}}`, planID))
+
+	// token-p2 shares token-p1's OAuth principal but is a distinct bearer;
+	// it must still be treated as an intruder for plan ownership.
+	otherTokenRec := doMCPCall(t, srv, "token-p2", applyPayload)
+	if otherTokenRec.Code != http.StatusOK {
+		t.Fatalf("apply_content_plan same-principal-other-token status = %d body = %q", otherTokenRec.Code, otherTokenRec.Body.String())
+	}
+	if !toolCallBodyHasError(otherTokenRec, "plan_not_found") {
+		t.Fatalf("apply_content_plan same-principal-other-token body = %q, want plan_not_found", otherTokenRec.Body.String())
+	}
+	afterRejected, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after rejected apply: %v", err)
+	}
+	if string(afterRejected) != string(beforeAttempt) {
+		t.Fatalf("same-principal-other-token apply changed file:\nbefore=%q\nafter=%q", string(beforeAttempt), string(afterRejected))
+	}
+
+	ownerRec := doMCPCall(t, srv, "token-p1", applyPayload)
+	if ownerRec.Code != http.StatusOK {
+		t.Fatalf("apply_content_plan owner status = %d body = %q", ownerRec.Code, ownerRec.Body.String())
+	}
+	ownerData := toolCallResultData(t, ownerRec.Body.String())["data"].(map[string]any)
+	if got, _ := ownerData["status"].(string); got != "ok" {
+		t.Fatalf("apply_content_plan owner status = %q, want ok: %#v", got, ownerData)
+	}
+	applied, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("read file after owner apply: %v", err)
+	}
+	if !strings.Contains(string(applied), "Changed by token-p1") {
+		t.Fatalf("owner apply did not write planned body: %q", string(applied))
+	}
+}
+
 func TestRollbackChangeSnapshotIsolatedByCallerAcrossHTTP(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	contentRoot := t.TempDir()
