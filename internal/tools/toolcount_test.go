@@ -22,10 +22,10 @@ import (
 //	                            explain_structure, get_site_health, get_broken_links, get_backlinks,
 //	                            suggest_links, diff_page, inspect_rendered, validate_frontmatter,
 //	                            validate_site, plan_page, list_page_revisions
-//	content.write:       13  — create_page, update_page, delete_page, upload_page_asset,
+//	content.write:       15  — create_page, update_page, delete_page, upload_page_asset,
 //	                            delete_page_asset, get_mutation_status, get_rate_limits,
 //	                            plan_content_change (no scope gate — see #450), apply_content_plan,
-//	                            rollback_change, plan_bundle_change (no scope gate — see #854/#450),
+//	                            rollback_change, create_bundle, delete_bundle, plan_bundle_change (no scope gate — see #854/#450),
 //	                            apply_bundle_plan, rollback_bundle
 //	site.admin:          20  — build_site, preview_build, run_post_build_hooks,
 //	                            generate_hero_image, check_sri_versions, get_runtime_status,
@@ -34,7 +34,7 @@ import (
 //	                            revoke_all_previews, inspect_preview, get_storage_health,
 //	                            get_hugo_update, stage_hugo_upgrade, activate_hugo,
 //	                            rollback_hugo, bootstrap_hugo
-const expectedToolCount = 65
+const expectedToolCount = 67
 
 func TestTotalToolCount(t *testing.T) {
 	total := len(anon.Defs()) + len(readpkg.Defs()) + len(writepkg.Defs()) + len(adminpkg.Defs())
