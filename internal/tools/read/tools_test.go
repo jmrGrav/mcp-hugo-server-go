@@ -2423,6 +2423,73 @@ func TestReadToolsPreferDefaultLanguageForSourceOnlyMultilingualPage(t *testing.
 	})
 }
 
+func TestLanguagePrefixedReadsNeverBorrowDefaultRenderedPage(t *testing.T) {
+	htmlDir := t.TempDir()
+	frPublic := filepath.Join(htmlDir, "posts", "hello", "index.html")
+	if err := os.MkdirAll(filepath.Dir(frPublic), 0o755); err != nil {
+		t.Fatalf("MkdirAll public: %v", err)
+	}
+	if err := os.WriteFile(frPublic, []byte(`<!DOCTYPE html><html lang="fr"><head>
+<link rel="canonical" href="https://example.test/posts/hello/">
+<meta property="og:title" content="Bonjour FR"></head>
+<body><article>French rendered body</article></body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile public: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	for rel, raw := range map[string]string{
+		"posts/hello/index.fr.md": "---\ntitle: Bonjour FR\n---\nFrench source body\n",
+		"posts/hello/index.en.md": "---\ntitle: Hello EN\n---\nEnglish source body\n",
+	} {
+		full := filepath.Join(contentRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll source: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatalf("WriteFile source: %v", err)
+		}
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.ContentRoot = contentRoot
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	t.Run("frontmatter remains English source-only", func(t *testing.T) {
+		res := callTool(t, session, "get_page_frontmatter", map[string]any{"slug": "/en/posts/hello/"})
+		if res.IsError {
+			t.Fatalf("get_page_frontmatter returned error: %v", res.Content)
+		}
+		fm := decodeContent(t, res)["frontmatter"].(map[string]any)
+		if fm["title"] != "Hello EN" || fm["resolved_lang"] != "en" || fm["slug"] != "/en/posts/hello/" {
+			t.Fatalf("frontmatter identity/content mismatch: %#v", fm)
+		}
+		state := fm["state"].(map[string]any)
+		if state["public_state"] != "not_yet_available" || state["index_state"] != "source_only" {
+			t.Fatalf("frontmatter state = %#v, want source-only English", state)
+		}
+	})
+
+	t.Run("inspect_rendered refuses false public fallback", func(t *testing.T) {
+		res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/en/posts/hello/"})
+		if !res.IsError {
+			t.Fatalf("inspect_rendered returned success from the French public page: %#v", decodeContent(t, res))
+		}
+	})
+}
+
 func TestValidateFrontmatterSupportsExplicitLangFilter(t *testing.T) {
 	contentRoot := t.TempDir()
 	write := func(rel, raw string) {
@@ -3898,8 +3965,11 @@ func TestGetSiteHealthTranslationPairInfoFindingDoesNotMoveScore(t *testing.T) {
 	if advisoriesCount, _ := data["advisories_count"].(float64); advisoriesCount != 1 {
 		t.Fatalf("data.advisories_count = %v, want 1", advisoriesCount)
 	}
-	if data["status"] != "healthy" {
-		t.Fatalf("data.status = %v, want healthy", data["status"])
+	if data["content_status"] != "healthy" {
+		t.Fatalf("data.content_status = %v, want healthy", data["content_status"])
+	}
+	if data["status"] != "degraded" {
+		t.Fatalf("data.status = %v, want degraded because this taxonomy-only fixture has no matching public output", data["status"])
 	}
 }
 
@@ -3937,9 +4007,12 @@ func TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly(t *testin
 	}
 	data := decodeContent(t, res)
 
-	status, _ := data["status"].(string)
-	if status != "healthy_with_advisories" {
-		t.Fatalf("status = %q, want healthy_with_advisories", status)
+	contentStatus, _ := data["content_status"].(string)
+	if contentStatus != "healthy_with_advisories" {
+		t.Fatalf("content_status = %q, want healthy_with_advisories", contentStatus)
+	}
+	if status, _ := data["status"].(string); status != "degraded" {
+		t.Fatalf("status = %q, want degraded because this taxonomy-only fixture has no matching public output", status)
 	}
 	score, _ := data["score"].(float64)
 	if score != 99 {
@@ -4007,8 +4080,11 @@ func TestGetSiteHealthAdvisoriesCountIncludesCasingVariant(t *testing.T) {
 	if detail["kind"] != "casing_variant" {
 		t.Fatalf("taxonomy_inconsistency_details[0].kind = %v, want casing_variant", detail["kind"])
 	}
-	if data["status"] != "healthy_with_advisories" {
-		t.Fatalf("data.status = %v, want healthy_with_advisories (taxonomy findings do not move score, but they should now surface in status)", data["status"])
+	if data["content_status"] != "healthy_with_advisories" {
+		t.Fatalf("data.content_status = %v, want healthy_with_advisories", data["content_status"])
+	}
+	if data["status"] != "degraded" {
+		t.Fatalf("data.status = %v, want degraded because this taxonomy-only fixture has no matching public output", data["status"])
 	}
 	advisoriesCount, _ := data["advisories_count"].(float64)
 	if advisoriesCount != 1 {
@@ -4173,6 +4249,9 @@ func TestExtendedReadAnnotations(t *testing.T) {
 		assertSchemaHasProperties(t, tool, "outputSchema.meta", "generated_at", "release_version", "content_provenance")
 		assertSchemaLacksProperties(t, tool, "outputSchema", tc.noTopLevel...)
 	}
+	assertSchemaHasProperties(t, got["get_site_health"], "outputSchema.data",
+		"status", "content_status", "runtime_degraded", "runtime_degraded_reasons",
+		"published_pages", "source_pages", "publishable_source_pages", "missing_public_pages", "public_output_complete")
 }
 
 func assertReadPageState(t *testing.T, raw any, source, build, public, index string) {

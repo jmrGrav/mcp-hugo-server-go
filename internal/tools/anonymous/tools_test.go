@@ -281,6 +281,57 @@ func newSourceOnlyBilingualDefaultLangSession(t *testing.T) (*mcp.ClientSession,
 	return newTestClientWithCfg(t, idx, cfg, srcIdx)
 }
 
+func TestGetPageLanguagePrefixedURLDoesNotBorrowDefaultRenderedPage(t *testing.T) {
+	publicRoot := t.TempDir()
+	publicPath := filepath.Join(publicRoot, "posts", "hello", "index.html")
+	if err := os.MkdirAll(filepath.Dir(publicPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll public: %v", err)
+	}
+	if err := os.WriteFile(publicPath, []byte(`<!DOCTYPE html><html lang="fr"><head><title>Bonjour</title>
+<link rel="canonical" href="https://example.test/posts/hello/"></head><body>French rendered body</body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile public: %v", err)
+	}
+	contentRoot := t.TempDir()
+	for rel, raw := range map[string]string{
+		"posts/hello/index.fr.md": "---\ntitle: Bonjour\n---\nFrench source\n",
+		"posts/hello/index.en.md": "---\ntitle: Hello\n---\nEnglish source\n",
+	} {
+		full := filepath.Join(contentRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll source: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatalf("WriteFile source: %v", err)
+		}
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_page", map[string]any{"slug": "/en/posts/hello/"})
+	if !res.IsError {
+		t.Fatalf("get_page returned success from the French public page: %#v", decodeContent(t, res))
+	}
+	raw, _ := json.Marshal(res.Content)
+	if strings.Contains(string(raw), "French rendered body") {
+		t.Fatalf("get_page leaked default-language rendered content: %s", raw)
+	}
+}
+
 func TestGetPagePrefersDefaultLanguageForSourceOnlyMultilingualPage(t *testing.T) {
 	session, done := newSourceOnlyBilingualDefaultLangSession(t)
 	defer done()

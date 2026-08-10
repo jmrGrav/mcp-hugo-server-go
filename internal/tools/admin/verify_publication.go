@@ -248,8 +248,6 @@ func checkPublicationOnce(ctx context.Context, idx *site.Index, srcIdx *hugosite
 	pageSlug := slug
 	if resolved.Public != nil {
 		pageSlug = resolved.Public.Slug
-	} else if resolved.Source != nil {
-		pageSlug = resolved.Source.Slug
 	}
 	data.Slug = pageSlug
 	data.URL = joinSiteURL(cfg.SiteURL, pageSlug)

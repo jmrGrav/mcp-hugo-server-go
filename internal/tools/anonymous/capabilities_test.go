@@ -1,10 +1,15 @@
 package anonymous_test
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	writepkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 )
 
@@ -160,6 +165,76 @@ func TestGetCapabilitiesReportsObservedLanguageModeAndLocalHeroGeneration(t *tes
 	if got := features["image_generation_available"]; got != true {
 		t.Fatalf("image_generation_available = %v, want true when local hero generation is available", got)
 	}
+}
+
+func TestGetCapabilitiesObservedLanguagesComeFromSourceWhenPublicBuildIsPartial(t *testing.T) {
+	publicRoot := t.TempDir()
+	publicPath := filepath.Join(publicRoot, "posts", "hello", "index.html")
+	if err := os.MkdirAll(filepath.Dir(publicPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll public: %v", err)
+	}
+	if err := os.WriteFile(publicPath, []byte(`<!DOCTYPE html><html lang="fr"><head><title>Bonjour</title>
+<link rel="canonical" href="https://example.test/posts/hello/"></head><body>Bonjour</body></html>`), 0o644); err != nil {
+		t.Fatalf("WriteFile public: %v", err)
+	}
+	contentRoot := t.TempDir()
+	for _, lang := range []string{"fr", "en"} {
+		path := filepath.Join(contentRoot, "posts", "hello", "index."+lang+".md")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("MkdirAll source: %v", err)
+		}
+		if err := os.WriteFile(path, []byte("---\ntitle: "+lang+"\n---\nbody\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile source: %v", err)
+		}
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.ContentRoot = contentRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	session, done := newTestClientWithCfg(t, idx, cfg, srcIdx)
+	defer done()
+
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	languages := decodeContent(t, res)["languages"].(map[string]any)
+	available := languages["available"].([]any)
+	if len(available) != 2 || available[0] != "en" || available[1] != "fr" {
+		t.Fatalf("languages.available = %#v, want source-observed [en fr] despite FR-only public tree", available)
+	}
+}
+
+func TestGetCapabilitiesPublishedOutputSchemaIncludesPlanningFields(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithCfg(t, idx, config.Default(), nil)
+	defer done()
+
+	listed, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	for _, tool := range listed.Tools {
+		if tool.Name != "get_capabilities" {
+			continue
+		}
+		assertSchemaHasProperties(t, tool, "outputSchema.data.languages", "default", "mode", "available")
+		assertSchemaHasProperties(t, tool, "outputSchema.data.features",
+			"image_generation_available", "local_hero_generation_available", "external_image_generation_available")
+		return
+	}
+	t.Fatal("get_capabilities missing from tools/list")
 }
 
 // findStringLeak reports whether needle appears in any string value anywhere

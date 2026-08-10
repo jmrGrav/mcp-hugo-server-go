@@ -128,6 +128,11 @@ type contentEnvelopeData struct {
 
 	Status string `json:"status,omitempty"`
 	Score  int    `json:"score,omitempty"`
+	// ContentStatus preserves the source/front-matter health classification
+	// when the top-level status is degraded by an operational publication
+	// failure. This prevents a score of 100 from hiding a broken public tree
+	// while keeping the two dimensions explicit.
+	ContentStatus string `json:"content_status,omitempty"`
 	// AdvisoriesCount is additive (#591): the total count of taxonomy
 	// findings across ALL severities (both "info" translation_pair and
 	// "warning" casing_variant/alias_mismatch/possible_duplicate — none of
@@ -147,6 +152,9 @@ type contentEnvelopeData struct {
 	// failed build state without requiring an agent to infer it from a second
 	// tool name (#972).
 	RuntimeDegraded *bool `json:"runtime_degraded,omitempty"`
+	// RuntimeDegradedReasons contains stable machine-readable reason codes,
+	// never host paths or raw build errors.
+	RuntimeDegradedReasons []string `json:"runtime_degraded_reasons,omitempty"`
 	// ScoreBreakdown is additive to get_site_health (#419): per-category
 	// score/weight/issues so an agent can see why `score` is what it is,
 	// without re-deriving the scoring logic. Nil for tools other than
@@ -159,6 +167,9 @@ type contentEnvelopeData struct {
 	PublishedPages               int                        `json:"published_pages,omitempty"`
 	SourcePages                  int                        `json:"source_pages,omitempty"`
 	DraftPages                   int                        `json:"draft_pages,omitempty"`
+	PublishableSourcePages       int                        `json:"publishable_source_pages,omitempty"`
+	MissingPublicPages           int                        `json:"missing_public_pages,omitempty"`
+	PublicOutputComplete         *bool                      `json:"public_output_complete,omitempty"`
 	Tags                         int                        `json:"tags,omitempty"`
 	Categories                   int                        `json:"categories,omitempty"`
 	MissingTitles                int                        `json:"missing_titles,omitempty"`
@@ -668,7 +679,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, newContentEnvelope(data, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, and taxonomy inconsistency warnings. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `status` on an otherwise healthy site, while a `warning`-severity taxonomy finding still promotes `status` to `healthy_with_advisories` without moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own `git_untracked` status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true; `runtime_degraded_reasons`, `publishable_source_pages`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -677,11 +688,17 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, newContentEnvelope(contentEnvelopeData{
 				Status:                       health.Status,
 				Score:                        health.Score,
+				ContentStatus:                health.ContentStatus,
 				AdvisoriesCount:              health.AdvisoriesCount,
+				RuntimeDegraded:              health.RuntimeDegraded,
+				RuntimeDegradedReasons:       health.RuntimeDegradedReasons,
 				ScoreBreakdown:               health.ScoreBreakdown,
 				PublishedPages:               health.PublishedPages,
 				SourcePages:                  health.SourcePages,
 				DraftPages:                   health.DraftPages,
+				PublishableSourcePages:       health.PublishableSourcePages,
+				MissingPublicPages:           health.MissingPublicPages,
+				PublicOutputComplete:         health.PublicOutputComplete,
 				Tags:                         health.Tags,
 				Categories:                   health.Categories,
 				MissingTitles:                health.MissingTitles,
@@ -1721,6 +1738,13 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	if snapshot.Attempted {
 		degraded := snapshot.Status == "failed"
 		health.RuntimeDegraded = &degraded
+		if degraded {
+			reason := "last_build_failed"
+			if snapshot.ErrorClass != "" {
+				reason += ":" + snapshot.ErrorClass
+			}
+			health.RuntimeDegradedReasons = append(health.RuntimeDegradedReasons, reason)
+		}
 	}
 	if count, ok := untrackedSourcePageCount(ctx, srcIdx, cfg.ContentRoot); ok {
 		health.UntrackedSourcePages = &count
@@ -1761,6 +1785,26 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 						health.MissingDates++
 					}
 				}
+			}
+		}
+		if idx != nil {
+			now := time.Now()
+			resolver := site.NewPageResolver(idx, srcIdx, cfg)
+			for _, p := range pages {
+				if !sourceExpectedInPublic(p, now) {
+					continue
+				}
+				health.PublishableSourcePages++
+				if !sourceHasPublicOutput(idx, resolver, p) {
+					health.MissingPublicPages++
+				}
+			}
+			complete := health.MissingPublicPages == 0
+			health.PublicOutputComplete = &complete
+			if !complete {
+				degraded := true
+				health.RuntimeDegraded = &degraded
+				health.RuntimeDegradedReasons = append(health.RuntimeDegradedReasons, "public_output_incomplete")
 			}
 		}
 		details := detectTaxonomyInconsistencies(srcIdx, aliases)
@@ -1828,7 +1872,62 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	if health.Status == "healthy" && taxonomyWarnings > 0 {
 		health.Status = "healthy_with_advisories"
 	}
+	health.ContentStatus = health.Status
+	if health.RuntimeDegraded != nil && *health.RuntimeDegraded {
+		health.Status = "degraded"
+	}
 	return health
+}
+
+func sourceExpectedInPublic(p hugosite.SourcePage, now time.Time) bool {
+	// Hugo section/homepage bundles (_index.md, _index.<lang>.md at any
+	// directory depth) route to their section's own URL (e.g. "/", "/posts/"),
+	// not to a slug derived from the bundle's own filename — SlugFromRel gives
+	// them a literal slug like "_index.en" that the public index never uses.
+	// Checking these against the resolver as if they were ordinary content
+	// pages always "fails" even when the section is fully published, which
+	// would flip get_site_health to degraded on every real site that uses
+	// Hugo section indexes at all.
+	if strings.HasPrefix(filepath.Base(p.FilePath), "_index.") {
+		return false
+	}
+	if p.Draft {
+		return false
+	}
+	if !p.PublishDate.IsZero() && p.PublishDate.After(now) {
+		return false
+	}
+	if !p.ExpiryDate.IsZero() && !p.ExpiryDate.After(now) {
+		return false
+	}
+	if raw, ok := p.FrontmatterRaw["headless"]; ok {
+		if headless, ok := raw.(bool); ok && headless {
+			return false
+		}
+	}
+	if build, ok := p.FrontmatterRaw["_build"].(map[string]any); ok {
+		render := strings.ToLower(strings.TrimSpace(frontmatterStringValue(build["render"])))
+		if render == "never" || render == "link" {
+			return false
+		}
+	}
+	return true
+}
+
+func sourceHasPublicOutput(idx *site.Index, resolver *site.PageResolver, p hugosite.SourcePage) bool {
+	resolved, ok := resolver.ResolveWithLang(p.Slug, p.Lang)
+	if ok && resolved.Public != nil {
+		return true
+	}
+	customURL := strings.TrimSpace(frontmatterStringValue(p.FrontmatterRaw["url"]))
+	if customURL == "" {
+		return false
+	}
+	public, ok := idx.GetBySlug(customURL)
+	if !ok {
+		return false
+	}
+	return p.Lang == "" || public.Lang == "" || p.Lang == public.Lang
 }
 
 // detectTaxonomyInconsistencies finds slug pairs that look like duplicates or

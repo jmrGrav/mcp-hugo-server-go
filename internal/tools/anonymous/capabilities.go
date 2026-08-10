@@ -7,6 +7,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	adminpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
@@ -110,7 +111,7 @@ func newGetCapabilitiesOutput(data getCapabilitiesData) getCapabilitiesOutput {
 // that wouldn't otherwise appear until it had content. Empty
 // configuredLangs (the default for every operator who hasn't set the field)
 // preserves the original derived-from-content behavior unchanged.
-func availableLanguages(idx *site.Index, defaultLang string, configuredLangs []string) []string {
+func availableLanguages(idx *site.Index, srcIdx *hugosite.SourceIndex, defaultLang string, configuredLangs []string) []string {
 	seen := map[string]bool{}
 	if d := strings.TrimSpace(defaultLang); d != "" {
 		seen[d] = true
@@ -121,10 +122,23 @@ func availableLanguages(idx *site.Index, defaultLang string, configuredLangs []s
 				seen[c] = true
 			}
 		}
-	} else if idx != nil {
-		for _, p := range idx.ContentPages() {
-			if l := strings.TrimSpace(p.Lang); l != "" {
-				seen[l] = true
+	} else {
+		// Source is authoritative for observed languages. A failed or partial
+		// build can leave the public index with only one language; deriving
+		// capabilities from that tree would make an agent believe the site had
+		// become monolingual precisely while it most needs accurate recovery
+		// information.
+		if srcIdx != nil {
+			for _, l := range srcIdx.Languages() {
+				if l = strings.TrimSpace(l); l != "" {
+					seen[l] = true
+				}
+			}
+		} else if idx != nil {
+			for _, p := range idx.ContentPages() {
+				if l := strings.TrimSpace(p.Lang); l != "" {
+					seen[l] = true
+				}
 			}
 		}
 	}
@@ -136,7 +150,7 @@ func availableLanguages(idx *site.Index, defaultLang string, configuredLangs []s
 	return out
 }
 
-func registerGetCapabilities(s *mcp.Server, idx *site.Index, cfg config.Config) {
+func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
 	addReadOnlyTool(s, "get_capabilities", "Get capabilities",
 		"Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): "+
 			"`server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); "+
@@ -161,7 +175,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, cfg config.Config) 
 				Languages: capabilitiesLanguages{
 					Default:   strings.TrimSpace(cfg.DefaultLanguage),
 					Mode:      languageMode,
-					Available: availableLanguages(idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages),
+					Available: availableLanguages(idx, srcIdx, cfg.DefaultLanguage, cfg.ConfiguredLanguages),
 				},
 				Limits: capabilitiesLimits{
 					BodyMaxBytes:           writepkg.BodyMaxBytes(),

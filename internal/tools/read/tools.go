@@ -952,7 +952,11 @@ func resolvedPublicPage(resolved site.ResolvedPage) site.Page {
 		}
 		return p
 	}
-	return sourcePageAsPublic(resolved.Source)
+	p := sourcePageAsPublic(resolved.Source)
+	if site.LanguagePrefixFromSlug(resolved.RequestedSlug) != "" {
+		p.Slug = site.NormalizeSlug(resolved.RequestedSlug)
+	}
+	return p
 }
 
 func sourcePageAsPublic(src *hugosite.SourcePage) site.Page {
@@ -1032,6 +1036,9 @@ func canonicalResolvedSlug(resolved site.ResolvedPage) string {
 		return resolved.Public.Slug
 	}
 	if resolved.Source != nil {
+		if site.LanguagePrefixFromSlug(resolved.RequestedSlug) != "" {
+			return site.NormalizeSlug(resolved.RequestedSlug)
+		}
 		return canonicalSourceSlug(resolved.Source.Slug)
 	}
 	return ""
