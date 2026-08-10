@@ -17,7 +17,32 @@ func MustSchema[T any]() any {
 	if s.Type == "" {
 		s.Type = "object"
 	}
+	// response_mode is deliberately handler-validated (#892), so publishing a
+	// JSON Schema enum would prevent the structured invalid_params response from
+	// reaching callers. Keep its vocabulary discoverable in every inferred
+	// schema instead. Doing this here makes newly added response_mode inputs
+	// inherit the contract rather than relying on every registration site.
+	WithResponseModeDescription(s)
 	return s
+}
+
+const responseModeDescription = "Accepted values: standard (default) or compact. Other values, including reserved future values, are rejected with a structured invalid_params error."
+
+// WithResponseModeDescription publishes the handler-validated response_mode
+// vocabulary without adding a JSON Schema enum. It is a no-op for schemas
+// without that optional field.
+func WithResponseModeDescription(s any) any {
+	schema := s.(*jsonschema.Schema)
+	prop, ok := schema.Properties["response_mode"]
+	if !ok {
+		return schema
+	}
+	if prop.Description == "" {
+		prop.Description = responseModeDescription
+	} else {
+		prop.Description += " " + responseModeDescription
+	}
+	return schema
 }
 
 // WithEnum sets a real published `enum` constraint on schema's field property

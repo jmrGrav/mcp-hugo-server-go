@@ -8,6 +8,7 @@ fi
 
 BASE_URL="${MCP_BASE_URL:-https://mcp.arleo.eu}"
 ACCESS_TOKEN="${MCP_ACCESS_TOKEN:-}"
+WRITE_ACCESS_TOKEN="${MCP_WRITE_ACCESS_TOKEN:-}"
 SMOKE_DELAY="${MCP_SMOKE_DELAY:-6}"
 BURST_COUNT="${MCP_SMOKE_BURST_COUNT:-10}"
 SESSION_CALLS="${MCP_SMOKE_SESSION_CALLS:-0}"
@@ -265,6 +266,29 @@ classify_response "initialized"
 mcp_request "tools_list" "tools/list"
 tools_count="$(jq -r '.result.tools | length' "$TMPDIR/last-tools_list.json")"
 pass "tools/list returned $tools_count tools"
+
+# A read catalogue is intentionally smaller. Verify the independently-issued
+# write token in a fresh MCP session so a connector cache or an accidental
+# scope regression cannot hide managed-Hugo tools after a deploy (#998).
+if [[ -n "$WRITE_ACCESS_TOKEN" ]]; then
+  ACCESS_TOKEN="$WRITE_ACCESS_TOKEN"
+  MCP_SESSION_ID=""
+  post_mcp "$TMPDIR/initialize.json"
+  classify_response "write_initialize"
+  [[ -n "$MCP_SESSION_ID" ]] || fail "write initialize did not return Mcp-Session-Id"
+  post_mcp "$TMPDIR/initialized.json"
+  classify_response "write_initialized"
+  mcp_request "write_tools_list" "tools/list"
+  write_tools_count="$(jq -r '.result.tools | length' "$TMPDIR/last-write_tools_list.json")"
+  [[ "$write_tools_count" == "65" ]] || fail "write tools/list returned $write_tools_count tools, want 65"
+  for tool in get_hugo_update stage_hugo_upgrade activate_hugo rollback_hugo bootstrap_hugo; do
+    jq -e --arg tool "$tool" 'any(.result.tools[]?; .name == $tool)' "$TMPDIR/last-write_tools_list.json" >/dev/null || fail "write tools/list missing $tool"
+  done
+  pass "fresh write tools/list returned all 65 tools including managed-Hugo tools"
+  ACCESS_TOKEN="${MCP_ACCESS_TOKEN:-}"
+else
+  warn "MCP_WRITE_ACCESS_TOKEN is not set; write catalogue parity check skipped"
+fi
 
 call_tool "unknown_tool" "codex_unknown_tool" "{}" 0
 call_tool "get_site_information" "get_site_information" "{}"

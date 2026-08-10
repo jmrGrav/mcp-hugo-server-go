@@ -904,6 +904,7 @@ Configure these under **Settings → Secrets and variables → Actions**:
 | Secret | Description |
 |--------|-------------|
 | `PRODUCTION_URL` | Base URL of the MCP server (e.g. `https://mcp.arleo.eu`) |
+| `MCP_WRITE_ACCESS_TOKEN` | A current write-scoped bearer token used only for fresh post-deploy `tools/list` catalogue parity checks; keep it separate from the read smoke token. |
 | `MCP_ACCESS_TOKEN` | Bearer token for post-deploy smoke read-only calls |
 
 ### Rollback

@@ -33,6 +33,7 @@ jobs:
           MCP_SMOKE_LIVE: "1"
           MCP_BASE_URL: ${{ secrets.PRODUCTION_URL }}
           MCP_ACCESS_TOKEN: ${{ secrets.MCP_ACCESS_TOKEN }}
+          MCP_WRITE_ACCESS_TOKEN: ${{ secrets.MCP_WRITE_ACCESS_TOKEN }}
           MCP_SMOKE_DELAY: "4"
         run: bash scripts/smoke-mcp-live.sh
 
