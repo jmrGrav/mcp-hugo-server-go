@@ -2,6 +2,18 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.3] - 2026-08-10
+
+Adds an operator-controlled managed Hugo upgrade workflow and clarifies two contract ambiguities found during live audits. Delivered as #990, #995, and #994.
+
+### New
+- **Managed Hugo upgrade/rollback, opt-in via `hugo_upgrade` config** (#980, #990): `get_hugo_update`, `stage_hugo_upgrade`, and `activate_hugo` download, checksum-verify against the official Hugo release manifest, and atomically activate an exact Hugo release through a private managed symlink — never a package-manager path — with no implicit restart. `rollback_hugo` atomically restores the previous managed target, re-verifying its checksum before the swap so a tampered or missing previous binary fails closed. Disabled by default; enabling it also requires the managed directory to be listed ahead of the existing `hugo` install in the service's `PATH`, documented in the wiki's new Managed Hugo Upgrades runbook.
+- **`bootstrap_hugo` seeds the first rollback target on a fresh deployment** (#995): one-time setup that detects the currently-installed Hugo version, re-downloads and checksum-verifies that exact version from the official release (never trusts the pre-existing on-disk binary directly), and activates it as the initial managed baseline — closing the gap where `rollback_hugo` had nothing to restore on a system's very first real activation. Refuses if a managed version is already active.
+
+### Contract
+- **`errors[0].code` documented as the sole authoritative MCP error classification** (#991): raw MCP transport tests now prove a business failure (e.g. `content_not_found`) stays a normal JSON-RPC result with `isError:true` and never gains a server-emitted top-level `error_code`; any generic `error_code` an agent sees is added by a connector/bridge layer outside this server's control and is not authoritative.
+- **`get_site_health` gains a typed `publication_coverage` breakdown** (#992): `source_pages`, `publishable_source_pages`/`publishable_content_pages`, `section_index_pages`, and `published_pages` count independent populations that are not expected to be numerically equal; `publication_coverage` makes the reconciliation explicit (`completeness_basis`, `counters_directly_comparable:false`) instead of requiring an agent to infer it from arithmetic. Existing counter fields are unchanged and remain backward compatible.
+
 ## [v1.8.2] - 2026-08-10
 
 Response to Sol's second live v1.8.1 audit (2026-08-10) plus two production incidents found during this release's own review/verification cycle. Delivered as #985, #983, and #984.
