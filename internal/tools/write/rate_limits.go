@@ -190,4 +190,3 @@ func registerGetRateLimits(s *mcp.Server, cfg config.Config, mutationMu *sync.Mu
 		}), nil
 	}))
 }
-
