@@ -8,6 +8,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	adminpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
@@ -80,6 +81,7 @@ type capabilitiesFeatures struct {
 }
 
 type getCapabilitiesData struct {
+	EffectiveScopes     []string              `json:"effective_scopes,omitempty"`
 	Server              capabilitiesServer    `json:"server"`
 	Languages           capabilitiesLanguages `json:"languages"`
 	Limits              capabilitiesLimits    `json:"limits"`
@@ -157,7 +159,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			"`limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
 			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
 			pMin, pDef, pMax := adminpkg.PreviewTTLBoundsSeconds()
 			localHeroGenerationAvailable := strings.TrimSpace(cfg.HugoRoot) != ""
 			externalImageGenerationAvailable := strings.TrimSpace(cfg.ImageGenURL) != ""
@@ -166,6 +168,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				languageMode = "configured"
 			}
 			data := getCapabilitiesData{
+				EffectiveScopes: effectiveCapabilityScopes(ctx),
 				Server: capabilitiesServer{
 					ReleaseVersion: buildinfo.Version,
 					Commit:         buildinfo.Commit,
@@ -212,4 +215,11 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}
 			return nil, newGetCapabilitiesOutput(data), nil
 		})
+}
+
+func effectiveCapabilityScopes(ctx context.Context) []string {
+	if scope, _ := ctx.Value(oauth.CtxScope).(string); strings.TrimSpace(scope) != "" {
+		return []string{strings.TrimSpace(scope)}
+	}
+	return []string{"anonymous"}
 }

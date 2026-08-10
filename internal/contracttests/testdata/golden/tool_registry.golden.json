@@ -1586,6 +1586,7 @@
     "output_schema_fields": [
       "data.allowed_image_formats:unspecified:required",
       "data.blocked_shortcodes:unspecified:required",
+      "data.effective_scopes:unspecified",
       "data.features.cloudflare_purge_configured:boolean:required",
       "data.features.external_image_generation_available:boolean:required",
       "data.features.force_dry_run_all:boolean:required",
@@ -1652,7 +1653,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "50b45722b3d1cef2273d3d10f46e7710444ba16bfbf51ea2ca983196198a027b"
+    "output_schema_sha256": "8dae020b36eb5ebfe7c0ffebf1738fcca4a3466168b9b73c2c024e24f0d704b6"
   },
   {
     "name": "get_changelog",
