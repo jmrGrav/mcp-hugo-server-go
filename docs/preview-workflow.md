@@ -28,6 +28,19 @@ behind it) can open directly.
    `{issuer}/preview/{preview_id}/{token}/`, an `expires_at` timestamp, and
    the build result.
 
+When `preview_external_verification: true`, the tool does not trust a build or
+an HTTP 200 alone. Before returning the entry URL it exercises the public
+`oauth.issuer` ingress with a temporary cookie session and checks:
+
+- the signed entry URL redirects to the exact nested page route;
+- the nested page bytes match the isolated `index.html`;
+- an asset's bytes match the isolated file;
+- an intentionally missing route returns 404 rather than the home page.
+
+The probe session is reset before the URL is returned, so the caller can still
+exchange the entry token normally. Any failed check revokes the preview and
+returns `preview_unreachable`.
+
 ## How the URL is served
 
 The plain-HTTP handler in `internal/server` recognizes any request path
@@ -47,6 +60,10 @@ This route is intentionally **not** behind the OAuth bearer-token gate that
 protects `/mcp` — the token embedded in the URL path is the preview's own,
 purpose-built gate. Requiring an OAuth bearer token as well would defeat the
 point of handing an agent (or a human) a single clickable link.
+
+The reverse proxy must forward `/preview/` paths unchanged to the MCP service.
+Do not configure `try_files ... /index.html` or another SPA fallback on this
+location: missing preview routes must remain 404.
 
 ## TTL and cleanup
 

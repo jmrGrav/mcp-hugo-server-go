@@ -76,6 +76,31 @@ exit 0
 	return dir
 }
 
+func writeMockHugoPreviewTree(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+dest=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--destination" ]; then
+    dest="$arg"
+  fi
+  prev="$arg"
+done
+mkdir -p "$dest/en/posts/probe" "$dest/assets"
+printf '<html><title>home</title></html>\n' > "$dest/index.html"
+printf '<html lang="en"><title>probe article</title></html>\n' > "$dest/en/posts/probe/index.html"
+printf 'body { color: #123; }\n' > "$dest/assets/site.css"
+exit 0
+`
+	p := filepath.Join(dir, "hugo")
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatalf("write mock hugo: %v", err)
+	}
+	return dir
+}
+
 func newCreatePreviewServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, *previewstore.Store, func()) {
 	t.Helper()
 	store := previewstore.New()
@@ -94,6 +119,24 @@ func newCreatePreviewServer(t *testing.T, cfg config.Config) (*mcp.ClientSession
 		t.Fatalf("client connect: %v", err)
 	}
 	return session, store, func() { _ = session.Close() }
+}
+
+func newCreatePreviewServerAtURL(t *testing.T, cfg config.Config, store *previewstore.Store, baseURL string) (*mcp.ClientSession, func()) {
+	t.Helper()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterCreatePreview(s, cfg, store, baseURL)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, func() { _ = session.Close() }
 }
 
 func TestCreatePreviewBuildsIsolatedDirAndServesViaStore(t *testing.T) {
@@ -133,6 +176,9 @@ func TestCreatePreviewBuildsIsolatedDirAndServesViaStore(t *testing.T) {
 	}
 	if data["expires_at"] == "" || data["expires_at"] == nil {
 		t.Fatal("data.expires_at must not be empty")
+	}
+	if got := data["external_verification"]; got != "not_configured" {
+		t.Fatalf("data.external_verification = %v, want not_configured", got)
 	}
 
 	// The public site directory must remain untouched by the preview build.
@@ -468,5 +514,126 @@ func TestCreatePreviewBuildFailureReturnsError(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatalf("create_preview on hugo failure: want error, got success")
+	}
+}
+
+func TestCreatePreviewExternalVerificationChecksPageAssetAndMissingRoute(t *testing.T) {
+	hugoDir := writeMockHugoPreviewTree(t)
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	store := previewstore.New()
+	previewHandler := store.HTTPHandler()
+	ingress := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A CDN may add its own cookie. Verification must select the scoped
+		// preview cookie by name rather than requiring it to be the only one.
+		http.SetCookie(w, &http.Cookie{Name: "cdn_fixture", Value: "present", Path: "/"})
+		previewHandler.ServeHTTP(w, r)
+	}))
+	defer ingress.Close()
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.PreviewExternalVerification = true
+
+	session, done := newCreatePreviewServerAtURL(t, cfg, store, ingress.URL)
+	defer done()
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("create_preview returned error: %s", resultText(res))
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	if got := data["external_verification"]; got != "passed" {
+		t.Fatalf("external_verification = %v, want passed", got)
+	}
+
+	// The external probe activated and then reset its temporary session. The
+	// returned entry token must still be usable by the actual caller.
+	client := &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := client.Get(data["url"].(string)) //nolint:gosec -- test-only local ingress URL
+	if err != nil {
+		t.Fatalf("returned preview URL: %v", err)
+	}
+	resp.Body.Close()
+	foundPreviewCookie := false
+	for _, cookie := range resp.Cookies() {
+		foundPreviewCookie = foundPreviewCookie || strings.HasPrefix(cookie.Name, "mcp_preview_")
+	}
+	if resp.StatusCode != http.StatusFound || !foundPreviewCookie {
+		t.Fatalf("returned preview URL status/preview-cookie = %d/%v, want 302/true", resp.StatusCode, foundPreviewCookie)
+	}
+}
+
+func TestCreatePreviewExternalVerificationRejectsHomepageFallback(t *testing.T) {
+	hugoDir := writeMockHugoPreviewTree(t)
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	store := previewstore.New()
+	strict := store.HTTPHandler()
+	fallback := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		strict.ServeHTTP(rec, r)
+		if rec.Code == http.StatusNotFound {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("<html><title>home fallback</title></html>"))
+			return
+		}
+		for key, values := range rec.Header() {
+			for _, value := range values {
+				w.Header().Add(key, value)
+			}
+		}
+		w.WriteHeader(rec.Code)
+		_, _ = w.Write(rec.Body.Bytes())
+	}))
+	defer fallback.Close()
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.PreviewExternalVerification = true
+	session, done := newCreatePreviewServerAtURL(t, cfg, store, fallback.URL)
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(resultText(res), "preview_unreachable") {
+		t.Fatalf("homepage fallback must produce preview_unreachable, got %q", resultText(res))
+	}
+	if got := len(store.List()); got != 0 {
+		t.Fatalf("failed externally verified preview must be revoked, active previews = %d", got)
+	}
+}
+
+func TestCreatePreviewExternalVerificationRevokesUnreachablePreview(t *testing.T) {
+	hugoDir := writeMockHugoPreviewTree(t)
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	store := previewstore.New()
+	unreachable := httptest.NewServer(store.HTTPHandler())
+	baseURL := unreachable.URL
+	unreachable.Close()
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	cfg.PreviewExternalVerification = true
+	session, done := newCreatePreviewServerAtURL(t, cfg, store, baseURL)
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatalf("CallTool error: %v", err)
+	}
+	if !res.IsError || !strings.Contains(resultText(res), "preview_unreachable") {
+		t.Fatalf("unreachable ingress must produce preview_unreachable, got %q", resultText(res))
+	}
+	if got := len(store.List()); got != 0 {
+		t.Fatalf("unreachable preview must be revoked, active previews = %d", got)
 	}
 }

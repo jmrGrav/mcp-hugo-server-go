@@ -164,6 +164,50 @@ func TestInspectPreviewRenderedSupportsDraftPage(t *testing.T) {
 	}
 }
 
+func TestInspectPreviewRenderedPreservesNonDefaultLanguagePath(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "draft", "index.en.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: English draft\ndate: 2026-08-10\ndraft: true\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previewRoot := t.TempDir()
+	full := filepath.Join(previewRoot, "en", "posts", "draft", "index.html")
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	html := `<!doctype html><html lang="en"><head><title>English draft</title><meta name="description" content="Preview"><link rel="canonical" href="https://mcp.example.test/preview/abc123/en/posts/draft/"></head><body>Body.</body></html>`
+	if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.DefaultLanguage = "fr"
+	session, store, done := newPreviewInspectionServer(t, cfg)
+	defer done()
+	store.Put("abc123", &previewstore.Entry{Dir: previewRoot, Token: "entry-token", ExpiresAt: time.Now().Add(time.Hour), BuildStatus: "passed", Owner: "audit"})
+
+	res, err := callTool(t, session, "inspect_preview", map[string]any{"slug": "/en/posts/draft/", "preview_id": "abc123"})
+	if err != nil {
+		t.Fatalf("inspect_preview error=%v", err)
+	}
+	if res.IsError {
+		t.Fatalf("inspect_preview result=%s", resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+	if got := data["url"]; got != "https://mcp.example.test/preview/abc123/en/posts/draft/" {
+		t.Fatalf("url = %v, want language-prefixed preview URL", got)
+	}
+	if got := data["output_path"]; got != "en/posts/draft/index.html" {
+		t.Fatalf("output_path = %v, want language-prefixed output", got)
+	}
+}
+
 func TestInspectPreviewRenderedPreviewExpiredReturnsStableCode(t *testing.T) {
 	contentRoot := t.TempDir()
 	writePreviewInspectionPage(t, contentRoot)

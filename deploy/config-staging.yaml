@@ -22,6 +22,7 @@ reject_symlinks: true
 reject_hidden_paths: true
 
 build_timeout_seconds: 120
+preview_external_verification: false # enable only with a reachable public /preview/ ingress
 
 rate_limit:
   anonymous_per_min: 120

@@ -113,6 +113,7 @@ tool returns `write_error`, verify:
 |-------|------|---------|---------|
 | `build_timeout_seconds` | int | `120` | Maximum time (in seconds) to wait for Hugo build to complete. |
 | `post_build_hooks` | array of strings | (empty) | URLs to POST a `{"event":"post_build"}` webhook to after successful site build. Only HTTPS endpoints and public DNS hostnames are allowed (SSRF protected); redirects are not followed and response bodies are bounded. |
+| `preview_external_verification` | bool | `false` | When enabled, `create_preview` verifies its signed entry redirect, cookie-backed nested HTML route, one asset, and strict missing-route 404 through `oauth.issuer` before returning success. Served bytes must match the isolated build; a homepage fallback is rejected as `preview_unreachable` and the failed preview is revoked. |
 
 ### Idempotency Configuration
 
@@ -445,6 +446,7 @@ reject_hidden_paths: true
 image_gen_url: https://api.example.com/generate-image
 image_gen_key: your-api-key
 build_timeout_seconds: 120
+preview_external_verification: false # enable when /preview/ is publicly routed to this service
 post_build_hooks:
   - https://example.com/webhook/post-build
 idempotency_ttl_seconds: 900 # 15 minutes; raise for longer outage-recovery windows (#616)

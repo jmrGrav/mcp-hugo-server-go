@@ -144,6 +144,7 @@ This section applies specifically to the **stdio transport** (`transport: stdio`
 |---|---|---|
 | Post-build webhooks | `post_build_hooks` | Whatever URL(s) you configure |
 | AI hero-image generation | `image_gen_url` / `image_gen_key` | Whatever image-generation API you configure |
+| Preview ingress verification | `preview_external_verification` | The operator-configured OAuth issuer (`/preview/` only) |
 | Cloudflare cache purge | `cloudflare.*` | Cloudflare's API |
 | IndexNow search-engine ping | `indexnow.*` | IndexNow's API (or your configured endpoint) |
 | Google Search Console indexing | `google_indexing.*` | Google's Indexing API |

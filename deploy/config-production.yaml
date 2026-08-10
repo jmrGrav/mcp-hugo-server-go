@@ -36,6 +36,9 @@ reject_hidden_paths: true
 
 # --- Hugo build ---
 build_timeout_seconds: 120
+# Verify create_preview through the real public ingress before returning its
+# token. Requires oauth.issuer /preview/ routes to reach this service.
+preview_external_verification: true
 # post_build_hooks:
 #   - https://your-webhook-host/rebuild-notify  # must be public HTTPS, no private IPs
 

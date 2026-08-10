@@ -371,6 +371,10 @@ func ParseToolError(err error) ToolError {
 	}
 
 	switch code {
+	case "preview_unreachable":
+		out.Retryable = false
+		out.Resolution = &ErrorResolution{Action: "contact_operator"}
+		out.Suggestion = "verify that oauth.issuer forwards /preview/ unchanged to this service and does not fall back missing routes to index.html"
 	case "ambiguous_language":
 		out.Field = "lang"
 		out.Retryable = true

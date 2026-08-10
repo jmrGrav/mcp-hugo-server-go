@@ -69,6 +69,49 @@ func TestStoreServesValidPreview(t *testing.T) {
 	}
 }
 
+func TestStorePreservesCleanNestedRouteAndDoesNotFallback(t *testing.T) {
+	dir := t.TempDir()
+	writePreviewFile(t, dir, "index.html", "home marker")
+	writePreviewFile(t, dir, "en/posts/probe/index.html", "english article marker")
+
+	s := previewstore.New()
+	s.Put("abc123", &previewstore.Entry{Dir: dir, Token: "entry-token", ExpiresAt: time.Now().Add(time.Hour)})
+	h := s.HTTPHandler()
+
+	req := httptest.NewRequest(http.MethodGet, "/preview/abc123/entry-token/en/posts/probe/", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != "/preview/abc123/en/posts/probe/" {
+		t.Fatalf("entry redirect = %d %q, want nested clean route", rec.Code, rec.Header().Get("Location"))
+	}
+	cookie := rec.Result().Cookies()[0]
+
+	req = httptest.NewRequest(http.MethodGet, "/preview/abc123/en/posts/probe/", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "english article marker") {
+		t.Fatalf("nested clean route = %d %q, want English article", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/preview/abc123/en/posts/missing/", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "home marker") {
+		t.Fatalf("missing nested route = %d %q, want strict 404 without home fallback", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCleanPathPreservesDirectoryRoute(t *testing.T) {
+	if got := previewstore.CleanPath("abc123", "en/posts/probe/"); got != "/preview/abc123/en/posts/probe/" {
+		t.Fatalf("CleanPath directory route = %q", got)
+	}
+	if got := previewstore.CleanPath("abc123", "assets/site.css"); got != "/preview/abc123/assets/site.css" {
+		t.Fatalf("CleanPath asset route = %q", got)
+	}
+}
+
 // TestStoreServesSecurityHeaders is a regression test for #831: the preview
 // URL's token is the sole access control, so responses must not be
 // cacheable by shared/intermediate caches and must resist being framed or
@@ -318,6 +361,37 @@ func TestEntryTokenReExchangeBeforeActivation(t *testing.T) {
 	}
 	if first != second {
 		t.Fatalf("re-exchange returned a different session token (%q vs %q); must be idempotent", first, second)
+	}
+}
+
+func TestResetSessionForProbeLeavesEntryTokenUsable(t *testing.T) {
+	dir := t.TempDir()
+	writePreviewFile(t, dir, "index.html", "session content")
+
+	s := previewstore.New()
+	s.Put("abc123", &previewstore.Entry{
+		Dir:       dir,
+		Token:     "entry-token",
+		ExpiresAt: time.Now().Add(time.Hour),
+	})
+
+	_, firstSession, ok := s.EstablishSession("abc123", "entry-token")
+	if !ok {
+		t.Fatal("probe session exchange should succeed")
+	}
+	if _, ok := s.GetBySession("abc123", firstSession); !ok {
+		t.Fatal("probe session should fetch content")
+	}
+	if !s.ResetSessionForProbe("abc123") {
+		t.Fatal("ResetSessionForProbe should find the active preview")
+	}
+
+	_, browserSession, ok := s.EstablishSession("abc123", "entry-token")
+	if !ok {
+		t.Fatal("entry token must remain exchangeable after the pre-return probe reset")
+	}
+	if browserSession == firstSession {
+		t.Fatal("browser exchange should mint a fresh session after the probe reset")
 	}
 }
 
