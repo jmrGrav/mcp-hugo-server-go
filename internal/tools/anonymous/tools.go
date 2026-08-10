@@ -255,17 +255,19 @@ type getSitemapData struct {
 	// the plain and offset-past-end paths still emit "entries":[] — a non-nil
 	// pointer to an empty slice is not "empty" for omitempty, unlike a bare
 	// []T which would be dropped, silently changing the empty-page shape.
-	Entries        *[]sitemapEntryDTO `json:"entries,omitempty"`
-	Total          int                `json:"total"`
-	Limit          int                `json:"limit"`
-	Offset         int                `json:"offset"`
-	ReturnedCount  int                `json:"returned_count"`
-	HasMore        bool               `json:"has_more"`
-	NextOffset     *int               `json:"next_offset,omitempty"`
-	ContentPages   int                `json:"content_pages"`
-	TaxonomyPages  int                `json:"taxonomy_pages"`
-	SectionPages   int                `json:"section_pages"`
-	OtherDocuments int                `json:"other_documents"`
+	Entries           *[]sitemapEntryDTO `json:"entries,omitempty"`
+	Total             int                `json:"total"`
+	Limit             int                `json:"limit"`
+	Offset            int                `json:"offset"`
+	ReturnedCount     int                `json:"returned_count"`
+	HasMore           bool               `json:"has_more"`
+	NextOffset        *int               `json:"next_offset,omitempty"`
+	ContentPages      int                `json:"content_pages"`
+	TaxonomyPages     int                `json:"taxonomy_pages"`
+	SectionPages      int                `json:"section_pages"`
+	OtherDocuments    int                `json:"other_documents"`
+	EntriesOmitted    bool               `json:"entries_omitted,omitempty"`
+	PaginationApplies *bool              `json:"pagination_applies,omitempty"`
 }
 
 type getFeedData struct {
@@ -588,7 +590,7 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 
 	addReadOnlyTool(s, "get_sitemap", "Read sitemap",
 		"Return the full published URL inventory (slug, URL, date) including taxonomy list pages (/tags/…, /categories/…). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. "+
-			"`exclude_taxonomies=true` narrows the scan scope to content pages only. `response_mode:\"compact\"` keeps the same pagination and scope but trims each row down to slug+url only. `summary_only=true` returns counts and scope breakdowns without any `entries`, so callers can inspect inventory size cheaply without paying for a full row list. For content-page browsing with titles and summaries use list_pages.",
+			"`exclude_taxonomies=true` narrows the scan scope to content pages only. `response_mode:\"compact\"` keeps the same pagination and scope but trims each row down to slug+url only. `summary_only=true` returns counts and scope breakdowns without any `entries`, so callers can inspect inventory size cheaply without paying for a full row list; it sets `entries_omitted:true` and `pagination_applies:false`, so `limit`/`offset`/pagination fields must not be interpreted as a page of rows. For content-page browsing with titles and summaries use list_pages.",
 		func(_ context.Context, _ *mcp.CallToolRequest, in getSitemapInput) (*mcp.CallToolResult, getSitemapOutput, error) {
 			if idx == nil {
 				return nil, getSitemapOutput{}, fmt.Errorf("index not initialized")
@@ -618,16 +620,19 @@ func registerAnonymousTaxonomyAndFeedTools(s *mcp.Server, idx *site.Index, srcId
 			}
 			total := len(all)
 			if in.SummaryOnly {
+				paginationApplies := false
 				return nil, newGetSitemapOutput(getSitemapData{
-					Total:          total,
-					Limit:          limit,
-					Offset:         offset,
-					ReturnedCount:  0,
-					HasMore:        false,
-					ContentPages:   counts.ContentPages,
-					TaxonomyPages:  counts.TaxonomyPages,
-					SectionPages:   counts.SectionPages,
-					OtherDocuments: counts.OtherDocuments,
+					Total:             total,
+					Limit:             limit,
+					Offset:            offset,
+					ReturnedCount:     0,
+					HasMore:           false,
+					ContentPages:      counts.ContentPages,
+					TaxonomyPages:     counts.TaxonomyPages,
+					SectionPages:      counts.SectionPages,
+					OtherDocuments:    counts.OtherDocuments,
+					EntriesOmitted:    true,
+					PaginationApplies: &paginationApplies,
 				}), nil
 			}
 			if offset >= len(all) {

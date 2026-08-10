@@ -2892,7 +2892,7 @@
   {
     "name": "get_sitemap",
     "required_scope": "",
-    "description": "Return the full published URL inventory (slug, URL, date) including taxonomy list pages (/tags/…, /categories/…). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. `exclude_taxonomies=true` narrows the scan scope to content pages only. `response_mode:\"compact\"` keeps the same pagination and scope but trims each row down to slug+url only. `summary_only=true` returns counts and scope breakdowns without any `entries`, so callers can inspect inventory size cheaply without paying for a full row list. For content-page browsing with titles and summaries use list_pages.",
+    "description": "Return the full published URL inventory (slug, URL, date) including taxonomy list pages (/tags/…, /categories/…). Reader tool: on OAuth-enabled deployments, obtain a read Bearer token first; on bearerless deployments, call it directly. `exclude_taxonomies=true` narrows the scan scope to content pages only. `response_mode:\"compact\"` keeps the same pagination and scope but trims each row down to slug+url only. `summary_only=true` returns counts and scope breakdowns without any `entries`, so callers can inspect inventory size cheaply without paying for a full row list; it sets `entries_omitted:true` and `pagination_applies:false`, so `limit`/`offset`/pagination fields must not be interpreted as a page of rows. For content-page browsing with titles and summaries use list_pages.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -2922,11 +2922,13 @@
       "data.entries[].slug:string:required",
       "data.entries[].source_key:string",
       "data.entries[].url:string:required",
+      "data.entries_omitted:boolean",
       "data.has_more:boolean:required",
       "data.limit:integer:required",
       "data.next_offset:unspecified",
       "data.offset:integer:required",
       "data.other_documents:integer:required",
+      "data.pagination_applies:unspecified",
       "data.returned_count:integer:required",
       "data.section_pages:integer:required",
       "data.taxonomy_pages:integer:required",
@@ -2961,7 +2963,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "2c46fae7fde3c0955da9ebb67248b0c4caa5f8a61e2115b68af32445d7891a2d"
+    "output_schema_sha256": "1a0eed9783cb1f50e484bb15e6a3d1b1d29830abf556a770a8b8efc003ac5e64"
   },
   {
     "name": "get_storage_health",
