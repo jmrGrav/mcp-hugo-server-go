@@ -96,6 +96,39 @@ func TestRollbackChangeUnknownRevisionIsSnapshotNotFound(t *testing.T) {
 	}
 }
 
+// TestRollbackChangeRejectsLanguagePrefixedSlugWithExplicitLang is a
+// regression test for the ambiguous-input guard added alongside #1002:
+// passing both a language-prefixed slug ("fr/posts/bilingual") and an
+// explicit lang param double-applies the language during source
+// resolution, which previously surfaced as a confusing not_found rather
+// than a clear, actionable error.
+func TestRollbackChangeRejectsLanguagePrefixedSlugWithExplicitLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	pageDir := filepath.Join(contentRoot, "posts", "bilingual")
+	if err := os.MkdirAll(pageDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pageDir, "index.fr.md"), []byte("---\ntitle: Titre\n---\nContenu.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "fr/posts/bilingual",
+		"lang":              "fr",
+		"to_revision":       "sha256:irrelevant",
+		"expected_revision": "sha256:irrelevant",
+	})
+	if !res.IsError {
+		t.Fatal("rollback_change with a language-prefixed slug and explicit lang should fail")
+	}
+	raw := marshalContent(t, res)
+	if !strings.Contains(raw, "language_prefixed_slug_with_explicit_lang") {
+		t.Fatalf("rollback_change language-prefixed slug error = %s", raw)
+	}
+}
+
 // TestRollbackChangeRevisionConflict verifies rollback_change refuses to
 // undo a newer, unrelated change — the same optimistic-concurrency guard
 // every other write tool uses.

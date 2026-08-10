@@ -181,6 +181,7 @@ func registerRollbackChange(
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run rollback after a timeout or uncertain delivery. " +
 			"`dry_run` previews the diff without writing. " +
 			"Writes source only — like apply_content_plan, does not build/publish; call publish_changes afterward. " +
+			"`slug` must not carry a language prefix when `lang` is also given — passing both (e.g. `slug:\"fr/posts/x\", lang:\"fr\"`) fails fast with `language_prefixed_slug_with_explicit_lang` naming the slug to use instead, rather than double-applying the language and surfacing a confusing not_found. " +
 			"`rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
 		InputSchema:  tools.MustSchema[rollbackChangeInput](),
 		OutputSchema: tools.MustSchema[rollbackChangeOutput](),
