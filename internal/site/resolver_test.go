@@ -318,6 +318,40 @@ func TestPageResolverResolvesPublicOnlyPageWithHTMLFallback(t *testing.T) {
 	}
 }
 
+// TestPageResolverImplicitDefaultLangBorrowsUnlabelledSource guards the
+// second disjunct of resolveImplicit's unlabelled-source fallback
+// (resolvedLang == cfg.DefaultLanguage), reached via the *implicit*
+// (no-explicit-lang) resolution path with a language-prefixed public slug. A
+// labeled public page (Lang set, non-empty — so the first disjunct alone
+// would reject this) whose source is still an unlabelled legacy index.md
+// bundle must still resolve when that page's own language happens to be the
+// site's default: the public page IS that default-language rendering, so
+// borrowing the unlabelled source is correct, not the cross-language bug
+// this PR's strictness exists to prevent. Without this disjunct, a mutation
+// deleting it left every other test green (see PR #985 review).
+func TestPageResolverImplicitDefaultLangBorrowsUnlabelledSource(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSourcePage(t, contentRoot, "posts/hello/index.md", "---\ntitle: Hello\n---\nUnlabelled body\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &Index{
+		entries: []entry{{page: Page{Slug: "/en/posts/hello/", Lang: "en", Title: "Rendered"}}},
+		bySlug:  map[string]int{"/en/posts/hello/": 0},
+		info:    map[string]string{},
+	}
+	resolver := NewPageResolver(idx, srcIdx, config.Config{ContentRoot: contentRoot, DefaultLanguage: "en"})
+
+	got, ok := resolver.Resolve("/en/posts/hello/")
+	if !ok {
+		t.Fatal("Resolve(implicit default lang) not found")
+	}
+	if got.Source == nil || got.Source.Body != "Unlabelled body" {
+		t.Fatalf("Resolve(implicit default lang).Source = %#v, want unlabelled source borrowed", got.Source)
+	}
+}
+
 func writeSourcePage(t *testing.T, root, rel, raw string) {
 	t.Helper()
 	full := filepath.Join(root, rel)
