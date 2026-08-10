@@ -47,7 +47,7 @@ class Handler(BaseHTTPRequestHandler):
         req_id = request.get("id")
         token = self.bearer_token()
         if method == "initialize":
-            session_id = f"fixture-session-{len(sessions_by_token)}-{token}"
+            session_id = f"fixture-session-{len(sessions_by_token)}"
             sessions_by_token[token] = session_id
             self.send_json({"jsonrpc":"2.0", "id":req_id, "result":{}}, session_id=session_id)
             return
