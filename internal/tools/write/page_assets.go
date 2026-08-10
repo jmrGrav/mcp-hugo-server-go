@@ -645,6 +645,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			"By default this targets bundle-local files only; set `scope:\"generated\"` to explicitly target the generated hero image at {HugoRoot}/static/images/{slug}-featured.jpg instead of the bundle directory. " +
 			"Non-dry-run calls require expected_sha256 (from upload_page_asset/list_page_assets) or expected_revision (the page bundle's own revision) as a concurrency guard; a mismatch fails with revision_conflict, telling the agent to re-check the current hash/revision via list_page_assets and retry. " +
 			"Before deleting, the asset reference is checked against every index.<lang>.md file in the bundle: if referenced, the call fails with asset_referenced unless force=true is passed, so a still-linked image isn't silently broken. " +
+			"A non-forced asset_referenced refusal does not consume the destructive quota; force=true is a genuine deletion attempt and does consume it. " +
 			"dry_run previews the asset's sha256 and whether it's referenced, without requiring expected_sha256/expected_revision and without deleting anything. " +
 			"Callers may provide idempotency_key to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. " +
 			"This only removes the source asset, not any built public copy or CDN cache — unlike delete_page, it does not purge; the asset stays reachable at its old URL until the next build. " +
@@ -850,15 +851,10 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read asset"))
 		}
 
-		// #887 quota-consumption boundary: the target asset exists (the ReadFile
-		// above succeeded) and this is a genuine, non-replayed destructive
-		// attempt, so consume the destructive quota now — the revision_conflict
-		// and asset_referenced rejections below, and the delete itself, all cost
-		// a token, while not_found / read_error above stay free.
-		//
-		if !limiter.Allow() {
-			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page_asset", cfg.RateLimit.DestructivePerMin, limiter))
-		}
+		// Check the concurrency guard before the reference guard. A stale
+		// revision remains a real state-conflict attempt and consumes quota;
+		// an asset_referenced refusal, however, is a non-destructive
+		// precondition failure and must remain free (#963).
 		actualHash := contentmodel.SourceRevisionBytes(data)
 		actualBundleRevision := ""
 		if hasBundleDir {
@@ -867,6 +863,18 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 					actualBundleRevision = rev
 				}
 			}
+		}
+		if in.ExpectedSha256 != "" && in.ExpectedSha256 != actualHash {
+			if !limiter.Allow() {
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page_asset", cfg.RateLimit.DestructivePerMin, limiter))
+			}
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
+		}
+		if in.ExpectedRevision != "" && in.ExpectedRevision != actualBundleRevision {
+			if !limiter.Allow() {
+				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page_asset", cfg.RateLimit.DestructivePerMin, limiter))
+			}
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
 		}
 		var (
 			referencedIn []string
@@ -878,14 +886,13 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				slog.Warn("delete_page_asset: reference scan failed", "slug", slug, "filename", filename, "error", refErr)
 			}
 		}
-		if in.ExpectedSha256 != "" && in.ExpectedSha256 != actualHash {
-			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
-		}
-		if in.ExpectedRevision != "" && in.ExpectedRevision != actualBundleRevision {
-			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: asset changed since it was read; call list_page_assets to get the current hash and retry"))
-		}
 		if len(referencedIn) > 0 && !in.Force {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("asset_referenced: %q is referenced in %v; pass force=true to delete anyway", filename, referencedIn))
+		}
+		// A forced delete and every successful delete are genuine destructive
+		// attempts. Unlike the reference guard above, they consume quota.
+		if !limiter.Allow() {
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page_asset", cfg.RateLimit.DestructivePerMin, limiter))
 		}
 
 		if err := os.Remove(filePath); err != nil {

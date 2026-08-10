@@ -1,6 +1,8 @@
 package write_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -263,6 +265,41 @@ func TestQuotaConsistency887_DeletePageAsset(t *testing.T) {
 	assertQuotaDelta(t, session, scopeDestructive, 1, false, func() *mcp.CallToolResult {
 		return callTool(t, session, "delete_page_asset", map[string]any{
 			"slug": "posts/article", "filename": "doomed.png", "expected_sha256": sha,
+		})
+	})
+}
+
+func TestQuotaConsistency963_ReferencedAssetIsFreeUntilForced(t *testing.T) {
+	contentRoot := t.TempDir()
+	dir := filepath.Join(contentRoot, "posts", "article")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "index.md"), []byte("---\ntitle: Article\n---\n![cover](cover.png)\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rl := smallRateLimit()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rl})
+	defer done()
+
+	up := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug": "posts/article", "filename": "cover.png", "content_base64": b64(minimalPNG),
+	})
+	if up.IsError {
+		t.Fatalf("setup upload_page_asset failed: %s", marshalContent(t, up))
+	}
+	sha := decodeWriteData(t, up)["sha256"].(string)
+
+	// The reference guard blocks without consuming destructive quota (#963).
+	assertQuotaDelta(t, session, scopeDestructive, 0, true, func() *mcp.CallToolResult {
+		return callTool(t, session, "delete_page_asset", map[string]any{
+			"slug": "posts/article", "filename": "cover.png", "expected_sha256": sha,
+		})
+	})
+	// force=true turns the same request into a genuine deletion attempt.
+	assertQuotaDelta(t, session, scopeDestructive, 1, false, func() *mcp.CallToolResult {
+		return callTool(t, session, "delete_page_asset", map[string]any{
+			"slug": "posts/article", "filename": "cover.png", "expected_sha256": sha, "force": true,
 		})
 	})
 }

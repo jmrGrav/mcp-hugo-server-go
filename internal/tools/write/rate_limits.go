@@ -62,7 +62,9 @@ const (
 //	CONSUMES (spends one token): a valid request against a confirmed-eligible
 //	target that makes a genuine mutation attempt — including its state-conflict
 //	rejections: revision_conflict, already_exists (the create/upload write-time
-//	collision), asset_referenced, security/write/delete errors, and success.
+//	collision), security/write/delete errors, and success. An
+//	asset_referenced refusal is free because no deletion is attempted; passing
+//	force=true makes it a genuine destructive attempt again.
 //
 // Mechanically: limiter.Allow() is invoked only after every free gate above
 // has passed, immediately before the state-conflict check / atomic mutation.
