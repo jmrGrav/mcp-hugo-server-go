@@ -212,6 +212,11 @@ func TestGetPageBySlug(t *testing.T) {
 		t.Fatalf("get_page returned error: %v", res.Content)
 	}
 	m := decodeContent(t, res)
+	envelope := decodeEnvelope(t, res)
+	meta := envelope["meta"].(map[string]any)
+	if got := meta["content_provenance"]; got != "site_rendered_public_untrusted" {
+		t.Fatalf("get_page meta.content_provenance = %v, want rendered public untrusted", got)
+	}
 	pageVal, ok := m["page"]
 	if !ok {
 		t.Fatal("get_page: missing 'page' key")
@@ -396,6 +401,9 @@ func TestGetPageUsesSourceIndexForCreatedPageBeforeBuild(t *testing.T) {
 	res := callTool(t, session, "get_page", map[string]any{"slug": "/drafts/fresh/", "allow_source_fallback": true, "content_only": false})
 	if res.IsError {
 		t.Fatalf("get_page source-only with allow_source_fallback returned error: %v", res.Content)
+	}
+	if got := decodeEnvelope(t, res)["meta"].(map[string]any)["content_provenance"]; got != "site_source_untrusted" {
+		t.Fatalf("get_page source fallback meta.content_provenance = %v, want source untrusted", got)
 	}
 	m := decodeContent(t, res)
 	page := m["page"].(map[string]any)
