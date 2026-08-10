@@ -917,3 +917,12 @@ func TestValidateFrontMatterPageDetectsOnlyFrontmatterLikeBodyPrefix(t *testing.
 		t.Fatalf("ordinary markdown must not be flagged: %#v", issues)
 	}
 }
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
