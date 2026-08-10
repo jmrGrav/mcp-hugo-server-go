@@ -2,12 +2,54 @@ package contracttests
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	toolsadmin "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// TestContractResponseModeVocabularyIsPublishedForEveryTool keeps discovery
+// and handler validation aligned without reintroducing a JSON Schema enum.
+// It deliberately scans the complete write-scoped registry rather than a
+// representative sample: a new tool must not silently publish response_mode
+// as an undocumented free string (#997).
+func TestContractResponseModeVocabularyIsPublishedForEveryTool(t *testing.T) {
+	s := registerFullContractServer(t)
+	session, done := connectClient(t, s)
+	defer done()
+
+	res, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
+	if err != nil {
+		t.Fatalf("ListTools() error = %v", err)
+	}
+	found := 0
+	for _, tl := range res.Tools {
+		schema, ok := tl.InputSchema.(map[string]any)
+		if !ok {
+			t.Fatalf("%s: input schema type = %T, want map[string]any", tl.Name, tl.InputSchema)
+		}
+		properties, _ := schema["properties"].(map[string]any)
+		property, hasResponseMode := properties["response_mode"].(map[string]any)
+		if !hasResponseMode {
+			continue
+		}
+		found++
+		description, _ := property["description"].(string)
+		for _, want := range []string{"standard", "compact", "default"} {
+			if !strings.Contains(strings.ToLower(description), want) {
+				t.Errorf("%s.response_mode description = %q, missing %q", tl.Name, description, want)
+			}
+		}
+		if _, hasEnum := property["enum"]; hasEnum {
+			t.Errorf("%s.response_mode must remain handler-validated, not a JSON Schema enum", tl.Name)
+		}
+	}
+	if found == 0 {
+		t.Fatal("full tool registry contains no response_mode properties")
+	}
+}
 
 // toolInputSchemaProperty fetches tool's published input schema via
 // tools/list and returns the JSON object for its named property, failing

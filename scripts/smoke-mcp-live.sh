@@ -8,6 +8,10 @@ fi
 
 BASE_URL="${MCP_BASE_URL:-https://mcp.arleo.eu}"
 ACCESS_TOKEN="${MCP_ACCESS_TOKEN:-}"
+WRITE_ACCESS_TOKEN="${MCP_WRITE_ACCESS_TOKEN:-}"
+VERIFY_WRITE_CATALOGUE="${MCP_SMOKE_VERIFY_WRITE_CATALOGUE:-0}"
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOOL_REGISTRY_MANIFEST="${MCP_TOOL_REGISTRY_MANIFEST:-$SCRIPT_ROOT/internal/contracttests/testdata/golden/tool_registry.golden.json}"
 SMOKE_DELAY="${MCP_SMOKE_DELAY:-6}"
 BURST_COUNT="${MCP_SMOKE_BURST_COUNT:-10}"
 SESSION_CALLS="${MCP_SMOKE_SESSION_CALLS:-0}"
@@ -249,6 +253,7 @@ echo "  MCP_BASE_URL=$BASE_URL"
 echo "  MCP_ACCESS_TOKEN=<redacted>"
 echo "  MCP_SMOKE_ENABLE_WRITES=$ENABLE_WRITES"
 echo "  MCP_SMOKE_VERIFY_DEPLOY=$VERIFY_DEPLOY"
+echo "  MCP_SMOKE_VERIFY_WRITE_CATALOGUE=$VERIFY_WRITE_CATALOGUE"
 echo "  MCP_SMOKE_DELAY=$SMOKE_DELAY"
 echo "  MCP_SMOKE_SESSION_CALLS=$SESSION_CALLS"
 echo "  MCP_SMOKE_SESSION_DELAY=$SESSION_DELAY"
@@ -265,6 +270,38 @@ classify_response "initialized"
 mcp_request "tools_list" "tools/list"
 tools_count="$(jq -r '.result.tools | length' "$TMPDIR/last-tools_list.json")"
 pass "tools/list returned $tools_count tools"
+
+# A read catalogue is intentionally smaller. Verify the independently-issued
+# write token in a fresh MCP session so a connector cache or an accidental
+# scope regression cannot hide managed-Hugo tools after a deploy (#998). The
+# check is opt-in because local synthetic fixtures deliberately have no second
+# independently-issued write principal; release workflows must opt in.
+if [[ "$VERIFY_WRITE_CATALOGUE" == "1" ]]; then
+  [[ -n "$WRITE_ACCESS_TOKEN" ]] || fail "MCP_WRITE_ACCESS_TOKEN is required when MCP_SMOKE_VERIFY_WRITE_CATALOGUE=1"
+  [[ -r "$TOOL_REGISTRY_MANIFEST" ]] || fail "tool registry manifest is not readable: $TOOL_REGISTRY_MANIFEST"
+
+  jq -r '.[].name' "$TOOL_REGISTRY_MANIFEST" | LC_ALL=C sort -u > "$TMPDIR/expected-write-tools.txt"
+  [[ -s "$TMPDIR/expected-write-tools.txt" ]] || fail "tool registry manifest contains no tools"
+
+  READ_SESSION_ID="$MCP_SESSION_ID"
+  ACCESS_TOKEN="$WRITE_ACCESS_TOKEN"
+  MCP_SESSION_ID=""
+  post_mcp "$TMPDIR/initialize.json"
+  classify_response "write_initialize"
+  [[ -n "$MCP_SESSION_ID" ]] || fail "write initialize did not return Mcp-Session-Id"
+  post_mcp "$TMPDIR/initialized.json"
+  classify_response "write_initialized"
+  mcp_request "write_tools_list" "tools/list"
+  jq -r '.result.tools[]?.name' "$TMPDIR/last-write_tools_list.json" | LC_ALL=C sort -u > "$TMPDIR/actual-write-tools.txt"
+  if ! cmp -s "$TMPDIR/expected-write-tools.txt" "$TMPDIR/actual-write-tools.txt"; then
+    diff -u "$TMPDIR/expected-write-tools.txt" "$TMPDIR/actual-write-tools.txt" >&2 || true
+    fail "fresh write tools/list does not exactly match the versioned registry manifest"
+  fi
+  expected_write_tools_count="$(wc -l < "$TMPDIR/expected-write-tools.txt" | tr -d ' ')"
+  pass "fresh write tools/list matches all $expected_write_tools_count registry tools including managed-Hugo tools"
+  ACCESS_TOKEN="${MCP_ACCESS_TOKEN:-}"
+  MCP_SESSION_ID="$READ_SESSION_ID"
+fi
 
 call_tool "unknown_tool" "codex_unknown_tool" "{}" 0
 call_tool "get_site_information" "get_site_information" "{}"

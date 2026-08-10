@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -230,6 +231,15 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 			)
 			return nil, createPreviewOutput{}, fmt.Errorf("build_error: %s", summary)
 		}
+		// Hugo/template language helpers must retain the preview mount before
+		// the non-default-language prefix. A few theme combinations instead
+		// render /{lang}/preview/{id}/..., which escapes the authenticated
+		// preview namespace. Normalize exactly that impossible-in-preview form
+		// in every generated HTML document before it can be served (#996).
+		if err := normalizePreviewLanguageURLs(destDir, previewID); err != nil {
+			_ = os.RemoveAll(destDir)
+			return nil, createPreviewOutput{}, fmt.Errorf("build_error: normalize preview URLs: %w", err)
+		}
 
 		expiresAt := time.Now().Add(ttl)
 		store.Put(previewID, &previewstore.Entry{
@@ -277,4 +287,34 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		}
 		return nil, out, nil
 	}))
+}
+
+// normalizePreviewLanguageURLs fixes the known reversed preview-language
+// prefix in generated HTML. The preview id in a URL must equal previewID;
+// another id is never rewritten. This covers href/src/canonical/hreflang and
+// any other URL-bearing HTML attribute without attempting to mutate assets.
+func normalizePreviewLanguageURLs(destDir, previewID string) error {
+	return filepath.WalkDir(destDir, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(path), ".html") {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rewritten := previewstore.MalformedLanguagePrefixPattern.ReplaceAllFunc(raw, func(match []byte) []byte {
+			parts := previewstore.MalformedLanguagePrefixPattern.FindSubmatch(match)
+			if len(parts) != 3 || string(parts[2]) != previewID {
+				return match
+			}
+			return []byte("/preview/" + previewID + "/" + string(parts[1]) + "/")
+		})
+		if string(rewritten) == string(raw) {
+			return nil
+		}
+		return os.WriteFile(path, rewritten, 0o644)
+	})
 }

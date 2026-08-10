@@ -318,7 +318,7 @@ and is now implemented for all anonymous/content.read tools.
 
 | Parameter        | Type       | Meaning                                                    |
 |-------------------|------------|-------------------------------------------------------------|
-| `response_mode`   | string     | `standard` (default) or `compact` (reduced field set, tool-defined). `full` and `ids_only` are reserved for future work and rejected as `invalid_params` until implemented — they are never silently treated as `standard`. |
+| `response_mode`   | string     | `standard` (default) or `compact` (reduced field set, tool-defined). Each supporting tool publishes these values in its property description, rather than a JSON Schema `enum`: SDK enum validation would bypass this server's structured `invalid_params` envelope. `full` and `ids_only` are reserved for future work and rejected as `invalid_params` until implemented — they are never silently treated as `standard`. |
 | `fields`          | string[]   | Restrict each returned item to the named JSON fields. Applied after `response_mode`, so it can further narrow a `compact` row. Unknown field names are silently dropped, not an error. |
 | `include_body`    | bool       | Default `true`. When `false`, omit large body content (e.g. Markdown) and return metadata only. Same nil-means-true semantics everywhere it appears (see `export_agent_context`, #325). |
 | `max_body_chars`  | int        | Truncate a body field to N characters. `0` (default) disables truncation. Truncation adds a `warnings` entry so callers know the body was cut. |

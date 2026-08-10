@@ -101,6 +101,34 @@ exit 0
 	return dir
 }
 
+// writeMockHugoWithReversedLanguagePreviewURL simulates a theme/Hugo
+// combination that incorrectly places the language segment before the preview
+// mount. It derives the random preview id from --baseURL, so the fixture
+// exercises the exact generated path rather than a hard-coded lookalike.
+func writeMockHugoWithReversedLanguagePreviewURL(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+dest=""
+base=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--destination" ]; then dest="$arg"; fi
+  if [ "$prev" = "--baseURL" ]; then base="$arg"; fi
+  prev="$arg"
+done
+id="$(printf '%s' "$base" | sed -E 's#^.*/preview/([^/]+)/?$#\1#')"
+mkdir -p "$dest/en/posts/probe"
+printf '<html><head><link rel="canonical" href="https://mcp.example.test/en/preview/%s/posts/probe/"><link rel="alternate" hreflang="en" href="/en/preview/%s/posts/probe/"><script src="/en/preview/%s/assets/site.js"></script></head><body><a href="/en/preview/%s/posts/next/">next</a><a href="/en/preview/%s/tags/test/">tag</a><a href="/en/preview/%s/categories/docs/">category</a><a href="/en/preview/%s/documentation/">docs</a><img src="/en/preview/%s/assets/site.css"></body></html>' "$id" "$id" "$id" "$id" "$id" "$id" "$id" "$id" > "$dest/en/posts/probe/index.html"
+exit 0
+`
+	p := filepath.Join(dir, "hugo")
+	if err := os.WriteFile(p, []byte(script), 0o755); err != nil {
+		t.Fatalf("write mock hugo: %v", err)
+	}
+	return dir
+}
+
 func newCreatePreviewServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, *previewstore.Store, func()) {
 	t.Helper()
 	store := previewstore.New()
@@ -212,6 +240,49 @@ func TestCreatePreviewBuildsIsolatedDirAndServesViaStore(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "preview marker content") {
 		t.Fatalf("served content = %q, missing marker", rec.Body.String())
+	}
+}
+
+func TestCreatePreviewNormalizesReversedNonDefaultLanguageURLs(t *testing.T) {
+	hugoDir := writeMockHugoWithReversedLanguagePreviewURL(t)
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	session, store, done := newCreatePreviewServer(t, cfg)
+	defer done()
+
+	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "create_preview", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("create_preview = %v, %s", err, resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+	id := data["preview_id"].(string)
+	token := strings.TrimSuffix(strings.TrimPrefix(data["url"].(string), "https://mcp.example.test/preview/"+id+"/"), "/")
+	entry, ok := store.Get(id, token)
+	if !ok {
+		t.Fatal("created preview is not in the store")
+	}
+	raw, err := os.ReadFile(filepath.Join(entry.Dir, "en", "posts", "probe", "index.html"))
+	if err != nil {
+		t.Fatalf("read normalized preview: %v", err)
+	}
+	if strings.Contains(string(raw), "/en/preview/"+id+"/") {
+		t.Fatalf("preview retained malformed language-before-mount URL: %s", raw)
+	}
+	for _, want := range []string{
+		"/preview/" + id + "/en/posts/probe/",
+		"/preview/" + id + "/en/posts/next/",
+		"/preview/" + id + "/en/tags/test/",
+		"/preview/" + id + "/en/categories/docs/",
+		"/preview/" + id + "/en/documentation/",
+		"/preview/" + id + "/en/assets/site.css",
+		"/preview/" + id + "/en/assets/site.js",
+	} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("normalized preview missing %q: %s", want, raw)
+		}
 	}
 }
 

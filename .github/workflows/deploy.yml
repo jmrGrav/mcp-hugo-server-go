@@ -198,6 +198,8 @@ jobs:
           MCP_SMOKE_LIVE: "1"
           MCP_BASE_URL: ${{ secrets.PRODUCTION_URL }}
           MCP_ACCESS_TOKEN: ${{ secrets.MCP_ACCESS_TOKEN }}
+          MCP_WRITE_ACCESS_TOKEN: ${{ secrets.MCP_WRITE_ACCESS_TOKEN }}
+          MCP_SMOKE_VERIFY_WRITE_CATALOGUE: "1"
           MCP_SMOKE_DELAY: "3"
           # This workflow runs after the binary has been installed and the
           # production environment approval has been granted. Exercise the

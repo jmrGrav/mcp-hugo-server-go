@@ -813,7 +813,7 @@ func TestReaderTokenToolsListMatchesReadOnlyCatalog(t *testing.T) {
 			t.Fatalf("reader tools/list missing %q; got %v", name, names)
 		}
 	}
-	for _, forbidden := range []string{"create_page", "update_page", "delete_page", "build_site", "preview_build", "run_post_build_hooks"} {
+	for _, forbidden := range []string{"create_page", "update_page", "delete_page", "build_site", "preview_build", "run_post_build_hooks", "get_hugo_update", "stage_hugo_upgrade", "activate_hugo", "rollback_hugo", "bootstrap_hugo"} {
 		for _, got := range names {
 			if got == forbidden {
 				t.Fatalf("reader tools/list must not include %q; got %v", forbidden, names)
@@ -1981,13 +1981,19 @@ clients:
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
+	if got, want := len(names), 65; got != want {
+		t.Errorf("chatgpt write token tools/list = %d tools, want %d; got %v", got, want, names)
+	}
 	// Must see write tools.
 	if !containsToolName(names, "create_page") {
 		t.Errorf("chatgpt write token missing create_page; got %v", names)
 	}
 	// Per #450, site.admin folded into write with no exceptions: a write
 	// token now also sees the tools that used to require site.admin.
-	for _, adminTool := range []string{"build_site", "check_sri_versions", "preview_build"} {
+	for _, adminTool := range []string{
+		"build_site", "check_sri_versions", "preview_build",
+		"get_hugo_update", "stage_hugo_upgrade", "activate_hugo", "rollback_hugo", "bootstrap_hugo",
+	} {
 		if !containsToolName(names, adminTool) {
 			t.Errorf("chatgpt write token must expose formerly-admin tool %q (folded into write per #450)", adminTool)
 		}
