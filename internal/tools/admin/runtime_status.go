@@ -23,6 +23,11 @@ import (
 // this tool shells out to, so a hung or missing binary can't stall the call.
 const probeTimeout = 5 * time.Second
 
+// processStartedAt is intentionally process-scoped. Runtime status does not
+// claim to recover a build history across restarts; LastBuildPersistence makes
+// that boundary explicit to callers.
+var processStartedAt = time.Now().UTC()
+
 type getRuntimeStatusInput struct {
 	// IncludeRevisions opts into hashing the full content_root/site_root trees
 	// for source_revision/public_revision. Off by default: hashing a large
@@ -93,19 +98,23 @@ type lastBuildRuntimeStatus struct {
 type runtimeStatusData struct {
 	// ReleaseVersion — see the comment on toolcontract.ResponseMeta.ReleaseVersion.
 	// Named ServerVersion/server_version through v1.5.7; renamed (#563).
-	ReleaseVersion    string                  `json:"release_version"`
-	SchemaVersion     string                  `json:"schema_version"`
-	Commit            string                  `json:"commit,omitempty"`
-	CommitTime        string                  `json:"commit_time,omitempty"`
-	BuildChannel      string                  `json:"build_channel,omitempty"`
-	BuildDirty        bool                    `json:"build_dirty"`
-	BinaryBuildDirty  bool                    `json:"binary_build_dirty"`
-	SiteWorktreeDirty bool                    `json:"site_worktree_dirty"`
-	Hugo              hugoRuntimeStatus       `json:"hugo"`
-	Git               gitRuntimeStatus        `json:"git"`
-	Site              siteRuntimeStatus       `json:"site"`
-	LastBuild         *lastBuildRuntimeStatus `json:"last_build,omitempty"`
-	Degraded          []string                `json:"degraded,omitempty"`
+	ReleaseVersion          string                  `json:"release_version"`
+	SchemaVersion           string                  `json:"schema_version"`
+	Commit                  string                  `json:"commit,omitempty"`
+	CommitTime              string                  `json:"commit_time,omitempty"`
+	BuildChannel            string                  `json:"build_channel,omitempty"`
+	BuildDirty              bool                    `json:"build_dirty"`
+	BinaryBuildDirty        bool                    `json:"binary_build_dirty"`
+	SiteWorktreeDirty       bool                    `json:"site_worktree_dirty"`
+	SourceAheadOfPublic     bool                    `json:"source_ahead_of_public"`
+	UnpublishedChangesCount int                     `json:"unpublished_changes_count"`
+	ProcessStartedAt        string                  `json:"process_started_at"`
+	LastBuildPersistence    string                  `json:"last_build_persistence"`
+	Hugo                    hugoRuntimeStatus       `json:"hugo"`
+	Git                     gitRuntimeStatus        `json:"git"`
+	Site                    siteRuntimeStatus       `json:"site"`
+	LastBuild               *lastBuildRuntimeStatus `json:"last_build,omitempty"`
+	Degraded                []string                `json:"degraded,omitempty"`
 }
 
 type getRuntimeStatusOutput struct {
@@ -113,6 +122,15 @@ type getRuntimeStatusOutput struct {
 }
 
 var hugoVersionPattern = regexp.MustCompile(`v(\d+\.\d+\.\d+(?:-\S+)?)`)
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 // RegisterRuntimeStatus wires get_runtime_status (site.admin scope).
 func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex) {
@@ -132,7 +150,9 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"(#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, " +
 			"`preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the " +
 			"tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` " +
-			"is the honest default for anything not confidently recognized). Read-only; does not expose secrets or arbitrary " +
+			"is the honest default for anything not confidently recognized). `source_ahead_of_public` and " +
+			"`unpublished_changes_count` report server-known source changes awaiting publication; `process_started_at` " +
+			"and `last_build_persistence` make restart behavior explicit. Read-only; does not expose secrets or arbitrary " +
 			"host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
@@ -144,13 +164,15 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in getRuntimeStatusInput) (*mcp.CallToolResult, getRuntimeStatusOutput, error) {
 		data := runtimeStatusData{
-			ReleaseVersion:   buildinfo.Version,
-			SchemaVersion:    buildinfo.SchemaVersion,
-			Commit:           buildinfo.Commit,
-			CommitTime:       buildinfo.CommitTime,
-			BuildChannel:     buildinfo.EffectiveBuildChannel(),
-			BuildDirty:       buildinfo.Dirty,
-			BinaryBuildDirty: buildinfo.Dirty,
+			ReleaseVersion:       buildinfo.Version,
+			SchemaVersion:        buildinfo.SchemaVersion,
+			Commit:               buildinfo.Commit,
+			CommitTime:           buildinfo.CommitTime,
+			BuildChannel:         buildinfo.EffectiveBuildChannel(),
+			BuildDirty:           buildinfo.Dirty,
+			BinaryBuildDirty:     buildinfo.Dirty,
+			ProcessStartedAt:     processStartedAt.Format(time.RFC3339),
+			LastBuildPersistence: "process_memory",
 			Site: siteRuntimeStatus{
 				ContentRootConfigured: strings.TrimSpace(cfg.ContentRoot) != "",
 				HugoRootConfigured:    strings.TrimSpace(cfg.HugoRoot) != "",
@@ -160,6 +182,12 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		data.Hugo = probeHugo(ctx, cfg)
 		data.Git = probeGitBaseline(ctx, cfg)
 		data.SiteWorktreeDirty = data.Git.Dirty
+		pendingPages := 0
+		if srcIdx != nil {
+			pendingPages = len(srcIdx.PendingPages())
+		}
+		data.UnpublishedChangesCount = pendingPages
+		data.SourceAheadOfPublic = pendingPages > 0 || (data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassContentSource))
 
 		if !data.Hugo.Available {
 			data.Degraded = append(data.Degraded, "build_site/preview_build: hugo binary is unavailable — "+data.Hugo.Error)

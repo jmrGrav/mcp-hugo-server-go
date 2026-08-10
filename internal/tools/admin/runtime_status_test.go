@@ -113,6 +113,18 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 	if got, ok := site["source_revision"].(string); !ok || got == "" {
 		t.Fatalf("site.source_revision = %v, want non-empty", site["source_revision"])
 	}
+	if got, ok := data["process_started_at"].(string); !ok || got == "" {
+		t.Fatalf("process_started_at = %v, want RFC3339 timestamp", data["process_started_at"])
+	}
+	if data["last_build_persistence"] != "process_memory" {
+		t.Fatalf("last_build_persistence = %v, want process_memory", data["last_build_persistence"])
+	}
+	if data["source_ahead_of_public"] != false {
+		t.Fatalf("source_ahead_of_public = %v, want false for clean source", data["source_ahead_of_public"])
+	}
+	if data["unpublished_changes_count"] != float64(0) {
+		t.Fatalf("unpublished_changes_count = %v, want 0", data["unpublished_changes_count"])
+	}
 
 	if degraded, present := out["data"].(map[string]any)["degraded"]; present {
 		t.Fatalf("expected no degraded surfaces when hugo+git are both available, got %v", degraded)
