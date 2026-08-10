@@ -712,13 +712,14 @@ func registerContentPlanTools(
 		}
 
 		// Idempotency replay is checked before the plan lookup: a plan is
-		// single-use and deleted the moment a real (non-dry-run) apply
-		// attempt is made, successful or not. A genuine retry of an
-		// already-applied request must not depend on the plan still
-		// existing, or replay would be indistinguishable from
-		// plan_not_found on the second call — deliberately reordered from
-		// the design doc's literal listing (which checked plan existence
-		// first) once implementing surfaced that gap.
+		// single-use and deleted once a real (non-dry-run) apply attempt
+		// succeeds in passing the revision check — not merely attempted; a
+		// revision_conflict or build_in_progress preserves it (#1001). A
+		// genuine retry of an already-applied request must not depend on
+		// the plan still existing, or replay would be indistinguishable
+		// from plan_not_found on the second call — deliberately reordered
+		// from the design doc's literal listing (which checked plan
+		// existence first) once implementing surfaced that gap.
 		idemHash := ""
 		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
 			hash, hashErr := requestHash(struct {

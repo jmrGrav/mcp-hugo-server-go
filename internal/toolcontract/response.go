@@ -421,14 +421,13 @@ func ParseToolError(err error) ToolError {
 			out.Resolution.AllowedValues = allowed
 		}
 	case "build_in_progress", "rate_limit_exceeded":
-		if code == "build_in_progress" && strings.Contains(message, "plan_bundle_change again") {
-			out.Retryable = false
-			out.Resolution = &ErrorResolution{
-				Action:          "replan_then_retry",
-				RecommendedTool: "plan_bundle_change",
-			}
-			return out
-		}
+		// The "plan was already consumed" build_in_progress variant this
+		// branch used to special-case no longer exists: #1001 changed both
+		// apply_content_plan and apply_bundle_plan to look the plan up
+		// without consuming it, so a lock timeout never consumes a plan
+		// anymore and every build_in_progress message across the codebase
+		// is now the neutral "content lock is held, retry in a moment" —
+		// genuinely retryable without replanning.
 		out.Retryable = true
 		out.Resolution = &ErrorResolution{Action: "retry_later"}
 		if code == "rate_limit_exceeded" {
@@ -476,13 +475,21 @@ func ParseToolError(err error) ToolError {
 			RecommendedTool: recommendedTool,
 		}
 	case "bundle_conflict":
-		// apply_bundle_plan's whole-bundle optimistic-concurrency gate
-		// (#854 AC2/AC3); the plan is preserved on this error (#1001), same
-		// as apply_content_plan's revision_conflict above.
-		out.Retryable = true
-		out.Resolution = &ErrorResolution{
-			Action:          "replan_then_retry",
-			RecommendedTool: "plan_bundle_change",
+		// bundle_conflict has three producers (apply_bundle_plan,
+		// rollback_bundle, update_page's sibling-translation guard) and
+		// only apply_bundle_plan's is plan-based — its plan is preserved on
+		// this error (#1001), so "replan via plan_bundle_change" is
+		// specifically correct there. The other two don't use plans at all
+		// (rollback_bundle takes expected_bundle_revision directly;
+		// update_page's message already names get_page_for_edit), so this
+		// must stay scoped to the plan-based message rather than firing for
+		// every bundle_conflict.
+		if strings.Contains(message, "plan_bundle_change") {
+			out.Retryable = true
+			out.Resolution = &ErrorResolution{
+				Action:          "replan_then_retry",
+				RecommendedTool: "plan_bundle_change",
+			}
 		}
 	case "asset_referenced":
 		// delete_page_asset's guard against deleting an asset still linked
