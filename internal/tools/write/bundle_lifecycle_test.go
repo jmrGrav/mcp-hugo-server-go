@@ -193,6 +193,44 @@ func TestCreateBundleRevisionsRoundTripIntoDeleteBundle(t *testing.T) {
 	}
 }
 
+// TestCreateBundleRollsBackFirstFileOnMidWriteFailure is a regression test
+// for #1008's "prove no partial bundle remains when one language operation
+// fails" acceptance criterion. The existing atomicity test only exercises
+// the validation pre-pass, which runs before any file is touched and never
+// reaches the create loop's rollback() closure. This test forces a failure
+// *during* the write loop, after the first translation is already on disk:
+// a dangling symlink at the second translation's path passes the existence
+// preflight (os.Stat on a dangling symlink reports IsNotExist) but makes the
+// exclusive os.Link promotion inside fileutil.AtomicCreateChecked fail with
+// fs.ErrExist, which is exactly the failure rollback() exists to handle.
+func TestCreateBundleRollsBackFirstFileOnMidWriteFailure(t *testing.T) {
+	root := t.TempDir()
+	session, _, done := newTestServer(t, root)
+	defer done()
+
+	dir := filepath.Join(root, "posts/rollback-bundle")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "does-not-exist"), filepath.Join(dir, "index.en.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	res := callTool(t, session, "create_bundle", map[string]any{
+		"slug": "posts/rollback-bundle",
+		"pages": []any{
+			map[string]any{"lang": "fr", "title": "Bonjour", "body": "Corps FR"},
+			map[string]any{"lang": "en", "title": "Hello", "body": "Body EN"},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("create_bundle must fail when the second translation's path collides mid-write")
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "index.fr.md")); !os.IsNotExist(err) {
+		t.Fatalf("mid-write failure left the first translation behind: %v", err)
+	}
+}
+
 // TestBundleIdempotencyKeyConflictOnDifferentPayload confirms reusing the
 // same idempotency_key for a genuinely different create_bundle request
 // (different slug) is rejected as idempotency_conflict rather than silently
