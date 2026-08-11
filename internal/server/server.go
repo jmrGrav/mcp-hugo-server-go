@@ -168,7 +168,7 @@ func newScopedServer(
 	s := mcp.NewServer(impl, serverOpts)
 	s.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, scopeName, knownTools))
 	registerSharedResources(s)
-	anonymous.Register(s, idx, cfg, srcIdx)
+	anonymous.Register(s, idx, cfg, scopeName, srcIdx)
 	read.Register(s, idx, cfg, srcIdx)
 	if srcIdx != nil {
 		read.RegisterWithSourceIndex(s, idx, srcIdx, cfg, siteDB)

@@ -49,6 +49,9 @@ func TestUploadPageAssetSuccess(t *testing.T) {
 	out := decodeWriteContent(t, res)
 	dataEnvelope := decodeWriteData(t, res)
 	assertRootOnlyField(t, out, dataEnvelope, "rate_limit_remaining")
+	if got := dataEnvelope["status"]; got != "created" {
+		t.Fatalf("upload_page_asset data.status = %v, want created — upload_page_asset only ever creates (an existing filename fails with already_exists)", got)
+	}
 	if dataEnvelope["source_key"] != "posts/article" {
 		t.Fatalf("upload_page_asset data.source_key = %v, want posts/article", dataEnvelope["source_key"])
 	}
@@ -389,6 +392,9 @@ func TestUploadPageAssetDryRunDoesNotWrite(t *testing.T) {
 		t.Fatalf("upload_page_asset dry_run returned error: %s", raw)
 	}
 	dataEnvelope := decodeWriteData(t, res)
+	if got := dataEnvelope["status"]; got != "unchanged" {
+		t.Fatalf("upload_page_asset dry_run data.status = %v, want unchanged", got)
+	}
 	if dryRun, _ := dataEnvelope["dry_run"].(bool); !dryRun {
 		t.Fatalf("upload_page_asset dry_run response data.dry_run = %v, want true", dataEnvelope["dry_run"])
 	}

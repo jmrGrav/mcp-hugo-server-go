@@ -96,6 +96,7 @@ type createPageData struct {
 	Content            string               `json:"content,omitempty"`
 	Warning            string               `json:"warning,omitempty"`
 	NewRevision        string               `json:"new_revision,omitempty"`
+	RevisionKind       string               `json:"revision_kind,omitempty"`
 	State              *site.LifecycleState `json:"state,omitempty"`
 	RateLimit          *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// TaxonomyCasingNormalized/TaxonomyCasingAmbiguous — see the comment on
@@ -170,11 +171,12 @@ type updatePageData struct {
 	// the false case) rather than being elided by omitempty — an agent must
 	// be able to tell "succeeded, no change" apart from "succeeded, changed"
 	// without diffing revisions itself.
-	Changed     *bool                `json:"changed,omitempty"`
-	Warning     string               `json:"warning,omitempty"`
-	NewRevision string               `json:"new_revision,omitempty"`
-	State       *site.LifecycleState `json:"state,omitempty"`
-	RateLimit   *rateLimitBucket     `json:"rate_limit,omitempty"`
+	Changed      *bool                `json:"changed,omitempty"`
+	Warning      string               `json:"warning,omitempty"`
+	NewRevision  string               `json:"new_revision,omitempty"`
+	RevisionKind string               `json:"revision_kind,omitempty"`
+	State        *site.LifecycleState `json:"state,omitempty"`
+	RateLimit    *rateLimitBucket     `json:"rate_limit,omitempty"`
 	// TaxonomyCasingNormalized lists tags/categories rewritten to match a
 	// casing already present elsewhere in the index (#589), populated only
 	// when the caller opted in via normalize_taxonomy_casing. Present only
@@ -710,7 +712,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	rt := newWriteRegisterRuntime(cfg, siteIdxs...)
 	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots)
 	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots)
+	registerListPageSnapshots(s, cfg, rt.snapshots)
 	registerBundleTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.bundlePlans, rt.bundleSnapshots)
+	registerBundleLifecycleTools(s, pg, idx, cfg, siteDB, rt)
 	registerCreatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerUpdatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerDeletePageTool(s, pg, idx, cfg, siteDB, rt)
@@ -873,7 +877,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages)
 			return nil, newCreatePageOutput(createPageData{
-				Status:                   "ok",
+				Status:                   "unchanged",
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedLang),
@@ -993,7 +997,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		idx.Upsert(created)
 		// Do NOT insert into the public site index — the page is source-only until
 		// Hugo builds it. UpsertPage here would break allow_source_fallback detection.
-		status := "ok"
+		status := "created"
 		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(created); err != nil {
@@ -1020,6 +1024,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			ResolvedLang:             strPtr(resolvedLang),
 			ResolvedSourcePath:       strPtr(logicalPath),
 			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
+			RevisionKind:             "content_snapshot",
 			Warning:                  appendLastBuildWarning(warning),
 			State:                    &state,
 			RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -1319,7 +1324,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			dryRunChanged := content != string(raw)
 			return nil, newUpdatePageOutput(updatePageData{
-				Status:                   "ok",
+				Status:                   "unchanged",
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedSource.Lang),
@@ -1403,7 +1408,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				rt.siteIdx.UpsertPage(pubUpdated)
 			}
 		}
-		status := "ok"
+		status := "updated"
 		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {
@@ -1444,6 +1449,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			ResolvedSourcePath:       strPtr(logicalPath),
 			Changed:                  &realChanged,
 			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
+			RevisionKind:             "content_snapshot",
 			Warning:                  appendLastBuildWarning(warning),
 			State:                    &state,
 			RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -1665,7 +1671,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			}
 			backlinksCount := len(bls)
 			return nil, newDeletePageOutput(deletePageData{
-				Status:                   "ok",
+				Status:                   "unchanged",
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedSource.Lang),
@@ -1847,7 +1853,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 
 		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
-		status := "ok"
+		status := "deleted"
 		if degradedDelete {
 			status = "partial_success"
 		}
@@ -2311,9 +2317,12 @@ func Defs() []tools.ToolDef {
 		{Name: "plan_content_change", RequiredScope: ""},
 		{Name: "apply_content_plan", RequiredScope: "write"},
 		{Name: "rollback_change", RequiredScope: "write"},
+		{Name: "list_page_snapshots", RequiredScope: "write"},
 		{Name: "plan_bundle_change", RequiredScope: ""},
 		{Name: "apply_bundle_plan", RequiredScope: "write"},
 		{Name: "rollback_bundle", RequiredScope: "write"},
+		{Name: "create_bundle", RequiredScope: "write"},
+		{Name: "delete_bundle", RequiredScope: "write"},
 	}
 }
 

@@ -687,19 +687,21 @@ func registerApplyBundlePlan(
 			}
 		}
 
-		var entry bundlePlanEntry
-		var ok bool
-		if in.DryRun {
-			entry, ok = plans.get(in.PlanID, isolationCallerKey(ctx))
-		} else {
-			entry, ok = plans.consume(in.PlanID, isolationCallerKey(ctx))
-		}
+		// Keep retryable bundle conflicts from consuming the plan (#1001):
+		// look the plan up without consuming it, and only consume it once
+		// the revision check below has passed.
+		entry, ok := plans.get(in.PlanID, isolationCallerKey(ctx))
 		if !ok {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_bundle_change again"))
 		}
+		// From here on, errors carry the slug the plan resolved (#1001) — a
+		// bundle spans multiple languages, so RequestedLang stays empty.
+		wrapErr = func(err error) error {
+			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: entry.Slug})
+		}
 
 		if !acquireContentLock("apply_bundle_plan") {
-			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held and this single-use plan was already consumed; call plan_bundle_change again before retrying"))
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
 		}
 		defer releaseContentLock("apply_bundle_plan")
 
@@ -711,6 +713,11 @@ func registerApplyBundlePlan(
 		}
 		if currentRev != entry.BundleRevision {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("bundle_conflict: bundle changed since the plan was created; call plan_bundle_change again"))
+		}
+		if !in.DryRun {
+			if _, ok := plans.consume(in.PlanID, isolationCallerKey(ctx)); !ok {
+				return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_bundle_change again"))
+			}
 		}
 
 		// Validate EVERY candidate before writing ANY — a single failure
@@ -727,7 +734,7 @@ func registerApplyBundlePlan(
 		if in.DryRun {
 			state := updatePageState(siteIdx != nil, bundleHasPublic(siteIdx, entry.Slug))
 			return nil, newApplyBundlePlanOutput(applyBundlePlanData{
-				Status: "ok", PlanID: in.PlanID, Slug: canonicalPublicSlug(entry.Slug), DryRun: true,
+				Status: "unchanged", PlanID: in.PlanID, Slug: canonicalPublicSlug(entry.Slug), DryRun: true,
 				BundleStatus: "valid", BeforeRevision: entry.BundleRevision,
 				Translations: bundleDryRunOutcomes(cfg.ContentRoot, entry.Translations), State: &state,
 				RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -767,7 +774,7 @@ func registerApplyBundlePlan(
 
 		afterRev, _ := contentmodel.BundleRevision(entry.BundleDir)
 		bundleStatus := "applied"
-		status := "ok"
+		status := "updated"
 		warning := ""
 		if len(warnings) > 0 {
 			status = "partial_success"
@@ -921,7 +928,7 @@ func registerRollbackBundle(
 				})
 			}
 			return nil, newRollbackBundleOutput(rollbackBundleData{
-				Status: "ok", Slug: canonicalPublicSlug(in.Slug), DryRun: true, BundleStatus: "restorable",
+				Status: "unchanged", Slug: canonicalPublicSlug(in.Slug), DryRun: true, BundleStatus: "restorable",
 				BeforeRevision: currentRev, Translations: outcomes,
 				RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
@@ -953,7 +960,7 @@ func registerRollbackBundle(
 			})
 		}
 		afterRev, _ := contentmodel.BundleRevision(dir)
-		status := "ok"
+		status := "restored"
 		warning := ""
 		if len(warnings) > 0 {
 			status = "partial_success"

@@ -224,6 +224,7 @@ type applyContentPlanData struct {
 	DryRun         bool                 `json:"dry_run,omitempty"`
 	BeforeRevision string               `json:"before_revision,omitempty"`
 	AfterRevision  string               `json:"after_revision,omitempty"`
+	RevisionKind   string               `json:"revision_kind,omitempty"`
 	Validation     string               `json:"validation,omitempty"`
 	Warning        string               `json:"warning,omitempty"`
 	State          *site.LifecycleState `json:"state,omitempty"`
@@ -712,13 +713,14 @@ func registerContentPlanTools(
 		}
 
 		// Idempotency replay is checked before the plan lookup: a plan is
-		// single-use and deleted the moment a real (non-dry-run) apply
-		// attempt is made, successful or not. A genuine retry of an
-		// already-applied request must not depend on the plan still
-		// existing, or replay would be indistinguishable from
-		// plan_not_found on the second call — deliberately reordered from
-		// the design doc's literal listing (which checked plan existence
-		// first) once implementing surfaced that gap.
+		// single-use and deleted once a real (non-dry-run) apply attempt
+		// succeeds in passing the revision check — not merely attempted; a
+		// revision_conflict or build_in_progress preserves it (#1001). A
+		// genuine retry of an already-applied request must not depend on
+		// the plan still existing, or replay would be indistinguishable
+		// from plan_not_found on the second call — deliberately reordered
+		// from the design doc's literal listing (which checked plan
+		// existence first) once implementing surfaced that gap.
 		idemHash := ""
 		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
 			hash, hashErr := requestHash(struct {
@@ -738,15 +740,18 @@ func registerContentPlanTools(
 			}
 		}
 
-		var entry planEntry
-		var ok bool
-		if in.DryRun {
-			entry, ok = plans.get(in.PlanID, isolationCallerKey(ctx))
-		} else {
-			entry, ok = plans.consume(in.PlanID, isolationCallerKey(ctx))
-		}
+		// Keep retryable revision conflicts from consuming the plan (#1001):
+		// look the plan up without consuming it, and only consume it once
+		// the revision check below has passed.
+		entry, ok := plans.get(in.PlanID, isolationCallerKey(ctx))
 		if !ok {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_content_change again"))
+		}
+		// From here on, errors carry the slug/lang the plan resolved (#1001)
+		// — a caller reading request_context on a revision_conflict/
+		// build_in_progress/read_error no longer has to guess which page.
+		wrapErr = func(err error) error {
+			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: entry.Slug, RequestedLang: entry.Lang})
 		}
 
 		const lockWait = 10 * time.Second
@@ -776,6 +781,11 @@ func registerContentPlanTools(
 		if entry.Revision != currentRevision {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since the plan was created; call plan_content_change again"))
 		}
+		if !in.DryRun {
+			if _, ok := plans.consume(in.PlanID, isolationCallerKey(ctx)); !ok {
+				return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_content_change again"))
+			}
+		}
 
 		if err := validateFrontmatterRoundTrip(entry.Content); err != nil {
 			slog.Error("apply_content_plan: round-trip guard failed", "plan_id", in.PlanID, "error", err)
@@ -789,7 +799,7 @@ func registerContentPlanTools(
 			}
 			state := updatePageState(siteIdx != nil, hadPublic)
 			return nil, newApplyContentPlanOutput(applyContentPlanData{
-				Status:         "ok",
+				Status:         "unchanged",
 				PlanID:         in.PlanID,
 				Slug:           canonicalPublicSlug(entry.Slug),
 				DryRun:         true,
@@ -862,7 +872,7 @@ func registerContentPlanTools(
 			}
 		}
 
-		status := "ok"
+		status := "updated"
 		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {
@@ -879,6 +889,7 @@ func registerContentPlanTools(
 			Slug:           canonicalPublicSlug(entry.Slug),
 			BeforeRevision: entry.Revision,
 			AfterRevision:  contentmodel.SourceRevisionBytes([]byte(entry.Content)),
+			RevisionKind:   "content_snapshot",
 			Validation:     "passed",
 			Warning:        appendLastBuildWarning(warning),
 			State:          &state,
