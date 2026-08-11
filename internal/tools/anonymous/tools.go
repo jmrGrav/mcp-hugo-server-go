@@ -774,6 +774,8 @@ func addReadOnlyTool[In, Out any](s *mcp.Server, name, title, description string
 
 func boolPtr(v bool) *bool { return &v }
 
+const contentProvenanceServerGeneratedTrusted = "server_generated_trusted"
+
 func success[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
@@ -823,7 +825,9 @@ func newGetFeedOutput(data getFeedData) getFeedOutput {
 }
 
 func newGetSiteInformationOutput(data getSiteInformationData) getSiteInformationOutput {
-	return getSiteInformationOutput{ToolResponse: success(data)}
+	meta := toolcontract.NewMeta(buildinfo.Version, time.Now().UTC())
+	meta.ContentProvenance = contentProvenanceServerGeneratedTrusted
+	return getSiteInformationOutput{ToolResponse: toolcontract.Success(data, meta)}
 }
 
 func clampLimit(v, defaultVal, maxVal int) int {

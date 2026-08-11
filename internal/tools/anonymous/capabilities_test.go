@@ -139,6 +139,9 @@ func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("get_capabilities failed: %#v", res)
 	}
+	if got := decodeEnvelope(t, res)["meta"].(map[string]any)["content_provenance"]; got != "server_generated_trusted" {
+		t.Fatalf("get_capabilities provenance = %v, want server_generated_trusted", got)
+	}
 	data := decodeContent(t, res)
 
 	limits, ok := data["limits"].(map[string]any)

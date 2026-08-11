@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -102,7 +103,9 @@ type getCapabilitiesOutput struct {
 }
 
 func newGetCapabilitiesOutput(data getCapabilitiesData) getCapabilitiesOutput {
-	return getCapabilitiesOutput{ToolResponse: success(data)}
+	meta := toolcontract.NewMeta(buildinfo.Version, time.Now().UTC())
+	meta.ContentProvenance = contentProvenanceServerGeneratedTrusted
+	return getCapabilitiesOutput{ToolResponse: toolcontract.Success(data, meta)}
 }
 
 // availableLanguages returns the distinct non-empty language codes present in
