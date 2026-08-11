@@ -193,6 +193,33 @@ func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
 	if got := int(features["post_build_hooks_count"].(float64)); got != 1 {
 		t.Errorf("post_build_hooks_count = %d, want 1", got)
 	}
+	disabled, ok := data["disabled_features"].([]any)
+	if !ok {
+		t.Fatalf("disabled_features missing/wrong type: %#v", data["disabled_features"])
+	}
+	seenCloudflare := false
+	seenExternalImage := false
+	for _, raw := range disabled {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("disabled_features entry type = %T", raw)
+		}
+		if entry["reason"] != "feature_disabled" {
+			t.Errorf("disabled feature reason = %v, want feature_disabled", entry["reason"])
+		}
+		if entry["name"] == "cloudflare_purge" {
+			seenCloudflare = true
+		}
+		if entry["name"] == "external_image_generation" {
+			seenExternalImage = true
+		}
+	}
+	if !seenCloudflare {
+		t.Error("disabled_features missing cloudflare_purge")
+	}
+	if seenExternalImage {
+		t.Error("disabled_features reported external_image_generation despite ImageGenURL being configured")
+	}
 
 	// Security invariant: the actual hook command must never be exposed.
 	env := decodeEnvelope(t, res)
