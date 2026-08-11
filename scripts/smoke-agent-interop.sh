@@ -10,6 +10,12 @@ BASE_URL="${BASE_URL:-https://mcp.arleo.eu}"
 SITE_URL="${SITE_URL:-https://www.arleo.eu}"
 CLAUDE_REDIRECT_URI="${CLAUDE_REDIRECT_URI:-https://claude.ai/api/mcp/auth_callback}"
 CHATGPT_REDIRECT_URI="${CHATGPT_REDIRECT_URI:-https://chatgpt.com/aip/oauth/callback}"
+GEMINI_REDIRECT_URI="${GEMINI_REDIRECT_URI:-}"
+GEMINI_CLIENT_ID="${GEMINI_CLIENT_ID:-gemini-interop-smoke}"
+GEMINI_CLIENT_NAME="${GEMINI_CLIENT_NAME:-gemini-interop-smoke}"
+CLIENT_RUNTIME_VERSION="${CLIENT_RUNTIME_VERSION:-unknown}"
+CLIENT_NAME="${CLIENT_NAME:-agent-interop-smoke}"
+INTEROP_RESULT_FILE="${INTEROP_RESULT_FILE:-}"
 EXPECT_READ_TOOLS_MIN="${EXPECT_READ_TOOLS_MIN:-}"
 EXPECT_ADMIN_TOOLS_MIN="${EXPECT_ADMIN_TOOLS_MIN:-}"
 
@@ -27,8 +33,27 @@ pass() {
   printf 'PASS %s\n' "$1" >&2
 }
 
+write_result_artifact() {
+  local outcome="$1"
+  local dimension="${2:-release_gate}"
+  local attribution="${3:-server_verified}"
+  [[ -z "$INTEROP_RESULT_FILE" ]] && return 0
+  jq -nc --arg scenario "agent-interop-smoke" --arg client "$CLIENT_NAME" \
+    --arg dimension "$dimension" --arg attribution "$attribution" \
+    --arg outcome "$outcome" --arg runtime "$CLIENT_RUNTIME_VERSION" \
+    --arg base_url "$BASE_URL" --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{scenario:$scenario,client:$client,dimension:$dimension,outcome:$outcome,client_runtime_version:$runtime,failure_attribution:$attribution,base_url:$base_url,timestamp:$timestamp}' \
+    >>"$INTEROP_RESULT_FILE"
+}
+
 fail() {
-  printf 'FAIL %s\n' "$1" >&2
+  local msg="$1"
+  printf 'FAIL %s\n' "$msg" >&2
+  local attribution="unknown"
+  if [[ "$msg" =~ attribution=([a-z_]+) ]]; then
+    attribution="${BASH_REMATCH[1]}"
+  fi
+  write_result_artifact "fail" "$msg" "$attribution"
   exit 1
 }
 
@@ -123,6 +148,27 @@ check_tools_list() {
   printf '%s\n' "$count"
 }
 
+check_scope_capabilities() {
+  local label="$1"
+  local bearer="$2"
+  local expected_json="$3"
+  [[ -n "$expected_json" ]] || return 0
+  local json missing
+  json="$(curl -fsS "$BASE_URL/mcp" -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' -H "Authorization: Bearer $bearer" \
+    --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | extract_json)"
+  # $expected[] as $name binds $name but leaves `.` (select's implicit input
+  # and output) at the top-level response object -- select would otherwise
+  # emit the whole response per missing tool instead of its name, tripping
+  # `join(",")` with a type error under set -e on the very path this check
+  # exists to report on. Pull the have-list out first and re-emit $name
+  # explicitly after select.
+  missing="$(jq -r --argjson expected "$expected_json" \
+    '[.result.tools[].name] as $have | [$expected[] as $name | select(($have | index($name)) | not) | $name] | join(",")' <<<"$json")"
+  [[ -z "$missing" ]] || fail "$label effective capability mapping missing tools: $missing"
+  pass "$label scope-to-capability mapping"
+}
+
 # Calls a tool via MCP JSON-RPC and returns the parsed result JSON.
 # Usage: mcp_tool_call LABEL TOOL_NAME ARGS_JSON [BEARER]
 mcp_tool_call() {
@@ -168,21 +214,43 @@ mcp_tool_call() {
     return 2
   fi
   if [[ "$status" != "200" ]]; then
-    fail "$label tools/call $tool_name: HTTP $status"
+    fail "$label tools/call $tool_name: HTTP $status (attribution=server_or_proxy; client bridge did not receive a valid response)"
     return 1
   fi
   local json
   json="$(extract_json "$body")"
   if jq -e '.error' <<<"$json" >/dev/null 2>&1; then
-    fail "$label tools/call $tool_name error: $(jq -r '.error.message // .error' <<<"$json")"
+    fail "$label tools/call $tool_name error: $(jq -r '.error.message // .error' <<<"$json") (attribution=server_or_proxy)"
     return 1
   fi
   if ! jq -e '.result' <<<"$json" >/dev/null 2>&1; then
-    fail "$label tools/call $tool_name: missing result field"
+    fail "$label tools/call $tool_name: missing result field (attribution=bridge_or_server_unknown)"
     return 1
   fi
   pass "$label tools/call $tool_name"
   jq '.result' <<<"$json"
+}
+
+assert_envelope_contract() {
+  local label="$1"
+  local result="$2"
+  local text
+  text="$(jq -r '.content[0].text // empty' <<<"$result")"
+  [[ -n "$text" ]] || fail "$label: missing content text"
+  jq -e '.success == true and (.data | type == "object") and (.errors | type == "array") and (.warnings | type == "array") and (.meta.schema_version | type == "string")' <<<"$text" >/dev/null \
+    || fail "$label: invalid MCP response envelope"
+  pass "$label: response envelope/schema valid"
+}
+
+assert_structured_invalid_params() {
+  local label="$1"
+  local result="$2"
+  local text
+  jq -e '.isError == true' <<<"$result" >/dev/null || fail "$label: expected isError=true"
+  text="$(jq -r '.content[0].text // empty' <<<"$result")"
+  jq -e '.success == false and .errors[0].code == "invalid_params"' <<<"$text" >/dev/null \
+    || fail "$label: expected structured invalid_params error"
+  pass "$label: structured business error valid"
 }
 
 probe_dcr() {
@@ -230,6 +298,9 @@ echo "  BASE_URL=$BASE_URL"
 echo "  SITE_URL=$SITE_URL"
 echo "  CLAUDE_REDIRECT_URI=$CLAUDE_REDIRECT_URI"
 echo "  CHATGPT_REDIRECT_URI=$CHATGPT_REDIRECT_URI"
+echo "  GEMINI_REDIRECT_URI=${GEMINI_REDIRECT_URI:-<unset>}"
+echo "  CLIENT_NAME=$CLIENT_NAME"
+echo "  CLIENT_RUNTIME_VERSION=$CLIENT_RUNTIME_VERSION"
 
 "$(dirname "$0")/check-agent-ready.sh" "$BASE_URL"
 
@@ -305,6 +376,13 @@ if [[ "${SMOKE_DCR_PROBE:-0}" == "1" ]]; then
   probe_dcr "ChatGPT" "$CHATGPT_REDIRECT_URI" "chatgpt-interop-smoke"
   probe_authorize "Claude" "claude-admin" "$CLAUDE_REDIRECT_URI"
   probe_authorize "ChatGPT" "chatgpt-write" "$CHATGPT_REDIRECT_URI"
+  if [[ "${SMOKE_GEMINI_PROBE:-0}" == "1" ]]; then
+    [[ -n "$GEMINI_REDIRECT_URI" ]] || fail "SMOKE_GEMINI_PROBE=1 requires GEMINI_REDIRECT_URI"
+    probe_dcr "Gemini" "$GEMINI_REDIRECT_URI" "$GEMINI_CLIENT_NAME"
+    probe_authorize "Gemini" "$GEMINI_CLIENT_ID" "$GEMINI_REDIRECT_URI"
+  else
+    echo "SKIP Gemini DCR/authorize probe (SMOKE_GEMINI_PROBE not set)"
+  fi
 else
   echo "SKIP DCR probe (SMOKE_DCR_PROBE not set)"
 fi
@@ -319,9 +397,14 @@ fi
 
 if [[ -n "${ADMIN_BEARER:-}" ]]; then
   admin_count="$(check_tools_list admin "$ADMIN_BEARER" "${EXPECT_ADMIN_TOOLS_MIN:-}")"
+  check_scope_capabilities "admin" "$ADMIN_BEARER" "${EXPECTED_ADMIN_TOOLS_JSON:-}"
 else
   admin_count=""
   echo "SKIP admin tools/list (ADMIN_BEARER not provided)"
+fi
+
+if [[ -n "${READ_BEARER:-}" ]]; then
+  check_scope_capabilities "read" "$READ_BEARER" "${EXPECTED_READ_TOOLS_JSON:-}"
 fi
 
 if [[ -n "$read_count" ]]; then
@@ -356,6 +439,27 @@ if [[ $site_info_status -ne 2 ]]; then
     fail "get_site_information: empty or missing content"
   else
     pass "get_site_information: content present"
+    assert_envelope_contract "get_site_information standard" "$site_info"
+  fi
+fi
+
+if [[ $site_info_status -ne 2 ]]; then
+  if compact_info="$(mcp_tool_call "anon" "get_site_information" '{"response_mode":"compact"}')"; then
+    compact_status=0
+  else
+    compact_status=$?
+  fi
+  if [[ $compact_status -ne 2 ]]; then
+    assert_envelope_contract "get_site_information compact" "$compact_info"
+  fi
+
+  if invalid_mode_info="$(mcp_tool_call "anon" "get_site_information" '{"response_mode":"invalid"}')"; then
+    invalid_mode_status=0
+  else
+    invalid_mode_status=$?
+  fi
+  if [[ $invalid_mode_status -ne 2 ]]; then
+    assert_structured_invalid_params "get_site_information invalid response_mode" "$invalid_mode_info"
   fi
 fi
 
@@ -383,6 +487,20 @@ else
   echo "SKIP read tools/call smoke (READ_BEARER not provided)"
 fi
 
+if [[ "${SMOKE_ENABLE_WRITES:-0}" == "1" ]]; then
+  [[ -n "${WRITE_BEARER:-}" ]] || fail "SMOKE_ENABLE_WRITES=1 requires WRITE_BEARER"
+  dry_run_slug="${WRITE_TEST_SLUG:-posts/interop-smoke-dry-run}"
+  dry_run_args="$(jq -nc --arg slug "$dry_run_slug" \
+    '{slug:$slug,title:"interop smoke dry-run",body:"contract probe",dry_run:true}')"
+  dry_run_result="$(mcp_tool_call "write" "create_page" "$dry_run_args" "$WRITE_BEARER")"
+  assert_envelope_contract "create_page dry-run" "$dry_run_result"
+  jq -e '.content[0].text | fromjson | .data.dry_run == true' <<<"$dry_run_result" >/dev/null \
+    || fail "create_page dry-run: server did not report dry_run=true"
+  pass "create_page dry-run is non-mutating"
+else
+  echo "SKIP mutation dry-run (SMOKE_ENABLE_WRITES not set)"
+fi
+
 register_status="$(
   curl -sk -o /dev/null -w '%{http_code}' \
     -X POST "$BASE_URL/register" \
@@ -398,4 +516,5 @@ case "$register_status" in
     ;;
 esac
 
+write_result_artifact "pass"
 echo "agent interop smoke OK"

@@ -57,14 +57,20 @@ and reverse-proxy HTML failures. The script is safe by default and skips write
 tools unless `MCP_SMOKE_ENABLE_WRITES=1` is explicitly set.
 
 The release interop gate (`scripts/smoke-agent-interop.sh`) is the deterministic
-client contract matrix for Claude and ChatGPT. It records, per client, discovery
-metadata, OAuth redirect behavior, scoped `tools/list` visibility, and a
-representative structured tool result. It must be run with the exact connector
-redirect URI and token used by the release environment; multi-day soak testing
-is intentionally out of scope because the service is already live-tested.
-Gemini, JSON Schema validation, response-mode coverage, structured business
-errors, mutation dry-run/apply behavior, and per-result client/runtime
-version publishing are not yet covered — see #1031.
+client contract matrix for Claude, ChatGPT, and optionally Gemini. It records,
+per run, discovery metadata, OAuth redirect behavior, scoped `tools/list`
+visibility, JSON response envelopes, compact/standard mode validation,
+structured business errors, and the client runtime version. Set
+`SMOKE_GEMINI_PROBE=1` with `GEMINI_REDIRECT_URI` to exercise Gemini DCR and
+authorize probes. Set `INTEROP_RESULT_FILE` to publish a JSON result record —
+one line per failure as it happens, plus a final summary line on success —
+each with client/runtime version and a failure-attribution field. Optional
+`EXPECTED_READ_TOOLS_JSON` and `EXPECTED_ADMIN_TOOLS_JSON` arrays assert the
+scope-to-effective-capability mapping.
+The opt-in `SMOKE_ENABLE_WRITES=1` probe requires `WRITE_BEARER` and performs a
+non-mutating `create_page` dry-run; destructive apply remains an integration
+fixture concern. Multi-day soak testing is intentionally out of scope because
+the service is already live-tested.
 
 ## Known Behavior: OAuth Enabled Requires Bearer for All Requests
 
