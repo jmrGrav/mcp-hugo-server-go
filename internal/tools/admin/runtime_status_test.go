@@ -193,6 +193,9 @@ func TestGetRuntimeStatusOmitsRevisionsByDefault(t *testing.T) {
 func TestGetRuntimeStatusStateMatrixDirtySourceNoBuildStaysInterpretable(t *testing.T) {
 	buildstatus.ResetForTest()
 	t.Cleanup(buildstatus.ResetForTest)
+	origDirty := buildinfo.Dirty
+	buildinfo.Dirty = false
+	t.Cleanup(func() { buildinfo.Dirty = origDirty })
 
 	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0 linux/amd64'\n")
 	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))

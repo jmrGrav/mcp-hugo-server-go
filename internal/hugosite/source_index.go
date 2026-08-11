@@ -324,6 +324,22 @@ func (idx *SourceIndex) HasPendingBuild() bool {
 // post-build index_reload callback (which calls ClearAllBuildPending), so it
 // can report the page-aware "changed set" for a build (#858): which changed
 // translations were included vs excluded as drafts.
+// PendingCount is PendingPages' count-only counterpart: it answers "how
+// many" without copying each pending SourcePage's Body/FrontmatterRaw, for
+// callers (e.g. get_runtime_status) that only need the number.
+func (idx *SourceIndex) PendingCount() int {
+	if idx == nil {
+		return 0
+	}
+	n := 0
+	for _, p := range idx.pages {
+		if p.BuildPending {
+			n++
+		}
+	}
+	return n
+}
+
 func (idx *SourceIndex) PendingPages() []SourcePage {
 	if idx == nil {
 		return nil

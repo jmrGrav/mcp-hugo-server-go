@@ -184,7 +184,9 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		data.SiteWorktreeDirty = data.Git.Dirty
 		pendingPages := 0
 		if srcIdx != nil {
-			pendingPages = len(srcIdx.PendingPages())
+			hugosite.ContentMu.RLock()
+			pendingPages = srcIdx.PendingCount()
+			hugosite.ContentMu.RUnlock()
 		}
 		data.UnpublishedChangesCount = pendingPages
 		data.SourceAheadOfPublic = pendingPages > 0 || (data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassContentSource))
