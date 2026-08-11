@@ -82,20 +82,29 @@ type capabilitiesFeatures struct {
 }
 
 type getCapabilitiesData struct {
-	EffectiveScopes     []string                 `json:"effective_scopes,omitempty"`
-	MaskedTools         *capabilitiesMaskedTools `json:"masked_tools,omitempty"`
-	Server              capabilitiesServer       `json:"server"`
-	Languages           capabilitiesLanguages    `json:"languages"`
-	Limits              capabilitiesLimits       `json:"limits"`
-	AllowedImageFormats []string                 `json:"allowed_image_formats"`
-	BlockedShortcodes   []string                 `json:"blocked_shortcodes"`
-	Features            capabilitiesFeatures     `json:"features"`
+	EffectiveScopes     []string                      `json:"effective_scopes,omitempty"`
+	MaskedTools         *capabilitiesMaskedTools      `json:"masked_tools,omitempty"`
+	DisabledFeatures    []capabilitiesDisabledFeature `json:"disabled_features,omitempty"`
+	Server              capabilitiesServer            `json:"server"`
+	Languages           capabilitiesLanguages         `json:"languages"`
+	Limits              capabilitiesLimits            `json:"limits"`
+	AllowedImageFormats []string                      `json:"allowed_image_formats"`
+	BlockedShortcodes   []string                      `json:"blocked_shortcodes"`
+	Features            capabilitiesFeatures          `json:"features"`
 }
 
 type capabilitiesMaskedTools struct {
 	Count  int      `json:"count"`
 	Reason string   `json:"reason,omitempty"`
 	Scopes []string `json:"required_scopes,omitempty"`
+}
+
+// capabilitiesDisabledFeature explains an optional integration disabled by
+// configuration without exposing credentials or host paths.
+type capabilitiesDisabledFeature struct {
+	Name                  string `json:"name"`
+	Reason                string `json:"reason"`
+	RequiredConfiguration string `json:"required_configuration,omitempty"`
 }
 
 type getCapabilitiesOutput struct {
@@ -169,7 +178,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			"`limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
 			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool. "+
-			"`effective_scopes` names the caller's own scope (`write` or `read` — the only two the server ever grants) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools, or `not_configured` when a write-scoped caller has them but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `feature_disabled` is not yet implemented (#1029).",
+			"`effective_scopes` names the caller's own scope (`write` or `read` — the only two the server ever grants) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools, or `not_configured` when a write-scoped caller has them but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `disabled_features[]` separately explains optional integrations disabled by configuration with reason `feature_disabled`; it never exposes secrets or paths.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
 			pMin, pDef, pMax := adminpkg.PreviewTTLBoundsSeconds()
 			localHeroGenerationAvailable := strings.TrimSpace(cfg.HugoRoot) != ""
@@ -179,8 +188,9 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				languageMode = "configured"
 			}
 			data := getCapabilitiesData{
-				EffectiveScopes: effectiveCapabilityScopes(ctx, scopeName),
-				MaskedTools:     maskedCapabilityTools(ctx, scopeName, writeEnabled),
+				EffectiveScopes:  effectiveCapabilityScopes(ctx, scopeName),
+				MaskedTools:      maskedCapabilityTools(ctx, scopeName, writeEnabled),
+				DisabledFeatures: disabledCapabilityFeatures(cfg),
 				Server: capabilitiesServer{
 					ReleaseVersion: buildinfo.Version,
 					Commit:         buildinfo.Commit,
@@ -227,6 +237,26 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}
 			return nil, newGetCapabilitiesOutput(data), nil
 		})
+}
+
+func disabledCapabilityFeatures(cfg config.Config) []capabilitiesDisabledFeature {
+	features := make([]capabilitiesDisabledFeature, 0, 5)
+	if !cfg.HugoUpgrade.Enabled {
+		features = append(features, capabilitiesDisabledFeature{Name: "hugo_upgrade", Reason: "feature_disabled", RequiredConfiguration: "hugo_upgrade.enabled"})
+	}
+	if strings.TrimSpace(cfg.ImageGenURL) == "" {
+		features = append(features, capabilitiesDisabledFeature{Name: "external_image_generation", Reason: "feature_disabled", RequiredConfiguration: "image_gen_url"})
+	}
+	if !cfg.Cloudflare.Enabled() {
+		features = append(features, capabilitiesDisabledFeature{Name: "cloudflare_purge", Reason: "feature_disabled", RequiredConfiguration: "cloudflare.zone_id, cloudflare.api_token"})
+	}
+	if !cfg.IndexNow.Enabled() {
+		features = append(features, capabilitiesDisabledFeature{Name: "indexnow", Reason: "feature_disabled", RequiredConfiguration: "indexnow.key"})
+	}
+	if !cfg.GoogleIndex.Enabled() {
+		features = append(features, capabilitiesDisabledFeature{Name: "google_indexing", Reason: "feature_disabled", RequiredConfiguration: "google_indexing.service_account_path"})
+	}
+	return features
 }
 
 // fallbackEffectiveScope reports the caller's effective scope when no
