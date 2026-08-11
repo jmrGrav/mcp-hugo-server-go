@@ -47,7 +47,13 @@ write_result_artifact() {
 }
 
 fail() {
-  printf 'FAIL %s\n' "$1" >&2
+  local msg="$1"
+  printf 'FAIL %s\n' "$msg" >&2
+  local attribution="unknown"
+  if [[ "$msg" =~ attribution=([a-z_]+) ]]; then
+    attribution="${BASH_REMATCH[1]}"
+  fi
+  write_result_artifact "fail" "$msg" "$attribution"
   exit 1
 }
 
