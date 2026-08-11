@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/caller"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
@@ -142,6 +143,7 @@ func ptrRateLimitBucket(bucket rateLimitBucket) *rateLimitBucket { return &bucke
 type getRateLimitsInput struct{}
 
 type getRateLimitsData struct {
+	IdentitySource     string          `json:"identity_source"`
 	CreateUpdateUpload rateLimitBucket `json:"create_update_upload"`
 	Destructive        rateLimitBucket `json:"destructive"`
 }
@@ -182,6 +184,7 @@ func registerGetRateLimits(s *mcp.Server, cfg config.Config, mutationMu *sync.Mu
 		deleteLimiter := callerLimiter(deleteMu, deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
 
 		return nil, newGetRateLimitsOutput(getRateLimitsData{
+			IdentitySource:     caller.Source(ctx),
 			CreateUpdateUpload: newRateLimitBucket(createLimiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
 			Destructive:        newRateLimitBucket(deleteLimiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
 		}), nil
