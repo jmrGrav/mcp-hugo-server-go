@@ -46,7 +46,7 @@ type createBundleInput struct {
 type deleteBundleInput struct {
 	Slug              string            `json:"slug"`
 	Languages         []string          `json:"languages"`
-	ExpectedRevisions map[string]string `json:"expected_revisions,omitempty"`
+	ExpectedRevisions map[string]string `json:"expected_revisions"`
 	DryRun            bool              `json:"dry_run,omitempty"`
 	IdempotencyKey    string            `json:"idempotency_key,omitempty"`
 }
@@ -145,6 +145,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			if e != nil {
 				return nil, bundleLifecycleOutput{}, wrap(e)
 			}
+			p.Lang = lang
 			files = append(files, struct {
 				path, content string
 				page          bundlePageInput
@@ -263,7 +264,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		return nil, out, nil
 	}))
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_bundle", Title: "Delete multilingual bundle", Description: "Atomically delete selected translations of a Hugo page bundle. All revisions are checked before the first unlink; a failure leaves the bundle unchanged. Pass every language to remove the bundle completely. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"delete_bundle\").", InputSchema: tools.MustSchema[deleteBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(true)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in deleteBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "delete_bundle", Title: "Delete multilingual bundle", Description: "Atomically delete selected translations of a Hugo page bundle. `expected_revisions` must supply the current revision (from get_page/create_bundle/delete_bundle output) for every language listed, including for dry_run; the call fails invalid_params otherwise. All revisions are checked before the first unlink; a failure leaves the bundle unchanged. Pass every language to remove the bundle completely. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"delete_bundle\").", InputSchema: tools.MustSchema[deleteBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(true)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in deleteBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		wrap := func(e error) error {
 			return toolcontract.WithRequestContext(e, toolcontract.RequestContext{Slug: in.Slug})

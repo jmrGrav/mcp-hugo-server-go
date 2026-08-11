@@ -149,6 +149,50 @@ func TestDeleteBundleIdempotencyKeyReplaysAfterSuccessfulDeleteWhenFilesGone(t *
 	}
 }
 
+// TestCreateBundleRevisionsRoundTripIntoDeleteBundle is a regression test:
+// create_bundle keyed its returned revisions map and internal index entries
+// off the raw, unnormalized `lang` field from each page instead of the
+// trimmed value used for the file path and the `languages` list. A caller
+// passing a language with incidental whitespace (accepted by
+// validateLangParam, which trims before validating) got back a revisions
+// map keyed by the untrimmed string, which delete_bundle's normalized
+// `expected_revisions[lang]` lookup could never match, breaking the
+// documented create -> delete_bundle recovery round trip.
+func TestCreateBundleRevisionsRoundTripIntoDeleteBundle(t *testing.T) {
+	root := t.TempDir()
+	session, _, done := newTestServer(t, root)
+	defer done()
+
+	created := callTool(t, session, "create_bundle", map[string]any{
+		"slug": "posts/roundtrip-bundle",
+		"pages": []any{
+			map[string]any{"lang": " fr", "title": "Bonjour", "body": "Corps FR"},
+			map[string]any{"lang": "en", "title": "Hello", "body": "Body EN"},
+		},
+	})
+	if created.IsError {
+		t.Fatalf("create_bundle failed: %s", marshalContent(t, created))
+	}
+	data := decodeWriteData(t, created)
+	revisions, _ := data["revisions"].(map[string]any)
+	if _, ok := revisions["fr"]; !ok {
+		t.Fatalf("revisions keyed off untrimmed lang, want %q, got %#v", "fr", revisions)
+	}
+
+	expectedRevisions := map[string]any{}
+	for lang, rev := range revisions {
+		expectedRevisions[lang] = rev
+	}
+	deleted := callTool(t, session, "delete_bundle", map[string]any{
+		"slug":               "posts/roundtrip-bundle",
+		"languages":          []any{"fr", "en"},
+		"expected_revisions": expectedRevisions,
+	})
+	if deleted.IsError {
+		t.Fatalf("delete_bundle using create_bundle's own revisions failed: %s", marshalContent(t, deleted))
+	}
+}
+
 // TestBundleIdempotencyKeyConflictOnDifferentPayload confirms reusing the
 // same idempotency_key for a genuinely different create_bundle request
 // (different slug) is rejected as idempotency_conflict rather than silently

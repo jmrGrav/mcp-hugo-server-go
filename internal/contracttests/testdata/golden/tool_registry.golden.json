@@ -913,7 +913,7 @@
   {
     "name": "delete_bundle",
     "required_scope": "write",
-    "description": "Atomically delete selected translations of a Hugo page bundle. All revisions are checked before the first unlink; a failure leaves the bundle unchanged. Pass every language to remove the bundle completely. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"delete_bundle\").",
+    "description": "Atomically delete selected translations of a Hugo page bundle. `expected_revisions` must supply the current revision (from get_page/create_bundle/delete_bundle output) for every language listed, including for dry_run; the call fails invalid_params otherwise. All revisions are checked before the first unlink; a failure leaves the bundle unchanged. Pass every language to remove the bundle completely. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"delete_bundle\").",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -944,7 +944,8 @@
       },
       "required": [
         "slug",
-        "languages"
+        "languages",
+        "expected_revisions"
       ],
       "type": "object"
     },
