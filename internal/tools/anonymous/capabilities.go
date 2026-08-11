@@ -248,7 +248,7 @@ func disabledCapabilityFeatures(cfg config.Config) []capabilitiesDisabledFeature
 		features = append(features, capabilitiesDisabledFeature{Name: "external_image_generation", Reason: "feature_disabled", RequiredConfiguration: "image_gen_url"})
 	}
 	if !cfg.Cloudflare.Enabled() {
-		features = append(features, capabilitiesDisabledFeature{Name: "cloudflare_purge", Reason: "feature_disabled", RequiredConfiguration: "cloudflare.zone_id_and_api_token"})
+		features = append(features, capabilitiesDisabledFeature{Name: "cloudflare_purge", Reason: "feature_disabled", RequiredConfiguration: "cloudflare.zone_id, cloudflare.api_token"})
 	}
 	if !cfg.IndexNow.Enabled() {
 		features = append(features, capabilitiesDisabledFeature{Name: "indexnow", Reason: "feature_disabled", RequiredConfiguration: "indexnow.key"})
