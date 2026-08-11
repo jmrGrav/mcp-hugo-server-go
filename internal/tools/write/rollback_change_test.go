@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,6 +94,86 @@ func TestRollbackChangeUnknownRevisionIsSnapshotNotFound(t *testing.T) {
 	raw := marshalContent(t, res)
 	if !strings.Contains(raw, "snapshot_not_found") {
 		t.Fatalf("rollback_change unknown revision error = %s", raw)
+	}
+}
+
+// TestRollbackChangeDistinguishesGitCommitFromContentSnapshot is the paired
+// regression #1024/#1002 asked for: a git_commit revision (from
+// list_page_revisions, real git history this deployment never snapshotted)
+// must be rejected as non-restorable, while a content_snapshot revision
+// (from apply_content_plan/list_page_snapshots) must actually restore.
+func TestRollbackChangeDistinguishesGitCommitFromContentSnapshot(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "history", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: History\n---\nOriginal body.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, contentRoot, "init")
+	runGit(t, contentRoot, "config", "user.email", "test@example.test")
+	runGit(t, contentRoot, "config", "user.name", "Test User")
+	runGit(t, contentRoot, "add", ".")
+	runGit(t, contentRoot, "commit", "-m", "initial")
+
+	session, _, done := newReadWriteTestServer(t, contentRoot)
+	defer done()
+
+	revRes := callTool(t, session, "list_page_revisions", map[string]any{"slug": "posts/history"})
+	if revRes.IsError {
+		t.Fatalf("list_page_revisions failed: %s", marshalContent(t, revRes))
+	}
+	revisions := decodeWriteData(t, revRes)["revisions"].([]any)
+	if len(revisions) == 0 {
+		t.Fatal("list_page_revisions returned no revisions")
+	}
+	gitCommit := revisions[0].(map[string]any)
+	if gitCommit["revision_kind"] != "git_commit" {
+		t.Fatalf("list_page_revisions revision_kind = %v, want git_commit", gitCommit["revision_kind"])
+	}
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug":       "posts/history",
+		"operations": []any{map[string]any{"op": "update_body", "body": "Changed body."}},
+	})
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
+	}
+	applyData := decodeWriteData(t, applyRes)
+	if applyData["revision_kind"] != "content_snapshot" {
+		t.Fatalf("apply_content_plan revision_kind = %v, want content_snapshot", applyData["revision_kind"])
+	}
+	beforeRevision := applyData["before_revision"].(string)
+	afterRevision := applyData["after_revision"].(string)
+
+	// Non-restorable: real git history this server never snapshotted.
+	gitAttempt := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/history",
+		"to_revision":       gitCommit["commit"],
+		"expected_revision": afterRevision,
+	})
+	if !gitAttempt.IsError {
+		t.Fatal("rollback_change to a git_commit revision must fail as non-restorable")
+	}
+	if raw := marshalContent(t, gitAttempt); !strings.Contains(raw, "snapshot_not_found") {
+		t.Fatalf("rollback_change git_commit attempt error = %s, want snapshot_not_found", raw)
+	}
+
+	// Restorable: the content_snapshot apply_content_plan captured.
+	snapshotAttempt := callTool(t, session, "rollback_change", map[string]any{
+		"slug":              "posts/history",
+		"to_revision":       beforeRevision,
+		"expected_revision": afterRevision,
+	})
+	if snapshotAttempt.IsError {
+		t.Fatalf("rollback_change to a content_snapshot revision failed: %s", marshalContent(t, snapshotAttempt))
+	}
+	restored := readFileString(t, contentRoot, "posts/history/index.md")
+	if !strings.Contains(restored, "Original body.") {
+		t.Fatalf("rollback_change did not restore original content: %q", restored)
 	}
 }
 
@@ -515,6 +596,14 @@ func newReadWriteTestServer(t *testing.T, contentRoot string) (*mcp.ClientSessio
 		t.Fatalf("client connect: %v", err)
 	}
 	return session, idx, func() { _ = session.Close() }
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
 }
 
 func decodeNestedMap(t *testing.T, res *mcp.CallToolResult, path ...string) map[string]any {
