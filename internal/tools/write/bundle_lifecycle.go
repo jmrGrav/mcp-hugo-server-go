@@ -11,8 +11,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -35,9 +37,10 @@ type bundlePageInput struct {
 }
 
 type createBundleInput struct {
-	Slug   string            `json:"slug"`
-	Pages  []bundlePageInput `json:"pages"`
-	DryRun bool              `json:"dry_run,omitempty"`
+	Slug           string            `json:"slug"`
+	Pages          []bundlePageInput `json:"pages"`
+	DryRun         bool              `json:"dry_run,omitempty"`
+	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 }
 
 type deleteBundleInput struct {
@@ -45,6 +48,7 @@ type deleteBundleInput struct {
 	Languages         []string          `json:"languages"`
 	ExpectedRevisions map[string]string `json:"expected_revisions,omitempty"`
 	DryRun            bool              `json:"dry_run,omitempty"`
+	IdempotencyKey    string            `json:"idempotency_key,omitempty"`
 }
 
 type bundleLifecycleData struct {
@@ -76,13 +80,16 @@ func bundleLangFile(dir, lang string) (string, error) {
 }
 
 func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) {
-	mcp.AddTool(s, &mcp.Tool{Name: "create_bundle", Title: "Create multilingual bundle", Description: "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. dry_run previews the files without writing.", InputSchema: tools.MustSchema[createBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "create_bundle", Title: "Create multilingual bundle", Description: "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").", InputSchema: tools.MustSchema[createBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		wrap := func(e error) error {
 			return toolcontract.WithRequestContext(e, toolcontract.RequestContext{Slug: in.Slug})
 		}
 		if in.Slug == "" {
 			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: slug must not be empty"))
+		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(err)
 		}
 		if err := validateSlugFormat(in.Slug); err != nil {
 			return nil, bundleLifecycleOutput{}, wrap(err)
@@ -144,6 +151,60 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			}{path, content, p})
 			langs = append(langs, lang)
 		}
+		mutating := !in.DryRun && !cfg.ForceDryRunAll
+
+		lockHeld := false
+		acquireLock := func() error {
+			if lockHeld {
+				return nil
+			}
+			const lockWait = 10 * time.Second
+			deadline := time.Now().Add(lockWait)
+			for {
+				if hugosite.ContentMu.TryLock() {
+					lockHeld = true
+					return nil
+				}
+				if time.Now().After(deadline) {
+					return fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		if mutating && strings.TrimSpace(in.IdempotencyKey) != "" {
+			if err := acquireLock(); err != nil {
+				return nil, bundleLifecycleOutput{}, wrap(err)
+			}
+		}
+		defer func() {
+			if lockHeld {
+				hugosite.ContentMu.Unlock()
+			}
+		}()
+
+		// Idempotency replay must run before the already_exists preflight below:
+		// a successful first create leaves the translations on disk, so checking
+		// existence first would turn the exact same retry into already_exists
+		// instead of replaying the original success (matches delete_page's #724
+		// fix). It stays under the content lock so same-key concurrent retries
+		// serialize correctly.
+		idemHash := ""
+		if mutating && strings.TrimSpace(in.IdempotencyKey) != "" {
+			hash, hashErr := requestHash(in)
+			if hashErr != nil {
+				return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("internal_error: failed to hash idempotency request"))
+			}
+			idemHash = hash
+			var cached bundleLifecycleOutput
+			hit, replayErr := rt.idem.replay(idempotencyCallerKey(ctx), "create_bundle", in.IdempotencyKey, idemHash, &cached)
+			if replayErr != nil {
+				return nil, bundleLifecycleOutput{}, wrap(replayErr)
+			}
+			if hit {
+				return nil, cached, nil
+			}
+		}
+
 		for _, f := range files {
 			if _, e := os.Stat(f.path); e == nil {
 				return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("already_exists: translation %q already exists", filepath.Base(f.path)))
@@ -151,15 +212,16 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 				return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("read_error: failed to inspect bundle"))
 			}
 		}
-		if in.DryRun || cfg.ForceDryRunAll {
+		if !mutating {
 			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "unchanged", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true}), nil
 		}
 		createLimiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, mutationCallerKey(ctx), cfg.RateLimit.CreateUpdatePerMin)
 		if !createLimiter.Allow() {
 			return nil, bundleLifecycleOutput{}, wrap(rateLimitExceededErr("create_bundle", cfg.RateLimit.CreateUpdatePerMin, createLimiter))
 		}
-		hugosite.ContentMu.Lock()
-		defer hugosite.ContentMu.Unlock()
+		if err := acquireLock(); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(err)
+		}
 		created := []string{}
 		rollback := func() {
 			for _, p := range created {
@@ -192,10 +254,16 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 				}
 			}
 		}
-		return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "created", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs}), nil
+		out := bundleLifecycleSuccess(bundleLifecycleData{Status: "created", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs})
+		if idemHash != "" {
+			if err := rt.idem.remember(idempotencyCallerKey(ctx), "create_bundle", in.IdempotencyKey, idemHash, out); err != nil {
+				slog.Warn("create_bundle: could not persist idempotency result", "slug", in.Slug, "error", err)
+			}
+		}
+		return nil, out, nil
 	}))
 
-	mcp.AddTool(s, &mcp.Tool{Name: "delete_bundle", Title: "Delete multilingual bundle", Description: "Atomically delete selected translations of a Hugo page bundle. All revisions are checked before the first unlink; a failure leaves the bundle unchanged. Pass every language to remove the bundle completely.", InputSchema: tools.MustSchema[deleteBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(true)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in deleteBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "delete_bundle", Title: "Delete multilingual bundle", Description: "Atomically delete selected translations of a Hugo page bundle. All revisions are checked before the first unlink; a failure leaves the bundle unchanged. Pass every language to remove the bundle completely. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"delete_bundle\").", InputSchema: tools.MustSchema[deleteBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(true)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in deleteBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		wrap := func(e error) error {
 			return toolcontract.WithRequestContext(e, toolcontract.RequestContext{Slug: in.Slug})
@@ -203,9 +271,65 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		if in.Slug == "" {
 			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
+		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(err)
+		}
 		if len(in.Languages) == 0 {
 			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: languages must not be empty"))
 		}
+
+		lockHeld := false
+		acquireLock := func() error {
+			if lockHeld {
+				return nil
+			}
+			const lockWait = 10 * time.Second
+			deadline := time.Now().Add(lockWait)
+			for {
+				if hugosite.ContentMu.TryLock() {
+					lockHeld = true
+					return nil
+				}
+				if time.Now().After(deadline) {
+					return fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
+		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+			if err := acquireLock(); err != nil {
+				return nil, bundleLifecycleOutput{}, wrap(err)
+			}
+		}
+		defer func() {
+			if lockHeld {
+				hugosite.ContentMu.Unlock()
+			}
+		}()
+
+		// Idempotency replay must run before any current-state existence/revision
+		// checks: a successful first delete removes the translations, so
+		// checking them first would turn the exact same retry into not_found
+		// instead of replaying the original success (matches delete_page's #724
+		// fix). It stays under the content lock so same-key concurrent retries
+		// serialize correctly.
+		idemHash := ""
+		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+			hash, hashErr := requestHash(in)
+			if hashErr != nil {
+				return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("internal_error: failed to hash idempotency request"))
+			}
+			idemHash = hash
+			var cached bundleLifecycleOutput
+			hit, replayErr := rt.idem.replay(idempotencyCallerKey(ctx), "delete_bundle", in.IdempotencyKey, idemHash, &cached)
+			if replayErr != nil {
+				return nil, bundleLifecycleOutput{}, wrap(replayErr)
+			}
+			if hit {
+				return nil, cached, nil
+			}
+		}
+
 		dir, e := pg.SafeJoin(in.Slug)
 		if e != nil {
 			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: path validation failed"))
@@ -253,8 +377,9 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		if !deleteLimiter.Allow() {
 			return nil, bundleLifecycleOutput{}, wrap(rateLimitExceededErr("delete_bundle", cfg.RateLimit.DestructivePerMin, deleteLimiter))
 		}
-		hugosite.ContentMu.Lock()
-		defer hugosite.ContentMu.Unlock()
+		if err := acquireLock(); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(err)
+		}
 		for _, p := range paths {
 			raw, re := os.ReadFile(p.path)
 			if re != nil || contentmodel.SourceRevisionBytes(raw) != p.rev {
@@ -289,6 +414,12 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		for _, p := range paths {
 			revs[p.lang] = p.rev
 		}
-		return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "deleted", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs}), nil
+		out := bundleLifecycleSuccess(bundleLifecycleData{Status: "deleted", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs})
+		if idemHash != "" {
+			if err := rt.idem.remember(idempotencyCallerKey(ctx), "delete_bundle", in.IdempotencyKey, idemHash, out); err != nil {
+				slog.Warn("delete_bundle: could not persist idempotency result", "slug", in.Slug, "error", err)
+			}
+		}
+		return nil, out, nil
 	}))
 }
