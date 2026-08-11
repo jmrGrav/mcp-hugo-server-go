@@ -182,6 +182,102 @@ func TestGetRuntimeStatusOmitsRevisionsByDefault(t *testing.T) {
 	}
 }
 
+// TestGetRuntimeStatusStateMatrixDirtySourceNoBuildStaysInterpretable is the
+// #1030/#1009 state-matrix regression: build_dirty:false, git.dirty:true,
+// modified source files, divergent source/public revisions, and no
+// last_build, all simultaneously. Before source_ahead_of_public/
+// unpublished_changes_count/process_started_at/last_build_persistence
+// existed, this combination looked self-contradictory (a "clean" binary
+// build report next to a dirty git tree and no build history, with no field
+// explaining why). This asserts the new fields resolve that ambiguity.
+func TestGetRuntimeStatusStateMatrixDirtySourceNoBuildStaysInterpretable(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+
+	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0 linux/amd64'\n")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	if err := os.MkdirAll(contentRoot, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	pagePath := filepath.Join(contentRoot, "posts", "x", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: X\n---\noriginal\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	runGitCmd(t, root, "init")
+	runGitCmd(t, root, "config", "user.email", "test@example.test")
+	runGitCmd(t, root, "config", "user.name", "Test User")
+	runGitCmd(t, root, "add", ".")
+	runGitCmd(t, root, "commit", "-m", "initial")
+
+	// Modified source file left uncommitted: git.dirty:true, classified
+	// content_source, with no build_site call ever made (build_dirty stays
+	// the binary's own git-describe cleanliness, unrelated to this content
+	// edit, and last_build stays omitted).
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: X\n---\nedited, unpublished\n"), 0o644); err != nil {
+		t.Fatalf("edit page: %v", err)
+	}
+
+	siteRoot := t.TempDir()
+	// Divergent source/public revisions: public output exists but predates
+	// the source edit above.
+	if err := os.WriteFile(filepath.Join(siteRoot, "index.html"), []byte("stale public output"), 0o644); err != nil {
+		t.Fatalf("write stale public output: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = hugoDir
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{"include_revisions": true})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+
+	if data["build_dirty"] != false {
+		t.Fatalf("build_dirty = %v, want false (binary cleanliness, independent of the content edit)", data["build_dirty"])
+	}
+	git := data["git"].(map[string]any)
+	if git["dirty"] != true {
+		t.Fatalf("git.dirty = %v, want true (uncommitted content edit)", git["dirty"])
+	}
+	if _, present := data["last_build"]; present {
+		t.Fatalf("last_build = %v, want omitted (build_site never called)", data["last_build"])
+	}
+	site := data["site"].(map[string]any)
+	sourceRev, _ := site["source_revision"].(string)
+	publicRev, _ := site["public_revision"].(string)
+	if sourceRev == "" || publicRev == "" || sourceRev == publicRev {
+		t.Fatalf("source_revision=%q public_revision=%q, want non-empty and divergent", sourceRev, publicRev)
+	}
+
+	// Despite build_dirty:false and no last_build looking like "nothing to
+	// see here", source_ahead_of_public must say otherwise.
+	if data["source_ahead_of_public"] != true {
+		t.Fatalf("source_ahead_of_public = %v, want true — dirty content_source changes are pending publication", data["source_ahead_of_public"])
+	}
+	if got, ok := data["process_started_at"].(string); !ok || got == "" {
+		t.Fatalf("process_started_at = %v, want non-empty timestamp explaining process vs. build-history state", data["process_started_at"])
+	}
+	if data["last_build_persistence"] != "process_memory" {
+		t.Fatalf("last_build_persistence = %v, want process_memory (explains why last_build is omitted rather than looking broken)", data["last_build_persistence"])
+	}
+}
+
 func TestGetRuntimeStatusReportsDegradedSurfacesWhenHugoAndGitUnavailable(t *testing.T) {
 	buildstatus.ResetForTest()
 	t.Cleanup(buildstatus.ResetForTest)
