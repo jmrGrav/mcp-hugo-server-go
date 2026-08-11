@@ -32,7 +32,7 @@ func mustBenchmarkIndex(b *testing.B) *site.Index {
 func newBenchmarkClient(b *testing.B, idx *site.Index) (*mcp.ClientSession, func()) {
 	b.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "bench", Version: "0.1"}, nil)
-	anonymous.Register(s, idx, config.Default())
+	anonymous.Register(s, idx, config.Default(), "")
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

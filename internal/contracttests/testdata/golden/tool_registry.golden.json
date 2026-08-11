@@ -189,6 +189,7 @@
       "data.rate_limit.window_seconds:integer:required",
       "data.rate_limit:unspecified",
       "data.rate_limit_remaining:integer",
+      "data.revision_kind:string",
       "data.slug:string",
       "data.state.build_state:string:required",
       "data.state.index_state:string:required",
@@ -233,7 +234,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "c547c63eb1714b75df26f55e82fa340b433ed71bcb94fd766ce1bae0d9646495"
+    "output_schema_sha256": "b8e351b53e0e19dbcc2d428d6da10058cb7093e916b43666377430f292e44a0e"
   },
   {
     "name": "bootstrap_hugo",
@@ -601,6 +602,115 @@
     "output_schema_sha256": "6b1186011b9452690fe4845375f2efb1dd3fcf1f6950ea3bcac2f64fad0433f1"
   },
   {
+    "name": "create_bundle",
+    "required_scope": "write",
+    "description": "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "pages": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "categories": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "lang": {
+                "type": "string"
+              },
+              "tags": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "lang",
+              "title",
+              "body"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "pages"
+      ],
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.dry_run:boolean",
+      "data.languages:unspecified:required",
+      "data.revisions:object",
+      "data.slug:string:required",
+      "data.status:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "request_context.filename:string",
+      "request_context.requested_lang:string",
+      "request_context.slug:string:required",
+      "request_context:unspecified",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "8bac922c260cc6fc538be643aab63570ac003946a663f483b1f56cabb6b3287e"
+  },
+  {
     "name": "create_page",
     "required_scope": "write",
     "description": "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. `lang` for a language the site does not recognize: if the operator has set `configured_languages`, an unrecognized `lang` is rejected with `invalid_params` and nothing is written (#899); otherwise (the default) it is only a warning — the page is still written, since the server can't tell a typo from a deliberately new language without that operator-declared set. Either way, call get_capabilities first to see the authoritative/known language list.",
@@ -689,6 +799,7 @@
       "data.rate_limit_remaining:integer",
       "data.resolved_lang:unspecified",
       "data.resolved_source_path:unspecified",
+      "data.revision_kind:string",
       "data.slug:string",
       "data.source_key:string",
       "data.state.build_state:string:required",
@@ -741,7 +852,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "de0dcb47d8c7af72d1964c4b93666c55b891972e07ebc66f12eeb0263154c502"
+    "output_schema_sha256": "b6eb5d047a2d381a4a4e7fba61605e21fc7156c50433036bda4d00447b435a72"
   },
   {
     "name": "create_preview",
@@ -800,6 +911,87 @@
       "warnings:unspecified:required"
     ],
     "output_schema_sha256": "51a7d65fb61347cdbe914cc74230e2f10870b880d70bfab9be93a79e77eaf514"
+  },
+  {
+    "name": "delete_bundle",
+    "required_scope": "write",
+    "description": "Atomically delete selected translations of a Hugo page bundle. `expected_revisions` must supply the current revision (from get_page/create_bundle/delete_bundle output) for every language listed, including for dry_run; the call fails invalid_params otherwise. All revisions are checked before the first unlink; a failure leaves the bundle unchanged. Pass every language to remove the bundle completely. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"delete_bundle\").",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "expected_revisions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "languages",
+        "expected_revisions"
+      ],
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.dry_run:boolean",
+      "data.languages:unspecified:required",
+      "data.revisions:object",
+      "data.slug:string:required",
+      "data.status:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "request_context.filename:string",
+      "request_context.requested_lang:string",
+      "request_context.slug:string:required",
+      "request_context:unspecified",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "8bac922c260cc6fc538be643aab63570ac003946a663f483b1f56cabb6b3287e"
   },
   {
     "name": "delete_page",
@@ -953,8 +1145,10 @@
     "output_schema_fields": [
       "data.dry_run:boolean",
       "data.filename:string",
+      "data.follow_up_action:string",
       "data.kind:string",
       "data.path:string",
+      "data.public_copy_may_remain:boolean",
       "data.rate_limit.limit:integer:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
@@ -1006,7 +1200,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "78a0a2d8df0c443fe09cfeed3cebb54f2147e6e72e484943cbc884d274e5d05b"
+    "output_schema_sha256": "a36e5c73fc2045a0ebf44bafab3cf504a1425be6ba19cc75ab581de0ba07b337"
   },
   {
     "name": "diff_page",
@@ -1578,7 +1772,7 @@
   {
     "name": "get_capabilities",
     "required_scope": "",
-    "description": "Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): `server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); `limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); `allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). `features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool.",
+    "description": "Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): `server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); `limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); `allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). `features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool. `effective_scopes` names the caller's own scope (`write` or `read` — the only two the server ever grants) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools, or `not_configured` when a write-scoped caller has them but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `feature_disabled` is not yet implemented (#1029).",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"
@@ -1586,6 +1780,7 @@
     "output_schema_fields": [
       "data.allowed_image_formats:unspecified:required",
       "data.blocked_shortcodes:unspecified:required",
+      "data.effective_scopes:unspecified",
       "data.features.cloudflare_purge_configured:boolean:required",
       "data.features.external_image_generation_available:boolean:required",
       "data.features.force_dry_run_all:boolean:required",
@@ -1617,6 +1812,10 @@
       "data.limits.test_content_max_ttl_hours:integer:required",
       "data.limits.title_max_runes:integer:required",
       "data.limits:object:required",
+      "data.masked_tools.count:integer:required",
+      "data.masked_tools.reason:string",
+      "data.masked_tools.required_scopes:unspecified",
+      "data.masked_tools:unspecified",
       "data.server.build_channel:string",
       "data.server.commit:string",
       "data.server.release_version:string:required",
@@ -1652,7 +1851,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "50b45722b3d1cef2273d3d10f46e7710444ba16bfbf51ea2ca983196198a027b"
+    "output_schema_sha256": "82e8ec4e9f178486ab47300e5029a82f55f5f3b64c4874711bebb097df8a349e"
   },
   {
     "name": "get_changelog",
@@ -1847,7 +2046,7 @@
   {
     "name": "get_mutation_status",
     "required_scope": "write",
-    "description": "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change/apply_bundle_plan/rollback_bundle call that used idempotency_key actually succeeded — for recovering from a timeout or otherwise ambiguous response without resending the original mutation payload. `status: \"succeeded\"` means that exact call completed and `result` is its entire original response envelope (success/data/errors/warnings/meta, not just data), byte-identical to what a same-key/same-payload retry of the mutation tool itself would replay. `status: \"unknown\"` means there is no confirmed success on record for this tool+key right now — this does NOT mean the call failed: it equally covers still-in-flight, genuinely failed, expired (entries are retained 15 minutes on this server — a deployment-level setting, shared with the underlying idempotency cache), or never attempted with this key. Only successful calls are ever recorded here (failures are safe to simply retry). When in doubt, retrying the original mutation call with the same idempotency_key and payload is always safe regardless of what this tool reports — it will either replay the already-completed result or execute for the first time. Requires write.",
+    "description": "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change/apply_bundle_plan/rollback_bundle/create_bundle/delete_bundle call that used idempotency_key actually succeeded — for recovering from a timeout or otherwise ambiguous response without resending the original mutation payload. `status: \"succeeded\"` means that exact call completed and `result` is its entire original response envelope (success/data/errors/warnings/meta, not just data), byte-identical to what a same-key/same-payload retry of the mutation tool itself would replay. `status: \"unknown\"` means there is no confirmed success on record for this tool+key right now — this does NOT mean the call failed: it equally covers still-in-flight, genuinely failed, expired (entries are retained 15 minutes on this server — a deployment-level setting, shared with the underlying idempotency cache), or never attempted with this key. Only successful calls are ever recorded here (failures are safe to simply retry). When in doubt, retrying the original mutation call with the same idempotency_key and payload is always safe regardless of what this tool reports — it will either replay the already-completed result or execute for the first time. Requires write.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -2396,6 +2595,7 @@
       "data.destructive.scope:string:required",
       "data.destructive.window_seconds:integer:required",
       "data.destructive:object:required",
+      "data.identity_source:string:required",
       "data:object:required",
       "errors:unspecified:required",
       "errors[].build_id:string",
@@ -2426,7 +2626,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "19bb5bfa05a7d98055c57475839ccbc3e0706a06ee4fc72d7c193bda7107f8f2"
+    "output_schema_sha256": "29e50c1c353b5423ef6a8a65c910e4e05a2c54ba9f225e420100dbcfe456a418"
   },
   {
     "name": "get_recent_posts",
@@ -3007,6 +3207,9 @@
       "data.findings[].detail:string:required",
       "data.findings[].logical_path:string",
       "data.findings[].reason:string",
+      "data.findings[].recommended_action.arguments:object:required",
+      "data.findings[].recommended_action.recommended_tool:string:required",
+      "data.findings[].recommended_action:unspecified",
       "data.findings[].ref:string",
       "data.findings[].referenced_by:unspecified",
       "data.findings[].resource_class:string:required",
@@ -3047,7 +3250,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "dfa67563cead6e47555292e112a6e441350993317fed5ae8f544c3d309aab841"
+    "output_schema_sha256": "5e51a22e306027ab4af6d6207767fd591afa08c7d8c4d57363c7a9751c74426a"
   },
   {
     "name": "get_theme_status",
@@ -3486,6 +3689,66 @@
       "warnings:unspecified:required"
     ],
     "output_schema_sha256": "be187874142b577dc1d6c4175698ba63d3ce01a56535cab06cb963730c01d8d4"
+  },
+  {
+    "name": "list_page_snapshots",
+    "required_scope": "write",
+    "description": "List live rollback snapshots captured by this server for one page. Entries are caller-isolated, expire after 24 hours, and carry revision_kind=content_snapshot; unlike list_page_revisions git commits, these revisions can be passed to rollback_change.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "lang": {
+          "type": "string"
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.lang:string",
+      "data.slug:string:required",
+      "data.snapshots:unspecified:required",
+      "data.snapshots[].created_at:string:required",
+      "data.snapshots[].expires_at:string:required",
+      "data.snapshots[].revision:string:required",
+      "data.snapshots[].revision_kind:string:required",
+      "data.source_key:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "5415ec00135806d764894a488d53c011bc28adf9e7bdcbdbce7d5b6754be23da"
   },
   {
     "name": "list_pages",
@@ -4969,6 +5232,7 @@
       "data.rate_limit_remaining:integer",
       "data.resolved_lang:unspecified",
       "data.resolved_source_path:unspecified",
+      "data.revision_kind:string",
       "data.slug:string",
       "data.source_key:string",
       "data.state.build_state:string:required",
@@ -5024,7 +5288,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "a135f6bffcc83bea807d1fda5db757f5c33a369f2c96e17462e6b43c0863ed99"
+    "output_schema_sha256": "0cc43bd46e2af1db0e409ff3447645f9a4e5a4f2b42f307f8bf9b33c0dc2280c"
   },
   {
     "name": "upload_page_asset",

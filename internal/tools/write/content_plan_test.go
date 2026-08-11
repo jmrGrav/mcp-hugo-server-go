@@ -50,8 +50,8 @@ func TestPlanContentChangeAndApplyRoundTrip(t *testing.T) {
 		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
 	}
 	applyData := decodeWriteData(t, applyRes)
-	if applyData["status"] != "ok" {
-		t.Fatalf("apply_content_plan status = %v, want ok", applyData["status"])
+	if applyData["status"] != "updated" {
+		t.Fatalf("apply_content_plan status = %v, want updated", applyData["status"])
 	}
 	if applyData["after_revision"] == "" || applyData["after_revision"] == nil {
 		t.Fatal("apply_content_plan did not return after_revision")
@@ -286,10 +286,29 @@ func TestApplyContentPlanRevisionConflict(t *testing.T) {
 		t.Fatalf("apply_content_plan stale plan error = %s", raw)
 	}
 
-	// The plan should have been consumed even though the apply failed.
+	// request_context must carry the slug/lang the plan resolved (#1001) —
+	// apply_content_plan's only input is plan_id, so without this the
+	// caller has no page identity on the error at all.
+	m := decodeWriteContent(t, res)
+	reqCtx, ok := m["request_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_context type = %T, want populated object", m["request_context"])
+	}
+	if got := reqCtx["slug"]; got != "posts/article" {
+		t.Fatalf("request_context.slug = %v, want posts/article", got)
+	}
+
+	// The rejected apply must not have written anything beyond the setup
+	// mutation above (#1001's "absence of write" criterion).
+	if body := readFileString(t, contentRoot, "posts/article/index.md"); !strings.Contains(body, "Changed Elsewhere") || strings.Contains(body, "hugo") {
+		t.Fatalf("apply_content_plan wrote despite revision_conflict: %s", body)
+	}
+
+	// A retryable conflict must leave the plan available for the caller to
+	// inspect/retry or explicitly replace (#1001).
 	retry := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
-	if !retry.IsError || !strings.Contains(marshalContent(t, retry), "plan_not_found") {
-		t.Fatalf("plan should be consumed after a failed apply attempt, got: %s", marshalContent(t, retry))
+	if !retry.IsError || !strings.Contains(marshalContent(t, retry), "revision_conflict") {
+		t.Fatalf("retryable conflict should preserve the plan, got: %s", marshalContent(t, retry))
 	}
 }
 

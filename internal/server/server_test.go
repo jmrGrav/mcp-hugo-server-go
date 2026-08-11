@@ -1981,7 +1981,7 @@ clients:
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
-	if got, want := len(names), 65; got != want {
+	if got, want := len(names), 68; got != want {
 		t.Errorf("chatgpt write token tools/list = %d tools, want %d; got %v", got, want, names)
 	}
 	// Must see write tools.
@@ -2304,8 +2304,8 @@ func TestGetMutationStatusIsolatedByCallerAcrossHTTP(t *testing.T) {
 		t.Fatalf("create_page (caller A) status = %d body = %q", createRec.Code, createRec.Body.String())
 	}
 	createData := toolCallResultData(t, createRec.Body.String())
-	if status, _ := createData["data"].(map[string]any)["status"].(string); status != "ok" {
-		t.Fatalf("create_page (caller A) data.status = %v, want ok: %#v", createData["data"], createData)
+	if status, _ := createData["data"].(map[string]any)["status"].(string); status != "created" {
+		t.Fatalf("create_page (caller A) data.status = %v, want created: %#v", createData["data"], createData)
 	}
 
 	statusPayload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_mutation_status","arguments":{"tool":"create_page","idempotency_key":"` + sharedKey + `"}}}`)
@@ -2391,8 +2391,8 @@ func TestApplyContentPlanIsolatedByCallerAcrossHTTP(t *testing.T) {
 		t.Fatalf("apply_content_plan owner status = %d body = %q", aRec.Code, aRec.Body.String())
 	}
 	aData := toolCallResultData(t, aRec.Body.String())["data"].(map[string]any)
-	if got, _ := aData["status"].(string); got != "ok" {
-		t.Fatalf("apply_content_plan owner status = %q, want ok: %#v", got, aData)
+	if got, _ := aData["status"].(string); got != "updated" {
+		t.Fatalf("apply_content_plan owner status = %q, want updated: %#v", got, aData)
 	}
 	applied, err := os.ReadFile(filePath)
 	if err != nil {
@@ -2522,8 +2522,8 @@ func TestApplyContentPlanIsolatedByTokenEvenUnderSharedPrincipal(t *testing.T) {
 		t.Fatalf("apply_content_plan owner status = %d body = %q", ownerRec.Code, ownerRec.Body.String())
 	}
 	ownerData := toolCallResultData(t, ownerRec.Body.String())["data"].(map[string]any)
-	if got, _ := ownerData["status"].(string); got != "ok" {
-		t.Fatalf("apply_content_plan owner status = %q, want ok: %#v", got, ownerData)
+	if got, _ := ownerData["status"].(string); got != "updated" {
+		t.Fatalf("apply_content_plan owner status = %q, want updated: %#v", got, ownerData)
 	}
 	applied, err := os.ReadFile(filePath)
 	if err != nil {

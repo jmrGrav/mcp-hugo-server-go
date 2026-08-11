@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
@@ -74,8 +75,14 @@ type storageFinding struct {
 	Confidence string `json:"confidence,omitempty"`
 	// Reason is the machine-readable explanation for why this candidate was
 	// or was not considered a real orphan.
-	Reason string `json:"reason,omitempty"`
-	Detail string `json:"detail"`
+	Reason            string                    `json:"reason,omitempty"`
+	RecommendedAction *storageRecommendedAction `json:"recommended_action,omitempty"`
+	Detail            string                    `json:"detail"`
+}
+
+type storageRecommendedAction struct {
+	RecommendedTool string            `json:"recommended_tool"`
+	Arguments       map[string]string `json:"arguments"`
 }
 
 type storageHealthSummary struct {
@@ -179,6 +186,16 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 		if heroSlugHasOwner(snapshot.knownSlugs, slug) {
 			return nil // has an owning page — not orphaned
 		}
+		args := map[string]string{"scope": "generated", "slug": slug, "filename": filepath.Base(logicalPath)}
+		// delete_page_asset requires expected_sha256 (or expected_revision) as
+		// a concurrency guard on every non-dry-run call; without it here, this
+		// recommended_action would only ever work as a dry_run preview, not the
+		// directly executable remediation #1022 asked for. Best-effort: if the
+		// file becomes unreadable between the walk and this read, the caller
+		// falls back to list_page_assets for the current hash.
+		if raw, readErr := os.ReadFile(path); readErr == nil {
+			args["expected_sha256"] = contentmodel.SourceRevisionBytes(raw)
+		}
 		out = append(out, storageFinding{
 			Code:          storageFindingOrphanedGeneratedAsset,
 			Severity:      storageSeverityWarning,
@@ -187,7 +204,11 @@ func scanOrphanedGeneratedAssets(cfg config.Config, srcIdx *hugosite.SourceIndex
 			Slug:          slug,
 			Confidence:    "high",
 			Reason:        "no_frontmatter_reference_or_source_owner",
-			Detail:        "generated hero image has no explicit featured image reference and no owning page in the source index; remove with delete_page_asset (scope=generated) only after confirming the page was deleted",
+			RecommendedAction: &storageRecommendedAction{
+				RecommendedTool: "delete_page_asset",
+				Arguments:       args,
+			},
+			Detail: "generated hero image has no explicit featured image reference and no owning page in the source index; remove with delete_page_asset (scope=generated) only after confirming the page was deleted",
 		})
 		return nil
 	})

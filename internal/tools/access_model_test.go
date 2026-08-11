@@ -54,6 +54,9 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"plan_content_change":  "",
 		"apply_content_plan":   "write",
 		"rollback_change":      "write",
+		"list_page_snapshots":  "write",
+		"create_bundle":        "write",
+		"delete_bundle":        "write",
 		"plan_bundle_change":   "",
 		"apply_bundle_plan":    "write",
 		"rollback_bundle":      "write",
@@ -104,8 +107,8 @@ func TestCurrentAccessHierarchyStillMatchesDesignAnchor(t *testing.T) {
 	if got := len(readpkg.Defs()); got != 21 {
 		t.Fatalf("read tool count = %d, want 21", got)
 	}
-	if got := len(writepkg.Defs()); got != 13 {
-		t.Fatalf("write tool count = %d, want 13", got)
+	if got := len(writepkg.Defs()); got != 16 {
+		t.Fatalf("write tool count = %d, want 16", got)
 	}
 	if got := len(adminpkg.Defs()); got != 20 {
 		t.Fatalf("admin (folded into write) tool count = %d, want 20", got)
