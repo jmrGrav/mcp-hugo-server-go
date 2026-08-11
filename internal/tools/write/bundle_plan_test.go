@@ -315,6 +315,24 @@ func TestBundleApplyConflictRejectsWholeBundle(t *testing.T) {
 	if afterFR := readFileString(t, contentRoot, "posts/example/index.fr.md"); afterFR != beforeFR {
 		t.Fatalf("fr file changed despite bundle_conflict rejection")
 	}
+
+	// request_context must carry the slug the plan resolved (#1001).
+	m := decodeWriteContent(t, applyRes)
+	reqCtx, ok := m["request_context"].(map[string]any)
+	if !ok {
+		t.Fatalf("request_context type = %T, want populated object", m["request_context"])
+	}
+	if got := reqCtx["slug"]; got != "posts/example" {
+		t.Fatalf("request_context.slug = %v, want posts/example", got)
+	}
+
+	// A retryable bundle_conflict must leave the plan available for the
+	// caller to inspect/retry or explicitly replace (#1001), mirroring
+	// apply_content_plan's own fix.
+	retry := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if !retry.IsError || !strings.Contains(marshalContent(t, retry), "bundle_conflict") {
+		t.Fatalf("retryable bundle_conflict should preserve the plan, got: %s", marshalContent(t, retry))
+	}
 }
 
 // TestPlanBundleChangeRejectsLeafPage documents the scope-down decision: leaf

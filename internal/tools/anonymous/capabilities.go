@@ -9,6 +9,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	adminpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
@@ -81,12 +82,20 @@ type capabilitiesFeatures struct {
 }
 
 type getCapabilitiesData struct {
-	Server              capabilitiesServer    `json:"server"`
-	Languages           capabilitiesLanguages `json:"languages"`
-	Limits              capabilitiesLimits    `json:"limits"`
-	AllowedImageFormats []string              `json:"allowed_image_formats"`
-	BlockedShortcodes   []string              `json:"blocked_shortcodes"`
-	Features            capabilitiesFeatures  `json:"features"`
+	EffectiveScopes     []string                 `json:"effective_scopes,omitempty"`
+	MaskedTools         *capabilitiesMaskedTools `json:"masked_tools,omitempty"`
+	Server              capabilitiesServer       `json:"server"`
+	Languages           capabilitiesLanguages    `json:"languages"`
+	Limits              capabilitiesLimits       `json:"limits"`
+	AllowedImageFormats []string                 `json:"allowed_image_formats"`
+	BlockedShortcodes   []string                 `json:"blocked_shortcodes"`
+	Features            capabilitiesFeatures     `json:"features"`
+}
+
+type capabilitiesMaskedTools struct {
+	Count  int      `json:"count"`
+	Reason string   `json:"reason,omitempty"`
+	Scopes []string `json:"required_scopes,omitempty"`
 }
 
 type getCapabilitiesOutput struct {
@@ -153,14 +162,15 @@ func availableLanguages(idx *site.Index, srcIdx *hugosite.SourceIndex, defaultLa
 	return out
 }
 
-func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config) {
+func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, scopeName string, writeEnabled bool) {
 	addReadOnlyTool(s, "get_capabilities", "Get capabilities",
 		"Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): "+
 			"`server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); "+
 			"`limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
-			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool.",
-		func(_ context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
+			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool. "+
+			"`effective_scopes` names the caller's own scope (`write` or `read` — the only two the server ever grants) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools, or `not_configured` when a write-scoped caller has them but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `feature_disabled` is not yet implemented (#1029).",
+		func(ctx context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
 			pMin, pDef, pMax := adminpkg.PreviewTTLBoundsSeconds()
 			localHeroGenerationAvailable := strings.TrimSpace(cfg.HugoRoot) != ""
 			externalImageGenerationAvailable := strings.TrimSpace(cfg.ImageGenURL) != ""
@@ -169,6 +179,8 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				languageMode = "configured"
 			}
 			data := getCapabilitiesData{
+				EffectiveScopes: effectiveCapabilityScopes(ctx, scopeName),
+				MaskedTools:     maskedCapabilityTools(ctx, scopeName, writeEnabled),
 				Server: capabilitiesServer{
 					ReleaseVersion: buildinfo.Version,
 					Commit:         buildinfo.Commit,
@@ -215,4 +227,63 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			}
 			return nil, newGetCapabilitiesOutput(data), nil
 		})
+}
+
+// fallbackEffectiveScope reports the caller's effective scope when no
+// OAuth-verified scope is present in context — OAuth disabled, or a stdio
+// session, neither of which ever populates oauth.CtxScope. In both cases
+// there is no further per-call scope check, so the physical server tier the
+// caller reached (scopeName) is itself their effective access: the "write"
+// tier registers write tools unconditionally, and the public/"" tier
+// registers read tools unconditionally (see newScopedServer), so reporting
+// "anonymous" there would be false.
+func fallbackEffectiveScope(scopeName string) string {
+	if scopeName == "write" {
+		return "write"
+	}
+	return "read"
+}
+
+func effectiveCapabilityScopes(ctx context.Context, scopeName string) []string {
+	if scope, _ := ctx.Value(oauth.CtxScope).(string); strings.TrimSpace(scope) != "" {
+		return []string{strings.TrimSpace(scope)}
+	}
+	return []string{fallbackEffectiveScope(scopeName)}
+}
+
+// writeScopedToolCount is the number of tools requiring "write" scope,
+// across every package a scoped server can register (write, admin — read's
+// own tools never require a scope beyond read/anonymous, see Defs()).
+func writeScopedToolCount() int {
+	count := 0
+	for _, def := range append(writepkg.Defs(), adminpkg.Defs()...) {
+		if def.RequiredScope == "write" {
+			count++
+		}
+	}
+	return count
+}
+
+// maskedCapabilityTools reports the write-scoped tools this caller cannot
+// see, or nil when nothing is masked. effective is always exactly "write" or
+// "read": every OAuth-verified scope is canonicalized to one of those two
+// (oauth.CanonicalScope), and fallbackEffectiveScope never produces anything
+// else either.
+func maskedCapabilityTools(ctx context.Context, scopeName string, writeEnabled bool) *capabilitiesMaskedTools {
+	scope, _ := ctx.Value(oauth.CtxScope).(string)
+	effective := strings.TrimSpace(scope)
+	if effective == "" {
+		effective = fallbackEffectiveScope(scopeName)
+	}
+	if effective == "read" {
+		return &capabilitiesMaskedTools{Count: writeScopedToolCount(), Reason: "missing_scope", Scopes: []string{"write"}}
+	}
+	// effective == "write": scope alone grants access, but write tools only
+	// actually register when the deployment has a content_root configured
+	// (see newScopedServer's `scopeName == "write" && writeEnabled` guard).
+	// Without it, a write-scoped caller still can't see them.
+	if !writeEnabled {
+		return &capabilitiesMaskedTools{Count: writeScopedToolCount(), Reason: "not_configured", Scopes: []string{"write"}}
+	}
+	return nil
 }

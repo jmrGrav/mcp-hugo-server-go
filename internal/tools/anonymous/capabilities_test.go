@@ -10,8 +10,112 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	writepkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// newTestClientWithScope mirrors newTestClientWithCfg but lets the caller
+// pick the physical server tier (scopeName), so get_capabilities' effective
+// scope/masked-tools fallback (no OAuth in this harness — CtxScope is never
+// populated) can be exercised for both the "" (public) and "write" tiers.
+func newTestClientWithScope(t *testing.T, idx *site.Index, cfg config.Config, scopeName string) (*mcp.ClientSession, func()) {
+	t.Helper()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	anonymous.Register(s, idx, cfg, scopeName)
+
+	ctx := context.Background()
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(ctx, t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	return session, func() { _ = session.Close() }
+}
+
+// TestGetCapabilitiesMaskedToolsOmittedWhenWriteScopeFullyUnmasked is an
+// envelope-level regression test for the "struct omitempty is a no-op"
+// class of bug: MaskedTools must be a pointer so a fully-unmasked write-tier
+// caller gets no "masked_tools" key at all in the JSON, not
+// {"masked_tools":{"count":0}}.
+func TestGetCapabilitiesMaskedToolsOmittedWhenWriteScopeFullyUnmasked(t *testing.T) {
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
+
+	session, done := newTestClientWithScope(t, idx, cfg, "write")
+	defer done()
+
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	data := decodeContent(t, res)
+	if got := data["effective_scopes"].([]any); len(got) != 1 || got[0] != "write" {
+		t.Fatalf("effective_scopes = %v, want [write]", got)
+	}
+	if _, present := data["masked_tools"]; present {
+		t.Fatalf("masked_tools = %v, want the key entirely absent when nothing is masked", data["masked_tools"])
+	}
+}
+
+// TestGetCapabilitiesMaskedToolsOnPublicTierReportsMissingScope is the
+// mirror case: the public ("") tier registers read tools unconditionally
+// but never write tools, so it must report effective_scopes:["read"] and a
+// non-empty masked_tools with reason missing_scope.
+func TestGetCapabilitiesMaskedToolsOnPublicTierReportsMissingScope(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithScope(t, idx, config.Default(), "")
+	defer done()
+
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	data := decodeContent(t, res)
+	if got := data["effective_scopes"].([]any); len(got) != 1 || got[0] != "read" {
+		t.Fatalf("effective_scopes = %v, want [read]", got)
+	}
+	masked, ok := data["masked_tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("masked_tools missing/wrong type: %#v", data["masked_tools"])
+	}
+	if masked["reason"] != "missing_scope" {
+		t.Fatalf("masked_tools.reason = %v, want missing_scope", masked["reason"])
+	}
+	if count, ok := masked["count"].(float64); !ok || count == 0 {
+		t.Fatalf("masked_tools.count = %v, want non-zero", masked["count"])
+	}
+}
+
+// TestGetCapabilitiesMaskedToolsReportsNotConfiguredWithoutContentRoot is a
+// regression test for the "write tier but no content_root" gap: the caller
+// reached the write-scoped server (or holds a real write OAuth token) but
+// write tools never registered because the deployment has no content_root
+// (see newScopedServer's writeEnabled guard). Masking them under
+// missing_scope would be actively wrong — the caller already has the scope.
+func TestGetCapabilitiesMaskedToolsReportsNotConfiguredWithoutContentRoot(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithScope(t, idx, config.Default(), "write")
+	defer done()
+
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	data := decodeContent(t, res)
+	masked, ok := data["masked_tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("masked_tools missing/wrong type: %#v", data["masked_tools"])
+	}
+	if masked["reason"] != "not_configured" {
+		t.Fatalf("masked_tools.reason = %v, want not_configured (write scope granted, but no content_root)", masked["reason"])
+	}
+}
 
 // TestGetCapabilitiesReportsLimitsAndFeatureFlags is the #859 contract test:
 // get_capabilities must expose the hard limits (from the write tools' own

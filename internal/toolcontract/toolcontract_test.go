@@ -332,16 +332,21 @@ func TestParseToolErrorBuildInProgressHasNoRetryAfterSeconds(t *testing.T) {
 	}
 }
 
-func TestParseToolErrorBuildInProgressConsumedPlanRequiresReplan(t *testing.T) {
-	got := ParseToolError(fmt.Errorf("build_in_progress: content lock is held and this single-use plan was already consumed; call plan_bundle_change again before retrying"))
-	if got.Retryable {
-		t.Fatalf("Retryable = %v, want false when the consumed plan cannot be retried verbatim", got.Retryable)
+// TestParseToolErrorBuildInProgressNeverConsumesPlan is a regression test
+// for #1001: apply_content_plan and apply_bundle_plan now look their plan
+// up without consuming it, so a build_in_progress lock timeout never
+// consumes the plan either — the error must be plainly retryable without
+// replanning, not the old "plan was already consumed, replan" resolution.
+func TestParseToolErrorBuildInProgressNeverConsumesPlan(t *testing.T) {
+	got := ParseToolError(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
+	if !got.Retryable {
+		t.Fatalf("Retryable = %v, want true: the plan is preserved on this error", got.Retryable)
 	}
-	if got.Resolution == nil || got.Resolution.Action != "replan_then_retry" {
-		t.Fatalf("Resolution = %#v, want replan_then_retry", got.Resolution)
+	if got.Resolution == nil || got.Resolution.Action != "retry_later" {
+		t.Fatalf("Resolution = %#v, want retry_later", got.Resolution)
 	}
-	if got.Resolution.RecommendedTool != "plan_bundle_change" {
-		t.Fatalf("RecommendedTool = %q, want plan_bundle_change", got.Resolution.RecommendedTool)
+	if got.Resolution.RecommendedTool != "" {
+		t.Fatalf("RecommendedTool = %q, want empty: no replan is needed", got.Resolution.RecommendedTool)
 	}
 }
 
@@ -509,6 +514,59 @@ func TestParseToolErrorHugoUpgradeResolutions(t *testing.T) {
 			got := ParseToolError(fmt.Errorf("%s", tc.err))
 			if got.Resolution == nil || got.Resolution.Action != tc.action || got.Resolution.RecommendedTool != tc.recommendedTool || got.Field != tc.field {
 				t.Fatalf("ParseToolError = %#v", got)
+			}
+		})
+	}
+}
+
+// TestParseToolErrorPlanConflictResolutions is a regression test for #1001:
+// apply_content_plan and apply_bundle_plan don't accept expected_revision,
+// so their conflict errors must not recommend it (the generic
+// revision_conflict branch's get_page_for_edit/expected_revision) — they
+// must point back at the plan tool that produced the preserved plan.
+func TestParseToolErrorPlanConflictResolutions(t *testing.T) {
+	tests := []struct {
+		err             string
+		action          string
+		recommendedTool string
+	}{
+		{"revision_conflict: page changed since the plan was created; call plan_content_change again", "replan_then_retry", "plan_content_change"},
+		{"bundle_conflict: bundle changed since the plan was created; call plan_bundle_change again", "replan_then_retry", "plan_bundle_change"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.err, func(t *testing.T) {
+			got := ParseToolError(fmt.Errorf("%s", tc.err))
+			if got.Resolution == nil || got.Resolution.Action != tc.action || got.Resolution.RecommendedTool != tc.recommendedTool {
+				t.Fatalf("ParseToolError = %#v", got.Resolution)
+			}
+			if got.Field == "expected_revision" {
+				t.Fatalf("plan-based conflict must not recommend expected_revision, which these tools don't accept: %#v", got)
+			}
+			if !got.Retryable {
+				t.Fatalf("plan-based conflict should be retryable: %#v", got)
+			}
+		})
+	}
+}
+
+// TestParseToolErrorNonPlanBundleConflictUnaffected is a regression test for
+// a defect caught during #1001 review: bundle_conflict has three producers
+// (apply_bundle_plan, rollback_bundle, update_page's sibling-translation
+// guard) and only apply_bundle_plan's is plan-based. An early version of the
+// bundle_conflict case fired "replan via plan_bundle_change" unconditionally,
+// which would have misguided rollback_bundle and update_page callers — they
+// don't use plans, and update_page's message already names the correct tool
+// (get_page_for_edit) in its own text.
+func TestParseToolErrorNonPlanBundleConflictUnaffected(t *testing.T) {
+	tests := []string{
+		"bundle_conflict: bundle changed since it was read; read the latest bundle revision and retry",
+		"bundle_conflict: a sibling translation or bundle-local asset changed since the bundle was read; re-read bundle_revision (get_page_for_edit) and replan",
+	}
+	for _, msg := range tests {
+		t.Run(msg, func(t *testing.T) {
+			got := ParseToolError(fmt.Errorf("%s", msg))
+			if got.Resolution != nil && got.Resolution.RecommendedTool == "plan_bundle_change" {
+				t.Fatalf("non-plan-based bundle_conflict must not recommend plan_bundle_change: %#v", got.Resolution)
 			}
 		})
 	}

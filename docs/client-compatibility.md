@@ -56,6 +56,16 @@ discovery-only checks cannot see. It verifies `tools/list`, representative
 and reverse-proxy HTML failures. The script is safe by default and skips write
 tools unless `MCP_SMOKE_ENABLE_WRITES=1` is explicitly set.
 
+The release interop gate (`scripts/smoke-agent-interop.sh`) is the deterministic
+client contract matrix for Claude and ChatGPT. It records, per client, discovery
+metadata, OAuth redirect behavior, scoped `tools/list` visibility, and a
+representative structured tool result. It must be run with the exact connector
+redirect URI and token used by the release environment; multi-day soak testing
+is intentionally out of scope because the service is already live-tested.
+Gemini, JSON Schema validation, response-mode coverage, structured business
+errors, mutation dry-run/apply behavior, and per-result client/runtime
+version publishing are not yet covered — see #1031.
+
 ## Known Behavior: OAuth Enabled Requires Bearer for All Requests
 
 When `oauth.enabled: true`, **every** `/mcp` request must carry a valid Bearer

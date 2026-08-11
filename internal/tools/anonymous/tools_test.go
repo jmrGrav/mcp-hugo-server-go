@@ -37,7 +37,7 @@ func mustTestIndex(t *testing.T) *site.Index {
 func newTestClient(t *testing.T, idx *site.Index) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	anonymous.Register(s, idx, config.Default())
+	anonymous.Register(s, idx, config.Default(), "")
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
@@ -62,7 +62,7 @@ func newTestClientWithSourceIndex(t *testing.T, idx *site.Index, srcIdx *hugosit
 func newTestClientWithCfg(t *testing.T, idx *site.Index, cfg config.Config, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	anonymous.Register(s, idx, cfg, srcIdx)
+	anonymous.Register(s, idx, cfg, "", srcIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

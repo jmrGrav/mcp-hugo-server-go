@@ -185,3 +185,27 @@ func TestGetRateLimitsResetAtMovesIntoTheFutureAfterQuotaConsumption(t *testing.
 		t.Fatalf("reset_at = %v, want a future refill time after quota consumption", resetAt)
 	}
 }
+
+// TestGetRateLimitsIdentitySourceReportsUnknownWithoutOAuth is a regression
+// test for #962: identity_source must reflect the identity the quota bucket
+// was actually keyed on (internal/caller.Key), not an independently guessed
+// value. This test harness never populates oauth.CtxPrincipal/CtxTokenID/
+// CtxCallerIP (no OAuth middleware in the in-memory transport, the same
+// no-OAuth path stdio deployments take), so caller.Key falls back to the
+// shared "unknown" bucket — identity_source must say so plainly rather than
+// claiming a specific identity it doesn't have.
+func TestGetRateLimitsIdentitySourceReportsUnknownWithoutOAuth(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{})
+	defer done()
+
+	res := callTool(t, session, "get_rate_limits", map[string]any{})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("get_rate_limits expected success, got error: %s", raw)
+	}
+	data := decodeWriteData(t, res)
+	if got := data["identity_source"]; got != "unknown" {
+		t.Errorf("identity_source = %v, want %q (no OAuth context populated in this test harness)", got, "unknown")
+	}
+}

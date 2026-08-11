@@ -91,7 +91,7 @@ func mustAnonymousSourceIndex(t *testing.T) *hugosite.SourceIndex {
 func newAnonymousSession(t *testing.T, idx *site.Index, cfg config.Config, srcIdx *hugosite.SourceIndex) (*mcp.ClientSession, func()) {
 	t.Helper()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	Register(s, idx, cfg, srcIdx)
+	Register(s, idx, cfg, "", srcIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

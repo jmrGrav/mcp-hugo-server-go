@@ -40,3 +40,21 @@ func TokenKey(ctx context.Context) string {
 	}
 	return ""
 }
+
+// Source reports which context value Key actually resolved for this call —
+// "principal", "token", "ip", or "unknown" — so a diagnostic surface (e.g.
+// get_rate_limits' identity_source) can never drift from the precedence Key
+// itself uses. Derive identity-source reporting from this function rather
+// than re-implementing the principal→token→ip fallback order elsewhere.
+func Source(ctx context.Context) string {
+	if principal, _ := ctx.Value(oauth.CtxPrincipal).(string); strings.TrimSpace(principal) != "" {
+		return "principal"
+	}
+	if id, _ := ctx.Value(oauth.CtxTokenID).(string); strings.TrimSpace(id) != "" {
+		return "token"
+	}
+	if ip, _ := ctx.Value(oauth.CtxCallerIP).(string); strings.TrimSpace(ip) != "" {
+		return "ip"
+	}
+	return "unknown"
+}

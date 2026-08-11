@@ -143,7 +143,7 @@ func newSoakHarness(t *testing.T, withDB bool) *soakHarness {
 	}
 
 	server := mcp.NewServer(&mcp.Implementation{Name: "soak", Version: "0.1"}, nil)
-	anonymous.Register(server, siteIdx, cfg, srcIdx)
+	anonymous.Register(server, siteIdx, cfg, "", srcIdx)
 	readtools.Register(server, siteIdx, cfg, srcIdx)
 	writetools.Register(server, pg, srcIdx, cfg, siteDB, siteIdx)
 	admin.Register(server, cfg, srcIdx, admin.PostBuildCallback{Name: "index_reload", Fn: func() error {
