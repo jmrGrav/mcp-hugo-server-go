@@ -153,14 +153,18 @@ check_scope_capabilities() {
   local bearer="$2"
   local expected_json="$3"
   [[ -n "$expected_json" ]] || return 0
-  local response json missing
-  response="$(check_tools_list "$label" "$bearer")"
-  # Re-query the payload because check_tools_list intentionally returns only its count.
+  local json missing
   json="$(curl -fsS "$BASE_URL/mcp" -H 'Content-Type: application/json' \
     -H 'Accept: application/json, text/event-stream' -H "Authorization: Bearer $bearer" \
     --data '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | extract_json)"
+  # $expected[] as $name binds $name but leaves `.` (select's implicit input
+  # and output) at the top-level response object -- select would otherwise
+  # emit the whole response per missing tool instead of its name, tripping
+  # `join(",")` with a type error under set -e on the very path this check
+  # exists to report on. Pull the have-list out first and re-emit $name
+  # explicitly after select.
   missing="$(jq -r --argjson expected "$expected_json" \
-    '[ $expected[] as $name | select(([.result.tools[].name] | index($name)) | not) ] | join(",")' <<<"$json")"
+    '[.result.tools[].name] as $have | [$expected[] as $name | select(($have | index($name)) | not) | $name] | join(",")' <<<"$json")"
   [[ -z "$missing" ]] || fail "$label effective capability mapping missing tools: $missing"
   pass "$label scope-to-capability mapping"
 }
