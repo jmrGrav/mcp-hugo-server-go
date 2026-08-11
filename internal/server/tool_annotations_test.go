@@ -73,6 +73,7 @@ func TestAllToolsHaveAnnotations(t *testing.T) {
 	knownDestructive := map[string]bool{
 		"delete_page":       true,
 		"delete_page_asset": true,
+		"delete_bundle":     true,
 	}
 
 	for _, tool := range res.Tools {

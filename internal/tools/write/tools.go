@@ -711,6 +711,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots)
 	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots)
 	registerBundleTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.bundlePlans, rt.bundleSnapshots)
+	registerBundleLifecycleTools(s, pg, idx, cfg, siteDB, rt)
 	registerCreatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerUpdatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerDeletePageTool(s, pg, idx, cfg, siteDB, rt)
@@ -2314,6 +2315,8 @@ func Defs() []tools.ToolDef {
 		{Name: "plan_bundle_change", RequiredScope: ""},
 		{Name: "apply_bundle_plan", RequiredScope: "write"},
 		{Name: "rollback_bundle", RequiredScope: "write"},
+		{Name: "create_bundle", RequiredScope: "write"},
+		{Name: "delete_bundle", RequiredScope: "write"},
 	}
 }
 

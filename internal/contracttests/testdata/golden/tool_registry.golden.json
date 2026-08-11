@@ -601,6 +601,115 @@
     "output_schema_sha256": "6b1186011b9452690fe4845375f2efb1dd3fcf1f6950ea3bcac2f64fad0433f1"
   },
   {
+    "name": "create_bundle",
+    "required_scope": "write",
+    "description": "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "pages": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "body": {
+                "type": "string"
+              },
+              "categories": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "lang": {
+                "type": "string"
+              },
+              "tags": {
+                "items": {
+                  "type": "string"
+                },
+                "type": [
+                  "null",
+                  "array"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "lang",
+              "title",
+              "body"
+            ],
+            "type": "object"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "pages"
+      ],
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.dry_run:boolean",
+      "data.languages:unspecified:required",
+      "data.revisions:object",
+      "data.slug:string:required",
+      "data.status:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "request_context.filename:string",
+      "request_context.requested_lang:string",
+      "request_context.slug:string:required",
+      "request_context:unspecified",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "8bac922c260cc6fc538be643aab63570ac003946a663f483b1f56cabb6b3287e"
+  },
+  {
     "name": "create_page",
     "required_scope": "write",
     "description": "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. `lang` for a language the site does not recognize: if the operator has set `configured_languages`, an unrecognized `lang` is rejected with `invalid_params` and nothing is written (#899); otherwise (the default) it is only a warning — the page is still written, since the server can't tell a typo from a deliberately new language without that operator-declared set. Either way, call get_capabilities first to see the authoritative/known language list.",
@@ -800,6 +909,87 @@
       "warnings:unspecified:required"
     ],
     "output_schema_sha256": "51a7d65fb61347cdbe914cc74230e2f10870b880d70bfab9be93a79e77eaf514"
+  },
+  {
+    "name": "delete_bundle",
+    "required_scope": "write",
+    "description": "Atomically delete selected translations of a Hugo page bundle. `expected_revisions` must supply the current revision (from get_page/create_bundle/delete_bundle output) for every language listed, including for dry_run; the call fails invalid_params otherwise. All revisions are checked before the first unlink; a failure leaves the bundle unchanged. Pass every language to remove the bundle completely. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"delete_bundle\").",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "type": "boolean"
+        },
+        "expected_revisions": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "languages": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "null",
+            "array"
+          ]
+        },
+        "slug": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug",
+        "languages",
+        "expected_revisions"
+      ],
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.dry_run:boolean",
+      "data.languages:unspecified:required",
+      "data.revisions:object",
+      "data.slug:string:required",
+      "data.status:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "request_context.filename:string",
+      "request_context.requested_lang:string",
+      "request_context.slug:string:required",
+      "request_context:unspecified",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "8bac922c260cc6fc538be643aab63570ac003946a663f483b1f56cabb6b3287e"
   },
   {
     "name": "delete_page",
@@ -1852,7 +2042,7 @@
   {
     "name": "get_mutation_status",
     "required_scope": "write",
-    "description": "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change/apply_bundle_plan/rollback_bundle call that used idempotency_key actually succeeded — for recovering from a timeout or otherwise ambiguous response without resending the original mutation payload. `status: \"succeeded\"` means that exact call completed and `result` is its entire original response envelope (success/data/errors/warnings/meta, not just data), byte-identical to what a same-key/same-payload retry of the mutation tool itself would replay. `status: \"unknown\"` means there is no confirmed success on record for this tool+key right now — this does NOT mean the call failed: it equally covers still-in-flight, genuinely failed, expired (entries are retained 15 minutes on this server — a deployment-level setting, shared with the underlying idempotency cache), or never attempted with this key. Only successful calls are ever recorded here (failures are safe to simply retry). When in doubt, retrying the original mutation call with the same idempotency_key and payload is always safe regardless of what this tool reports — it will either replay the already-completed result or execute for the first time. Requires write.",
+    "description": "Look up whether a prior create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change/apply_bundle_plan/rollback_bundle/create_bundle/delete_bundle call that used idempotency_key actually succeeded — for recovering from a timeout or otherwise ambiguous response without resending the original mutation payload. `status: \"succeeded\"` means that exact call completed and `result` is its entire original response envelope (success/data/errors/warnings/meta, not just data), byte-identical to what a same-key/same-payload retry of the mutation tool itself would replay. `status: \"unknown\"` means there is no confirmed success on record for this tool+key right now — this does NOT mean the call failed: it equally covers still-in-flight, genuinely failed, expired (entries are retained 15 minutes on this server — a deployment-level setting, shared with the underlying idempotency cache), or never attempted with this key. Only successful calls are ever recorded here (failures are safe to simply retry). When in doubt, retrying the original mutation call with the same idempotency_key and payload is always safe regardless of what this tool reports — it will either replay the already-completed result or execute for the first time. Requires write.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
