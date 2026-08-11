@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.4] - 2026-08-11
+
+Adds atomic multilingual bundle lifecycle tools and closes out a wave of contract-clarity and discoverability gaps from live audits — sitemap, provenance, rollback, rate-limit, runtime-state, and capability-discovery contracts all gain explicit, machine-readable answers to questions that previously required inference or a probe. Delivered as #999, #1012–#1020, #1023, #1025–#1028, and #1032–#1034.
+
+### New
+- **Atomic multilingual bundle lifecycle: `create_bundle`/`delete_bundle`** (#1008, #1027): atomic creation and deletion of a multi-language content bundle (e.g. FR+EN together) — every language is validated before the first filesystem mutation, and a mid-operation failure rolls back already-created/deleted files while holding the content lock. Both tools carry `idempotency_key`, recoverable via `get_mutation_status` after a timeout, matching every other mutation tool's retry contract.
+
+### Fix
+- **Preview links and write-tool discovery parity** (#996, #997, #998, #999): normalizes malformed non-default-language preview URLs from `/{lang}/preview/{id}/...` to `/preview/{id}/{lang}/...` before serving; publishes the validated `response_mode` vocabulary in every matching tool description; hardens the ChatGPT `content.write` OAuth regression to assert the full 65-tool write catalogue.
+- **Misplaced front matter in Markdown bodies is now detected** (#1004, #1016): `validate_frontmatter`, `validate_site`, and `get_site_health` flag a front matter key/value block accidentally left at the start of a Markdown body, without false-positiving on ordinary prose that merely mentions frontmatter keys.
+- **Content plans survive retryable conflicts** (#1001, #1020): `apply_content_plan` and `apply_bundle_plan` no longer consume a plan when a `revision_conflict`/`bundle_conflict`/`build_in_progress` failure is detected before the write — both now recommend replanning via `plan_content_change`/`plan_bundle_change` (previously wrong or absent) and populate `request_context` with the resolved slug/lang so a caller has something to act on.
+
+### Contract
+- **`get_sitemap`'s `summary_only` mode is now explicit** (#1005, #1012): adds `entries_omitted:true` and `pagination_applies:false` so a caller doesn't have to infer summary state from an empty array.
+- **Public page reads carry content provenance** (#1006 partial, #1013): `get_page` marks rendered public HTML `site_rendered_public_untrusted`; source-fallback reads stay `site_source_untrusted`.
+- **Generated-asset deletion reports `deleted`, not generic `ok`** (#1000 partial, #1014): real deletion of a `generate_hero_image`-generated asset now returns an unambiguous status; dry-run preview keeps `ok`, matching every other mutation tool's dry-run convention.
+- **Git-history vs. restorable-snapshot rollback boundary is explicit** (#1002 partial, #1015): every `list_page_revisions` row is labeled `revision_kind:"git_commit"` and both tools' descriptions now state plainly that git-history rows cannot be passed to `rollback_change`.
+- **`check_ai_readiness` declares its structural scope** (#1010 partial, #1017): adds `scope:"structure_only"`, making the tool's existing documented boundary machine-readable instead of prose-only.
+- **Runtime dirty-state labels clarified** (#1009 partial, #1018): adds explicit `binary_build_dirty` and `site_worktree_dirty` fields (aliases of the existing `build_dirty`/`git.dirty` values) alongside the fields they mirror.
+- **Deterministic MCP client contract matrix documented** (#1011 partial, #1019): documents the existing Claude/ChatGPT release interop smoke (`scripts/smoke-agent-interop.sh`) as the deterministic contract matrix and states soak testing is explicitly out of scope.
+- **Action-specific mutation statuses** (#1007, #1023): create/update/delete/plan-apply/rollback responses (page and bundle) now return `created`/`updated`/`deleted`/`restored`/`unchanged` instead of a generic `ok`; partial-success statuses are unchanged.
+- **`get_capabilities` exposes effective scope and masked tools** (#1010 partial, #1025): adds `effective_scopes` (the caller's own `write`/`read` scope) and `masked_tools` (count, reason — `missing_scope` or `not_configured` — and required scopes) for tools not visible to the current caller.
+- **`get_rate_limits` reports its identity source** (#962 observability, #1026): adds `identity_source` (`principal`/`token`/`ip`/`unknown`), reusing the same precedence logic that actually selects the quota bucket. Observability only — does not resolve #962's underlying legacy-token ambiguity, which remains open.
+- **Storage, provenance, and rollback contract polish** (#1021, #1022, #1024, #1028): `get_storage_health` orphan findings now carry an executable `delete_page_asset` action; server-generated responses (capabilities, site metadata) use `content_provenance: server_generated_trusted`; `list_page_snapshots` lists caller-isolated, expiry-aware restorable snapshots (`revision_kind: content_snapshot`).
+- **Gemini added to the deterministic interop smoke matrix** (#1031, #1032): configurable Gemini DCR/authorize probes, envelope/schema/compact-mode validation, scope-to-capability assertions, and safe mutation dry-run coverage, with client/runtime version and failure-attribution records published via `INTEROP_RESULT_FILE`.
+- **Runtime publication state and restart scope clarified** (#1030, #1033): `get_runtime_status` exposes `source_ahead_of_public`/`unpublished_changes_count` for pending source changes and `process_started_at`; `last_build_persistence` is explicitly labeled `process_memory` (in-memory only, no persistence migration).
+- **`get_capabilities` exposes disabled optional integrations** (#1029, #1034): adds `disabled_features[]` (`name`, `reason: feature_disabled`, safe `required_configuration` hint) for optional integrations disabled by configuration, without leaking secrets or host paths.
+
 ## [v1.8.3] - 2026-08-10
 
 Adds an operator-controlled managed Hugo upgrade workflow and clarifies two contract ambiguities found during live audits. Delivered as #990, #995, and #994.
