@@ -6,7 +6,7 @@ All notable changes to this project are documented here.
 
 ### Contract
 - **Mutation and rollback contracts aligned** (#1007, #1040, #1045, #1046): no-op `update_page` writes now report `status:"unchanged"`; retryable plan conflicts remain retryable; rollback documentation covers snapshots produced by both planning and direct updates; `bootstrap_hugo` preserves the effective `dry_run` flag in structured errors; and `inspect_rendered` reports an issue when its opt-in preview finds invalid front matter.
-- **Response schema versioned and tool schemas clarified** (#1042, #1043, #1047): response metadata advances to `v1.1.0` under an explicit additive/minor, breaking/major policy; legacy root aliases for SRI/hooks are documented as deprecated with `data.*` canonical; and `generate_hero_image.style` publishes the implemented enum (empty/default, `tech`, `geo`).
+- **Response schema versioned and tool schemas clarified** (#1042, #1043, #1047): response metadata advances to `v1.1.0` under an explicit additive/minor, breaking/major policy; legacy root aliases for SRI/hooks are documented as deprecated with `data.*` canonical. `#1047`'s request to publish `generate_hero_image.style` as a JSON-Schema `enum` was investigated and deliberately **not** implemented — it reproduces the exact bare-text, no-`StructuredContent` error #892 already fixed for this same field; the accepted values (empty/default, `tech`, `geo`) remain documented in the tool description and validated in the handler with a structured `invalid_params` error, as before.
 
 ## [v1.8.4] - 2026-08-11
 
