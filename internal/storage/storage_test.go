@@ -1,11 +1,14 @@
 package storage
 
 import (
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	_ "modernc.org/sqlite"
 )
 
 func TestMemoryStoreLifecycle(t *testing.T) {
@@ -129,6 +132,12 @@ func TestRefreshTokenLifecycleAllStores(t *testing.T) {
 			if scope, ok := s.ValidateAccessToken("atok1-next"); !ok || scope != "content.read" {
 				t.Fatalf("ValidateAccessToken(next) = %q, %v", scope, ok)
 			}
+			detailed := s.(interface {
+				ValidateAccessTokenDetails(string) (AccessTokenDetails, bool)
+			})
+			if details, ok := detailed.ValidateAccessTokenDetails("atok1-next"); !ok || details.Principal != "client-a" {
+				t.Fatalf("ValidateAccessTokenDetails(next) = (%#v, %v), want principal client-a after refresh", details, ok)
+			}
 			if err := s.AddRefreshToken("rtok2", "client-a", "content.write", expired); err != nil {
 				t.Fatalf("AddRefreshToken(expired) error = %v", err)
 			}
@@ -142,6 +151,91 @@ func TestRefreshTokenLifecycleAllStores(t *testing.T) {
 				t.Fatalf("Close() error = %v", err)
 			}
 		})
+	}
+}
+
+// TestLegacyPrincipallessAccessTokenIsObservable covers the deployment
+// migration state from #962: access tokens issued before principal-aware quota
+// identity may still validate with an empty principal. The server must not
+// silently invent a client identity from the bearer token; this test makes the
+// legacy state explicit so a future invalidation/rotation policy can be added
+// without losing regression coverage.
+func TestLegacyPrincipallessAccessTokenIsObservable(t *testing.T) {
+	t.Parallel()
+	future := time.Now().Add(time.Hour)
+	tests := []struct {
+		name  string
+		open  func(t *testing.T) Store
+		close func(Store) error
+	}{
+		{name: "memory", open: func(*testing.T) Store { return NewMemory() }, close: func(s Store) error { return s.Close() }},
+		{name: "json", open: func(t *testing.T) Store {
+			s, err := NewJSON(filepath.Join(t.TempDir(), "tokens.json"))
+			if err != nil {
+				t.Fatalf("NewJSON() error = %v", err)
+			}
+			return s
+		}, close: func(s Store) error { return s.Close() }},
+		{name: "sqlite", open: func(t *testing.T) Store {
+			s, err := NewSQLite(filepath.Join(t.TempDir(), "tokens.sqlite"))
+			if err != nil {
+				t.Fatalf("NewSQLite() error = %v", err)
+			}
+			return s
+		}, close: func(s Store) error { return s.Close() }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := tc.open(t)
+			defer func() {
+				if err := tc.close(s); err != nil {
+					t.Fatalf("close store: %v", err)
+				}
+			}()
+			if err := s.AddAccessToken("legacy-bearer", "content.write", "", future); err != nil {
+				t.Fatalf("AddAccessToken(legacy) error = %v", err)
+			}
+			detailed := s.(interface {
+				ValidateAccessTokenDetails(string) (AccessTokenDetails, bool)
+			})
+			details, ok := detailed.ValidateAccessTokenDetails("legacy-bearer")
+			if !ok || details.Scope != "content.write" || details.Principal != "" {
+				t.Fatalf("ValidateAccessTokenDetails(legacy) = (%#v, %v), want valid empty-principal token", details, ok)
+			}
+		})
+	}
+}
+
+func TestSQLiteLegacySchemaMigratesPrincipalAsEmpty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	_, err = db.Exec(`CREATE TABLE access_tokens (token TEXT PRIMARY KEY, scope TEXT NOT NULL, expires_at INTEGER NOT NULL)`)
+	if err != nil {
+		db.Close()
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO access_tokens (token, scope, expires_at) VALUES (?, ?, ?)`, "legacy-bearer", "content.write", time.Now().Add(time.Hour).Unix()); err != nil {
+		db.Close()
+		t.Fatalf("insert legacy token: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+
+	s, err := NewSQLite(path)
+	if err != nil {
+		t.Fatalf("NewSQLite(migrate) error = %v", err)
+	}
+	defer s.Close()
+	detailed := s.(interface {
+		ValidateAccessTokenDetails(string) (AccessTokenDetails, bool)
+	})
+	details, ok := detailed.ValidateAccessTokenDetails("legacy-bearer")
+	if !ok || details.Scope != "content.write" || details.Principal != "" {
+		t.Fatalf("migrated legacy token = (%#v, %v), want valid empty-principal token", details, ok)
 	}
 }
 
