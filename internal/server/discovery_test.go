@@ -314,16 +314,18 @@ func TestDiscoveryMinimalPublicSurfaceSnapshots(t *testing.T) {
 		t.Fatalf("decode auth server: %v", err)
 	}
 	authSubset := map[string]any{
-		"issuer":           authMeta.Issuer,
-		"scopes_supported": authMeta.ScopesSupported,
-		"reader_profile":   authMeta.AccessProfiles["reader"],
-		"operator_profile": authMeta.AccessProfiles["operator"],
+		"issuer":                authMeta.Issuer,
+		"scopes_supported":      authMeta.ScopesSupported,
+		"reader_profile":        authMeta.AccessProfiles["reader"],
+		"operator_profile":      authMeta.AccessProfiles["operator"],
+		"administrator_profile": authMeta.AccessProfiles["administrator"],
 	}
 	wantAuth := map[string]any{
-		"issuer":           "https://mcp.arleo.eu",
-		"scopes_supported": []string{"read", "write", "admin"},
-		"reader_profile":   accessProfileSnapshot{AcquisitionMode: "operator_approved_claim_or_pre_registered_oauth_client", InternalScopes: []string{"read"}},
-		"operator_profile": accessProfileSnapshot{AcquisitionMode: "approved_token", InternalScopes: []string{"write"}},
+		"issuer":                "https://mcp.arleo.eu",
+		"scopes_supported":      []string{"read", "write", "admin"},
+		"reader_profile":        accessProfileSnapshot{AcquisitionMode: "operator_approved_claim_or_pre_registered_oauth_client", InternalScopes: []string{"read"}},
+		"operator_profile":      accessProfileSnapshot{AcquisitionMode: "approved_token", InternalScopes: []string{"write"}},
+		"administrator_profile": accessProfileSnapshot{AcquisitionMode: "approved_admin_token", InternalScopes: []string{"admin"}},
 	}
 	if !reflect.DeepEqual(authSubset, wantAuth) {
 		t.Fatalf("auth server subset = %#v, want %#v", authSubset, wantAuth)
@@ -350,6 +352,7 @@ func TestDiscoveryMinimalPublicSurfaceSnapshots(t *testing.T) {
 		"scopes_supported":       prMeta.ScopesSupported,
 		"reader_profile":         prMeta.AccessProfiles["reader"],
 		"operator_profile":       prMeta.AccessProfiles["operator"],
+		"administrator_profile":  prMeta.AccessProfiles["administrator"],
 	}
 	wantPR := map[string]any{
 		"resource":               "https://mcp.arleo.eu/mcp",
@@ -357,6 +360,7 @@ func TestDiscoveryMinimalPublicSurfaceSnapshots(t *testing.T) {
 		"scopes_supported":       []string{"read", "write", "admin"},
 		"reader_profile":         accessProfileSnapshot{AcquisitionMode: "operator_approved_claim_or_pre_registered_oauth_client", InternalScopes: []string{"read"}},
 		"operator_profile":       accessProfileSnapshot{AcquisitionMode: "approved_token", InternalScopes: []string{"write"}},
+		"administrator_profile":  accessProfileSnapshot{AcquisitionMode: "approved_admin_token", InternalScopes: []string{"admin"}},
 	}
 	if !reflect.DeepEqual(prSubset, wantPR) {
 		t.Fatalf("protected resource subset = %#v, want %#v", prSubset, wantPR)

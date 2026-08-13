@@ -263,15 +263,20 @@ func disabledCapabilityFeatures(cfg config.Config) []capabilitiesDisabledFeature
 // OAuth-verified scope is present in context — OAuth disabled, or a stdio
 // session, neither of which ever populates oauth.CtxScope. In both cases
 // there is no further per-call scope check, so the physical server tier the
-// caller reached (scopeName) is itself their effective access: the "write"
-// tier registers write tools unconditionally, and the public/"" tier
+// caller reached (scopeName) is itself their effective access: the "admin"
+// tier (stdio, a trusted local transport, see server.NewStdio) and "write"
+// tier register write tools unconditionally, and the public/"" tier
 // registers read tools unconditionally (see newScopedServer), so reporting
-// "anonymous" there would be false.
+// "anonymous" or "read" there would be false.
 func fallbackEffectiveScope(scopeName string) string {
-	if scopeName == "write" {
+	switch scopeName {
+	case "admin":
+		return "admin"
+	case "write":
 		return "write"
+	default:
+		return "read"
 	}
-	return "read"
 }
 
 func effectiveCapabilityScopes(ctx context.Context, scopeName string) []string {
@@ -281,39 +286,54 @@ func effectiveCapabilityScopes(ctx context.Context, scopeName string) []string {
 	return []string{fallbackEffectiveScope(scopeName)}
 }
 
-// writeScopedToolCount is the number of tools requiring "write" scope,
-// across every package a scoped server can register (write, admin — read's
-// own tools never require a scope beyond read/anonymous, see Defs()).
-func writeScopedToolCount() int {
+// toolCountForScope is the number of tools whose RequiredScope is exactly
+// scope, across every package a scoped server can register (write, admin —
+// read's own tools never require a scope beyond read/anonymous, see Defs()).
+func toolCountForScope(scope string) int {
 	count := 0
 	for _, def := range append(writepkg.Defs(), adminpkg.Defs()...) {
-		if def.RequiredScope == "write" {
+		if def.RequiredScope == scope {
 			count++
 		}
 	}
 	return count
 }
 
-// maskedCapabilityTools reports the write-scoped tools this caller cannot
-// see, or nil when nothing is masked. effective is always exactly "write" or
-// "read": every OAuth-verified scope is canonicalized to one of those two
-// (oauth.CanonicalScope), and fallbackEffectiveScope never produces anything
-// else either.
+// maskedCapabilityTools reports the higher-tier tools this caller cannot
+// see, or nil when nothing is masked. effective is always exactly "read",
+// "write", or "admin": every OAuth-verified scope is canonicalized to one of
+// those three (oauth.CanonicalScope), and fallbackEffectiveScope never
+// produces anything else either.
 func maskedCapabilityTools(ctx context.Context, scopeName string, writeEnabled bool) *capabilitiesMaskedTools {
 	scope, _ := ctx.Value(oauth.CtxScope).(string)
 	effective := strings.TrimSpace(scope)
 	if effective == "" {
 		effective = fallbackEffectiveScope(scopeName)
 	}
-	if effective == "read" {
-		return &capabilitiesMaskedTools{Count: writeScopedToolCount(), Reason: "missing_scope", Scopes: []string{"write"}}
+	switch effective {
+	case "read":
+		// Both write- and admin-gated tools are invisible to a read-only
+		// caller; "write" is the immediate scope that would unlock write
+		// tools (admin is a further step beyond that), so it's reported as
+		// the single required scope, but the count includes everything a
+		// read caller cannot currently see.
+		return &capabilitiesMaskedTools{Count: toolCountForScope("write") + toolCountForScope("admin"), Reason: "missing_scope", Scopes: []string{"write"}}
+	case "admin":
+		// admin implies write, so nothing is scope-gated beyond this — but
+		// write (and therefore admin) tools only actually register when the
+		// deployment has a content_root configured (see newScopedServer's
+		// `(scopeName == "write" || scopeName == "admin") && writeEnabled`
+		// guard). Without it, an admin-scoped caller still can't see them.
+		if !writeEnabled {
+			return &capabilitiesMaskedTools{Count: toolCountForScope("write") + toolCountForScope("admin"), Reason: "not_configured", Scopes: []string{"write"}}
+		}
+		return nil
+	default: // effective == "write"
+		// write-tier scope alone grants access to write tools, but not to
+		// the admin-gated managed Hugo binary lifecycle tools.
+		if !writeEnabled {
+			return &capabilitiesMaskedTools{Count: toolCountForScope("write") + toolCountForScope("admin"), Reason: "not_configured", Scopes: []string{"write"}}
+		}
+		return &capabilitiesMaskedTools{Count: toolCountForScope("admin"), Reason: "missing_scope", Scopes: []string{"admin"}}
 	}
-	// effective == "write": scope alone grants access, but write tools only
-	// actually register when the deployment has a content_root configured
-	// (see newScopedServer's `scopeName == "write" && writeEnabled` guard).
-	// Without it, a write-scoped caller still can't see them.
-	if !writeEnabled {
-		return &capabilitiesMaskedTools{Count: writeScopedToolCount(), Reason: "not_configured", Scopes: []string{"write"}}
-	}
-	return nil
 }

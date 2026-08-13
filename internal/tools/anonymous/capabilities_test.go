@@ -37,12 +37,42 @@ func newTestClientWithScope(t *testing.T, idx *site.Index, cfg config.Config, sc
 	return session, func() { _ = session.Close() }
 }
 
-// TestGetCapabilitiesMaskedToolsOmittedWhenWriteScopeFullyUnmasked is an
+// TestGetCapabilitiesMaskedToolsOmittedWhenAdminScopeFullyUnmasked is an
 // envelope-level regression test for the "struct omitempty is a no-op"
-// class of bug: MaskedTools must be a pointer so a fully-unmasked write-tier
-// caller gets no "masked_tools" key at all in the JSON, not
-// {"masked_tools":{"count":0}}.
-func TestGetCapabilitiesMaskedToolsOmittedWhenWriteScopeFullyUnmasked(t *testing.T) {
+// class of bug: MaskedTools must be a pointer so a fully-unmasked
+// admin-tier caller gets no "masked_tools" key at all in the JSON, not
+// {"masked_tools":{"count":0}}. Admin, not write, is the fully-unmasked
+// tier as of v1.8.5 (#1039): a write-tier caller still has the four
+// admin-gated managed Hugo binary lifecycle tools masked (see
+// TestGetCapabilitiesWriteScopeReportsAdminToolsMasked below).
+func TestGetCapabilitiesMaskedToolsOmittedWhenAdminScopeFullyUnmasked(t *testing.T) {
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
+
+	session, done := newTestClientWithScope(t, idx, cfg, "admin")
+	defer done()
+
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	data := decodeContent(t, res)
+	if got := data["effective_scopes"].([]any); len(got) != 1 || got[0] != "admin" {
+		t.Fatalf("effective_scopes = %v, want [admin]", got)
+	}
+	if _, present := data["masked_tools"]; present {
+		t.Fatalf("masked_tools = %v, want the key entirely absent when nothing is masked", data["masked_tools"])
+	}
+}
+
+// TestGetCapabilitiesWriteScopeReportsAdminToolsMasked is a regression test
+// for v1.8.5 (#1039): before that change, write implied every tool with no
+// exceptions, so a write-tier caller was always fully unmasked. Now the four
+// managed Hugo binary lifecycle tools require the separate admin scope, so
+// a write-tier caller must see them reported as masked, not silently
+// omitted from masked_tools.
+func TestGetCapabilitiesWriteScopeReportsAdminToolsMasked(t *testing.T) {
 	idx := mustTestIndex(t)
 	cfg := config.Default()
 	cfg.ContentRoot = filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
@@ -58,8 +88,19 @@ func TestGetCapabilitiesMaskedToolsOmittedWhenWriteScopeFullyUnmasked(t *testing
 	if got := data["effective_scopes"].([]any); len(got) != 1 || got[0] != "write" {
 		t.Fatalf("effective_scopes = %v, want [write]", got)
 	}
-	if _, present := data["masked_tools"]; present {
-		t.Fatalf("masked_tools = %v, want the key entirely absent when nothing is masked", data["masked_tools"])
+	masked, ok := data["masked_tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("masked_tools = %v, want a present object (admin tools masked for a write-tier caller)", data["masked_tools"])
+	}
+	if masked["reason"] != "missing_scope" {
+		t.Fatalf("masked_tools.reason = %v, want missing_scope", masked["reason"])
+	}
+	scopes, _ := masked["required_scopes"].([]any)
+	if len(scopes) != 1 || scopes[0] != "admin" {
+		t.Fatalf("masked_tools.required_scopes = %v, want [admin]", masked["required_scopes"])
+	}
+	if count, _ := masked["count"].(float64); count == 0 {
+		t.Fatalf("masked_tools.count = %v, want non-zero (the four admin-gated Hugo lifecycle tools)", masked["count"])
 	}
 }
 

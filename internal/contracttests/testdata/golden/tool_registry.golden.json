@@ -2,7 +2,7 @@
   {
     "name": "activate_hugo",
     "required_scope": "admin",
-    "description": "Atomically point the configured managed Hugo symlink at an already staged and re-verified exact version. dry_run defaults to true. Refuses package-manager or arbitrary paths, preserves the previous managed target for rollback, writes an audit event, and never restarts the service implicitly. Requires write.",
+    "description": "Atomically point the configured managed Hugo symlink at an already staged and re-verified exact version. dry_run defaults to true. Refuses package-manager or arbitrary paths, preserves the previous managed target for rollback, writes an audit event, and never restarts the service implicitly. Requires admin.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -241,7 +241,7 @@
   {
     "name": "bootstrap_hugo",
     "required_scope": "admin",
-    "description": "One-time setup for a deployment that has never used managed Hugo upgrades: detects the currently installed Hugo version, then re-downloads and checksum-verifies that exact version from the official release (never trusts the existing binary on disk directly), stages it, and activates it as the initial managed baseline. dry_run defaults to true. Refuses to run if a managed version is already active — use stage_hugo_upgrade/activate_hugo for every upgrade after this. Without this step, rollback_hugo has no target to restore on a system's very first activation, because the pre-existing unmanaged binary was never itself a managed version. Requires write.",
+    "description": "One-time setup for a deployment that has never used managed Hugo upgrades: detects the currently installed Hugo version, then re-downloads and checksum-verifies that exact version from the official release (never trusts the existing binary on disk directly), stages it, and activates it as the initial managed baseline. dry_run defaults to true. Refuses to run if a managed version is already active — use stage_hugo_upgrade/activate_hugo for every upgrade after this. Without this step, rollback_hugo has no target to restore on a system's very first activation, because the pre-existing unmanaged binary was never itself a managed version. Requires admin.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -4714,7 +4714,7 @@
   {
     "name": "rollback_hugo",
     "required_scope": "admin",
-    "description": "Atomically restore the exact previous managed Hugo symlink target recorded by activate_hugo. dry_run defaults to true. Refuses unmanaged or changed targets and never restarts the service implicitly. Requires write.",
+    "description": "Atomically restore the exact previous managed Hugo symlink target recorded by activate_hugo. dry_run defaults to true. Refuses unmanaged or changed targets and never restarts the service implicitly. Requires admin.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -5026,7 +5026,7 @@
   {
     "name": "stage_hugo_upgrade",
     "required_scope": "admin",
-    "description": "Resolve and verify an exact official Hugo release without replacing the active binary. dry_run defaults to true. A real stage is disabled unless hugo_upgrade.enabled=true, downloads only allowlisted release assets with a bounded size, verifies the official SHA-256 manifest, extracts only the Hugo executable into the managed directory, and runs only the staged binary's version command. Requires write.",
+    "description": "Resolve and verify an exact official Hugo release without replacing the active binary. dry_run defaults to true. A real stage is disabled unless hugo_upgrade.enabled=true, downloads only allowlisted release assets with a bounded size, verifies the official SHA-256 manifest, extracts only the Hugo executable into the managed directory, and runs only the staged binary's version command. Requires admin.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {

@@ -223,7 +223,7 @@ func RegisterHugoUpgradeTools(s *mcp.Server, cfg config.Config) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "stage_hugo_upgrade", Title: "Stage Hugo upgrade",
-		Description: "Resolve and verify an exact official Hugo release without replacing the active binary. dry_run defaults to true. A real stage is disabled unless hugo_upgrade.enabled=true, downloads only allowlisted release assets with a bounded size, verifies the official SHA-256 manifest, extracts only the Hugo executable into the managed directory, and runs only the staged binary's version command. Requires write.",
+		Description: "Resolve and verify an exact official Hugo release without replacing the active binary. dry_run defaults to true. A real stage is disabled unless hugo_upgrade.enabled=true, downloads only allowlisted release assets with a bounded size, verifies the official SHA-256 manifest, extracts only the Hugo executable into the managed directory, and runs only the staged binary's version command. Requires admin.",
 		InputSchema: tools.MustSchema[stageHugoUpgradeInput](), OutputSchema: tools.MustSchema[stageHugoUpgradeOutput](),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false), IdempotentHint: false, OpenWorldHint: fileutil.BoolPtr(true)},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in stageHugoUpgradeInput) (*mcp.CallToolResult, stageHugoUpgradeOutput, error) {
@@ -238,7 +238,7 @@ func RegisterHugoUpgradeTools(s *mcp.Server, cfg config.Config) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "activate_hugo", Title: "Activate Hugo upgrade",
-		Description: "Atomically point the configured managed Hugo symlink at an already staged and re-verified exact version. dry_run defaults to true. Refuses package-manager or arbitrary paths, preserves the previous managed target for rollback, writes an audit event, and never restarts the service implicitly. Requires write.",
+		Description: "Atomically point the configured managed Hugo symlink at an already staged and re-verified exact version. dry_run defaults to true. Refuses package-manager or arbitrary paths, preserves the previous managed target for rollback, writes an audit event, and never restarts the service implicitly. Requires admin.",
 		InputSchema: tools.MustSchema[activateHugoUpgradeInput](), OutputSchema: tools.MustSchema[activateHugoUpgradeOutput](),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false), IdempotentHint: false, OpenWorldHint: fileutil.BoolPtr(false)},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in activateHugoUpgradeInput) (*mcp.CallToolResult, activateHugoUpgradeOutput, error) {
@@ -253,7 +253,7 @@ func RegisterHugoUpgradeTools(s *mcp.Server, cfg config.Config) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "rollback_hugo", Title: "Rollback Hugo upgrade",
-		Description: "Atomically restore the exact previous managed Hugo symlink target recorded by activate_hugo. dry_run defaults to true. Refuses unmanaged or changed targets and never restarts the service implicitly. Requires write.",
+		Description: "Atomically restore the exact previous managed Hugo symlink target recorded by activate_hugo. dry_run defaults to true. Refuses unmanaged or changed targets and never restarts the service implicitly. Requires admin.",
 		InputSchema: tools.MustSchema[rollbackHugoUpgradeInput](), OutputSchema: tools.MustSchema[rollbackHugoUpgradeOutput](),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false), IdempotentHint: false, OpenWorldHint: fileutil.BoolPtr(false)},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in rollbackHugoUpgradeInput) (*mcp.CallToolResult, rollbackHugoUpgradeOutput, error) {
@@ -268,7 +268,7 @@ func RegisterHugoUpgradeTools(s *mcp.Server, cfg config.Config) {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "bootstrap_hugo", Title: "Bootstrap managed Hugo",
-		Description: "One-time setup for a deployment that has never used managed Hugo upgrades: detects the currently installed Hugo version, then re-downloads and checksum-verifies that exact version from the official release (never trusts the existing binary on disk directly), stages it, and activates it as the initial managed baseline. dry_run defaults to true. Refuses to run if a managed version is already active — use stage_hugo_upgrade/activate_hugo for every upgrade after this. Without this step, rollback_hugo has no target to restore on a system's very first activation, because the pre-existing unmanaged binary was never itself a managed version. Requires write.",
+		Description: "One-time setup for a deployment that has never used managed Hugo upgrades: detects the currently installed Hugo version, then re-downloads and checksum-verifies that exact version from the official release (never trusts the existing binary on disk directly), stages it, and activates it as the initial managed baseline. dry_run defaults to true. Refuses to run if a managed version is already active — use stage_hugo_upgrade/activate_hugo for every upgrade after this. Without this step, rollback_hugo has no target to restore on a system's very first activation, because the pre-existing unmanaged binary was never itself a managed version. Requires admin.",
 		InputSchema: tools.MustSchema[bootstrapHugoInput](), OutputSchema: tools.MustSchema[bootstrapHugoOutput](),
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false), IdempotentHint: false, OpenWorldHint: fileutil.BoolPtr(true)},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in bootstrapHugoInput) (*mcp.CallToolResult, bootstrapHugoOutput, error) {
