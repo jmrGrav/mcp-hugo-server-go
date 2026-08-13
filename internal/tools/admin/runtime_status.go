@@ -108,6 +108,8 @@ type runtimeStatusData struct {
 	SiteWorktreeDirty       bool                    `json:"site_worktree_dirty"`
 	SourceAheadOfPublic     bool                    `json:"source_ahead_of_public"`
 	UnpublishedChangesCount int                     `json:"unpublished_changes_count"`
+	SourceAheadReason       string                  `json:"source_ahead_reason"`
+	PublicationState        string                  `json:"publication_state"`
 	ProcessStartedAt        string                  `json:"process_started_at"`
 	LastBuildPersistence    string                  `json:"last_build_persistence"`
 	Hugo                    hugoRuntimeStatus       `json:"hugo"`
@@ -151,7 +153,9 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"`preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the " +
 			"tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` " +
 			"is the honest default for anything not confidently recognized). `source_ahead_of_public` and " +
-			"`unpublished_changes_count` report server-known source changes awaiting publication; `process_started_at` " +
+			"`unpublished_changes_count` report server-known source changes awaiting publication. `source_ahead_reason` distinguishes " +
+			"`pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` " +
+			"is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` " +
 			"and `last_build_persistence` make restart behavior explicit. Read-only; does not expose secrets or arbitrary " +
 			"host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
@@ -190,6 +194,16 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		}
 		data.UnpublishedChangesCount = pendingPages
 		data.SourceAheadOfPublic = pendingPages > 0 || (data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassContentSource))
+		switch {
+		case pendingPages > 0:
+			data.SourceAheadReason, data.PublicationState = "pending_mcp_changes", "pending"
+		case data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassContentSource):
+			data.SourceAheadReason, data.PublicationState = "out_of_band_source_drift", "source_drift_only"
+		case data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassGeneratedAsset):
+			data.SourceAheadReason, data.PublicationState = "generated_asset_drift", "generated_asset_drift"
+		default:
+			data.SourceAheadReason, data.PublicationState = "none", "clean"
+		}
 
 		if !data.Hugo.Available {
 			data.Degraded = append(data.Degraded, "build_site/preview_build: hugo binary is unavailable — "+data.Hugo.Error)

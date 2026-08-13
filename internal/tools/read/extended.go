@@ -463,12 +463,14 @@ type getBacklinksOutput struct {
 }
 
 type suggestInternalLinksInput struct {
-	Slug         string   `json:"slug,omitempty"`
-	Tags         []string `json:"tags,omitempty"`
-	Categories   []string `json:"categories,omitempty"`
-	Body         string   `json:"body,omitempty"`
-	Limit        int      `json:"limit,omitempty"`
-	ResponseMode string   `json:"response_mode,omitempty"`
+	Slug            string   `json:"slug,omitempty"`
+	Language        string   `json:"language,omitempty"`
+	Tags            []string `json:"tags,omitempty"`
+	Categories      []string `json:"categories,omitempty"`
+	Body            string   `json:"body,omitempty"`
+	Limit           int      `json:"limit,omitempty"`
+	OnePerSourceKey bool     `json:"one_per_source_key,omitempty"`
+	ResponseMode    string   `json:"response_mode,omitempty"`
 }
 
 type responseModeOnlyInput struct {
@@ -479,6 +481,7 @@ type linkSuggestionDTO struct {
 	Slug             string   `json:"slug"`
 	Title            string   `json:"title"`
 	URL              string   `json:"url"`
+	Lang             string   `json:"lang,omitempty"`
 	AnchorText       string   `json:"anchor_text"`
 	SharedTags       []string `json:"shared_tags,omitempty"`
 	SharedCategories []string `json:"shared_categories,omitempty"`
@@ -876,7 +879,7 @@ func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, 
 		"Recommend existing published pages to link from a draft or existing page, based on shared tags and categories. "+
 			"Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. "+
 			"Optionally include body to detect pages whose titles already appear in the text (body_mention: true). "+
-			"Returns ranked suggestions with anchor_text and shared taxonomy context. Use this specifically for a draft not yet indexed (via tags/categories/body); for an already-published page, get_related_content's suggested_links field covers the same case alongside backlinks/related_pages/translations in one call. When suggested_links comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+			"Returns ranked suggestions with anchor_text and shared taxonomy context. Use this specifically for a draft not yet indexed (via tags/categories/body); for an already-published page, get_related_content's suggested_links field covers the same case alongside backlinks/related_pages/translations in one call. When suggested_links comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Options: `language` filters rows to one language; `one_per_source_key:true` collapses translated siblings; `response_mode:\"compact\"` keeps ranked slug/title/score/anchor rows while omitting translations and taxonomy detail. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in suggestInternalLinksInput) (*mcp.CallToolResult, suggestInternalLinksOutput, error) {
 			if idx == nil {
 				return nil, suggestInternalLinksOutput{}, fmt.Errorf("index not initialized")
@@ -885,6 +888,10 @@ func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, 
 				return nil, suggestInternalLinksOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 10, 20)
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, suggestInternalLinksOutput{}, err
+			}
 
 			// Build the reference taxonomy: start from provided tags/categories, then merge in the
 			// indexed page's taxonomy when a slug is given.
@@ -938,6 +945,14 @@ func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, 
 				}
 			}
 			suggestions, evaluated := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, limit)
+			suggestions = filterSuggestedLinks(suggestions, in.Language, in.OnePerSourceKey)
+			translations = filterRelationshipTranslations(translations, in.Language, in.OnePerSourceKey)
+			if mode == toolcontract.ResponseModeCompact {
+				translations = nil
+				for i := range suggestions {
+					suggestions[i].SharedTags, suggestions[i].SharedCategories = nil, nil
+				}
+			}
 			data := suggestInternalLinksData{
 				Slug:           resolvedSlug,
 				Total:          len(suggestions),
@@ -1012,6 +1027,7 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 					Slug:             pg.Slug,
 					Title:            pg.Title,
 					URL:              pg.URL,
+					Lang:             pg.Lang,
 					AnchorText:       pg.Title,
 					SharedTags:       taxonomy.Slugs(sharedTagTerms),
 					SharedCategories: taxonomy.Slugs(sharedCatTerms),
@@ -1034,6 +1050,7 @@ func scoreLinkSuggestions(idx *site.Index, excludeSlug string, refTags, refCats 
 				Slug:        pg.Slug,
 				Title:       pg.Title,
 				URL:         pg.URL,
+				Lang:        pg.Lang,
 				AnchorText:  pg.Title,
 				Score:       lexicalScore,
 				BodyMention: mention,

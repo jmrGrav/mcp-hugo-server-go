@@ -2638,6 +2638,75 @@ func TestGetRelatedContentSeparatesTranslations(t *testing.T) {
 	}
 }
 
+func TestRelationshipRecommendationsFilterLanguageAndCollapseTranslations(t *testing.T) {
+	session, done := newEditorialGraphSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{
+		"slug":               "/posts/hello/",
+		"language":           "en",
+		"one_per_source_key": true,
+		"response_mode":      "compact",
+		"limit":              10,
+	})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if translations, ok := data["translations"]; ok && translations != nil {
+		t.Fatalf("compact translations = %#v, want omitted", translations)
+	}
+	if backlinks, ok := data["backlinks"]; ok && backlinks != nil {
+		t.Fatalf("compact backlinks = %#v, want omitted", backlinks)
+	}
+	for _, key := range []string{"related_pages", "suggested_links"} {
+		rows, ok := data[key].([]any)
+		if !ok {
+			t.Fatalf("%s = %#v, want array", key, data[key])
+		}
+		seen := map[string]bool{}
+		for _, raw := range rows {
+			row := raw.(map[string]any)
+			if got := row["lang"]; got != "en" {
+				t.Fatalf("%s row language = %v, want en: %#v", key, got, row)
+			}
+			if got := row["shared_tags"]; got != nil {
+				t.Fatalf("compact %s shared_tags = %#v, want omitted", key, got)
+			}
+			slug := row["slug"].(string)
+			if seen[slug] {
+				t.Fatalf("%s contains duplicate source key for %q", key, slug)
+			}
+			seen[slug] = true
+		}
+	}
+
+	res = callTool(t, session, "suggest_links", map[string]any{
+		"slug":               "/posts/hello/",
+		"language":           "en",
+		"one_per_source_key": true,
+		"response_mode":      "compact",
+		"limit":              10,
+	})
+	if res.IsError {
+		t.Fatalf("suggest_links returned error: %v", res.Content)
+	}
+	data = decodeContent(t, res)
+	if translations, ok := data["translations"]; ok && translations != nil {
+		t.Fatalf("compact suggestion translations = %#v, want omitted", translations)
+	}
+	rows := data["suggested_links"].([]any)
+	for _, raw := range rows {
+		row := raw.(map[string]any)
+		if row["lang"] != "en" {
+			t.Fatalf("suggestion language = %v, want en", row["lang"])
+		}
+		if row["shared_tags"] != nil || row["shared_categories"] != nil {
+			t.Fatalf("compact suggestion taxonomy = %#v, want omitted", row)
+		}
+	}
+}
+
 func TestBuildAgentContextSeparatesTranslations(t *testing.T) {
 	session, done := newEditorialGraphSession(t)
 	defer done()

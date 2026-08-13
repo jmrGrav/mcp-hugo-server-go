@@ -122,6 +122,12 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 	if data["source_ahead_of_public"] != false {
 		t.Fatalf("source_ahead_of_public = %v, want false for clean source", data["source_ahead_of_public"])
 	}
+	if data["source_ahead_reason"] != "none" {
+		t.Fatalf("source_ahead_reason = %v, want none for clean source", data["source_ahead_reason"])
+	}
+	if data["publication_state"] != "clean" {
+		t.Fatalf("publication_state = %v, want clean for clean source", data["publication_state"])
+	}
 	if data["unpublished_changes_count"] != float64(0) {
 		t.Fatalf("unpublished_changes_count = %v, want 0", data["unpublished_changes_count"])
 	}
@@ -272,6 +278,12 @@ func TestGetRuntimeStatusStateMatrixDirtySourceNoBuildStaysInterpretable(t *test
 	// see here", source_ahead_of_public must say otherwise.
 	if data["source_ahead_of_public"] != true {
 		t.Fatalf("source_ahead_of_public = %v, want true — dirty content_source changes are pending publication", data["source_ahead_of_public"])
+	}
+	if data["source_ahead_reason"] != "out_of_band_source_drift" {
+		t.Fatalf("source_ahead_reason = %v, want out_of_band_source_drift", data["source_ahead_reason"])
+	}
+	if data["publication_state"] != "source_drift_only" {
+		t.Fatalf("publication_state = %v, want source_drift_only", data["publication_state"])
 	}
 	if got, ok := data["process_started_at"].(string); !ok || got == "" {
 		t.Fatalf("process_started_at = %v, want non-empty timestamp explaining process vs. build-history state", data["process_started_at"])
