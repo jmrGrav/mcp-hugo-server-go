@@ -2638,6 +2638,149 @@ func TestGetRelatedContentSeparatesTranslations(t *testing.T) {
 	}
 }
 
+func TestRelationshipRecommendationsFilterLanguageAndCollapseTranslations(t *testing.T) {
+	session, done := newEditorialGraphSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{
+		"slug":               "/posts/hello/",
+		"language":           "en",
+		"one_per_source_key": true,
+		"response_mode":      "compact",
+		"limit":              10,
+	})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if translations, ok := data["translations"]; ok && translations != nil {
+		t.Fatalf("compact translations = %#v, want omitted", translations)
+	}
+	if backlinks, ok := data["backlinks"]; ok && backlinks != nil {
+		t.Fatalf("compact backlinks = %#v, want omitted", backlinks)
+	}
+	for _, key := range []string{"related_pages", "suggested_links"} {
+		rows, ok := data[key].([]any)
+		if !ok {
+			t.Fatalf("%s = %#v, want array", key, data[key])
+		}
+		seen := map[string]bool{}
+		for _, raw := range rows {
+			row := raw.(map[string]any)
+			if got := row["lang"]; got != "en" {
+				t.Fatalf("%s row language = %v, want en: %#v", key, got, row)
+			}
+			if got := row["shared_tags"]; got != nil {
+				t.Fatalf("compact %s shared_tags = %#v, want omitted", key, got)
+			}
+			slug := row["slug"].(string)
+			if seen[slug] {
+				t.Fatalf("%s contains duplicate source key for %q", key, slug)
+			}
+			seen[slug] = true
+		}
+	}
+
+	res = callTool(t, session, "suggest_links", map[string]any{
+		"slug":               "/posts/hello/",
+		"language":           "en",
+		"one_per_source_key": true,
+		"response_mode":      "compact",
+		"limit":              10,
+	})
+	if res.IsError {
+		t.Fatalf("suggest_links returned error: %v", res.Content)
+	}
+	data = decodeContent(t, res)
+	if translations, ok := data["translations"]; ok && translations != nil {
+		t.Fatalf("compact suggestion translations = %#v, want omitted", translations)
+	}
+	rows := data["suggested_links"].([]any)
+	for _, raw := range rows {
+		row := raw.(map[string]any)
+		if row["lang"] != "en" {
+			t.Fatalf("suggestion language = %v, want en", row["lang"])
+		}
+		if row["shared_tags"] != nil || row["shared_categories"] != nil {
+			t.Fatalf("compact suggestion taxonomy = %#v, want omitted", row)
+		}
+	}
+}
+
+// TestRelationshipRecommendationsFilterLanguageDefaultModeKeepsDetail is the
+// default-response-mode counterpart to
+// TestRelationshipRecommendationsFilterLanguageAndCollapseTranslations: the
+// language/one_per_source_key filtering behavior must not depend on
+// response_mode, and the default (standard) mode must keep returning
+// translations/shared_tags/backlinks detail alongside the filtered results.
+func TestRelationshipRecommendationsFilterLanguageDefaultModeKeepsDetail(t *testing.T) {
+	session, done := newEditorialGraphSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{
+		"slug":               "/posts/hello/",
+		"language":           "en",
+		"one_per_source_key": true,
+		"limit":              10,
+	})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	if _, ok := data["translations"]; !ok {
+		t.Fatalf("default mode translations missing: %#v", data)
+	}
+	if _, ok := data["backlinks"]; !ok {
+		t.Fatalf("default mode backlinks missing: %#v", data)
+	}
+	seen := map[string]bool{}
+	for _, key := range []string{"related_pages", "suggested_links"} {
+		rows, ok := data[key].([]any)
+		if !ok {
+			t.Fatalf("%s = %#v, want array", key, data[key])
+		}
+		for _, raw := range rows {
+			row := raw.(map[string]any)
+			if got := row["lang"]; got != "en" {
+				t.Fatalf("%s row language = %v, want en: %#v", key, got, row)
+			}
+			if _, ok := row["shared_tags"]; !ok {
+				t.Fatalf("default mode %s shared_tags missing: %#v", key, row)
+			}
+			slug := row["slug"].(string)
+			key := key + slug
+			if seen[key] {
+				t.Fatalf("%s contains duplicate source key for %q", key, slug)
+			}
+			seen[key] = true
+		}
+	}
+
+	res = callTool(t, session, "suggest_links", map[string]any{
+		"slug":               "/posts/hello/",
+		"language":           "en",
+		"one_per_source_key": true,
+		"limit":              10,
+	})
+	if res.IsError {
+		t.Fatalf("suggest_links returned error: %v", res.Content)
+	}
+	data = decodeContent(t, res)
+	if _, ok := data["translations"]; !ok {
+		t.Fatalf("default mode suggestion translations missing: %#v", data)
+	}
+	rows := data["suggested_links"].([]any)
+	for _, raw := range rows {
+		row := raw.(map[string]any)
+		if row["lang"] != "en" {
+			t.Fatalf("suggestion language = %v, want en", row["lang"])
+		}
+		if _, ok := row["shared_tags"]; !ok {
+			t.Fatalf("default mode suggestion shared_tags missing: %#v", row)
+		}
+	}
+}
+
 func TestBuildAgentContextSeparatesTranslations(t *testing.T) {
 	session, done := newEditorialGraphSession(t)
 	defer done()
@@ -2704,6 +2847,39 @@ func TestSuggestInternalLinksSeparatesTranslations(t *testing.T) {
 // #458: when suggested_links comes back empty, the response must explain
 // why (candidates evaluated, minimum score required) instead of just an
 // empty array with no context.
+// TestRelatedContentEmptyResultDistinguishesFilterMissFromNoCandidates is a
+// regression test for the empty_reason misreport identified alongside the
+// #1041 overfetch fix: when scored candidates exist but a language filter
+// removes every one of them, empty_reason must say so instead of reporting
+// "no_candidates_with_sufficient_taxonomy_affinity" — a caller would
+// otherwise be told (wrongly) that nothing scores well enough, when the
+// real fix is to drop or change the language filter.
+func TestRelatedContentEmptyResultDistinguishesFilterMissFromNoCandidates(t *testing.T) {
+	session, done := newEditorialGraphSession(t)
+	defer done()
+
+	res := callTool(t, session, "get_related_content", map[string]any{
+		"slug":     "/posts/hello/",
+		"language": "de",
+		"limit":    10,
+	})
+	if res.IsError {
+		t.Fatalf("get_related_content returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+	related, ok := data["related_pages"].([]any)
+	if !ok || len(related) != 0 {
+		t.Fatalf("related_pages = %#v, want empty (no de content)", data["related_pages"])
+	}
+	emptyReason, ok := data["empty_reason"].(map[string]any)
+	if !ok {
+		t.Fatalf("empty_reason = %#v, want present alongside empty related_pages", data["empty_reason"])
+	}
+	if got := emptyReason["reason"]; got != "no_candidates_matching_language_or_source_key_filter" {
+		t.Fatalf("empty_reason.reason = %v, want no_candidates_matching_language_or_source_key_filter", got)
+	}
+}
+
 func TestSuggestLinksEmptyResultIncludesExplanation(t *testing.T) {
 	htmlDir := t.TempDir()
 	writeHTML := func(rel, html string) {

@@ -94,10 +94,12 @@ type getPageFrontmatterData struct {
 }
 
 type getRelatedContentInput struct {
-	Slug         string   `json:"slug"`
-	Limit        int      `json:"limit,omitempty"`
-	Include      []string `json:"include,omitempty"`
-	ResponseMode string   `json:"response_mode,omitempty"`
+	Slug            string   `json:"slug"`
+	Language        string   `json:"language,omitempty"`
+	Limit           int      `json:"limit,omitempty"`
+	Include         []string `json:"include,omitempty"`
+	OnePerSourceKey bool     `json:"one_per_source_key,omitempty"`
+	ResponseMode    string   `json:"response_mode,omitempty"`
 }
 
 // getRelatedContentAllInclude is the allowed vocabulary for get_related_content's
@@ -193,9 +195,16 @@ type emptyResultExplanationDTO struct {
 // computeRelated and scoreLinkSuggestions discard score-0 candidates.
 const minTaxonomyAffinityScore = 1
 
-func newEmptyResultExplanation(candidatesEvaluated, minimumScore int) *emptyResultExplanationDTO {
+func newEmptyResultExplanation(candidatesEvaluated, minimumScore int, filteredOut bool) *emptyResultExplanationDTO {
 	reason := "no_candidates_with_sufficient_taxonomy_affinity"
-	if candidatesEvaluated == 0 {
+	switch {
+	case filteredOut:
+		// Scored candidates existed but language/one_per_source_key
+		// filtering removed every one of them — a different situation
+		// from "nothing scored", and worth distinguishing so a caller
+		// isn't told to loosen scoring when the fix is to drop the filter.
+		reason = "no_candidates_matching_language_or_source_key_filter"
+	case candidatesEvaluated == 0:
 		reason = "no_other_published_content_to_compare"
 	}
 	return &emptyResultExplanationDTO{
@@ -508,7 +517,7 @@ func registerReadPageTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sour
 
 func registerReadRelationshipTools(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, resolver *site.PageResolver, cfg config.Config, aliases map[string]string) {
 	addReadOnlyTool(s, "get_related_content", "Get related content",
-		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Pass `include: [\"impact\"]` for a pre-mutation impact summary (`impact.taxonomy_orphans`, `impact.sitemap_present`, `impact.feed_present`, `impact.aliases`) answering \"what does changing this page affect?\" before a risky edit/delete — advisory only, never blocks a mutation, same posture as get_broken_links (#434). `index_staleness` is present only when the underlying index (backing related_pages/backlinks) is behind on-disk content — its absence means it's current (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+		"Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Pass `include: [\"impact\"]` for a pre-mutation impact summary (`impact.taxonomy_orphans`, `impact.sitemap_present`, `impact.feed_present`, `impact.aliases`) answering \"what does changing this page affect?\" before a risky edit/delete — advisory only, never blocks a mutation, same posture as get_broken_links (#434). `index_staleness` is present only when the underlying index (backing related_pages/backlinks) is behind on-disk content — its absence means it's current (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Options: `language` filters rows to one language; `one_per_source_key:true` collapses translated siblings; `response_mode:\"compact\"` omits backlinks, translations, and taxonomy detail while retaining ranked recommendations. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in getRelatedContentInput) (*mcp.CallToolResult, getRelatedContentOutput, error) {
 			if idx == nil {
 				return nil, getRelatedContentOutput{}, fmt.Errorf("index not initialized")
@@ -529,14 +538,65 @@ func registerReadRelationshipTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				return nil, getRelatedContentOutput{}, err
 			}
 			limit := clampLimit(in.Limit, 5, 20)
+			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+			if err != nil {
+				return nil, getRelatedContentOutput{}, err
+			}
 			ref := resolvedPublicPage(resolved)
 			if resolved.Public != nil {
 				ref = *resolved.Public
 			}
 			translations := collectTranslations(idx, ref)
-			related, evaluated := computeRelated(idx, ref, limit)
+			// #1041: computeRelated/scoreLinkSuggestions each truncate to
+			// their own limit argument internally, before the
+			// language/one_per_source_key filter below runs. Truncating
+			// first would silently under-deliver relative to the requested
+			// limit whenever a same-source-key sibling (near-guaranteed on
+			// a bilingual site, since translations usually share tags/
+			// categories and so score identically) occupied one of the
+			// pre-filter top-limit slots. When filtering is requested,
+			// over-fetch a generously larger candidate pool so there's
+			// enough headroom to still fill limit distinct-source-key
+			// results after filtering, then re-truncate to the real limit.
+			fetchLimit := limit
+			if in.Language != "" || in.OnePerSourceKey {
+				fetchLimit = overfetchLimit(limit)
+			}
+			related, evaluated := computeRelated(idx, ref, fetchLimit)
+			relatedBeforeFilter := len(related)
 			backlinks := premutationBacklinks(idx, ref.Slug)
-			suggestedLinks, _ := scoreLinkSuggestions(idx, ref.Slug, ref.Tags, ref.Categories, "", limit)
+			suggestedLinks, _ := scoreLinkSuggestions(idx, ref.Slug, ref.Tags, ref.Categories, "", fetchLimit)
+			translations = filterRelationshipTranslations(translations, in.Language, in.OnePerSourceKey)
+			related = filterRelatedPages(related, in.Language, in.OnePerSourceKey)
+			suggestedLinks = filterSuggestedLinks(suggestedLinks, in.Language, in.OnePerSourceKey)
+			if len(related) > limit {
+				related = related[:limit]
+			}
+			if len(suggestedLinks) > limit {
+				suggestedLinks = suggestedLinks[:limit]
+			}
+			if mode == toolcontract.ResponseModeCompact {
+				translations, backlinks = nil, nil
+				for i := range related {
+					related[i].SharedTags, related[i].SharedCategories, related[i].SharedTagTerms, related[i].SharedCategoryTerms = nil, nil, nil, nil
+				}
+				for i := range suggestedLinks {
+					suggestedLinks[i].SharedTags, suggestedLinks[i].SharedCategories = nil, nil
+				}
+			} else {
+				if translations == nil {
+					translations = []translationPageDTO{}
+				}
+				if related == nil {
+					related = []relatedPageDTO{}
+				}
+				if backlinks == nil {
+					backlinks = []backlinkDTO{}
+				}
+				if suggestedLinks == nil {
+					suggestedLinks = []linkSuggestionDTO{}
+				}
+			}
 			data := getRelatedContentData{
 				Translations:   translations,
 				RelatedPages:   related,
@@ -545,7 +605,8 @@ func registerReadRelationshipTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				IndexInfo:      staleness(idx, srcIdx, cfg),
 			}
 			if len(related) == 0 {
-				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
+				filteredOut := relatedBeforeFilter > 0 && (in.Language != "" || in.OnePerSourceKey)
+				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore, filteredOut)
 			}
 			if include["impact"] {
 				impact := premutationImpact(idx, resolved, ref, aliases)
@@ -1162,6 +1223,66 @@ func collectTranslations(idx *site.Index, ref site.Page) []translationPageDTO {
 	return out
 }
 
+func filterRelationshipTranslations(in []translationPageDTO, lang string, onePerSourceKey bool) []translationPageDTO {
+	lang = strings.TrimSpace(lang)
+	seen := map[string]bool{}
+	out := make([]translationPageDTO, 0, len(in))
+	for _, item := range in {
+		if lang != "" && item.Lang != lang {
+			continue
+		}
+		key := translationKey(item.Slug)
+		if onePerSourceKey && key != "" && seen[key] {
+			continue
+		}
+		if key != "" {
+			seen[key] = true
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func filterRelatedPages(in []relatedPageDTO, lang string, onePerSourceKey bool) []relatedPageDTO {
+	lang = strings.TrimSpace(lang)
+	seen := map[string]bool{}
+	out := make([]relatedPageDTO, 0, len(in))
+	for _, item := range in {
+		if lang != "" && item.Lang != lang {
+			continue
+		}
+		key := translationKey(item.Slug)
+		if onePerSourceKey && key != "" && seen[key] {
+			continue
+		}
+		if key != "" {
+			seen[key] = true
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func filterSuggestedLinks(in []linkSuggestionDTO, lang string, onePerSourceKey bool) []linkSuggestionDTO {
+	lang = strings.TrimSpace(lang)
+	seen := map[string]bool{}
+	out := make([]linkSuggestionDTO, 0, len(in))
+	for _, item := range in {
+		if lang != "" && item.Lang != lang {
+			continue
+		}
+		key := translationKey(item.Slug)
+		if onePerSourceKey && key != "" && seen[key] {
+			continue
+		}
+		if key != "" {
+			seen[key] = true
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 func translationKey(slug string) string {
 	candidates := site.SourceSlugCandidates(strings.Trim(slug, "/"))
 	if len(candidates) == 0 {
@@ -1232,6 +1353,24 @@ func clampLimit(v, defaultVal, maxVal int) int {
 		return maxVal
 	}
 	return v
+}
+
+// overfetchLimit computes how many raw (pre-language/pre-dedup) candidates
+// to request from computeRelated/scoreLinkSuggestions when the caller will
+// filter their result afterward (#1041): both functions truncate to the
+// limit they're given internally, so requesting only the caller's real
+// limit and filtering afterward could silently return fewer than limit
+// results whenever a same-source-key/wrong-language sibling occupied one
+// of the pre-filter top-limit slots. 8x is generous headroom for any
+// realistic site's language count while staying bounded.
+func overfetchLimit(limit int) int {
+	const factor = 8
+	const maxFetch = 200
+	fetch := limit * factor
+	if fetch > maxFetch {
+		return maxFetch
+	}
+	return fetch
 }
 
 // negativeLimitError — see the identical helper's comment in

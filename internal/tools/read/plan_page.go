@@ -104,6 +104,7 @@ func RegisterPlanPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 						fetchLimit = len(idx.Sitemap())
 					}
 					suggestions, evaluated := scoreLinkSuggestions(idx, "", in.Tags, in.Categories, in.Topic, fetchLimit)
+					suggestionsBeforeFilter := len(suggestions)
 					suggestions = filterSuggestionsByLanguage(idx, suggestions, in.Language)
 					if in.OnePerSourceKey {
 						suggestions = collapseSuggestionsBySourceKey(suggestions)
@@ -113,7 +114,8 @@ func RegisterPlanPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 					}
 					suggestedLinks = suggestions
 					if len(suggestions) == 0 {
-						emptyLinksReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
+						filteredOut := suggestionsBeforeFilter > 0 && (in.Language != "" || in.OnePerSourceKey)
+						emptyLinksReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore, filteredOut)
 					}
 				}
 			}

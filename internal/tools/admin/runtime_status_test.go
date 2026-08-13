@@ -122,6 +122,12 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 	if data["source_ahead_of_public"] != false {
 		t.Fatalf("source_ahead_of_public = %v, want false for clean source", data["source_ahead_of_public"])
 	}
+	if data["source_ahead_reason"] != "none" {
+		t.Fatalf("source_ahead_reason = %v, want none for clean source", data["source_ahead_reason"])
+	}
+	if data["publication_state"] != "clean" {
+		t.Fatalf("publication_state = %v, want clean for clean source", data["publication_state"])
+	}
 	if data["unpublished_changes_count"] != float64(0) {
 		t.Fatalf("unpublished_changes_count = %v, want 0", data["unpublished_changes_count"])
 	}
@@ -273,11 +279,107 @@ func TestGetRuntimeStatusStateMatrixDirtySourceNoBuildStaysInterpretable(t *test
 	if data["source_ahead_of_public"] != true {
 		t.Fatalf("source_ahead_of_public = %v, want true — dirty content_source changes are pending publication", data["source_ahead_of_public"])
 	}
+	if data["source_ahead_reason"] != "out_of_band_source_drift" {
+		t.Fatalf("source_ahead_reason = %v, want out_of_band_source_drift", data["source_ahead_reason"])
+	}
+	if data["publication_state"] != "source_drift_only" {
+		t.Fatalf("publication_state = %v, want source_drift_only", data["publication_state"])
+	}
 	if got, ok := data["process_started_at"].(string); !ok || got == "" {
 		t.Fatalf("process_started_at = %v, want non-empty timestamp explaining process vs. build-history state", data["process_started_at"])
 	}
 	if data["last_build_persistence"] != "process_memory" {
 		t.Fatalf("last_build_persistence = %v, want process_memory (explains why last_build is omitted rather than looking broken)", data["last_build_persistence"])
+	}
+}
+
+// TestGetRuntimeStatusStateMatrixGeneratedAssetDriftOnly is the fourth
+// #1036 state-matrix case: a generated_hero_image asset changed but
+// content/ itself is clean. source_ahead_of_public must stay false (no
+// actual source content is pending publication — matching its pre-#1036
+// definition exactly, since it only checks the content_source dirty
+// class), while the new fields still surface the drift instead of
+// reporting a flat "none"/"clean" that would hide it entirely.
+func TestGetRuntimeStatusStateMatrixGeneratedAssetDriftOnly(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+	origDirty := buildinfo.Dirty
+	buildinfo.Dirty = false
+	t.Cleanup(func() { buildinfo.Dirty = origDirty })
+
+	hugoDir := writeMockHugo(t, "#!/bin/sh\necho 'hugo v0.150.0 linux/amd64'\n")
+	t.Setenv("PATH", hugoDir+":"+os.Getenv("PATH"))
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	pagePath := filepath.Join(contentRoot, "posts", "x", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: X\n---\noriginal\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	// static/images/ is part of the committed baseline (a real Hugo site
+	// scaffold would already have this directory) so that the new hero
+	// image below shows up as its own untracked file in git status
+	// --porcelain — an entirely new, never-before-seen directory is
+	// instead collapsed by git into a single "?? static/" line, which
+	// would misclassify as external_unknown and defeat this test's setup.
+	placeholderPath := filepath.Join(root, "static", "images", ".gitkeep")
+	if err := os.MkdirAll(filepath.Dir(placeholderPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(placeholderPath, nil, 0o644); err != nil {
+		t.Fatalf("write placeholder: %v", err)
+	}
+	runGitCmd(t, root, "init")
+	runGitCmd(t, root, "config", "user.email", "test@example.test")
+	runGitCmd(t, root, "config", "user.name", "Test User")
+	runGitCmd(t, root, "add", ".")
+	runGitCmd(t, root, "commit", "-m", "initial")
+
+	// Only a generated hero image changes, uncommitted — content/ itself
+	// stays untouched, so this must classify as generated_asset, not
+	// content_source.
+	imagePath := filepath.Join(root, "static", "images", "posts-x-featured.jpg")
+	if err := os.WriteFile(imagePath, []byte("fake jpeg bytes"), 0o644); err != nil {
+		t.Fatalf("write generated image: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = hugoDir
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("tool returned error: %s", resultText(res))
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+
+	git := data["git"].(map[string]any)
+	if git["dirty"] != true {
+		t.Fatalf("git.dirty = %v, want true (uncommitted generated asset)", git["dirty"])
+	}
+	dirtyClasses, _ := git["dirty_classes"].([]any)
+	if len(dirtyClasses) != 1 || dirtyClasses[0] != "generated_asset" {
+		t.Fatalf("git.dirty_classes = %v, want [generated_asset]", dirtyClasses)
+	}
+	if data["source_ahead_of_public"] != false {
+		t.Fatalf("source_ahead_of_public = %v, want false — generated-asset-only drift is not source content pending publication", data["source_ahead_of_public"])
+	}
+	if data["source_ahead_reason"] != "generated_asset_drift" {
+		t.Fatalf("source_ahead_reason = %v, want generated_asset_drift", data["source_ahead_reason"])
+	}
+	if data["publication_state"] != "generated_asset_drift" {
+		t.Fatalf("publication_state = %v, want generated_asset_drift", data["publication_state"])
 	}
 }
 

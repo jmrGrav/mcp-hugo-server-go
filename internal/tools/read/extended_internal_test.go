@@ -935,6 +935,64 @@ func TestValidateFrontMatterPageDoesNotFlagFrontmatterLikeLinesMidBody(t *testin
 	}
 }
 
+// TestOverfetchLimitPreventsUnderDeliveryWhenFilteringAfterTruncation is a
+// regression test for #1041: computeRelated/scoreLinkSuggestions each
+// truncate to whatever limit they're given internally, *before* the
+// language/one_per_source_key filter runs at the call site. If the call
+// site asked for only `limit` raw candidates, a same-language-and-topic
+// sibling that happens to sort ahead of the caller's actually-wanted
+// candidate (here, by the tie-break on Date) can fill the only slot,
+// leaving nothing left for the requested language after filtering — not
+// just "fewer than limit", but potentially zero. The fix is to request
+// overfetchLimit(limit) raw candidates whenever a language/one_per_source_key
+// filter will run, then truncate to the real limit afterward.
+func TestOverfetchLimitPreventsUnderDeliveryWhenFilteringAfterTruncation(t *testing.T) {
+	cfg := config.Default()
+	cfg.SiteRoot = t.TempDir()
+	cfg.SiteURL = "https://example.test"
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	ref := site.Page{Slug: "/posts/ref/", Title: "Ref", Tags: []string{"go"}, URL: "https://example.test/posts/ref/"}
+	// b-fr: no English sibling, but sorts first (most recent) among equally
+	// scored candidates. a-fr/a-en: an actual translation pair; a-en is the
+	// candidate a language:"en" filter should surface, but it sorts last.
+	pages := []site.Page{
+		{Slug: "/posts/b/", Title: "B", Tags: []string{"go"}, Lang: "fr", Date: "2026-01-03", URL: "https://example.test/posts/b/"},
+		{Slug: "/posts/a/", Title: "A FR", Tags: []string{"go"}, Lang: "fr", Date: "2026-01-02", URL: "https://example.test/posts/a/"},
+		{Slug: "/en/posts/a/", Title: "A EN", Tags: []string{"go"}, Lang: "en", Date: "2026-01-01", URL: "https://example.test/en/posts/a/"},
+	}
+	for _, pg := range pages {
+		idx.UpsertPage(pg)
+	}
+
+	const limit = 1
+
+	// Requesting only `limit` raw candidates (the pre-#1041 call pattern)
+	// reproduces the bug: the single highest-ranked candidate (b-fr, most
+	// recent) doesn't match language:"en", so filtering leaves nothing —
+	// even though a genuinely matching candidate (a-en) exists.
+	buggy, _ := computeRelated(idx, ref, limit)
+	buggyFiltered := filterRelatedPages(buggy, "en", true)
+	if len(buggyFiltered) != 0 {
+		t.Fatalf("precondition not met: requesting only limit=%d raw candidates should reproduce the under-delivery bug (0 results), got %d", limit, len(buggyFiltered))
+	}
+
+	// The actual call-site behavior: over-fetch before filtering.
+	fetched, _ := computeRelated(idx, ref, overfetchLimit(limit))
+	filtered := filterRelatedPages(fetched, "en", true)
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	if len(filtered) != 1 {
+		t.Fatalf("overfetch+filter = %d results, want 1 (a-en)", len(filtered))
+	}
+	if filtered[0].Slug != "/en/posts/a/" {
+		t.Fatalf("overfetch+filter result = %q, want /en/posts/a/", filtered[0].Slug)
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

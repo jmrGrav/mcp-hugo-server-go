@@ -2751,7 +2751,7 @@
   {
     "name": "get_related_content",
     "required_scope": "",
-    "description": "Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Pass `include: [\"impact\"]` for a pre-mutation impact summary (`impact.taxonomy_orphans`, `impact.sitemap_present`, `impact.feed_present`, `impact.aliases`) answering \"what does changing this page affect?\" before a risky edit/delete — advisory only, never blocks a mutation, same posture as get_broken_links (#434). `index_staleness` is present only when the underlying index (backing related_pages/backlinks) is behind on-disk content — its absence means it's current (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
+    "description": "Return the four editorial surfaces for a slug: related_pages (tag/category overlap), backlinks (pages that link here), suggested_links (link candidates scored by tag affinity), and translations. Use this for content recommendations and editorial linking. If you only need one facet, get_backlinks (backlinks alone) and suggest_links (also works for a draft not yet indexed, via tags/categories/body) are cheaper standalone alternatives. When related_pages comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Pass `include: [\"impact\"]` for a pre-mutation impact summary (`impact.taxonomy_orphans`, `impact.sitemap_present`, `impact.feed_present`, `impact.aliases`) answering \"what does changing this page affect?\" before a risky edit/delete — advisory only, never blocks a mutation, same posture as get_broken_links (#434). `index_staleness` is present only when the underlying index (backing related_pages/backlinks) is behind on-disk content — its absence means it's current (#583). `index_staleness.likely_source` is a coarse, best-effort hint at why: `\"mcp_pending_build\"` (a known, expected write via this server awaiting the next build) vs. `\"external_or_unknown\"` (no such record — most plausibly an out-of-band edit, e.g. direct SSH/git) (#617). Options: `language` filters rows to one language; `one_per_source_key:true` collapses translated siblings; `response_mode:\"compact\"` omits backlinks, translations, and taxonomy detail while retaining ranked recommendations. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. Input: indexed slug only.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -2764,9 +2764,15 @@
             "array"
           ]
         },
+        "language": {
+          "type": "string"
+        },
         "limit": {
           "maximum": 20,
           "type": "integer"
+        },
+        "one_per_source_key": {
+          "type": "boolean"
         },
         "response_mode": {
           "description": "Accepted values: standard (default) or compact. Other values, including reserved future values, are rejected with a structured invalid_params error.",
@@ -2816,6 +2822,7 @@
       "data.suggested_links:unspecified:required",
       "data.suggested_links[].anchor_text:string:required",
       "data.suggested_links[].body_mention:boolean",
+      "data.suggested_links[].lang:string",
       "data.suggested_links[].score:integer:required",
       "data.suggested_links[].shared_categories:unspecified",
       "data.suggested_links[].shared_tags:unspecified",
@@ -2857,12 +2864,12 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "d6269dd71f7f5a967a7037da3cb37519e67880f04a38ab49077c713555e9baf0"
+    "output_schema_sha256": "a231bd95709a412f209d15adff5c2d15d8a992f2653a83786e0364936b25f64d"
   },
   {
     "name": "get_runtime_status",
     "required_scope": "write",
-    "description": "Report the actual runtime/build/git/site status of this server in one compact structured surface: server version and build commit, whether the hugo and git binaries are usable, the outcome of the most recent build_site attempt (last_build, omitted until build_site has been called at least once), and (opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) so cleanup does not depend on remembering to run a build first. When the git baseline is dirty, `data.git.dirty_classes` (#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, `preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` is the honest default for anything not confidently recognized). `source_ahead_of_public` and `unpublished_changes_count` report server-known source changes awaiting publication; `process_started_at` and `last_build_persistence` make restart behavior explicit. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
+    "description": "Report the actual runtime/build/git/site status of this server in one compact structured surface: server version and build commit, whether the hugo and git binaries are usable, the outcome of the most recent build_site attempt (last_build, omitted until build_site has been called at least once), and (opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) so cleanup does not depend on remembering to run a build first. When the git baseline is dirty, `data.git.dirty_classes` (#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, `preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` is the honest default for anything not confidently recognized). `source_ahead_of_public` and `unpublished_changes_count` report server-known source changes awaiting publication. `source_ahead_reason` distinguishes `pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` and `last_build_persistence` make restart behavior explicit. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -2899,6 +2906,7 @@
       "data.last_build:unspecified",
       "data.last_build_persistence:string:required",
       "data.process_started_at:string:required",
+      "data.publication_state:string:required",
       "data.release_version:string:required",
       "data.schema_version:string:required",
       "data.site.content_root_configured:boolean:required",
@@ -2914,6 +2922,7 @@
       "data.site:object:required",
       "data.site_worktree_dirty:boolean:required",
       "data.source_ahead_of_public:boolean:required",
+      "data.source_ahead_reason:string:required",
       "data.unpublished_changes_count:integer:required",
       "data:object:required",
       "errors:unspecified:required",
@@ -2945,7 +2954,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "d594f8016e45057d65baf9af1f5b35f180d4e6c110756710b7f74f7aba0f3736"
+    "output_schema_sha256": "821fb50dceee3caf01b6c4a12ca87d4c316c5f010d83beebdd52a880f58efe26"
   },
   {
     "name": "get_site_health",
@@ -4268,6 +4277,7 @@
       "data.suggested_links:unspecified",
       "data.suggested_links[].anchor_text:string:required",
       "data.suggested_links[].body_mention:boolean",
+      "data.suggested_links[].lang:string",
       "data.suggested_links[].score:integer:required",
       "data.suggested_links[].shared_categories:unspecified",
       "data.suggested_links[].shared_tags:unspecified",
@@ -4304,7 +4314,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "9430ff51e54938dd333b301bd9f2549e58fd87103115c1738f13ae5ae4debf44"
+    "output_schema_sha256": "7e87db5870c2058a6d1cf7046bd94fac93c3d66100f8348725a16270d79030ef"
   },
   {
     "name": "preview_build",
@@ -5094,7 +5104,7 @@
   {
     "name": "suggest_links",
     "required_scope": "",
-    "description": "Recommend existing published pages to link from a draft or existing page, based on shared tags and categories. Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. Optionally include body to detect pages whose titles already appear in the text (body_mention: true). Returns ranked suggestions with anchor_text and shared taxonomy context. Use this specifically for a draft not yet indexed (via tags/categories/body); for an already-published page, get_related_content's suggested_links field covers the same case alongside backlinks/related_pages/translations in one call. When suggested_links comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "description": "Recommend existing published pages to link from a draft or existing page, based on shared tags and categories. Supply slug (for an indexed page), or tags/categories (for a draft not yet published), or both. Optionally include body to detect pages whose titles already appear in the text (body_mention: true). Returns ranked suggestions with anchor_text and shared taxonomy context. Use this specifically for a draft not yet indexed (via tags/categories/body); for an already-published page, get_related_content's suggested_links field covers the same case alongside backlinks/related_pages/translations in one call. When suggested_links comes back empty, `empty_reason` explains why (candidates_evaluated, minimum_score) instead of leaving you to guess whether nothing qualifies or nothing else exists at all. Options: `language` filters rows to one language; `one_per_source_key:true` collapses translated siblings; `response_mode:\"compact\"` keeps ranked slug/title/score/anchor rows while omitting translations and taxonomy detail. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -5110,9 +5120,15 @@
             "array"
           ]
         },
+        "language": {
+          "type": "string"
+        },
         "limit": {
           "maximum": 20,
           "type": "integer"
+        },
+        "one_per_source_key": {
+          "type": "boolean"
         },
         "response_mode": {
           "description": "Accepted values: standard (default) or compact. Other values, including reserved future values, are rejected with a structured invalid_params error.",
@@ -5142,6 +5158,7 @@
       "data.suggested_links:unspecified:required",
       "data.suggested_links[].anchor_text:string:required",
       "data.suggested_links[].body_mention:boolean",
+      "data.suggested_links[].lang:string",
       "data.suggested_links[].score:integer:required",
       "data.suggested_links[].shared_categories:unspecified",
       "data.suggested_links[].shared_tags:unspecified",
@@ -5184,7 +5201,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "4513ee8ab53baf98c4f43f99ecebd8dbdf6cb6c621afee052302c316fd599892"
+    "output_schema_sha256": "123ba8898b9df970794b17168ac6e7cabb38e0e7ba4c665053da64bb5c7ca8cd"
   },
   {
     "name": "update_page",
