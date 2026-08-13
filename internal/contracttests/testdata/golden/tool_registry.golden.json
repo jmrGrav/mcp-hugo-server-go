@@ -90,6 +90,7 @@
       "data.dry_run:boolean",
       "data.plan_id:string",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -152,7 +153,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "d052aa3a8c3477849324c35aeff9a2fce351b96716c8c551ce1c0e5c22cd2f06"
+    "output_schema_sha256": "2f03e9b192034dc7bc8275ee9a5ecc4312b584a730ccf9abd7d05e6afb7199b2"
   },
   {
     "name": "apply_content_plan",
@@ -182,6 +183,7 @@
       "data.dry_run:boolean",
       "data.plan_id:string",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -234,7 +236,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "b8e351b53e0e19dbcc2d428d6da10058cb7093e916b43666377430f292e44a0e"
+    "output_schema_sha256": "42539d518abf5a5bdf5b32baf37a9819a9166ec01f210ec480026e2a32a8057a"
   },
   {
     "name": "bootstrap_hugo",
@@ -790,6 +792,7 @@
       "data.new_revision:string",
       "data.path:string",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -852,7 +855,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "b6eb5d047a2d381a4a4e7fba61605e21fc7156c50433036bda4d00447b435a72"
+    "output_schema_sha256": "e6c43e67637c76195ba9a4b7c82627b409966217344a9c209d393f6d7dcc5fd1"
   },
   {
     "name": "create_preview",
@@ -1046,6 +1049,7 @@
       "data.generated_assets[].sha256:string:required",
       "data.generated_assets[].size_bytes:integer:required",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -1099,7 +1103,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "cf37b3dfa098e6f3fea0c413ca5243cd45dae903e092bd8748565496ed4f8566"
+    "output_schema_sha256": "4ef65ab19b980dc940244b05550d5642f9e80c91df8b64fa7d6644cc630df156"
   },
   {
     "name": "delete_page_asset",
@@ -1150,6 +1154,7 @@
       "data.path:string",
       "data.public_copy_may_remain:boolean",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -1200,7 +1205,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "a36e5c73fc2045a0ebf44bafab3cf504a1425be6ba19cc75ab581de0ba07b337"
+    "output_schema_sha256": "902254a5c7c7c826b02fa084c7f73038842912bf02adafc3a251904be084756d"
   },
   {
     "name": "diff_page",
@@ -2579,13 +2584,14 @@
   {
     "name": "get_rate_limits",
     "required_scope": "write",
-    "description": "Check your remaining per-caller mutation quota before acting, instead of only discovering it after a create_page/update_page/delete_page/... call already reports rate_limit_remaining. Reports both independent quotas: `create_update_upload` (shared by create_page/update_page/upload_page_asset/apply_content_plan/rollback_change) and `destructive` (shared by delete_page/delete_page_asset). Each bucket's `remaining`/`limit` are call counts; `retry_after_seconds` is 0 if a call would succeed right now, otherwise how long to wait. Calling this tool never itself consumes any quota. Requires write (this reports the same per-caller identity and budget the mutation tools themselves use, which isn't meaningful for a pure reader).",
+    "description": "Check your remaining per-caller mutation quota before acting, instead of only discovering it after a create_page/update_page/delete_page/... call already reports rate_limit_remaining. Reports both independent token-bucket quotas: `create_update_upload` (shared by create_page/update_page/upload_page_asset/apply_content_plan/rollback_change) and `destructive` (shared by delete_page/delete_page_asset). Buckets refill continuously at `refill_rate_per_second` (derived from `limit / window_seconds`); `window_seconds` is a nominal refill period, not a fixed-window reset boundary. `reset_at` estimates the earliest next successful call and `retry_after_seconds` is 0 if a call would succeed right now, otherwise how long to wait. Calling this tool never itself consumes any quota. Requires write (this reports the same per-caller identity and budget the mutation tools themselves use, which isn't meaningful for a pure reader).",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"
     },
     "output_schema_fields": [
       "data.create_update_upload.limit:integer:required",
+      "data.create_update_upload.refill_rate_per_second:number:required",
       "data.create_update_upload.remaining:integer:required",
       "data.create_update_upload.reset_at:string:required",
       "data.create_update_upload.retry_after_seconds:number:required",
@@ -2593,6 +2599,7 @@
       "data.create_update_upload.window_seconds:integer:required",
       "data.create_update_upload:object:required",
       "data.destructive.limit:integer:required",
+      "data.destructive.refill_rate_per_second:number:required",
       "data.destructive.remaining:integer:required",
       "data.destructive.reset_at:string:required",
       "data.destructive.retry_after_seconds:number:required",
@@ -2630,7 +2637,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "29e50c1c353b5423ef6a8a65c910e4e05a2c54ba9f225e420100dbcfe456a418"
+    "output_schema_sha256": "5bc4d1c5cbc011d6dcd107fc50dace25b93374898ba398beb7bfd343c9bd7058"
   },
   {
     "name": "get_recent_posts",
@@ -4510,6 +4517,7 @@
       "data.bundle_status:string:required",
       "data.dry_run:boolean",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -4572,7 +4580,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "76ecdb7a642b11a5ce89aa84a925b05953b9d5aef5d35ebb1a41c4a5bfa11f51"
+    "output_schema_sha256": "e75ed38bb5156998a91971f31906a1bb387a15c7b24783f1d30cd823dada3162"
   },
   {
     "name": "rollback_change",
@@ -4612,6 +4620,7 @@
       "data.diff:string",
       "data.dry_run:boolean",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -4662,7 +4671,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "b83396d1cd9185f40804ab52d994a884f350c066f80f65eb729a099ecdbd2e79"
+    "output_schema_sha256": "7d8033287ead5e3353986ba4401270b6587c30d245a8a134a50a29849c8ef682"
   },
   {
     "name": "rollback_hugo",
@@ -5227,6 +5236,7 @@
       "data.dry_run:boolean",
       "data.new_revision:string",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -5292,7 +5302,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "0cc43bd46e2af1db0e409ff3447645f9a4e5a4f2b42f307f8bf9b33c0dc2280c"
+    "output_schema_sha256": "d8e98324cadf7b9519ec4b681b3a9329626ce28a69c25306365cdd9e19775399"
   },
   {
     "name": "upload_page_asset",
@@ -5331,6 +5341,7 @@
       "data.filename:string:required",
       "data.path:string",
       "data.rate_limit.limit:integer:required",
+      "data.rate_limit.refill_rate_per_second:number:required",
       "data.rate_limit.remaining:integer:required",
       "data.rate_limit.reset_at:string:required",
       "data.rate_limit.retry_after_seconds:number:required",
@@ -5375,7 +5386,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "e020b7012ee3ea92c6d79f316012f7d67fead5879c582dc3579c4de2094f5fc1"
+    "output_schema_sha256": "19530f98a572f5385d01bb75b2f4b3111965e3fd6500e20c2c57fa71f31fe5ea"
   },
   {
     "name": "validate_frontmatter",
