@@ -4,8 +4,82 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestCreateBundleTestContentForcesDraftForEveryTranslation(t *testing.T) {
+	root := t.TempDir()
+	session, idx, done := newTestServer(t, root)
+	defer done()
+
+	args := map[string]any{
+		"slug": "posts/test-bundle-safety",
+		"pages": []any{
+			map[string]any{"lang": "fr", "title": "Test FR", "body": "FR", "draft": false, "test_content": map[string]any{"ttl_hours": 2, "owner": "bundle-audit"}},
+			map[string]any{"lang": "en", "title": "Test EN", "body": "EN", "draft": false, "test_content": map[string]any{"ttl_hours": 2, "owner": "bundle-audit"}},
+		},
+	}
+	dryRun := callTool(t, session, "create_bundle", mergeArgs(args, map[string]any{"dry_run": true}))
+	if dryRun.IsError {
+		t.Fatalf("create_bundle dry-run failed: %s", marshalContent(t, dryRun))
+	}
+	if _, err := os.Stat(filepath.Join(root, "posts/test-bundle-safety")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created bundle files: %v", err)
+	}
+
+	created := callTool(t, session, "create_bundle", args)
+	if created.IsError {
+		t.Fatalf("create_bundle failed: %s", marshalContent(t, created))
+	}
+	for _, lang := range []string{"fr", "en"} {
+		raw, err := os.ReadFile(filepath.Join(root, "posts/test-bundle-safety", "index."+lang+".md"))
+		if err != nil {
+			t.Fatalf("read %s translation: %v", lang, err)
+		}
+		content := string(raw)
+		for _, want := range []string{"draft: true", "test_content: true", "test_content_owner: bundle-audit", "test_content_expires_at:"} {
+			if !strings.Contains(content, want) {
+				t.Errorf("%s frontmatter missing %q: %s", lang, want, content)
+			}
+		}
+	}
+	data := decodeWriteData(t, created)
+	expires, ok := data["test_content_expires_at"].(map[string]any)
+	if !ok || expires["fr"] == nil || expires["en"] == nil {
+		t.Fatalf("test_content_expires_at must report every translation, got %#v", data["test_content_expires_at"])
+	}
+
+	// The caller passed draft:false explicitly, but test_content must still
+	// force draft:true in the in-memory SourceIndex — not just the on-disk
+	// file — since get_site_health's DraftPages count and get_page's
+	// FrontmatterRaw-derived draft state both read the index directly
+	// (internal/tools/read), and it isn't rebuilt from disk until the next
+	// full rescan.
+	for _, lang := range []string{"fr", "en"} {
+		page, ok := idx.GetBySlugLang("posts/test-bundle-safety", lang)
+		if !ok {
+			t.Fatalf("%s translation missing from SourceIndex after create_bundle", lang)
+		}
+		if !page.Draft {
+			t.Errorf("%s SourcePage.Draft = false, want true (test_content must force it even though draft:false was passed)", lang)
+		}
+		if fmDraft, _ := page.FrontmatterRaw["draft"].(bool); !fmDraft {
+			t.Errorf("%s FrontmatterRaw[\"draft\"] = %v, want true (test_content must force it even though draft:false was passed)", lang, page.FrontmatterRaw["draft"])
+		}
+	}
+}
+
+func mergeArgs(base, extra map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(extra))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
+}
 
 func TestCreateBundleIsAtomicAcrossTranslations(t *testing.T) {
 	root := t.TempDir()

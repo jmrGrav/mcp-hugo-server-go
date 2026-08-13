@@ -29,11 +29,15 @@ import (
 )
 
 type bundlePageInput struct {
-	Lang       string   `json:"lang"`
-	Title      string   `json:"title"`
-	Body       string   `json:"body"`
-	Tags       []string `json:"tags,omitempty"`
-	Categories []string `json:"categories,omitempty"`
+	Lang          string            `json:"lang"`
+	Title         string            `json:"title"`
+	Body          string            `json:"body"`
+	Tags          []string          `json:"tags,omitempty"`
+	Categories    []string          `json:"categories,omitempty"`
+	Draft         *bool             `json:"draft,omitempty"`
+	Description   *string           `json:"description,omitempty"`
+	FeaturedImage *string           `json:"featured_image,omitempty"`
+	TestContent   *testContentInput `json:"test_content,omitempty"`
 }
 
 type createBundleInput struct {
@@ -52,16 +56,21 @@ type deleteBundleInput struct {
 }
 
 type bundleLifecycleData struct {
-	Status    string            `json:"status"`
-	Slug      string            `json:"slug"`
-	Languages []string          `json:"languages"`
-	DryRun    bool              `json:"dry_run,omitempty"`
-	Revisions map[string]string `json:"revisions,omitempty"`
+	Status               string            `json:"status"`
+	Slug                 string            `json:"slug"`
+	Languages            []string          `json:"languages"`
+	DryRun               bool              `json:"dry_run,omitempty"`
+	Revisions            map[string]string `json:"revisions,omitempty"`
+	TestContentExpiresAt map[string]string `json:"test_content_expires_at,omitempty"`
 }
 
 type bundleLifecycleOutput struct {
 	toolcontract.ToolResponse[bundleLifecycleData]
 	RequestContext *toolcontract.RequestContext `json:"request_context,omitempty"`
+}
+
+func buildBundleFrontmatter(p bundlePageInput) (string, string) {
+	return buildFrontmatterWithOptions(p.Title, p.Tags, p.Categories, p.Body, p.Draft, p.Description, p.FeaturedImage, p.TestContent)
 }
 
 func bundleLifecycleSuccess(d bundleLifecycleData) bundleLifecycleOutput {
@@ -80,7 +89,7 @@ func bundleLangFile(dir, lang string) (string, error) {
 }
 
 func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) {
-	mcp.AddTool(s, &mcp.Tool{Name: "create_bundle", Title: "Create multilingual bundle", Description: "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").", InputSchema: tools.MustSchema[createBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "create_bundle", Title: "Create multilingual bundle", Description: "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. Each page may set `draft`, `description`, `featured_image`, and the same explicit `test_content: {ttl_hours?, owner?}` safety marker as create_page; test_content forces draft:true for that translation and returns its effective expiry in `data.test_content_expires_at`. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").", InputSchema: tools.MustSchema[createBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		wrap := func(e error) error {
 			return toolcontract.WithRequestContext(e, toolcontract.RequestContext{Slug: in.Slug})
@@ -107,6 +116,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		seen := map[string]bool{}
 		files := make([]struct {
 			path, content string
+			expiresAt     string
 			page          bundlePageInput
 		}, 0, len(in.Pages))
 		langs := make([]string, 0, len(in.Pages))
@@ -131,13 +141,29 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			if e = validateBodyFormat(p.Body, cfg.BlockedShortcodes); e != nil {
 				return nil, bundleLifecycleOutput{}, wrap(e)
 			}
+			if p.Description != nil {
+				if e = rejectUnsafeText(*p.Description); e != nil {
+					return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: description %w", e))
+				}
+			}
+			if p.FeaturedImage != nil {
+				if e = validateFeaturedImagePath(*p.FeaturedImage); e != nil {
+					return nil, bundleLifecycleOutput{}, wrap(e)
+				}
+			}
+			if p.TestContent != nil && p.TestContent.TTLHours != nil {
+				ttl := *p.TestContent.TTLHours
+				if ttl <= 0 || ttl > testContentMaxTTLHours {
+					return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: test_content.ttl_hours must be between 1 and %d hours when provided", testContentMaxTTLHours))
+				}
+			}
 			if e = validateTaxonomyTerms("tag", p.Tags); e != nil {
 				return nil, bundleLifecycleOutput{}, wrap(e)
 			}
 			if e = validateTaxonomyTerms("category", p.Categories); e != nil {
 				return nil, bundleLifecycleOutput{}, wrap(e)
 			}
-			content, _ := buildFrontmatter(p.Title, p.Tags, p.Categories, p.Body, nil)
+			content, expiresAt := buildBundleFrontmatter(p)
 			if e = validateFrontmatterRoundTrip(content); e != nil {
 				return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("validation_error: %w", e))
 			}
@@ -148,8 +174,9 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			p.Lang = lang
 			files = append(files, struct {
 				path, content string
+				expiresAt     string
 				page          bundlePageInput
-			}{path, content, p})
+			}{path, content, expiresAt, p})
 			langs = append(langs, lang)
 		}
 		mutating := !in.DryRun && !cfg.ForceDryRunAll
@@ -214,7 +241,13 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			}
 		}
 		if !mutating {
-			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "unchanged", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true}), nil
+			expires := map[string]string{}
+			for _, f := range files {
+				if f.expiresAt != "" {
+					expires[f.page.Lang] = f.expiresAt
+				}
+			}
+			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "unchanged", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true, TestContentExpiresAt: expires}), nil
 		}
 		createLimiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, mutationCallerKey(ctx), cfg.RateLimit.CreateUpdatePerMin)
 		if !createLimiter.Allow() {
@@ -241,12 +274,33 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			created = append(created, f.path)
 		}
 		revs := map[string]string{}
+		expires := map[string]string{}
 		for _, f := range files {
 			raw, _ := os.ReadFile(f.path)
 			rev := contentmodel.SourceRevisionBytes(raw)
 			revs[f.page.Lang] = rev
+			if f.expiresAt != "" {
+				expires[f.page.Lang] = f.expiresAt
+			}
 			now := time.Now().UTC().Format(time.RFC3339)
-			idx.Upsert(hugosite.SourcePage{Slug: in.Slug, FilePath: f.path, Lang: f.page.Lang, Title: f.page.Title, Date: now, Tags: f.page.Tags, Categories: f.page.Categories, Body: f.page.Body, FrontmatterRaw: map[string]any{"title": f.page.Title, "date": now}, BuildPending: true})
+			effectiveDraft := f.page.TestContent != nil || (f.page.Draft != nil && *f.page.Draft)
+			frontmatterRaw := map[string]any{"title": f.page.Title, "date": now, "draft": effectiveDraft}
+			if f.page.Description != nil && *f.page.Description != "" {
+				frontmatterRaw["description"] = *f.page.Description
+			}
+			if f.page.FeaturedImage != nil && *f.page.FeaturedImage != "" {
+				frontmatterRaw["featuredImage"] = *f.page.FeaturedImage
+			}
+			if f.page.TestContent != nil {
+				frontmatterRaw["test_content"] = true
+				if f.page.TestContent.Owner != "" {
+					frontmatterRaw["test_content_owner"] = f.page.TestContent.Owner
+				}
+				if f.expiresAt != "" {
+					frontmatterRaw["test_content_expires_at"] = f.expiresAt
+				}
+			}
+			idx.Upsert(hugosite.SourcePage{Slug: in.Slug, FilePath: f.path, Lang: f.page.Lang, Title: f.page.Title, Date: now, Draft: effectiveDraft, Tags: f.page.Tags, Categories: f.page.Categories, Body: f.page.Body, FrontmatterRaw: frontmatterRaw, BuildPending: true})
 		}
 		if siteDB != nil {
 			for _, f := range files {
@@ -255,7 +309,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 				}
 			}
 		}
-		out := bundleLifecycleSuccess(bundleLifecycleData{Status: "created", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs})
+		out := bundleLifecycleSuccess(bundleLifecycleData{Status: "created", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs, TestContentExpiresAt: expires})
 		if idemHash != "" {
 			if err := rt.idem.remember(idempotencyCallerKey(ctx), "create_bundle", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("create_bundle: could not persist idempotency result", "slug", in.Slug, "error", err)
