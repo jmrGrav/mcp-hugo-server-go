@@ -158,7 +158,7 @@
   {
     "name": "apply_content_plan",
     "required_scope": "write",
-    "description": "Write exactly what a prior plan_content_change call previewed — no body/tags/title are resent, apply executes the plan's frozen content verbatim. Fails with `plan_not_found` if `plan_id` is unknown, already applied, or its 5-minute TTL expired (call plan_content_change again); fails with `revision_conflict` if the page changed since the plan was created. `test_content` remains an ongoing safety invariant here too: content whose frontmatter still carries `test_content: true` cannot be applied in a `draft:false` state, even if an older or externally-crafted plan attempts it (#728). A plan is single-use: this call consumes it whether the write succeeds or fails. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run apply after a timeout or uncertain delivery. `dry_run` re-verifies the plan without writing or consuming it. Deliberately writes source only — no build/publish/index-freshness fields in the response; that is publish_changes's layer, a separate, later, explicitly-confirmed step. `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
+    "description": "Write exactly what a prior plan_content_change call previewed — no body/tags/title are resent, apply executes the plan's frozen content verbatim. Fails with `plan_not_found` if `plan_id` is unknown, already applied, or its 5-minute TTL expired (call plan_content_change again); fails with `revision_conflict` if the page changed since the plan was created. `test_content` remains an ongoing safety invariant here too: content whose frontmatter still carries `test_content: true` cannot be applied in a `draft:false` state, even if an older or externally-crafted plan attempts it (#728). A plan is single-use after a terminal apply attempt; retryable revision conflicts and transient build/content-lock failures preserve it so the caller can retry or re-plan safely. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run apply after a timeout or uncertain delivery. `dry_run` re-verifies the plan without writing or consuming it. Deliberately writes source only — no build/publish/index-freshness fields in the response; that is publish_changes's layer, a separate, later, explicitly-confirmed step. `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -1616,6 +1616,11 @@
           "type": "string"
         },
         "style": {
+          "enum": [
+            "",
+            "tech",
+            "geo"
+          ],
           "type": "string"
         },
         "subtitle": {
@@ -4623,7 +4628,7 @@
   {
     "name": "rollback_change",
     "required_scope": "write",
-    "description": "Restore a page's source to a prior revision this server's own apply_content_plan produced. `to_revision` must be a revision apply_content_plan previously wrote — not arbitrary git history (this deployment has no controlled git-commit capability; see #379). Fails with `snapshot_not_found` if no snapshot was captured for that revision of this page (only revisions produced by apply_content_plan are ever snapshotted, with a 24-hour retention) or the resolved file/language doesn't match what the snapshot was captured for. Non-dry-run calls require `expected_revision`, the page's *current* revision — a stale value fails with `revision_conflict`, the same optimistic-concurrency guard every other write tool uses, so this can never silently undo a newer, unrelated change. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run rollback after a timeout or uncertain delivery. `dry_run` previews the diff without writing. Writes source only — like apply_content_plan, does not build/publish; call publish_changes afterward. `slug` must not carry a language prefix when `lang` is also given — passing both (e.g. `slug:\"fr/posts/x\", lang:\"fr\"`) fails fast with `language_prefixed_slug_with_explicit_lang` naming the slug to use instead, rather than double-applying the language and surfacing a confusing not_found. `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
+    "description": "Restore a page's source to a prior content snapshot captured by this server. `to_revision` must be a `content_snapshot` returned by list_page_snapshots; Git commits from list_page_revisions are not accepted. Snapshots may be produced by apply_content_plan or update_page, are caller-isolated, and retain for 24 hours. Fails with `snapshot_not_found` if no matching snapshot exists or the resolved file/language doesn't match what the snapshot was captured for. Non-dry-run calls require `expected_revision`, the page's *current* revision — a stale value fails with `revision_conflict`, the same optimistic-concurrency guard every other write tool uses, so this can never silently undo a newer, unrelated change. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run rollback after a timeout or uncertain delivery. `dry_run` previews the diff without writing. Writes source only — like apply_content_plan, does not build/publish; call publish_changes afterward. `slug` must not carry a language prefix when `lang` is also given — passing both (e.g. `slug:\"fr/posts/x\", lang:\"fr\"`) fails fast with `language_prefixed_slug_with_explicit_lang` naming the slug to use instead, rather than double-applying the language and surfacing a confusing not_found. `rate_limit_remaining` reports the caller's remaining budget on the shared create/update/upload quota (#466).",
     "input_schema": {
       "additionalProperties": false,
       "properties": {

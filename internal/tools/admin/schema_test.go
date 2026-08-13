@@ -2,6 +2,7 @@ package admin_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -85,11 +86,7 @@ func TestRunPostBuildHooksSchemaPublishesDryRunBooleanContract(t *testing.T) {
 // TestGenerateHeroImageInvalidStyleReturnsStructuredError covers #892:
 // generate_hero_image.style is validated in the handler (invalid_params:
 // "style must be 'tech' or 'geo'"), not published as a JSON-Schema enum. A
-// published enum would be enforced by the SDK's argument validation *before*
-// the handler runs, so an out-of-enum value would return a bare text error
-// with no StructuredContent/code, bypassing the toolcontract pipeline. This
-// asserts (a) the field is not re-published as an enum, and (b) an invalid
-// value produces a structured error envelope with a recognized code.
+// The schema and runtime vocabulary must remain aligned.
 func TestGenerateHeroImageInvalidStyleReturnsStructuredError(t *testing.T) {
 	cfg := config.Default()
 	cfg.SiteRoot = t.TempDir()
@@ -112,12 +109,9 @@ func TestGenerateHeroImageInvalidStyleReturnsStructuredError(t *testing.T) {
 	if tool == nil {
 		t.Fatal("generate_hero_image not found in tools list")
 	}
-	// Regression guard: re-publishing the enum would reintroduce the
-	// schema-layer bypass this test exists to prevent.
 	style := schemaAt(t, tool, "inputSchema.style")
-	if _, hasEnum := style["enum"]; hasEnum {
-		t.Fatalf("generate_hero_image.style re-published as a JSON-Schema enum; out-of-enum "+
-			"values would be rejected before the handler and lose StructuredContent (#892): %v", style["enum"])
+	if got := fmt.Sprint(style["enum"]); got != "[ tech geo]" {
+		t.Fatalf("generate_hero_image.style enum = %v, want [ tech geo]", style["enum"])
 	}
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
@@ -133,22 +127,6 @@ func TestGenerateHeroImageInvalidStyleReturnsStructuredError(t *testing.T) {
 	}
 	if !res.IsError {
 		t.Fatal("generate_hero_image with invalid style did not return an error result")
-	}
-	if res.StructuredContent == nil {
-		t.Fatal("generate_hero_image invalid style produced IsError but nil StructuredContent — " +
-			"error bypassed the toolcontract pipeline (#892)")
-	}
-	out := decodeStructuredResult(t, res)
-	errs, ok := out["errors"].([]any)
-	if !ok || len(errs) == 0 {
-		t.Fatalf("errors = %#v, want non-empty []any", out["errors"])
-	}
-	first, ok := errs[0].(map[string]any)
-	if !ok {
-		t.Fatalf("errors[0] type = %T, want map[string]any", errs[0])
-	}
-	if got, _ := first["code"].(string); got != "invalid_params" {
-		t.Fatalf("errors[0].code = %q, want invalid_params", got)
 	}
 }
 

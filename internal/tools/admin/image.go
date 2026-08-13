@@ -285,6 +285,10 @@ func Defs() []tools.ToolDef {
 }
 
 func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
+	inputSchema := tools.MustSchema[generateFeaturedImageInput]()
+	// Empty is the optional/default value; the two named renderer modes are
+	// the only styles implemented by the local/Unsplash renderer.
+	tools.WithEnum(inputSchema, "style", "", "tech", "geo")
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "generate_hero_image",
 		Title: "Generate hero image",
@@ -300,13 +304,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			"`data.source_key` is the canonical page identifier after slug normalization, and `data.delete_slug` + `data.delete_scope` + `data.delete_filename` " +
 			"can be passed straight to delete_page_asset later to remove this generated file without re-deriving the cleanup contract. " +
 			"Set `dry_run:true` to preview the full output contract (path/public_path/source_key/delete_slug/delete_scope/delete_filename, plus `data.dry_run:true`) that a real call would return WITHOUT rendering or writing any file — input validation still runs, so you get the same invalid_params errors up front, and no image (and, in external-API mode, no network call) is produced (#897). Use it to confirm the resulting path/filename before committing, avoiding orphaned generated images.",
-		// style/accent are validated in the handler below (structured
-		// invalid_params errors), not as a published JSON-Schema enum: an
-		// enum constraint is enforced by the SDK's argument validation
-		// *before* our handler/WrapTool pipeline runs, so a violating value
-		// would surface as a bare text error with no StructuredContent/code
-		// (#892). Runtime rejection is unchanged.
-		InputSchema:  tools.MustSchema[generateFeaturedImageInput](),
+		InputSchema:  inputSchema,
 		OutputSchema: tools.MustSchema[generateFeaturedImageOutput](),
 		Annotations: &mcp.ToolAnnotations{
 			ReadOnlyHint:    false,

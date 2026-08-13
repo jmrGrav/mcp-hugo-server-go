@@ -150,6 +150,15 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				}
 			}
 
+			var preview *previewDTO
+			if in.IncludePreview {
+				p := premutationPreview(ctx, idx, cfg, resolved, page, doc)
+				preview = &p
+				if !p.FrontmatterValid && overall == "ok" {
+					overall = "issues_found"
+				}
+			}
+
 			data := inspectRenderedPageData{
 				Slug:       page.Slug,
 				URL:        page.URL,
@@ -159,10 +168,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				Status:     overall,
 				Checks:     checks,
 			}
-			if in.IncludePreview {
-				preview := premutationPreview(ctx, idx, cfg, resolved, page, doc)
-				data.Preview = &preview
-			}
+			data.Preview = preview
 			return nil, newInspectRenderedPageOutput(data, time.Now().UTC()), nil
 		})
 }

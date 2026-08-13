@@ -674,7 +674,7 @@ func registerContentPlanTools(
 		Description: "Write exactly what a prior plan_content_change call previewed — no body/tags/title are resent, apply executes the plan's frozen content verbatim. " +
 			"Fails with `plan_not_found` if `plan_id` is unknown, already applied, or its 5-minute TTL expired (call plan_content_change again); fails with `revision_conflict` if the page changed since the plan was created. " +
 			"`test_content` remains an ongoing safety invariant here too: content whose frontmatter still carries `test_content: true` cannot be applied in a `draft:false` state, even if an older or externally-crafted plan attempts it (#728). " +
-			"A plan is single-use: this call consumes it whether the write succeeds or fails. " +
+			"A plan is single-use after a terminal apply attempt; retryable revision conflicts and transient build/content-lock failures preserve it so the caller can retry or re-plan safely. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run apply after a timeout or uncertain delivery. " +
 			"`dry_run` re-verifies the plan without writing or consuming it. " +
 			"Deliberately writes source only — no build/publish/index-freshness fields in the response; that is publish_changes's layer, a separate, later, explicitly-confirmed step. " +

@@ -48,10 +48,9 @@ type runPostBuildHooksData struct {
 	ConfiguredCount int          `json:"configured_count"`
 }
 
-// runPostBuildHooksOutput carries the same fields at the root as
-// compatibility aliases alongside the structured envelope (#552) — this
-// tool previously had no envelope at all, so this is purely additive, not a
-// breaking change.
+// runPostBuildHooksOutput carries legacy root aliases for compatibility with
+// clients predating the structured envelope (#552). `data.*` is canonical;
+// the root aliases are deprecated and kept only through the v1 window.
 type runPostBuildHooksOutput struct {
 	toolcontract.ToolResponse[runPostBuildHooksData]
 	Status          string       `json:"status"`
