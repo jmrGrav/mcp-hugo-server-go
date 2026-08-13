@@ -221,9 +221,9 @@ func registerRollbackChange(
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "rollback_change",
 		Title: "Rollback change",
-		Description: "Restore a page's source to a prior revision this server's own apply_content_plan produced. " +
-			"`to_revision` must be a revision apply_content_plan previously wrote — not arbitrary git history (this deployment has no controlled git-commit capability; see #379). " +
-			"Fails with `snapshot_not_found` if no snapshot was captured for that revision of this page (only revisions produced by apply_content_plan are ever snapshotted, with a 24-hour retention) or the resolved file/language doesn't match what the snapshot was captured for. " +
+		Description: "Restore a page's source to a prior content snapshot captured by this server. " +
+			"`to_revision` must be a `content_snapshot` returned by list_page_snapshots; Git commits from list_page_revisions are not accepted. Snapshots may be produced by apply_content_plan or update_page, are caller-isolated, and retain for 24 hours. " +
+			"Fails with `snapshot_not_found` if no matching snapshot exists or the resolved file/language doesn't match what the snapshot was captured for. " +
 			"Non-dry-run calls require `expected_revision`, the page's *current* revision — a stale value fails with `revision_conflict`, the same optimistic-concurrency guard every other write tool uses, so this can never silently undo a newer, unrelated change. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run rollback after a timeout or uncertain delivery. " +
 			"`dry_run` previews the diff without writing. " +

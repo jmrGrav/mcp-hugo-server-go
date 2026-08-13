@@ -275,7 +275,7 @@ func RegisterHugoUpgradeTools(s *mcp.Server, cfg config.Config) {
 		data, err := mgr.bootstrap(ctx, in)
 		if err != nil {
 			mgr.audit(ctx, "bootstrap_hugo", "failed", data.DetectedVersion, "", err)
-			return nil, bootstrapHugoOutput{}, err
+			return nil, bootstrapHugoOutput{}, toolcontract.WithDataFields(err, map[string]any{"dry_run": dryRunDefaultTrue(in.DryRun)})
 		}
 		mgr.audit(ctx, "bootstrap_hugo", "success", data.DetectedVersion, data.Checksum, nil)
 		return nil, bootstrapHugoOutput{ToolResponse: hugoUpgradeSuccess(data)}, nil
