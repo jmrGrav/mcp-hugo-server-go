@@ -2013,11 +2013,13 @@ func bundleWouldBeFullyRemovedAfterDelete(dir, resolvedSourcePath string) bool {
 }
 
 type frontmatterDoc struct {
-	Title      string   `yaml:"title"`
-	Date       string   `yaml:"date"`
-	Tags       []string `yaml:"tags"`
-	Categories []string `yaml:"categories"`
-	Draft      bool     `yaml:"draft"`
+	Title         string   `yaml:"title"`
+	Date          string   `yaml:"date"`
+	Tags          []string `yaml:"tags"`
+	Categories    []string `yaml:"categories"`
+	Draft         bool     `yaml:"draft"`
+	Description   string   `yaml:"description,omitempty"`
+	FeaturedImage string   `yaml:"featuredImage,omitempty"`
 	// TestContent/TestContentOwner/TestContentExpiresAt (#661) are only
 	// ever set via create_page's explicit opt-in test_content parameter —
 	// never inferred from slug/title, so a real published page that
@@ -2033,6 +2035,10 @@ type frontmatterDoc struct {
 // computed here so the caller-visible response and the on-disk frontmatter
 // always agree on the exact expiry that was applied.
 func buildFrontmatter(title string, tags, categories []string, body string, testContent *testContentInput) (string, string) {
+	return buildFrontmatterWithOptions(title, tags, categories, body, nil, nil, nil, testContent)
+}
+
+func buildFrontmatterWithOptions(title string, tags, categories []string, body string, draft *bool, description, featuredImage *string, testContent *testContentInput) (string, string) {
 	if tags == nil {
 		tags = []string{}
 	}
@@ -2044,7 +2050,7 @@ func buildFrontmatter(title string, tags, categories []string, body string, test
 		Date:       time.Now().UTC().Format(time.RFC3339),
 		Tags:       tags,
 		Categories: categories,
-		Draft:      false,
+		Draft:      draft != nil && *draft,
 	}
 	if testContent != nil {
 		ttlHours := testContentDefaultTTLHours
@@ -2055,6 +2061,12 @@ func buildFrontmatter(title string, tags, categories []string, body string, test
 		doc.TestContent = true
 		doc.TestContentOwner = testContent.Owner
 		doc.TestContentExpiresAt = time.Now().UTC().Add(time.Duration(ttlHours) * time.Hour).Format(time.RFC3339)
+	}
+	if description != nil {
+		doc.Description = *description
+	}
+	if featuredImage != nil {
+		doc.FeaturedImage = *featuredImage
 	}
 	raw, _ := marshalWithIndent(doc, 2)
 	var sb strings.Builder

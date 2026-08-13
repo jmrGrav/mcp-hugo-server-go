@@ -604,7 +604,7 @@
   {
     "name": "create_bundle",
     "required_scope": "write",
-    "description": "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").",
+    "description": "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. Each page may set `draft`, `description`, `featured_image`, and the same explicit `test_content: {ttl_hours?, owner?}` safety marker as create_page; test_content forces draft:true for that translation and returns its effective expiry in `data.test_content_expires_at`. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -630,6 +630,24 @@
                   "array"
                 ]
               },
+              "description": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
+              "draft": {
+                "type": [
+                  "null",
+                  "boolean"
+                ]
+              },
+              "featured_image": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              },
               "lang": {
                 "type": "string"
               },
@@ -640,6 +658,24 @@
                 "type": [
                   "null",
                   "array"
+                ]
+              },
+              "test_content": {
+                "additionalProperties": false,
+                "properties": {
+                  "owner": {
+                    "type": "string"
+                  },
+                  "ttl_hours": {
+                    "type": [
+                      "null",
+                      "integer"
+                    ]
+                  }
+                },
+                "type": [
+                  "null",
+                  "object"
                 ]
               },
               "title": {
@@ -674,6 +710,7 @@
       "data.revisions:object",
       "data.slug:string:required",
       "data.status:string:required",
+      "data.test_content_expires_at:object",
       "data:object:required",
       "errors:unspecified:required",
       "errors[].build_id:string",
@@ -708,7 +745,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "8bac922c260cc6fc538be643aab63570ac003946a663f483b1f56cabb6b3287e"
+    "output_schema_sha256": "ece06183f4aaebadf6a299cfeac4b793ee1fb36fdf21d487d8bb2fcd9803aed7"
   },
   {
     "name": "create_page",
@@ -957,6 +994,7 @@
       "data.revisions:object",
       "data.slug:string:required",
       "data.status:string:required",
+      "data.test_content_expires_at:object",
       "data:object:required",
       "errors:unspecified:required",
       "errors[].build_id:string",
@@ -991,7 +1029,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "8bac922c260cc6fc538be643aab63570ac003946a663f483b1f56cabb6b3287e"
+    "output_schema_sha256": "ece06183f4aaebadf6a299cfeac4b793ee1fb36fdf21d487d8bb2fcd9803aed7"
   },
   {
     "name": "delete_page",

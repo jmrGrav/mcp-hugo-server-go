@@ -4,8 +4,63 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestCreateBundleTestContentForcesDraftForEveryTranslation(t *testing.T) {
+	root := t.TempDir()
+	session, _, done := newTestServer(t, root)
+	defer done()
+
+	args := map[string]any{
+		"slug": "posts/test-bundle-safety",
+		"pages": []any{
+			map[string]any{"lang": "fr", "title": "Test FR", "body": "FR", "draft": false, "test_content": map[string]any{"ttl_hours": 2, "owner": "bundle-audit"}},
+			map[string]any{"lang": "en", "title": "Test EN", "body": "EN", "draft": false, "test_content": map[string]any{"ttl_hours": 2, "owner": "bundle-audit"}},
+		},
+	}
+	dryRun := callTool(t, session, "create_bundle", mergeArgs(args, map[string]any{"dry_run": true}))
+	if dryRun.IsError {
+		t.Fatalf("create_bundle dry-run failed: %s", marshalContent(t, dryRun))
+	}
+	if _, err := os.Stat(filepath.Join(root, "posts/test-bundle-safety")); !os.IsNotExist(err) {
+		t.Fatalf("dry-run created bundle files: %v", err)
+	}
+
+	created := callTool(t, session, "create_bundle", args)
+	if created.IsError {
+		t.Fatalf("create_bundle failed: %s", marshalContent(t, created))
+	}
+	for _, lang := range []string{"fr", "en"} {
+		raw, err := os.ReadFile(filepath.Join(root, "posts/test-bundle-safety", "index."+lang+".md"))
+		if err != nil {
+			t.Fatalf("read %s translation: %v", lang, err)
+		}
+		content := string(raw)
+		for _, want := range []string{"draft: true", "test_content: true", "test_content_owner: bundle-audit", "test_content_expires_at:"} {
+			if !strings.Contains(content, want) {
+				t.Errorf("%s frontmatter missing %q: %s", lang, want, content)
+			}
+		}
+	}
+	data := decodeWriteData(t, created)
+	expires, ok := data["test_content_expires_at"].(map[string]any)
+	if !ok || expires["fr"] == nil || expires["en"] == nil {
+		t.Fatalf("test_content_expires_at must report every translation, got %#v", data["test_content_expires_at"])
+	}
+}
+
+func mergeArgs(base, extra map[string]any) map[string]any {
+	out := make(map[string]any, len(base)+len(extra))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
+}
 
 func TestCreateBundleIsAtomicAcrossTranslations(t *testing.T) {
 	root := t.TempDir()
