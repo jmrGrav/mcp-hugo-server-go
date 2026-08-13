@@ -295,8 +295,8 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 		Description: "Generate a hero/featured image for a page and save it to {HugoRoot}/static/images/{slug}-featured.jpg. " +
 			"`slug` accepts either the canonical public form (`/posts/example/`) or the source-key form (`posts/example`); " +
 			"language-prefixed public slugs are normalized to the same source key before writing. " +
-			"Uses local Go rendering (1200×675 JPEG, Unsplash photo background selected by title hash, dark gradient overlay, title, tags). " +
-			"Required: slug. Optional: title, subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo). " +
+			"Uses local Go rendering (1200×675 JPEG, one of six bundled Unsplash photo backgrounds selected deterministically by title, dark gradient overlay, title, tags). " +
+			"Required: slug. Optional: title, subtitle, tags (max 6), accent (hex colour like #7aa2f7), style (tech|geo; controls the fallback gradient/accent palette, not photo selection). " +
 			"If title is omitted, the renderer falls back to prompt text (API mode) or a humanized slug segment (local mode), so the contract stays usable for dry-runs and structural validation paths that only care about the resulting file contract. " +
 			"This tool only writes the image file — it never touches page frontmatter. `data.public_path` is the ready-to-use " +
 			"featuredImage value; call update_page with featured_image=data.public_path afterwards to attach it (per language, " +
