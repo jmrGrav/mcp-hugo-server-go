@@ -42,6 +42,9 @@ func TestGetRateLimitsReportsFullBudgetBeforeAnyMutation(t *testing.T) {
 	if got := cuu["retry_after_seconds"].(float64); got != 0 {
 		t.Errorf("create_update_upload.retry_after_seconds = %v, want 0 (quota available now)", got)
 	}
+	if got := cuu["refill_rate_per_second"].(float64); got != 10.0/60.0 {
+		t.Errorf("create_update_upload.refill_rate_per_second = %v, want %v", got, 10.0/60.0)
+	}
 
 	destructive, ok := data["destructive"].(map[string]any)
 	if !ok {
@@ -52,6 +55,9 @@ func TestGetRateLimitsReportsFullBudgetBeforeAnyMutation(t *testing.T) {
 	}
 	if got := int(destructive["limit"].(float64)); got != 4 {
 		t.Errorf("destructive.limit = %d, want 4", got)
+	}
+	if got := destructive["refill_rate_per_second"].(float64); got != 4.0/60.0 {
+		t.Errorf("destructive.refill_rate_per_second = %v, want %v", got, 4.0/60.0)
 	}
 }
 
