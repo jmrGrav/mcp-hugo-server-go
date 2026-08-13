@@ -52,6 +52,75 @@ func TestPublicSlugForSourceLangPrefixesOnlyNonDefaultLanguage(t *testing.T) {
 	}
 }
 
+func TestLanguageAndSourceSlugHelpersCoverNormalizationEdges(t *testing.T) {
+	tests := []struct {
+		name       string
+		raw        string
+		prefix     string
+		candidates []string
+	}{
+		{name: "bare default slug", raw: "/posts/hello/", candidates: []string{"posts/hello"}},
+		{name: "prefixed slug", raw: "/en/posts/hello/", prefix: "en", candidates: []string{"en/posts/hello", "posts/hello"}},
+		{name: "slash-trimmed prefixed slug", raw: "/en/posts/hello/", prefix: "en", candidates: []string{"en/posts/hello", "posts/hello"}},
+		{name: "empty", raw: "///", candidates: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := LanguagePrefixFromSlug(tt.raw); got != tt.prefix {
+				t.Fatalf("LanguagePrefixFromSlug(%q) = %q, want %q", tt.raw, got, tt.prefix)
+			}
+			got := SourceSlugCandidates(tt.raw)
+			if len(got) != len(tt.candidates) {
+				t.Fatalf("SourceSlugCandidates(%q) = %#v, want %#v", tt.raw, got, tt.candidates)
+			}
+			for i := range got {
+				if got[i] != tt.candidates[i] {
+					t.Fatalf("SourceSlugCandidates(%q)[%d] = %q, want %q", tt.raw, i, got[i], tt.candidates[i])
+				}
+			}
+		})
+	}
+}
+
+func TestPublicSlugForSourceLangNormalizesEmptyAndDefaultInputs(t *testing.T) {
+	tests := []struct {
+		name, source, lang, defaultLang, want string
+	}{
+		{name: "empty source", source: "///", lang: "en", defaultLang: "fr", want: ""},
+		{name: "empty language", source: "/posts/hello/", lang: "", defaultLang: "fr", want: "/posts/hello/"},
+		{name: "default language with whitespace", source: "posts/hello", lang: " fr ", defaultLang: "fr", want: "/posts/hello/"},
+		{name: "secondary language with whitespace", source: "/posts/hello/", lang: " en ", defaultLang: "fr", want: "/en/posts/hello/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PublicSlugForSourceLang(tt.source, tt.lang, tt.defaultLang); got != tt.want {
+				t.Fatalf("PublicSlugForSourceLang(%q, %q, %q) = %q, want %q", tt.source, tt.lang, tt.defaultLang, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPageMatchesExplicitLangUsesSlugAndDefaultFallbacks(t *testing.T) {
+	tests := []struct {
+		name, slug, pageLang, requested, defaultLang string
+		want                                         bool
+	}{
+		{name: "explicit page language", slug: "/posts/hello/", pageLang: "en", requested: "en", defaultLang: "fr", want: true},
+		{name: "mismatched explicit page language", slug: "/posts/hello/", pageLang: "en", requested: "fr", defaultLang: "fr", want: false},
+		{name: "language prefix fallback", slug: "/en/posts/hello/", requested: "en", defaultLang: "fr", want: true},
+		{name: "bare slug default fallback", slug: "/posts/hello/", requested: "fr", defaultLang: "fr", want: true},
+		{name: "bare slug rejects secondary language", slug: "/posts/hello/", requested: "en", defaultLang: "fr", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			page := &Page{Slug: tt.slug, Lang: tt.pageLang}
+			if got := pageMatchesExplicitLang(page, tt.requested, tt.defaultLang); got != tt.want {
+				t.Fatalf("pageMatchesExplicitLang(%#v, %q, %q) = %v, want %v", page, tt.requested, tt.defaultLang, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPageResolverResolvesLanguagePrefixedPublicSlugToSource(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeSourcePage(t, contentRoot, "posts/hello/index.md", "---\ntitle: Hello\n---\nClean source body\n")
