@@ -53,9 +53,9 @@ type sriCheckData struct {
 	Findings               []sriCheckEntry `json:"findings"`
 }
 
-// sriCheckOutput carries the same fields at the root as compatibility
-// aliases alongside the structured envelope (#552) — this tool previously
-// had no envelope at all, so this is purely additive, not a breaking change.
+// sriCheckOutput carries legacy root aliases for compatibility with clients
+// predating the structured envelope (#552). `data.*` is canonical; the root
+// aliases are deprecated and kept only through the v1 compatibility window.
 type sriCheckOutput struct {
 	toolcontract.ToolResponse[sriCheckData]
 	FilesScanned           int             `json:"files_scanned"`

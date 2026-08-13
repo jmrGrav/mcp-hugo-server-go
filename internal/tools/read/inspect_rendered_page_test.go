@@ -963,6 +963,70 @@ func TestInspectRenderedPageIncludePreviewSurfacesRisks(t *testing.T) {
 	}
 }
 
+// TestInspectRenderedPageStatusEscalatesFromWarningsWhenPreviewFrontmatterInvalid
+// is a regression test for #1046: invalid preview frontmatter must escalate
+// the top-level status to "issues_found" even when the checks loop already
+// produced "warnings_found" (a lower severity), not just from "ok" — the
+// same way a "fail" in the checks loop always wins over a "warn", regardless
+// of which ran first.
+func TestInspectRenderedPageStatusEscalatesFromWarningsWhenPreviewFrontmatterInvalid(t *testing.T) {
+	longDescription := strings.Repeat("a", 200)
+	siteRoot := t.TempDir()
+	writeRenderedHTML(t, siteRoot, "posts/hello/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head>
+<title>Hello World</title>
+<meta name="description" content="`+longDescription+`">
+<link rel="canonical" href="https://example.test/posts/hello/">
+</head>
+<body>
+<p>Hello world, no broken links or missing images here.</p>
+</body>
+</html>`)
+
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	pagePath := filepath.Join(contentRoot, "posts", "hello", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// No title in front matter (missing_title issue for validate_frontmatter).
+	if err := os.WriteFile(pagePath, []byte("---\ndate: 2026-07-03\n---\nHello world.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+
+	session, done := newInspectRenderedPagePreviewClient(t, siteRoot, contentRoot)
+	defer done()
+
+	// First confirm the checks loop alone (no preview) lands on
+	// "warnings_found", not "issues_found" — otherwise this test wouldn't
+	// actually exercise the escalation-from-warnings path.
+	warnOnly := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/hello/"})
+	if warnOnly.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", warnOnly.Content[0].(*mcp.TextContent).Text)
+	}
+	warnOnlyData := decodeContent(t, warnOnly)
+	if got := warnOnlyData["status"]; got != "warnings_found" {
+		t.Fatalf("status without preview = %v, want warnings_found (overlong meta description) — test precondition not met", got)
+	}
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/hello/", "include_preview": true})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	data := decodeContent(t, res)
+	preview, ok := data["preview"].(map[string]any)
+	if !ok {
+		t.Fatalf("preview type = %T, want map[string]any", data["preview"])
+	}
+	if got := preview["frontmatter_valid"]; got != false {
+		t.Fatalf("preview.frontmatter_valid = %v, want false (missing title)", got)
+	}
+	if got := data["status"]; got != "issues_found" {
+		t.Fatalf("status = %v, want issues_found (invalid preview frontmatter must escalate past warnings_found, not be silently masked by it)", got)
+	}
+}
+
 // TestInspectRenderedPageOmitsPreviewByDefault is a regression test for
 // #435: omitting include_preview must not add the preview field at all,
 // preserving every existing caller's response shape and cost.

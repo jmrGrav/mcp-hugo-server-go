@@ -150,6 +150,21 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				}
 			}
 
+			var preview *previewDTO
+			if in.IncludePreview {
+				p := premutationPreview(ctx, idx, cfg, resolved, page, doc)
+				preview = &p
+				// Invalid preview frontmatter is a fail-equivalent finding
+				// (#1046) and must escalate regardless of the checks loop's
+				// own status — not just from "ok": a page already at
+				// "warnings_found" (from an unrelated warn-level check)
+				// must still escalate to "issues_found" here, the same way
+				// a "fail" in the loop above always wins over a "warn".
+				if !p.FrontmatterValid {
+					overall = "issues_found"
+				}
+			}
+
 			data := inspectRenderedPageData{
 				Slug:       page.Slug,
 				URL:        page.URL,
@@ -159,10 +174,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				Status:     overall,
 				Checks:     checks,
 			}
-			if in.IncludePreview {
-				preview := premutationPreview(ctx, idx, cfg, resolved, page, doc)
-				data.Preview = &preview
-			}
+			data.Preview = preview
 			return nil, newInspectRenderedPageOutput(data, time.Now().UTC()), nil
 		})
 }

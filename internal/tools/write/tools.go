@@ -1408,7 +1408,11 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				rt.siteIdx.UpsertPage(pubUpdated)
 			}
 		}
-		status := "updated"
+		realChanged := content != string(raw)
+		status := "unchanged"
+		if realChanged {
+			status = "updated"
+		}
 		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {
@@ -1440,7 +1444,6 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 
 		state := updatePageState(rt.siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-		realChanged := content != string(raw)
 		out := newUpdatePageOutput(updatePageData{
 			Status:                   status,
 			Slug:                     canonicalPublicSlug(in.Slug),

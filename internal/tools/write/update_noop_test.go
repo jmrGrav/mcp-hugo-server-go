@@ -61,4 +61,7 @@ func TestUpdatePageChangedFlagDistinguishesNoOpFromRealEdit(t *testing.T) {
 	if changed, ok := noopData["changed"].(bool); !ok || changed {
 		t.Fatalf("real no-op: data.changed = %v, want false", noopData["changed"])
 	}
+	if got := noopData["status"]; got != "unchanged" {
+		t.Fatalf("real no-op: data.status = %v, want unchanged", got)
+	}
 }

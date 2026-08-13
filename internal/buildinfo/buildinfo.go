@@ -5,7 +5,9 @@ import (
 	"strings"
 )
 
-const SchemaVersion = "v1.0.0"
+// SchemaVersion tracks the response contract shape. Additive fields increment
+// the minor version; incompatible changes increment the major version.
+const SchemaVersion = "v1.1.0"
 
 // Version is set at build time via -ldflags.
 var Version = "dev"
