@@ -187,15 +187,15 @@ func TestPurgeExpired(t *testing.T) {
 func TestScopeConfigurationHelpers(t *testing.T) {
 	// Per #450, all legacy 4-tier scope strings (including "system.admin",
 	// an alias for the old "site.admin") canonicalize down to just "read"
-	// and "write"; dedup now produces exactly 2 unique scopes.
+	// and "write"; dedup now produces read/write/admin tiers.
 	scopes, err := normalizeConfiguredScopes([]string{"system.admin", "content.write", "read"}, "site.admin")
 	if err != nil {
 		t.Fatalf("normalizeConfiguredScopes() error = %v", err)
 	}
-	if len(scopes) != 2 || scopes[0] != "read" || scopes[1] != "write" {
+	if len(scopes) != 3 || scopes[0] != "read" || scopes[1] != "write" || scopes[2] != "admin" {
 		t.Fatalf("normalizeConfiguredScopes() = %#v", scopes)
 	}
-	if got := highestConfiguredScope(scopes); got != "write" {
+	if got := highestConfiguredScope(scopes); got != "admin" {
 		t.Fatalf("highestConfiguredScope() = %q", got)
 	}
 	if got, err := requestedScope("content.read content.write"); err != nil || got != "write" {
@@ -213,8 +213,8 @@ func TestScopeConfigurationHelpers(t *testing.T) {
 	// accepted here (now as a legacy alias resolved to "read" by
 	// CanonicalScope), and a higher-ranked scope in the same list must
 	// still win.
-	if got, err := requestedScope("reader content.read content.write site.admin"); err != nil || got != "write" {
-		t.Fatalf(`requestedScope("reader content.read content.write site.admin") = %q, %v, want "write", nil`, got, err)
+	if got, err := requestedScope("reader content.read content.write site.admin"); err != nil || got != "admin" {
+		t.Fatalf(`requestedScope("reader content.read content.write site.admin") = %q, %v, want "admin", nil`, got, err)
 	}
 	// Per #450, "reader" is now a plain legacy alias for "read" (the
 	// dedicated reader-safe profile it used to key into no longer exists as
@@ -245,5 +245,11 @@ func TestScopeConfigurationHelpers(t *testing.T) {
 	}
 	if CanonicalScope("mcp") != "read" || !IsLegacyScope("mcp") {
 		t.Fatal("legacy scope alias not normalized correctly")
+	}
+	if CanonicalScope("admin") != "admin" || IsLegacyScope("admin") {
+		t.Fatal("admin must be a canonical scope, not a legacy alias")
+	}
+	if CanonicalScope("site.admin") != "admin" || !IsLegacyScope("site.admin") {
+		t.Fatal("site.admin must remain a compatibility alias for admin")
 	}
 }

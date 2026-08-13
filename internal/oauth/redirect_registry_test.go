@@ -94,8 +94,8 @@ clients:
 		if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 			t.Fatalf("token(%s) decode: %v", redirectURI, err)
 		}
-		if tokenResp.Scope != "write" {
-			t.Fatalf("token(%s) scope = %q want write", redirectURI, tokenResp.Scope)
+		if tokenResp.Scope != "admin" {
+			t.Fatalf("token(%s) scope = %q want admin", redirectURI, tokenResp.Scope)
 		}
 	}
 }

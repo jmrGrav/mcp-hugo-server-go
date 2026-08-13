@@ -1,7 +1,7 @@
 package tools
 
 // KnownScopes lists every scope this server may issue or enforce.
-var KnownScopes = []string{"read", "write"}
+var KnownScopes = []string{"read", "write", "admin"}
 
 type ToolDef struct {
 	Name          string
@@ -58,6 +58,8 @@ func scopeRank(scope string) int {
 		return 0
 	case "write":
 		return 1
+	case "admin":
+		return 2
 	default:
 		return -1
 	}
@@ -66,7 +68,8 @@ func scopeRank(scope string) int {
 // ScopeRank returns the integer rank of a known scope:
 //
 //	0  anonymous / "" / read
-//	1  write (highest)
+//	1  write
+//	2  admin (highest)
 //	0  unknown scope (treated as anonymous)
 func ScopeRank(scope string) int {
 	r := scopeRank(scope)
@@ -80,3 +83,6 @@ func ScopeRank(scope string) int {
 func IsWriteScope(scope string) bool {
 	return ScopeRank(scope) >= 1
 }
+
+// IsAdminScope reports whether scope carries Hugo administration privileges.
+func IsAdminScope(scope string) bool { return ScopeRank(scope) >= 2 }

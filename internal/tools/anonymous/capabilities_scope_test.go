@@ -24,12 +24,36 @@ func TestEffectiveCapabilityScopesFallsBackToServerTierWithoutOAuth(t *testing.T
 		t.Errorf("effectiveCapabilityScopes(ctx, %q) = %v, want [read] (public tier registers read tools unconditionally)", "", got)
 	}
 
-	if masked := maskedCapabilityTools(ctx, "write", true); masked != nil {
-		t.Errorf("maskedCapabilityTools(ctx, write, writeEnabled=true) = %+v, want nil (JSON omits the field entirely; a zero-value struct would not)", masked)
+	// A write-tier caller can no longer see everything: the four managed
+	// Hugo binary lifecycle tools are admin-gated (v1.8.5, #1039), so a
+	// write-tier caller still has masked tools — just admin ones, not write.
+	if masked := maskedCapabilityTools(ctx, "write", true); masked == nil || masked.Reason != "missing_scope" || len(masked.Scopes) != 1 || masked.Scopes[0] != "admin" || masked.Count == 0 {
+		t.Errorf("maskedCapabilityTools(ctx, write, writeEnabled=true) = %+v, want missing_scope/[admin] with non-zero count", masked)
+	}
+	// The admin tier (e.g. stdio, a trusted local transport) has nothing
+	// masked once content_root is configured.
+	if masked := maskedCapabilityTools(ctx, "admin", true); masked != nil {
+		t.Errorf("maskedCapabilityTools(ctx, admin, writeEnabled=true) = %+v, want nil (admin sees every tool)", masked)
 	}
 	masked := maskedCapabilityTools(ctx, "", true)
 	if masked == nil || masked.Count == 0 || masked.Reason != "missing_scope" {
 		t.Errorf("maskedCapabilityTools(ctx, \"\", true) = %+v, want non-zero count with reason missing_scope (write tools masked on the public tier)", masked)
+	}
+}
+
+// TestEffectiveCapabilityScopesFallsBackToAdminServerTier is a regression
+// test for the stdio transport (server.NewStdio): it registers on the
+// "admin" physical tier and never populates oauth.CtxScope, so the fallback
+// must report "admin", not silently downgrade to "read" the way a
+// read/write-only fallback would.
+func TestEffectiveCapabilityScopesFallsBackToAdminServerTier(t *testing.T) {
+	ctx := context.Background()
+
+	if got := effectiveCapabilityScopes(ctx, "admin"); len(got) != 1 || got[0] != "admin" {
+		t.Errorf("effectiveCapabilityScopes(ctx, %q) = %v, want [admin]", "admin", got)
+	}
+	if masked := maskedCapabilityTools(ctx, "admin", true); masked != nil {
+		t.Errorf("maskedCapabilityTools(ctx, admin, writeEnabled=true) = %+v, want nil (admin tier fallback sees every tool)", masked)
 	}
 }
 

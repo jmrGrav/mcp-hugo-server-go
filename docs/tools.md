@@ -97,8 +97,10 @@ transport itself is authenticated.
 
 ## `write` (canonical write scope; implies `read`)
 
-Per #450, `write` implies `read` and folds in every tool that used to
-require a separate `site.admin` scope, with no exceptions.
+Per #450, `write` implies `read` and folds in editorial and site-operation
+tools. Managed Hugo binary lifecycle actions are the explicit `admin` tier.
+This third tier is opt-in for administrator tokens; legacy scope aliases keep
+their historical `write` mapping for compatibility.
 
 Successful write-tool responses currently use a **v1.x compatibility**
 convention (#520):
@@ -147,13 +149,17 @@ input returns a structured `idempotency_conflict` error.
 - `list_previews` - List previews
 - `revoke_preview` - Revoke preview
 - `revoke_all_previews` - Revoke all previews
+
+`revoke_all_previews` remains a write-scoped operation: it revokes only the
+previews owned by the current caller, despite its name, and is not a
+cross-tenant administrative action.
 - `inspect_preview` - Inspect preview rendered page (same rendered-output security/SEO checks as `inspect_rendered`, run against an isolated preview build so draft/test_content pages can be audited before publish; requires `preview_id` from `create_preview`; see #863)
 - `get_storage_health` - Get storage health (advisory-only detection of orphaned generated assets, expired preview residue, and source/index/public inconsistencies; never deletes anything itself; see #861)
 
-Legacy scope strings (`content.write`, `site.admin`, `system.admin`, `admin`,
-and others — see `docs/mcp-contract.md` §6.12 for the full table) are
-accepted as compatibility aliases for `write`, but only `read`/`write` are
-advertised as canonical tool tiers.
+Legacy scope strings (`content.write`, `site.admin`, `system.admin`, and
+others — see `docs/mcp-contract.md` §6.12 for the full table) are accepted as
+compatibility aliases; only `read`/`write`/`admin` are advertised as canonical
+tool tiers.
 
 ## Taxonomy Fields
 
