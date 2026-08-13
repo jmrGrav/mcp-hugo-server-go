@@ -227,6 +227,18 @@ func (s *Service) ValidateBearer(token string) (string, bool) {
 // scope, whether the stored scope was a deprecated alias, and whether the token
 // was accepted.
 func (s *Service) ValidateBearerDetails(token string) (string, bool, bool) {
+	detailedStore, hasDetails := s.store.(accessTokenDetailsStore)
+	if hasDetails {
+		details, ok := detailedStore.ValidateAccessTokenDetails(HashToken(token))
+		if !ok || strings.TrimSpace(details.Principal) == "" {
+			// Tokens issued before principal-aware identity was introduced have
+			// no safe identity to use for shared quotas. Reject them so callers
+			// must refresh/reauthorize instead of silently falling back to a
+			// bearer-scoped bucket.
+			return "", false, false
+		}
+		return CanonicalScope(details.Scope), IsLegacyScope(details.Scope), true
+	}
 	scope, ok := s.store.ValidateAccessToken(HashToken(token))
 	if !ok {
 		return "", false, false
@@ -245,7 +257,7 @@ func (s *Service) ValidateBearerInfo(token string) (string, time.Time, string, b
 		return "", time.Time{}, "", false, false
 	}
 	details, ok := detailedStore.ValidateAccessTokenDetails(HashToken(token))
-	if !ok {
+	if !ok || strings.TrimSpace(details.Principal) == "" {
 		return "", time.Time{}, "", false, false
 	}
 	return CanonicalScope(details.Scope), details.ExpiresAt, strings.TrimSpace(details.Principal), IsLegacyScope(details.Scope), true

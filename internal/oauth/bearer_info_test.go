@@ -71,6 +71,28 @@ func TestValidateBearerInfoInvalidToken(t *testing.T) {
 	}
 }
 
+func TestValidateBearerInfoRejectsLegacyPrincipalLessToken(t *testing.T) {
+	svc, store := newAgentTestService()
+	if err := store.AddAccessToken(HashToken("legacy-token"), "content.write", "", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
+	}
+	scope, expiresAt, principal, legacy, ok := svc.ValidateBearerInfo("legacy-token")
+	if ok || scope != "" || !expiresAt.IsZero() || principal != "" || legacy {
+		t.Fatalf("ValidateBearerInfo(legacy) = (%q, %v, %q, %v, %v), want rejected zero values", scope, expiresAt, principal, legacy, ok)
+	}
+}
+
+func TestValidateBearerDetailsRejectsLegacyPrincipalLessToken(t *testing.T) {
+	svc, store := newAgentTestService()
+	if err := store.AddAccessToken(HashToken("legacy-token"), "content.write", "", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("AddAccessToken() error = %v", err)
+	}
+	scope, legacy, ok := svc.ValidateBearerDetails("legacy-token")
+	if ok || scope != "" || legacy {
+		t.Fatalf("ValidateBearerDetails(legacy) = (%q, %v, %v), want rejected zero values", scope, legacy, ok)
+	}
+}
+
 func newAgentTestServiceConfig() config.OAuthConfig {
 	return config.OAuthConfig{
 		Enabled:               true,

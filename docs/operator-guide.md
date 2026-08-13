@@ -238,6 +238,12 @@ The `oauth` section configures OAuth 2.0 authentication (optional):
 | `oauth.storage_backend` | string | `memory` | Token persistence backend: `memory` (ephemeral), `json` (file-based), or `sqlite` (database). |
 | `oauth.storage_path` | string | (empty) | Path to token storage file (required for `json` or `sqlite` backends). |
 
+Access tokens persisted before principal-aware quota identity was introduced may
+have an empty `principal`. Those legacy bearers now fail closed at `/mcp`
+authentication; the client must use its refresh token or complete OAuth again
+to obtain a bearer carrying its stable client principal. Refresh-token renewal
+is the supported migration path and does not require deleting the refresh token.
+
 ## Tool Access Scopes
 
 Since #450, the server enforces exactly two canonical runtime scopes:
