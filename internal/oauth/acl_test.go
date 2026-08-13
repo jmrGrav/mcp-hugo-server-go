@@ -6,6 +6,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
+	toolsadmin "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	toolsanon "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
 	toolsread "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	toolswrite "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
@@ -277,5 +278,31 @@ func TestACLFormerSiteAdminToolNowRequiresWrite(t *testing.T) {
 	}
 	if !p2.AllowRequest(body, "write") {
 		t.Fatal("write must be able to call build_site")
+	}
+}
+
+func TestACLManagedHugoLifecycleRequiresAdmin(t *testing.T) {
+	reg := tools.NewRegistry()
+	for _, d := range toolsanon.Defs() {
+		reg.Register(d)
+	}
+	for _, d := range toolsread.Defs() {
+		reg.Register(d)
+	}
+	for _, d := range toolswrite.Defs() {
+		reg.Register(d)
+	}
+	for _, d := range toolsadmin.Defs() {
+		reg.Register(d)
+	}
+	p := oauth.NewScopePolicy(reg)
+	for _, name := range []string{"stage_hugo_upgrade", "activate_hugo", "rollback_hugo", "bootstrap_hugo"} {
+		body := toolsCallBody(name)
+		if p.AllowRequest(body, "write") {
+			t.Errorf("write scope must not call %s", name)
+		}
+		if !p.AllowRequest(body, "admin") {
+			t.Errorf("admin scope must call %s", name)
+		}
 	}
 }

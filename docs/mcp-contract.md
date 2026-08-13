@@ -404,9 +404,10 @@ content, including drafts, for every tool in this table.
 
 ### `write` (requires a registered OAuth client, see [§6.12](#612-2-scope-model-readwrite-450))
 
-Per [§6.12](#612-2-scope-model-readwrite-450), the tools formerly split
-between `content.write` and `site.admin` are now a single `write` scope with
-no exceptions — `write` implies full `read` access plus everything below.
+Per [§6.12](#612-2-scope-model-readwrite-450), editorial and site-operation
+tools use `write`; managed Hugo binary lifecycle tools use the separate
+`admin` scope. `write` implies full `read` access plus everything below except
+the four explicitly admin-gated Hugo upgrade tools.
 
 `create_page`/`update_page`/`delete_page`/`upload_page_asset`/
 `delete_page_asset`/`generate_hero_image` used to leave `data` as an empty
@@ -879,11 +880,21 @@ Collapses the pre-#450 4-tier scope model (`reader`, `content.read`,
   `get_theme_status`, `verify_publication`, `create_preview`) now fold into
   `write` with **no exceptions** — there is no longer a way to get write
   access to content without also getting the operational tools, or vice
-  versa.
+  versa. Managed Hugo binary lifecycle tools are now the explicit `admin`
+  tier; legacy `site.admin` and `system.admin` inputs continue to resolve to
+  `write` so existing tokens are not silently elevated.
 
-`tools.KnownScopes` is now `{"read", "write"}`; `tools.ScopeRank` gives
+- **`admin`** — requires an explicitly approved administrator OAuth client.
+  It implies `write` and is required for `stage_hugo_upgrade`,
+  `activate_hugo`, `rollback_hugo`, and `bootstrap_hugo`.
+
+`revoke_all_previews` remains write-scoped: its bulk operation calls
+`RevokeAllOwned` and only revokes previews belonging to the current caller.
+It is not a cross-tenant administrative capability.
+
+`tools.KnownScopes` is now `{"read", "write", "admin"}`; `tools.ScopeRank` gives
 `read` the same rank (0) as anonymous — capability-identical, matching the
-"no gate" decision above — and `write` rank 1 (now the top rank).
+"no gate" decision above — `write` rank 1, and `admin` rank 2.
 `tools.IsWriteScope` (renamed from `IsAdminScope`) reports whether a scope
 carries write privileges.
 
@@ -896,7 +907,9 @@ request time (bearer token validation):
 | Legacy string                                                  | Canonical |
 |------------------------------------------------------------------|-----------|
 | `mcp`, `read`, `content.read`, `reader`                           | `read`    |
-| `write`, `content.write`, `site.admin`, `site_admin`, `siteadmin`, `system.admin`, `admin`, `system_admin`, `systemadmin` | `write`   |
+| `write`, `content.write` | `write`   |
+| `site.admin`, `site_admin`, `siteadmin`, `system.admin`, `system_admin`, `systemadmin` | `admin`   |
+| `admin`                                                        | `admin`   |
 
 This mirrors the existing `mcp` legacy-alias pattern (§6.11): already-issued
 access tokens (up to `AccessTokenTTLSeconds` old) and OAuth clients with a

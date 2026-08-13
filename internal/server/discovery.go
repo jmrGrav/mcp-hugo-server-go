@@ -99,6 +99,12 @@ func discoveryAccessProfiles(cfg config.Config) map[string]discoveryAccessProfil
 			AcquisitionMode: "approved_token",
 			InternalScopes:  []string{"write"},
 		},
+		"administrator": {
+			Description:     "Human-facing label for the separately approved scope required by managed Hugo binary lifecycle operations.",
+			Acquisition:     "explicit administrator token present in the server registry",
+			AcquisitionMode: "approved_admin_token",
+			InternalScopes:  []string{"admin"},
+		},
 	}
 }
 
@@ -415,15 +421,15 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 	if !hasRegistrationFlow {
 		block.WriteString(fmt.Sprintf(
 			"## Agent registration\n\n"+
-				"External access profiles: `reader` and `operator`.\n"+
-				"`reader` and `operator` are human-facing labels layered on top of the canonical OAuth scopes `read` and `write`.\n"+
-				"`reader` maps to `read`; `operator` maps to `write`.\n\n"+
+				"External access profiles: `reader`, `operator`, and `administrator`.\n"+
+				"These labels map to canonical OAuth scopes `read`, `write`, and `admin`.\n"+
+				"`reader` maps to `read`; `operator` maps to `write`; `administrator` maps to `admin`.\n\n"+
 				"Registration endpoint: `%s/register`\n"+
 				"Authorization endpoint: `%s/authorize`\n"+
 				"Token endpoint: `%s/token`\n"+
 				"Protected resource metadata: %s/.well-known/oauth-protected-resource\n"+
 				"MCP endpoint: `%s/mcp`\n"+
-				"Scopes: `read`, `write`\n\n"+
+				"Scopes: `read`, `write`, `admin`\n\n"+
 				"```json\n"+
 				"{\n"+
 				"  \"registration_flow\": {\n"+
@@ -434,7 +440,8 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"    \"mcp_endpoint\": \"%s/mcp\",\n"+
 				"    \"scopes\": [\n"+
 				"      \"read\",\n"+
-				"      \"write\"\n"+
+				"      \"write\",\n"+
+				"      \"admin\"\n"+
 				"    ]\n"+
 				"  }\n"+
 				"}\n"+
@@ -463,6 +470,12 @@ func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []by
 				"      \"acquisition\": \"approved token present in the server registry\",\n"+
 				"      \"acquisition_mode\": \"approved_token\",\n"+
 				"      \"internal_scopes\": [\"write\"]\n"+
+				"    }\n"+
+				"    ,\"administrator\": {\n"+
+				"      \"description\": \"Human-facing label for the separately approved managed Hugo administrator scope.\",\n"+
+				"      \"acquisition\": \"explicit administrator token present in the server registry\",\n"+
+				"      \"acquisition_mode\": \"approved_admin_token\",\n"+
+				"      \"internal_scopes\": [\"admin\"]\n"+
 				"    }\n"+
 				"  }\n"+
 				"}\n"+

@@ -10,7 +10,7 @@ import (
 
 // normalizeConfiguredScope maps a single space-delimited scope token (from
 // config, a client's requested scope, or an /authorize request) to a
-// canonical internal scope: "read" or "write". All legacy scope strings
+// canonical internal scope: "read", "write", or "admin". All legacy scope strings
 // (the pre-#450 4-tier model, plus the original "mcp" alias) are resolved
 // via CanonicalScope, the single source of truth for scope aliasing.
 func normalizeConfiguredScope(raw string) (string, error) {
@@ -19,6 +19,8 @@ func normalizeConfiguredScope(raw string) (string, error) {
 		return "read", nil
 	case "write":
 		return "write", nil
+	case "admin":
+		return "admin", nil
 	default:
 		return "", fmt.Errorf("invalid scope %q", raw)
 	}

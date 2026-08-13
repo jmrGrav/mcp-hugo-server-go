@@ -99,7 +99,7 @@ func openStore(cfg config.OAuthConfig) (storage.Store, error) {
 
 // ScopeExtension is a plug-and-play hook for registering additional MCP tools
 // without modifying core server packages. It is called once per scope server
-// (scopeName is one of "", "write").
+// (scopeName is one of "", "write", "admin").
 // Implementations should call mcp.AddTool on s to add tools to that scope.
 //
 // Example:
@@ -173,7 +173,7 @@ func newScopedServer(
 	if srcIdx != nil {
 		read.RegisterWithSourceIndex(s, idx, srcIdx, cfg, siteDB)
 	}
-	if scopeName == "write" && writeEnabled {
+	if (scopeName == "write" || scopeName == "admin") && writeEnabled {
 		toolswrite.Register(s, pg, srcIdx, cfg, siteDB, idx)
 	}
 	for _, ext := range extensions {
@@ -567,17 +567,30 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 // through the create_preview tool must be readable through that handler,
 // which only works if both sides share one previewstore.Store.
 func buildWriteScopedServer(core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension) (*mcp.Server, *previewstore.Store) {
-	writeServer := newScopedServer("write", core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions)
-	admin.Register(writeServer, cfg, core.srcIdx, postBuildCallbacks("build_site", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
-	admin.RegisterVerifyPublication(writeServer, idx, core.srcIdx, cfg)
-	admin.RegisterPublishChanges(writeServer, idx, core.srcIdx, cfg, postBuildCallbacks("publish_changes", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
 	previews := previewstore.New()
-	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
-	admin.RegisterCreatePreview(writeServer, cfg, previews, previewBaseURL)
-	admin.RegisterPreviewAccessTools(writeServer, cfg, previews, previewBaseURL)
-	admin.RegisterStorageHealth(writeServer, cfg, core.srcIdx, previews)
-	read.RegisterInspectPreviewRenderedPage(writeServer, idx, core.srcIdx, cfg, previews, previewBaseURL)
+	writeServer := buildPrivilegedScopedServer("write", core, cfg, idx, extensions, previews)
+	// Keep managed Hugo binary tools out of tools/list for ordinary write
+	// callers. Calls are also denied by ScopePolicy; this removes discovery
+	// ambiguity as well as enforcing the boundary.
+	writeServer.RemoveTools("stage_hugo_upgrade", "activate_hugo", "rollback_hugo", "bootstrap_hugo")
 	return writeServer, previews
+}
+
+func buildAdminScopedServer(core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension, previews *previewstore.Store) *mcp.Server {
+	return buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, previews)
+}
+
+func buildPrivilegedScopedServer(scopeName string, core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension, previews *previewstore.Store) *mcp.Server {
+	server := newScopedServer(scopeName, core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions)
+	admin.Register(server, cfg, core.srcIdx, postBuildCallbacks("build_site", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
+	admin.RegisterVerifyPublication(server, idx, core.srcIdx, cfg)
+	admin.RegisterPublishChanges(server, idx, core.srcIdx, cfg, postBuildCallbacks("publish_changes", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
+	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
+	admin.RegisterCreatePreview(server, cfg, previews, previewBaseURL)
+	admin.RegisterPreviewAccessTools(server, cfg, previews, previewBaseURL)
+	admin.RegisterStorageHealth(server, cfg, core.srcIdx, previews)
+	read.RegisterInspectPreviewRenderedPage(server, idx, core.srcIdx, cfg, previews, previewBaseURL)
+	return server
 }
 
 // NewStdio builds a write-scoped *mcp.Server for the stdio transport
@@ -593,8 +606,9 @@ func NewStdio(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) 
 	if err != nil {
 		return nil, err
 	}
-	writeServer, _ := buildWriteScopedServer(core, cfg, idx, extensions)
-	return writeServer, nil
+	// Stdio is a trusted local operator transport; expose the full privileged
+	// catalog, including admin-gated Hugo lifecycle tools.
+	return buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, previewstore.New()), nil
 }
 
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
@@ -614,6 +628,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 
 	publicServer := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
 	writeServer, previews := buildWriteScopedServer(core, cfg, idx, extensions)
+	adminServer := buildAdminScopedServer(core, cfg, idx, extensions, previews)
 	previewHandler := previews.HTTPHandler()
 
 	opts := &mcp.StreamableHTTPOptions{
@@ -632,6 +647,9 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		scope, _ := r.Context().Value(oauth.CtxScope).(string)
 		rank := tools.ScopeRank(scope)
 		slog.Info("mcp: session created", "scope", scope, "rank", rank, "remote_addr", r.RemoteAddr)
+		if rank >= 2 {
+			return adminServer
+		}
 		if rank >= 1 {
 			return writeServer
 		}

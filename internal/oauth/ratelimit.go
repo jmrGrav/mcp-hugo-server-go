@@ -115,7 +115,7 @@ func (rl *RateLimiter) perMinFor(scope string) int {
 		return rl.cfg.ContentReadPerMin
 	case "content.write":
 		return rl.cfg.ContentWritePerMin
-	case "write", "site.admin":
+	case "write", "admin", "site.admin":
 		return rl.cfg.SiteAdminPerMin
 	default:
 		return rl.cfg.AnonymousPerMin

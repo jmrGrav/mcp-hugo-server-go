@@ -1618,8 +1618,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "write" {
-		t.Fatalf("token scope = %q want write", tokenResp.Scope)
+	if tokenResp.Scope != "admin" {
+		t.Fatalf("token scope = %q want admin", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
@@ -1721,8 +1721,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "write" {
-		t.Fatalf("token scope = %q want write", tokenResp.Scope)
+	if tokenResp.Scope != "admin" {
+		t.Fatalf("token scope = %q want admin", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
@@ -1897,8 +1897,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "write" {
-		t.Fatalf("token scope = %q want write (should be clamped from system.admin)", tokenResp.Scope)
+	if tokenResp.Scope != "admin" {
+		t.Fatalf("token scope = %q want admin (system.admin compatibility alias)", tokenResp.Scope)
 	}
 }
 
@@ -1981,21 +1981,26 @@ clients:
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
-	if got, want := len(names), 68; got != want {
+	if got, want := len(names), 64; got != want {
 		t.Errorf("chatgpt write token tools/list = %d tools, want %d; got %v", got, want, names)
 	}
 	// Must see write tools.
 	if !containsToolName(names, "create_page") {
 		t.Errorf("chatgpt write token missing create_page; got %v", names)
 	}
-	// Per #450, site.admin folded into write with no exceptions: a write
-	// token now also sees the tools that used to require site.admin.
+	// The four managed Hugo binary lifecycle tools are admin-only and omitted
+	// from the ordinary write-scoped tools/list response.
 	for _, adminTool := range []string{
 		"build_site", "check_sri_versions", "preview_build",
-		"get_hugo_update", "stage_hugo_upgrade", "activate_hugo", "rollback_hugo", "bootstrap_hugo",
+		"get_hugo_update",
 	} {
 		if !containsToolName(names, adminTool) {
-			t.Errorf("chatgpt write token must expose formerly-admin tool %q (folded into write per #450)", adminTool)
+			t.Errorf("chatgpt write token must expose write tool %q", adminTool)
+		}
+	}
+	for _, adminTool := range []string{"stage_hugo_upgrade", "activate_hugo", "rollback_hugo", "bootstrap_hugo"} {
+		if containsToolName(names, adminTool) {
+			t.Errorf("chatgpt write token must not expose admin tool %q", adminTool)
 		}
 	}
 }
@@ -2148,8 +2153,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "write" {
-		t.Fatalf("token scope = %q want write", tokenResp.Scope)
+	if tokenResp.Scope != "admin" {
+		t.Fatalf("token scope = %q want admin", tokenResp.Scope)
 	}
 
 	cases := []struct {

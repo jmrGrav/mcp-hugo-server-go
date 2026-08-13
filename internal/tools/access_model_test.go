@@ -76,10 +76,10 @@ func TestVerifiedToolScopeMatrix(t *testing.T) {
 		"inspect_preview":      "write",
 		"get_storage_health":   "write",
 		"get_hugo_update":      "write",
-		"stage_hugo_upgrade":   "write",
-		"activate_hugo":        "write",
-		"rollback_hugo":        "write",
-		"bootstrap_hugo":       "write",
+		"stage_hugo_upgrade":   "admin",
+		"activate_hugo":        "admin",
+		"rollback_hugo":        "admin",
+		"bootstrap_hugo":       "admin",
 	}
 
 	got := make(map[string]string, len(want))

@@ -249,13 +249,20 @@ Since #450, the server enforces exactly two canonical runtime scopes:
   registration; `/mcp` still requires a Bearer token even for anonymous-tier
   tools.
 - `write`: `read` plus mutations and site operations. Requires a registered
-  OAuth client. `write` implies `read` — there is no third tier; every tool
-  that used to require a separate `site.admin` scope now just requires
-  `write`.
+  OAuth client. `write` implies `read`.
+- `admin`: `write` plus the four managed Hugo binary lifecycle tools
+  (`stage_hugo_upgrade`, `activate_hugo`, `rollback_hugo`, and
+  `bootstrap_hugo`). Requires an explicitly approved administrator token.
+  Legacy `site.admin`/`system.admin` aliases continue to resolve to `admin`
+  so already-issued administrator tokens retain their capability.
 
-Some docs and discovery metadata still use the descriptive profile labels
-`reader` and `operator`. Treat those as human-facing names for the two
-runtime scopes above, not as separate ACL layers.
+`revoke_all_previews` is also intentionally write-scoped. It is a bulk action
+only over previews owned by the current caller (`RevokeAllOwned`), not a
+cross-tenant administrative operation.
+
+Some docs and discovery metadata use the descriptive profile labels
+`reader`, `operator`, and `administrator`. Treat those as human-facing names
+for the three runtime scopes above, not as separate ACL layers.
 
 Legacy clients may still send any pre-#450 scope string (`mcp`, `reader`,
 `content.read`, `content.write`, `site.admin`, `system.admin`, and other

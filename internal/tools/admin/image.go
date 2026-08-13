@@ -277,10 +277,10 @@ func Defs() []tools.ToolDef {
 		{Name: "publish_changes", RequiredScope: "write"},
 		{Name: "get_storage_health", RequiredScope: "write"},
 		{Name: "get_hugo_update", RequiredScope: "write"},
-		{Name: "stage_hugo_upgrade", RequiredScope: "write"},
-		{Name: "activate_hugo", RequiredScope: "write"},
-		{Name: "rollback_hugo", RequiredScope: "write"},
-		{Name: "bootstrap_hugo", RequiredScope: "write"},
+		{Name: "stage_hugo_upgrade", RequiredScope: "admin"},
+		{Name: "activate_hugo", RequiredScope: "admin"},
+		{Name: "rollback_hugo", RequiredScope: "admin"},
+		{Name: "bootstrap_hugo", RequiredScope: "admin"},
 	}
 }
 

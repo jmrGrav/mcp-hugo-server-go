@@ -321,7 +321,7 @@ func TestDiscoveryMinimalPublicSurfaceSnapshots(t *testing.T) {
 	}
 	wantAuth := map[string]any{
 		"issuer":           "https://mcp.arleo.eu",
-		"scopes_supported": []string{"read", "write"},
+		"scopes_supported": []string{"read", "write", "admin"},
 		"reader_profile":   accessProfileSnapshot{AcquisitionMode: "operator_approved_claim_or_pre_registered_oauth_client", InternalScopes: []string{"read"}},
 		"operator_profile": accessProfileSnapshot{AcquisitionMode: "approved_token", InternalScopes: []string{"write"}},
 	}
@@ -354,7 +354,7 @@ func TestDiscoveryMinimalPublicSurfaceSnapshots(t *testing.T) {
 	wantPR := map[string]any{
 		"resource":               "https://mcp.arleo.eu/mcp",
 		"resource_documentation": "https://mcp.arleo.eu/auth.md",
-		"scopes_supported":       []string{"read", "write"},
+		"scopes_supported":       []string{"read", "write", "admin"},
 		"reader_profile":         accessProfileSnapshot{AcquisitionMode: "operator_approved_claim_or_pre_registered_oauth_client", InternalScopes: []string{"read"}},
 		"operator_profile":       accessProfileSnapshot{AcquisitionMode: "approved_token", InternalScopes: []string{"write"}},
 	}
@@ -379,9 +379,10 @@ func TestPublishedAuthAndToolSurfacesStayConvergedOnCanonicalReadWrite(t *testin
 	}
 	authBody := authRec.Body.String()
 	for _, want := range []string{
-		"`reader` maps to `read`; `operator` maps to `write`.",
+		"`reader` maps to `read`; `operator` maps to `write`; `administrator` maps to `admin`.",
 		`"internal_scopes": ["read"]`,
 		`"internal_scopes": ["write"]`,
+		`"internal_scopes": ["admin"]`,
 	} {
 		if !strings.Contains(authBody, want) {
 			t.Fatalf("auth.md missing %q:\n%s", want, authBody)
@@ -850,8 +851,8 @@ func TestAuthMdAppendsCanonicalRegistrationBlockWhenMissing(t *testing.T) {
 	if strings.Contains(body, `"internal_scopes": ["read", "write"]`) {
 		t.Fatal("auth.md response must not publish legacy operator scope inheritance")
 	}
-	if !strings.Contains(body, "`reader` maps to `read`; `operator` maps to `write`.") {
-		t.Fatal("auth.md response must explain the reader/operator labels in terms of canonical scopes")
+	if !strings.Contains(body, "`reader` maps to `read`; `operator` maps to `write`; `administrator` maps to `admin`.") {
+		t.Fatal("auth.md response must explain the reader/operator/administrator labels in terms of canonical scopes")
 	}
 }
 
