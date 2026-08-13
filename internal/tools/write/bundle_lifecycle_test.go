@@ -10,7 +10,7 @@ import (
 
 func TestCreateBundleTestContentForcesDraftForEveryTranslation(t *testing.T) {
 	root := t.TempDir()
-	session, _, done := newTestServer(t, root)
+	session, idx, done := newTestServer(t, root)
 	defer done()
 
 	args := map[string]any{
@@ -48,6 +48,25 @@ func TestCreateBundleTestContentForcesDraftForEveryTranslation(t *testing.T) {
 	expires, ok := data["test_content_expires_at"].(map[string]any)
 	if !ok || expires["fr"] == nil || expires["en"] == nil {
 		t.Fatalf("test_content_expires_at must report every translation, got %#v", data["test_content_expires_at"])
+	}
+
+	// The caller passed draft:false explicitly, but test_content must still
+	// force draft:true in the in-memory SourceIndex — not just the on-disk
+	// file — since get_site_health's DraftPages count and get_page's
+	// FrontmatterRaw-derived draft state both read the index directly
+	// (internal/tools/read), and it isn't rebuilt from disk until the next
+	// full rescan.
+	for _, lang := range []string{"fr", "en"} {
+		page, ok := idx.GetBySlugLang("posts/test-bundle-safety", lang)
+		if !ok {
+			t.Fatalf("%s translation missing from SourceIndex after create_bundle", lang)
+		}
+		if !page.Draft {
+			t.Errorf("%s SourcePage.Draft = false, want true (test_content must force it even though draft:false was passed)", lang)
+		}
+		if fmDraft, _ := page.FrontmatterRaw["draft"].(bool); !fmDraft {
+			t.Errorf("%s FrontmatterRaw[\"draft\"] = %v, want true (test_content must force it even though draft:false was passed)", lang, page.FrontmatterRaw["draft"])
+		}
 	}
 }
 

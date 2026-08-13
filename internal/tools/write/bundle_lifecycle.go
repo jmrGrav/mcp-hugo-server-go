@@ -283,7 +283,8 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 				expires[f.page.Lang] = f.expiresAt
 			}
 			now := time.Now().UTC().Format(time.RFC3339)
-			frontmatterRaw := map[string]any{"title": f.page.Title, "date": now, "draft": f.page.Draft != nil && *f.page.Draft}
+			effectiveDraft := f.page.TestContent != nil || (f.page.Draft != nil && *f.page.Draft)
+			frontmatterRaw := map[string]any{"title": f.page.Title, "date": now, "draft": effectiveDraft}
 			if f.page.Description != nil && *f.page.Description != "" {
 				frontmatterRaw["description"] = *f.page.Description
 			}
@@ -299,7 +300,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 					frontmatterRaw["test_content_expires_at"] = f.expiresAt
 				}
 			}
-			idx.Upsert(hugosite.SourcePage{Slug: in.Slug, FilePath: f.path, Lang: f.page.Lang, Title: f.page.Title, Date: now, Tags: f.page.Tags, Categories: f.page.Categories, Body: f.page.Body, FrontmatterRaw: frontmatterRaw, BuildPending: true})
+			idx.Upsert(hugosite.SourcePage{Slug: in.Slug, FilePath: f.path, Lang: f.page.Lang, Title: f.page.Title, Date: now, Draft: effectiveDraft, Tags: f.page.Tags, Categories: f.page.Categories, Body: f.page.Body, FrontmatterRaw: frontmatterRaw, BuildPending: true})
 		}
 		if siteDB != nil {
 			for _, f := range files {
