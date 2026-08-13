@@ -944,9 +944,20 @@ func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, 
 					translations = collectTranslations(idx, *ref)
 				}
 			}
-			suggestions, evaluated := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, limit)
+			// #1041: over-fetch before filtering — see overfetchLimit's
+			// comment for why truncating to limit before the language/
+			// one_per_source_key filter would silently under-deliver.
+			fetchLimit := limit
+			if in.Language != "" || in.OnePerSourceKey {
+				fetchLimit = overfetchLimit(limit)
+			}
+			suggestions, evaluated := scoreLinkSuggestions(idx, resolvedSlug, refTags, refCats, in.Body, fetchLimit)
+			suggestionsBeforeFilter := len(suggestions)
 			suggestions = filterSuggestedLinks(suggestions, in.Language, in.OnePerSourceKey)
 			translations = filterRelationshipTranslations(translations, in.Language, in.OnePerSourceKey)
+			if len(suggestions) > limit {
+				suggestions = suggestions[:limit]
+			}
 			if mode == toolcontract.ResponseModeCompact {
 				translations = nil
 				for i := range suggestions {
@@ -960,7 +971,8 @@ func registerReadExtendedLinkAndSuggestionTools(s *mcp.Server, idx *site.Index, 
 				SuggestedLinks: suggestions,
 			}
 			if len(suggestions) == 0 {
-				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
+				filteredOut := suggestionsBeforeFilter > 0 && (in.Language != "" || in.OnePerSourceKey)
+				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore, filteredOut)
 			}
 			resp := newSuggestInternalLinksOutput(data, time.Now().UTC())
 			resp.Warnings = warnings

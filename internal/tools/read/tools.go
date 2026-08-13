@@ -195,9 +195,16 @@ type emptyResultExplanationDTO struct {
 // computeRelated and scoreLinkSuggestions discard score-0 candidates.
 const minTaxonomyAffinityScore = 1
 
-func newEmptyResultExplanation(candidatesEvaluated, minimumScore int) *emptyResultExplanationDTO {
+func newEmptyResultExplanation(candidatesEvaluated, minimumScore int, filteredOut bool) *emptyResultExplanationDTO {
 	reason := "no_candidates_with_sufficient_taxonomy_affinity"
-	if candidatesEvaluated == 0 {
+	switch {
+	case filteredOut:
+		// Scored candidates existed but language/one_per_source_key
+		// filtering removed every one of them — a different situation
+		// from "nothing scored", and worth distinguishing so a caller
+		// isn't told to loosen scoring when the fix is to drop the filter.
+		reason = "no_candidates_matching_language_or_source_key_filter"
+	case candidatesEvaluated == 0:
 		reason = "no_other_published_content_to_compare"
 	}
 	return &emptyResultExplanationDTO{
@@ -540,12 +547,34 @@ func registerReadRelationshipTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				ref = *resolved.Public
 			}
 			translations := collectTranslations(idx, ref)
-			related, evaluated := computeRelated(idx, ref, limit)
+			// #1041: computeRelated/scoreLinkSuggestions each truncate to
+			// their own limit argument internally, before the
+			// language/one_per_source_key filter below runs. Truncating
+			// first would silently under-deliver relative to the requested
+			// limit whenever a same-source-key sibling (near-guaranteed on
+			// a bilingual site, since translations usually share tags/
+			// categories and so score identically) occupied one of the
+			// pre-filter top-limit slots. When filtering is requested,
+			// over-fetch a generously larger candidate pool so there's
+			// enough headroom to still fill limit distinct-source-key
+			// results after filtering, then re-truncate to the real limit.
+			fetchLimit := limit
+			if in.Language != "" || in.OnePerSourceKey {
+				fetchLimit = overfetchLimit(limit)
+			}
+			related, evaluated := computeRelated(idx, ref, fetchLimit)
+			relatedBeforeFilter := len(related)
 			backlinks := premutationBacklinks(idx, ref.Slug)
-			suggestedLinks, _ := scoreLinkSuggestions(idx, ref.Slug, ref.Tags, ref.Categories, "", limit)
+			suggestedLinks, _ := scoreLinkSuggestions(idx, ref.Slug, ref.Tags, ref.Categories, "", fetchLimit)
 			translations = filterRelationshipTranslations(translations, in.Language, in.OnePerSourceKey)
 			related = filterRelatedPages(related, in.Language, in.OnePerSourceKey)
 			suggestedLinks = filterSuggestedLinks(suggestedLinks, in.Language, in.OnePerSourceKey)
+			if len(related) > limit {
+				related = related[:limit]
+			}
+			if len(suggestedLinks) > limit {
+				suggestedLinks = suggestedLinks[:limit]
+			}
 			if mode == toolcontract.ResponseModeCompact {
 				translations, backlinks = nil, nil
 				for i := range related {
@@ -576,7 +605,8 @@ func registerReadRelationshipTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 				IndexInfo:      staleness(idx, srcIdx, cfg),
 			}
 			if len(related) == 0 {
-				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore)
+				filteredOut := relatedBeforeFilter > 0 && (in.Language != "" || in.OnePerSourceKey)
+				data.EmptyReason = newEmptyResultExplanation(evaluated, minTaxonomyAffinityScore, filteredOut)
 			}
 			if include["impact"] {
 				impact := premutationImpact(idx, resolved, ref, aliases)
@@ -1323,6 +1353,24 @@ func clampLimit(v, defaultVal, maxVal int) int {
 		return maxVal
 	}
 	return v
+}
+
+// overfetchLimit computes how many raw (pre-language/pre-dedup) candidates
+// to request from computeRelated/scoreLinkSuggestions when the caller will
+// filter their result afterward (#1041): both functions truncate to the
+// limit they're given internally, so requesting only the caller's real
+// limit and filtering afterward could silently return fewer than limit
+// results whenever a same-source-key/wrong-language sibling occupied one
+// of the pre-filter top-limit slots. 8x is generous headroom for any
+// realistic site's language count while staying bounded.
+func overfetchLimit(limit int) int {
+	const factor = 8
+	const maxFetch = 200
+	fetch := limit * factor
+	if fetch > maxFetch {
+		return maxFetch
+	}
+	return fetch
 }
 
 // negativeLimitError — see the identical helper's comment in
