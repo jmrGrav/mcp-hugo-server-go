@@ -1927,11 +1927,15 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	health.AdvisoriesCount = len(health.TaxonomyInconsistencyDetails)
 
 	score := frontmatterScore
-	// #719: a perfect 100 alongside actionable warning-severity taxonomy
-	// drift is semantically misleading. Keep info-only translation pairs
-	// non-penalizing, but cap the exposed top-level score just below
-	// perfection when a real warning is still present.
+	// #719/#1066: a perfect 100 alongside either actionable taxonomy drift
+	// or a degraded runtime is semantically misleading. Keep info-only
+	// translation pairs non-penalizing, but cap the exposed top-level score
+	// just below perfection whenever another machine-readable field tells an
+	// agent that action is still required.
 	if score == 100 && taxonomyWarnings > 0 {
+		score = 99
+	}
+	if score == 100 && health.RuntimeDegraded != nil && *health.RuntimeDegraded {
 		score = 99
 	}
 	health.Score = score
