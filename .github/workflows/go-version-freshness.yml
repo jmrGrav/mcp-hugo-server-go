@@ -21,15 +21,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          current="$(grep -E '^go [0-9]+\.[0-9]+\.[0-9]+$' go.mod | awk '{print $2}')"
+          current="$(grep -E '^go [0-9]+\.[0-9]+(\.[0-9]+)?$' go.mod | awk '{print $2}')"
           if [ -z "$current" ]; then
             echo "::error::could not parse a go directive from go.mod"
             exit 1
           fi
 
+          # go.dev/dl can list multiple concurrently-supported stable release
+          # lines (e.g. the latest 1.26.x and the latest 1.25.x both carry
+          # stable:true) - sort numerically by version and take the highest,
+          # never trust array order from the API.
           latest="$(curl -fsSL 'https://go.dev/dl/?mode=json' \
-            | jq -r '[.[] | select(.stable == true)][0].version' \
-            | sed 's/^go//')"
+            | jq -r '[.[] | select(.stable == true) | .version | ltrimstr("go")]
+                     | sort_by(split(".") | map(tonumber? // 0))
+                     | last')"
           if [ -z "$latest" ] || [ "$latest" = "null" ]; then
             echo "::error::could not resolve the latest stable Go release from go.dev/dl"
             exit 1
