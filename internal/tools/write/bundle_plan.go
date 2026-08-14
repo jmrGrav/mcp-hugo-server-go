@@ -45,6 +45,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -106,18 +107,33 @@ type bundlePlanStore struct {
 	ttl        time.Duration
 	maxEntries int
 	entries    map[string]bundlePlanEntry
+	persistent *db.DB
 }
 
-func newBundlePlanStore(ttl time.Duration, maxEntries int) *bundlePlanStore {
-	return &bundlePlanStore{ttl: ttl, maxEntries: maxEntries, entries: make(map[string]bundlePlanEntry)}
+func newBundlePlanStore(ttl time.Duration, maxEntries int, persistent ...*db.DB) *bundlePlanStore {
+	var journal *db.DB
+	if len(persistent) > 0 {
+		journal = persistent[0]
+	}
+	return &bundlePlanStore{ttl: ttl, maxEntries: maxEntries, entries: make(map[string]bundlePlanEntry), persistent: journal}
 }
 
-func (s *bundlePlanStore) put(id string, entry bundlePlanEntry) {
+func (s *bundlePlanStore) put(id string, entry bundlePlanEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	s.entries[id] = entry
 	s.trimLocked()
+	if s.persistent != nil {
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if err := s.persistent.PutEphemeralRecord("bundle_plan", id, entry.CallerKey, raw, entry.CreatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *bundlePlanStore) get(id, callerKey string) (bundlePlanEntry, bool) {
@@ -125,6 +141,12 @@ func (s *bundlePlanStore) get(id, callerKey string) (bundlePlanEntry, bool) {
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if !ok && s.persistent != nil {
+		if raw, found, err := s.persistent.GetEphemeralRecord("bundle_plan", id, callerKey, s.ttl); err == nil && found && json.Unmarshal(raw, &entry) == nil {
+			ok = true
+			s.entries[id] = entry
+		}
+	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
 		return bundlePlanEntry{}, false
 	}
@@ -136,11 +158,19 @@ func (s *bundlePlanStore) consume(id, callerKey string) (bundlePlanEntry, bool) 
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if !ok && s.persistent != nil {
+		if raw, found, err := s.persistent.GetEphemeralRecord("bundle_plan", id, callerKey, s.ttl); err == nil && found && json.Unmarshal(raw, &entry) == nil {
+			ok = true
+		}
+	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
 		return bundlePlanEntry{}, false
 	}
 	if ok {
 		delete(s.entries, id)
+		if s.persistent != nil {
+			_ = s.persistent.DeleteEphemeralRecord("bundle_plan", id, callerKey)
+		}
 	}
 	return entry, ok
 }
@@ -603,11 +633,13 @@ func registerPlanBundleChange(
 			return nil, planBundleChangeOutput{}, wrapErr(fmt.Errorf("internal_error: failed to allocate plan id"))
 		}
 		now := time.Now().UTC()
-		plans.put(planID, bundlePlanEntry{
+		if err := plans.put(planID, bundlePlanEntry{
 			CallerKey: isolationCallerKey(ctx),
 			Slug:      in.Slug, BundleDir: dir, BundleRevision: bundleRev,
 			Translations: planTranslations, CreatedAt: now,
-		})
+		}); err != nil {
+			return nil, planBundleChangeOutput{}, wrapErr(fmt.Errorf("persistence_error: failed to persist bundle plan: %w", err))
+		}
 		_ = siteIdx // state derivation intentionally deferred to apply
 		return nil, newPlanBundleChangeOutput(planBundleChangeData{
 			Slug: canonicalPublicSlug(in.Slug), BundleRevision: bundleRev, Translations: outcomes,

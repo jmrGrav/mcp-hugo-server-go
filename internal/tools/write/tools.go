@@ -749,7 +749,7 @@ func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, siteIdxs ...*site
 		idem:             newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256, siteDB),
 		plans:            newPlanStore(planTTL, planMaxEntries, siteDB),
 		snapshots:        newSnapshotStore(snapshotTTL, snapshotMaxEntries),
-		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries),
+		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries, siteDB),
 		bundleSnapshots:  newBundleSnapshotStore(snapshotTTL, snapshotMaxEntries),
 	}
 }

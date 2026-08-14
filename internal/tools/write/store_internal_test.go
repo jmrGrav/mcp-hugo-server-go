@@ -1,8 +1,11 @@
 package write
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 )
 
 func TestPlanStorePruneAndTrimLocked(t *testing.T) {
@@ -35,6 +38,35 @@ func TestPlanStorePruneAndTrimLocked(t *testing.T) {
 	}
 	if _, ok := store.entries["newest"]; !ok {
 		t.Fatal("trimLocked() dropped newest plan, want it retained")
+	}
+}
+
+func TestBundlePlanStoreSurvivesReopenWithCallerIsolation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	first, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newBundlePlanStore(time.Hour, 8, first)
+	entry := bundlePlanEntry{CallerKey: "caller-a", Slug: "posts/example", BundleDir: "/opaque", BundleRevision: "sha256:before", CreatedAt: time.Now().UTC()}
+	if err := store.put("bundle-plan-1", entry); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	restarted := newBundlePlanStore(time.Hour, 8, second)
+	got, ok := restarted.get("bundle-plan-1", "caller-a")
+	if !ok || got.BundleRevision != entry.BundleRevision {
+		t.Fatalf("restarted get = %+v, %v; want persisted entry", got, ok)
+	}
+	if _, ok := restarted.get("bundle-plan-1", "caller-b"); ok {
+		t.Fatal("caller-b read caller-a bundle plan")
 	}
 }
 
