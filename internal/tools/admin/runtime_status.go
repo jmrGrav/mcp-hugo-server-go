@@ -14,6 +14,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -135,7 +136,7 @@ func containsString(values []string, want string) bool {
 }
 
 // RegisterRuntimeStatus wires get_runtime_status (site.admin scope).
-func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex) {
+func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, publicIndexes ...*site.Index) {
 	if s == nil {
 		return
 	}
@@ -192,12 +193,31 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			pendingPages = srcIdx.PendingCount()
 			hugosite.ContentMu.RUnlock()
 		}
-		data.UnpublishedChangesCount = pendingPages
-		data.SourceAheadOfPublic = pendingPages > 0 || (data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassContentSource))
+		// BuildPending is useful for this process's own writes, but it is
+		// intentionally volatile. When the public index is available, reconcile
+		// every source page against its resolved output too: that detects an
+		// out-of-band source change after restart and clears it after a full
+		// successful Hugo build (#1066).
+		externalPending := 0
+		if len(publicIndexes) > 0 && publicIndexes[0] != nil && srcIdx != nil {
+			resolver := site.NewPageResolver(publicIndexes[0], srcIdx, cfg)
+			for _, source := range srcIdx.ListPages(0, 0) {
+				if source.Draft {
+					continue
+				}
+				resolved, ok := resolver.ResolveWithLang(source.Slug, source.Lang)
+				if !ok || site.StateForResolvedPage(resolved, cfg.SiteRoot).BuildState == "pending" {
+					externalPending++
+				}
+			}
+		}
+		data.UnpublishedChangesCount = max(pendingPages, externalPending)
+		fallbackGitDrift := len(publicIndexes) == 0 && data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassContentSource)
+		data.SourceAheadOfPublic = data.UnpublishedChangesCount > 0 || fallbackGitDrift
 		switch {
 		case pendingPages > 0:
 			data.SourceAheadReason, data.PublicationState = "pending_mcp_changes", "pending"
-		case data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassContentSource):
+		case externalPending > 0 || fallbackGitDrift:
 			data.SourceAheadReason, data.PublicationState = "out_of_band_source_drift", "source_drift_only"
 		case data.Git.Dirty && containsString(data.Git.DirtyClasses, dirtyClassGeneratedAsset):
 			data.SourceAheadReason, data.PublicationState = "generated_asset_drift", "generated_asset_drift"
