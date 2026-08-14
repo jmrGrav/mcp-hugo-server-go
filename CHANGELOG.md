@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here.
 
-## [v1.8.5] - unreleased
+## [v1.8.5] - 2026-08-14
 
 ### Security
 - **Third `admin` scope separates editorial write from Hugo binary administration** (#1039, #1050): the runtime scope model extends from two tiers (`read`/`write`) to three (`read`/`write`/`admin`). `admin` is strictly additive on top of `write` — it does not narrow or replace `write` — and gates only the four managed Hugo binary lifecycle tools (`stage_hugo_upgrade`, `activate_hugo`, `rollback_hugo`, `bootstrap_hugo`); every tool that previously required a separate `site.admin`/`system.admin` tier stays under `write`. Legacy `site.admin`/`system.admin` scope aliases (and casing/underscore variants) now resolve to `admin`, not `write`, so already-issued administrator tokens retain their original capability rather than being silently downgraded. `get_capabilities` and OAuth discovery metadata (`scopes_supported`, `access_profiles.administrator`) were extended to report the new tier consistently across all three scope levels.
