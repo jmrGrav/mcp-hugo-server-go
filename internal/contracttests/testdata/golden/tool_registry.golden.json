@@ -1248,10 +1248,13 @@
   {
     "name": "diff_page",
     "required_scope": "",
-    "description": "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository and a configured content root. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. `response_mode:\"compact\"` omits the full raw diff (and any full source fallback) in favor of a short `diff_summary`, so selection/audit passes can see that changes exist without paying for the unified diff unless they explicitly ask for standard mode. Use this before editing or reviewing a page.",
+    "description": "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository and a configured content root. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. `response_mode:\"compact\"` omits the full raw diff (and any full source fallback) in favor of a short `diff_summary`, so selection/audit passes can see that changes exist without paying for the unified diff unless they explicitly ask for standard mode. Use this before editing or reviewing a page.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "lang": {
+          "type": "string"
+        },
         "response_mode": {
           "description": "Accepted values: standard (default) or compact. Other values, including reserved future values, are rejected with a structured invalid_params error.",
           "type": "string"
@@ -3436,12 +3439,15 @@
   {
     "name": "inspect_rendered",
     "required_scope": "",
-    "description": "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `\u003cimg\u003e` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `\u003cimg\u003e` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered \u003clink\u003e tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "description": "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `\u003cimg\u003e` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `\u003cimg\u003e` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered \u003clink\u003e tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
         "include_preview": {
           "type": "boolean"
+        },
+        "lang": {
+          "type": "string"
         },
         "response_mode": {
           "description": "Accepted values: standard (default) or compact. Other values, including reserved future values, are rejected with a structured invalid_params error.",
@@ -3684,10 +3690,13 @@
   {
     "name": "list_page_revisions",
     "required_scope": "",
-    "description": "List the prior git commits that touched a page's source file, most recent first. Each row is explicitly `revision_kind:\"git_commit\"`: it is suitable for git history and diff_page, but is not an apply_content_plan snapshot and cannot be passed to rollback_change. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "description": "List the prior git commits that touched a page's source file, most recent first. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Each row is explicitly `revision_kind:\"git_commit\"`: it is suitable for git history and diff_page, but is not an apply_content_plan snapshot and cannot be passed to rollback_change. Requires a local Git repository and a configured content root, same as diff_page; when git metadata is unavailable, `status: \"git_unavailable\"` is returned with an empty `revisions` list and an explanatory warning rather than failing outright. `limit` caps how many commits are returned (default 20, max 100) — `--follow` is used so renames are tracked across history. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "lang": {
+          "type": "string"
+        },
         "limit": {
           "maximum": 100,
           "type": "integer"

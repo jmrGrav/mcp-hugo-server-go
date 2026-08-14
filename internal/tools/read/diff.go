@@ -23,6 +23,7 @@ import (
 
 type diffPageInput struct {
 	Slug         string `json:"slug"`
+	Lang         string `json:"lang,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
 }
 
@@ -51,7 +52,7 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository and a configured content root. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. `response_mode:\"compact\"` omits the full raw diff (and any full source fallback) in favor of a short `diff_summary`, so selection/audit passes can see that changes exist without paying for the unified diff unless they explicitly ask for standard mode. Use this before editing or reviewing a page.",
+	addReadOnlyTool(s, "diff_page", "Diff page", "Show a read-only diff for a Hugo source page against the current Git HEAD. Requires a local Git repository and a configured content root. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token. The response includes lifecycle `state` so agents can tell whether the source is already built/public or still ahead of the public site. `response_mode:\"compact\"` omits the full raw diff (and any full source fallback) in favor of a short `diff_summary`, so selection/audit passes can see that changes exist without paying for the unified diff unless they explicitly ask for standard mode. Use this before editing or reviewing a page.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in diffPageInput) (*mcp.CallToolResult, diffPageOutput, error) {
 			mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
 			if err != nil {
@@ -66,11 +67,15 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 			if strings.TrimSpace(in.Slug) == "" {
 				return nil, diffPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 			}
+			if err := validateSlugLangConsistency(in.Slug, in.Lang); err != nil {
+				return nil, diffPageOutput{}, err
+			}
 			resolver := site.NewPageResolver(idx, srcIdx, cfg)
-			resolved, ok := resolver.Resolve(in.Slug)
+			resolved, ok := resolver.ResolveWithLang(in.Slug, strings.TrimSpace(in.Lang))
 			if !ok || resolved.Source == nil {
 				return nil, diffPageOutput{}, fmt.Errorf("content_not_found: page not found for slug %q", in.Slug)
 			}
+			languageWarning := implicitMultilingualResolutionWarning(in.Slug, in.Lang, resolved, srcIdx, cfg)
 			contentRoot := strings.TrimSpace(cfg.ContentRoot)
 			if contentRoot == "" {
 				return nil, diffPageOutput{}, fmt.Errorf("git_metadata_unavailable: content root not configured")
@@ -101,6 +106,9 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				}
 				resp := newDiffPageOutput(data, time.Now().UTC())
 				resp.Warnings = []string{fmt.Sprintf("Git repository metadata is unavailable (%s); returning source content without a diff.", reason)}
+				if languageWarning != "" {
+					resp.Warnings = append(resp.Warnings, languageWarning)
+				}
 				return resp
 			}
 			if cfg.GitBaseline.Mode == "disabled" {
@@ -159,6 +167,9 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				}
 				resp := newDiffPageOutput(data, time.Now().UTC())
 				resp.Warnings = []string{"File is new and not yet tracked by git — showing full source instead of diff."}
+				if languageWarning != "" {
+					resp.Warnings = append(resp.Warnings, languageWarning)
+				}
 				return nil, resp, nil
 			}
 			diffText, err := unifiedDiff(relPath, baseContent, currentContent)
@@ -183,7 +194,11 @@ func RegisterDiffPage(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceInd
 				added, removed := countDiffLines(diffText)
 				data.DiffSummary = fmt.Sprintf("%d line(s) added, %d removed", added, removed)
 			}
-			return nil, newDiffPageOutput(data, time.Now().UTC()), nil
+			resp := newDiffPageOutput(data, time.Now().UTC())
+			if languageWarning != "" {
+				resp.Warnings = []string{languageWarning}
+			}
+			return nil, resp, nil
 		})
 }
 

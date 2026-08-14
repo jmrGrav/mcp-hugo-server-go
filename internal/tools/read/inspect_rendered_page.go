@@ -25,6 +25,7 @@ import (
 
 type inspectRenderedPageInput struct {
 	Slug         string `json:"slug"`
+	Lang         string `json:"lang,omitempty"`
 	ResponseMode string `json:"response_mode,omitempty"`
 	// IncludePreview opts into the pre-publish preview facet (#435): a
 	// diff summary, this page's broken-link count, and front-matter
@@ -97,7 +98,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `<img>` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `<img>` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `<img>` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `<img>` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in inspectRenderedPageInput) (*mcp.CallToolResult, inspectRenderedPageOutput, error) {
 			if idx == nil {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("index not initialized")
@@ -106,9 +107,12 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 			if slug == "" {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
 			}
+			if err := validateSlugLangConsistency(slug, in.Lang); err != nil {
+				return nil, inspectRenderedPageOutput{}, err
+			}
 
 			resolver := site.NewPageResolver(idx, srcIdx, cfg)
-			resolved, ok := resolver.Resolve(slug)
+			resolved, ok := resolver.ResolveWithLang(slug, strings.TrimSpace(in.Lang))
 			if !ok || resolved.Public == nil {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("content_not_found: no rendered public page found for slug %q", slug)
 			}
@@ -175,7 +179,11 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				Checks:     checks,
 			}
 			data.Preview = preview
-			return nil, newInspectRenderedPageOutput(data, time.Now().UTC()), nil
+			out := newInspectRenderedPageOutput(data, time.Now().UTC())
+			if warning := implicitMultilingualResolutionWarning(slug, in.Lang, resolved, srcIdx, cfg); warning != "" {
+				out.Warnings = []string{warning}
+			}
+			return nil, out, nil
 		})
 }
 

@@ -91,7 +91,11 @@ func RegisterAIReadiness(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Source
 				Warnings:           report.Warnings,
 				Suggestions:        report.Suggestions,
 			}
-			return nil, newValidateAIReadinessOutput(data, time.Now().UTC()), nil
+			out := newValidateAIReadinessOutput(data, time.Now().UTC())
+			if warning := implicitMultilingualResolutionWarning(slug, in.Lang, resolved, srcIdx, cfg); warning != "" {
+				out.Warnings = []string{warning}
+			}
+			return nil, out, nil
 		})
 }
 
