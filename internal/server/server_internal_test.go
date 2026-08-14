@@ -196,6 +196,7 @@ func TestApplyOAuthCORS(t *testing.T) {
 
 func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
 	want := []string{
+		"recovery_journal",
 		"index_reload",
 		"db_reindex",
 		"publication_manifest",
@@ -215,13 +216,15 @@ func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
 			got := make([]string, 0, len(callbacks))
 			for _, cb := range callbacks {
 				got = append(got, cb.Name)
-				// A callback runs via exactly one of these two signatures
+				// A callback runs via a normal function, a lifecycle hook, or a
+				// completion callback. Recovery is lifecycle-only until the final
+				// completion transition.
 				// (build.go's runner dispatches on whichever is set) — never
 				// require Fn specifically, or a legitimate
 				// OnBuildComplete-only callback like publication_manifest
 				// reads as broken.
-				if cb.Fn == nil && cb.OnBuildComplete == nil {
-					t.Fatalf("postBuildCallbacks(%q) returned nil Fn and nil OnBuildComplete for %q", action, cb.Name)
+				if cb.Fn == nil && cb.OnBuildStart == nil && cb.OnOutputSwapped == nil && cb.OnBuildComplete == nil {
+					t.Fatalf("postBuildCallbacks(%q) returned no callback for %q", action, cb.Name)
 				}
 			}
 			if !slices.Equal(got, want) {

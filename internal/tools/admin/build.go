@@ -512,12 +512,29 @@ func ownershipDriftSuggestion(summary string) (string, bool) {
 type PostBuildCallback struct {
 	Name string
 	Fn   func() error
+	// OnBuildStart runs while ContentMu is held, immediately before Hugo is
+	// invoked. It is for durable intent records: a database transaction cannot
+	// include the subsequent filesystem rename, so recovery needs this fact
+	// before the external process has a chance to write output.
+	OnBuildStart func(BuildProgress) error
+	// OnOutputSwapped runs after the new public tree has replaced the old one,
+	// but before the ordinary post-build callbacks. A process loss after this
+	// point leaves a durable "file_written" fact for startup reconciliation.
+	OnOutputSwapped func(BuildProgress) error
 	// OnBuildComplete runs after the output has been swapped, the normal
 	// callbacks have completed, and source/public tree fingerprints have been
 	// observed under ContentMu. It is intended for durable operational facts
 	// such as the publication manifest; it must not treat those derived facts
 	// as a replacement for the filesystem.
 	OnBuildComplete func(BuildCompletion) error
+}
+
+// BuildProgress is the minimum safe payload for a recovery journal. It
+// deliberately contains no filesystem path or caller secret; the build ID and
+// time are sufficient to correlate a retained record with server logs.
+type BuildProgress struct {
+	BuildID    string
+	ObservedAt time.Time
 }
 
 // BuildCompletion contains the facts a post-build recorder may persist. The
@@ -655,6 +672,19 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 
 	start := time.Now()
 	runID := newBuildID(start)
+	progress := BuildProgress{BuildID: runID, ObservedAt: start.UTC()}
+	for i, cb := range siteReload {
+		if cb.OnBuildStart == nil {
+			continue
+		}
+		name := cb.Name
+		if name == "" {
+			name = fmt.Sprintf("callback %d", i)
+		}
+		if err := cb.OnBuildStart(progress); err != nil {
+			return buildSiteData{}, fmt.Errorf("build_recovery_record_failed: %s: %w", name, err)
+		}
+	}
 	args := append(buildCommandArgs(cacheDir, false), "--destination", buildDir)
 	// #nosec G204 -- executable is fixed to hugo; args come from
 	// buildCommandArgs and validated config, not from MCP caller input.
@@ -734,6 +764,28 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 	if swapErr != nil {
 		buildstatus.RecordFailure("output_swap", time.Now())
 		return buildSiteData{}, swapErr
+	}
+	progress.ObservedAt = time.Now().UTC()
+	for i, cb := range siteReload {
+		if cb.OnOutputSwapped == nil {
+			continue
+		}
+		name := cb.Name
+		if name == "" {
+			name = fmt.Sprintf("callback %d", i)
+		}
+		if err := cb.OnOutputSwapped(progress); err != nil {
+			// The output has already been installed. Preserve that fact in the
+			// response rather than claiming an all-or-nothing filesystem/SQLite
+			// transaction that the platform cannot provide.
+			warning := fmt.Sprintf("post-output-swap callback %q failed: %v", name, err)
+			if swapWarning == "" {
+				swapWarning = warning
+			} else {
+				swapWarning += "; " + warning
+			}
+			slog.Warn("build_site: post-output-swap callback failed", "callback", name, "error", err)
+		}
 	}
 	// Post-swap servability self-check (#983 incident): swapBuildOutput's
 	// chmod is the actual fix for MkdirTemp's 0700 default, but a *future*
