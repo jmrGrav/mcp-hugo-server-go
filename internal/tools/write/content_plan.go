@@ -82,17 +82,22 @@ func newPlanStore(ttl time.Duration, maxEntries int, persistent ...*db.DB) *plan
 	}
 }
 
-func (s *planStore) put(id string, entry planEntry) {
+func (s *planStore) put(id string, entry planEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	s.entries[id] = entry
 	s.trimLocked()
 	if s.persistent != nil {
-		if raw, err := json.Marshal(entry); err == nil {
-			_ = s.persistent.PutEphemeralRecord("content_plan", id, entry.CallerKey, raw, entry.CreatedAt)
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if err := s.persistent.PutEphemeralRecord("content_plan", id, entry.CallerKey, raw, entry.CreatedAt); err != nil {
+			return err
 		}
 	}
+	return nil
 }
 
 // get looks up a plan without consuming it (used for a dry-run apply, which
@@ -666,7 +671,7 @@ func registerContentPlanTools(
 			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("internal_error: failed to allocate plan id"))
 		}
 		now := time.Now().UTC()
-		plans.put(planID, planEntry{
+		if err := plans.put(planID, planEntry{
 			CallerKey:  isolationCallerKey(ctx),
 			Slug:       in.Slug,
 			Lang:       resolvedSource.Lang,
@@ -678,7 +683,9 @@ func registerContentPlanTools(
 			Tags:       resolved.Tags,
 			Categories: resolved.Categories,
 			CreatedAt:  now,
-		})
+		}); err != nil {
+			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("internal_error: failed to persist content plan"))
+		}
 
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 		return nil, newPlanContentChangeOutput(planContentChangeData{
