@@ -458,22 +458,6 @@ func hashTree(root string) (string, error) {
 	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// hugoVersionForManifest is deliberately best-effort. A successful build is
-// never downgraded merely because a wrapper does not implement `hugo version`;
-// the manifest keeps an empty version in that case and still records the
-// verifiable source/public fingerprints.
-func hugoVersionForManifest(ctx context.Context) string {
-	tctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(tctx, "hugo", "version")
-	cmd.Env = boundedCommandEnv()
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(truncateUTF8(out, 256))
-}
-
 func boundedCommandEnv() []string {
 	env := make([]string, 0, 5)
 	if path := os.Getenv("PATH"); path != "" {
@@ -873,9 +857,12 @@ cbLoop:
 		BuildID:        runID,
 		SourceRevision: sourceRevision,
 		OutputRevision: outputRevision,
-		HugoVersion:    hugoVersionForManifest(ctx),
-		Status:         status,
-		ObservedAt:     time.Now().UTC(),
+		// A build command is the only Hugo process this path is allowed to
+		// invoke. Version probing is intentionally left to runtime status so
+		// wrappers with side effects cannot be run twice (#1077).
+		HugoVersion: "",
+		Status:      status,
+		ObservedAt:  time.Now().UTC(),
 	}
 	for i, cb := range siteReload {
 		if cb.OnBuildComplete == nil {
