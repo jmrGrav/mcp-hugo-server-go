@@ -181,6 +181,23 @@ func TestSnapshotHealth(t *testing.T) {
 	}
 }
 
+func TestRecoveryJournalListsOnlyUncommittedOperations(t *testing.T) {
+	d := openTestDB(t)
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "write-1", Kind: "content_write", State: "file_written", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "build-1", Kind: "build", State: "committed", Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := d.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].OperationID != "write-1" || pending[0].State != "file_written" {
+		t.Fatalf("PendingRecovery = %+v", pending)
+	}
+}
+
 func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.db")
 	d, err := db.Open(path)
