@@ -1928,14 +1928,15 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 
 	score := frontmatterScore
 	// #719/#1066: a perfect 100 alongside either actionable taxonomy drift
-	// or a degraded runtime is semantically misleading. Keep info-only
-	// translation pairs non-penalizing, but cap the exposed top-level score
-	// just below perfection whenever another machine-readable field tells an
-	// agent that action is still required.
+	// or a failed build_site attempt is semantically misleading. Keep
+	// info-only translation pairs non-penalizing, and don't cap for
+	// public_output_incomplete alone — that reason fires for perfectly
+	// normal create_page -> build_site windows and is already surfaced via
+	// status/runtime_degraded_reasons without needing to move score too.
 	if score == 100 && taxonomyWarnings > 0 {
 		score = 99
 	}
-	if score == 100 && health.RuntimeDegraded != nil && *health.RuntimeDegraded {
+	if score == 100 && snapshot.Attempted && snapshot.Status == "failed" {
 		score = 99
 	}
 	health.Score = score

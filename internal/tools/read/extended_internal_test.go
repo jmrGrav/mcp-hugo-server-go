@@ -179,8 +179,8 @@ func TestBuildSiteHealthDetectsIncompleteMultilingualPublicOutput(t *testing.T) 
 	if health.RuntimeDegraded == nil || !*health.RuntimeDegraded || health.Status != "degraded" {
 		t.Fatalf("runtime/status = %#v/%q, want true/degraded", health.RuntimeDegraded, health.Status)
 	}
-	if health.ContentStatus != "healthy" || health.Score != 99 {
-		t.Fatalf("content status/score = %q/%d, want healthy/99 while public output is incomplete", health.ContentStatus, health.Score)
+	if health.ContentStatus != "healthy" || health.Score != 100 {
+		t.Fatalf("content status/score = %q/%d, want healthy/100 (public_output_incomplete affects status, not score)", health.ContentStatus, health.Score)
 	}
 	if !slicesContain(health.RuntimeDegradedReasons, "public_output_incomplete") {
 		t.Fatalf("runtime_degraded_reasons = %#v, want public_output_incomplete", health.RuntimeDegradedReasons)
