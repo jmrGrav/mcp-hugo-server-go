@@ -246,7 +246,7 @@ is the supported migration path and does not require deleting the refresh token.
 
 ## Tool Access Scopes
 
-Since #450, the server enforces exactly two canonical runtime scopes:
+Since #450 (and extended by #1039/#1050), the server enforces exactly three canonical runtime scopes:
 
 - `read`: full visibility, including drafts and other
   source-only/pre-publication content (an explicit operator
@@ -273,14 +273,15 @@ for the three runtime scopes above, not as separate ACL layers.
 Legacy clients may still send any pre-#450 scope string (`mcp`, `reader`,
 `content.read`, `content.write`, `site.admin`, `system.admin`, and other
 aliases — see `docs/mcp-contract.md` §6.12 for the full table). They are
-accepted as deprecated compatibility aliases resolved to `read`/`write`, but
-are not advertised as canonical scopes and should not be used by new
-clients.
+accepted as deprecated compatibility aliases resolved to `read`/`write`/`admin`
+(`site.admin`/`system.admin` and their casing/underscore variants resolve to
+`admin`, not `write`), but only `read`/`write`/`admin` are advertised as
+canonical scopes and should be used by new clients.
 
 Published discovery metadata now carries both:
 
-- canonical runtime scope strings (`read`, `write`) in `scopes_supported`
-- additive `access_profiles.reader` / `access_profiles.operator` metadata as descriptive profile labels over that same two-scope model
+- canonical runtime scope strings (`read`, `write`, `admin`) in `scopes_supported`
+- additive `access_profiles.reader` / `access_profiles.operator` / `access_profiles.administrator` metadata as descriptive profile labels over that same three-scope model
 
 To enable confidential OAuth clients for `write`, set `oauth.client_registry_path` to a root-readable YAML file on the host. Each entry may use either the legacy `client_id` / `client_secret` / `scope` fields or the canonical `id` / `secret` / `scopes` fields. Redirect URIs may be exact values or strict HTTPS path-prefix patterns such as `https://chatgpt.com/connector/oauth/*`. The loader upserts client records into the SQLite store when available; it never logs secrets and never deletes absent clients automatically.
 

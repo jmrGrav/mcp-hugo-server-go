@@ -69,7 +69,7 @@ Use this if you want a persistent, remotely-reachable instance — e.g. to let a
 
 ## Access model
 
-The server enforces exactly two internal scopes (#450):
+The server enforces exactly three internal scopes (#450, extended by #1039/#1050):
 
 - `read`: full visibility, including drafts and other source-only/pre-publication
   content. Requires no secret and is auto-registrable (self-service, the same
@@ -77,13 +77,17 @@ The server enforces exactly two internal scopes (#450):
 - `write`: requires a registered OAuth client (`client_id` + `client_secret`).
   Implies `read` — a `write` token gets everything, including build/site/integrity/
   diagnostic operations that used to require a separate `site.admin` scope.
+- `admin`: requires an explicitly approved administrator OAuth client. Implies
+  `write` and additionally gates the four managed Hugo binary lifecycle tools
+  (`stage_hugo_upgrade`, `activate_hugo`, `rollback_hugo`, `bootstrap_hugo`).
 
 Legacy clients may still send any scope string from the pre-#450 four-tier model
 (`reader`, `content.read`, `content.write`, `site.admin`, `system.admin`, ...) or the
 original `mcp` alias. The server accepts all of them as deprecated compatibility
-aliases, resolved to `read`/`write` via `oauth.CanonicalScope`, but only `read` and
-`write` are ever advertised as canonical scopes. See
-[docs/mcp-contract.md §6.12](docs/mcp-contract.md#612-2-scope-model-readwrite-450)
+aliases, resolved to `read`/`write`/`admin` via `oauth.CanonicalScope`
+(`site.admin`/`system.admin` resolve to `admin`), but only `read`, `write`, and
+`admin` are ever advertised as canonical scopes. See
+[docs/mcp-contract.md §6.12](docs/mcp-contract.md#612-3-scope-model-readwriteadmin-450)
 for the full mapping and rationale.
 
 ## Tool inventory
@@ -128,7 +132,8 @@ No new orchestration tool is needed for this — `apply_content_plan`'s existing
 - Reader-facing discovery is provider-neutral: capability differences depend on token trust, not on whether the client is ChatGPT, Claude, Gemini, Le Chat, Copilot, or another MCP consumer.
 - An OAuth bearer token with `write` scope is required for mutating and operational tools.
 - `write` is never exposed to anonymous or `read`-scoped callers.
-- Legacy scope aliases (`mcp`, `reader`, `content.read`, `content.write`, `site.admin`, `system.admin`, ...) are accepted for compatibility, but only `read`/`write` are advertised as canonical.
+- An OAuth bearer token with `admin` scope is required for the four managed Hugo binary lifecycle tools (`stage_hugo_upgrade`, `activate_hugo`, `rollback_hugo`, `bootstrap_hugo`); `admin` is never exposed to `read`- or `write`-scoped callers.
+- Legacy scope aliases (`mcp`, `reader`, `content.read`, `content.write`, `site.admin`, `system.admin`, ...) are accepted for compatibility, but only `read`/`write`/`admin` are advertised as canonical.
 
 ## Privacy policy
 

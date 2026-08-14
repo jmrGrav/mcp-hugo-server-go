@@ -29,17 +29,18 @@ every registered tool going forward.
 
 ## Runtime access model
 
-The runtime currently enforces exactly two canonical scopes (#450, see
-`docs/mcp-contract.md` §6.12):
+The runtime currently enforces exactly three canonical scopes (#450, extended
+by #1039/#1050; see `docs/mcp-contract.md` §6.12):
 
 - `read`: full source-aware read visibility, including drafts and source-only content
 - `write`: `read` plus every mutation/build/preview/site-operation tool
+- `admin`: `write` plus the four managed Hugo binary lifecycle tools (`stage_hugo_upgrade`, `activate_hugo`, `rollback_hugo`, `bootstrap_hugo`)
 
-Some public docs still use the descriptive labels `reader` and `operator`.
-Treat them as human-facing profile names only, not as additional runtime
-scopes or a finer ACL split. On OAuth-enabled deployments `/mcp` requires a
-Bearer token for every tool call, including the tools listed below under the
-anonymous tier.
+Some public docs still use the descriptive labels `reader`, `operator`, and
+`administrator`. Treat them as human-facing profile names only, not as
+additional runtime scopes or a finer ACL split. On OAuth-enabled deployments
+`/mcp` requires a Bearer token for every tool call, including the tools
+listed below under the anonymous tier.
 
 ## Search tool selection (#326)
 
