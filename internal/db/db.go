@@ -228,28 +228,43 @@ func (d *DB) ListEphemeralRecords(kind, callerKey string, ttl time.Duration) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var records []EphemeralRecord
+	var expiredIDs []string
 	for rows.Next() {
 		var record EphemeralRecord
 		var created string
 		if err := rows.Scan(&record.ID, &record.Payload, &created); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		at, err := time.Parse(time.RFC3339Nano, created)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		if ttl > 0 && time.Since(at) > ttl {
-			if _, err := d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=? AND caller_key=?`, kind, record.ID, callerKey); err != nil {
-				return nil, err
-			}
+			expiredIDs = append(expiredIDs, record.ID)
 			continue
 		}
 		record.CreatedAt = at.UTC()
 		records = append(records, record)
 	}
-	return records, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	// rows must be fully drained and closed before issuing another statement
+	// on this *sql.DB: with SetMaxOpenConns(1), a nested Exec while rows still
+	// holds the only connection checked out would deadlock forever.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for _, id := range expiredIDs {
+		if _, err := d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=? AND caller_key=?`, kind, id, callerKey); err != nil {
+			return nil, err
+		}
+	}
+	return records, nil
 }
 
 // RecordPublicationManifest persists a completed build's observed source and

@@ -75,6 +75,66 @@ func TestBundleApplyFRENSuccess(t *testing.T) {
 	}
 }
 
+// TestApplyBundlePlanDryRunProjectsOutcomesWithoutWriting covers the dry-run
+// branch of apply_bundle_plan: it must report the same per-translation
+// outcome shape a real apply would (via bundleDryRunOutcomes), including
+// each source path, without touching the plan or the filesystem.
+func TestApplyBundlePlanDryRunProjectsOutcomesWithoutWriting(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/dry-run-bundle")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/dry-run-bundle",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Corps FR previsualise.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("Previewed EN body.")}},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_bundle_change failed: %s", marshalContent(t, planRes))
+	}
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	dryRun := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID, "dry_run": true})
+	if dryRun.IsError {
+		t.Fatalf("dry-run apply_bundle_plan failed: %s", marshalContent(t, dryRun))
+	}
+	dryData := decodeWriteData(t, dryRun)
+	if dryData["status"] != "unchanged" {
+		t.Fatalf("dry-run status = %v, want unchanged", dryData["status"])
+	}
+	translations := dryData["translations"].([]any)
+	if len(translations) != 2 {
+		t.Fatalf("dry-run translations = %d, want 2", len(translations))
+	}
+	for _, raw := range translations {
+		tr := raw.(map[string]any)
+		if tr["status"] != "valid" {
+			t.Fatalf("dry-run translation status = %v, want valid: %#v", tr["status"], tr)
+		}
+		if src, _ := tr["source_path"].(string); src == "" {
+			t.Fatalf("dry-run translation missing source_path: %#v", tr)
+		}
+	}
+	if got := readFileString(t, contentRoot, "posts/dry-run-bundle/index.fr.md"); strings.Contains(got, "previsualise") {
+		t.Fatalf("dry-run must not write FR file: %q", got)
+	}
+	if got := readFileString(t, contentRoot, "posts/dry-run-bundle/index.en.md"); strings.Contains(got, "Previewed") {
+		t.Fatalf("dry-run must not write EN file: %q", got)
+	}
+
+	// The plan must still be consumable for a real apply after a dry-run.
+	apply := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if apply.IsError {
+		t.Fatalf("apply after dry-run failed: %s", marshalContent(t, apply))
+	}
+	if got := readFileString(t, contentRoot, "posts/dry-run-bundle/index.fr.md"); !strings.Contains(got, "previsualise") {
+		t.Fatalf("real apply after dry-run did not write FR file: %q", got)
+	}
+}
+
 func TestRollbackBundleRestoresPersistedSnapshotAfterRestart(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeBilingualBundle(t, contentRoot, "posts/restart-bundle")

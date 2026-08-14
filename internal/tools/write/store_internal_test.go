@@ -168,6 +168,66 @@ func TestPersistedPlanReadFailureIsNotReportedAsMissing(t *testing.T) {
 	}
 }
 
+func TestBundlePlanStorePruneAndTrimLocked(t *testing.T) {
+	now := time.Date(2026, 7, 25, 23, 40, 0, 0, time.UTC)
+	store := &bundlePlanStore{
+		ttl:        time.Minute,
+		maxEntries: 2,
+		entries: map[string]bundlePlanEntry{
+			"expired": {CreatedAt: now.Add(-2 * time.Minute)},
+			"oldest":  {CreatedAt: now.Add(-30 * time.Second)},
+			"middle":  {CreatedAt: now.Add(-20 * time.Second)},
+			"newest":  {CreatedAt: now.Add(-10 * time.Second)},
+		},
+	}
+
+	store.pruneLocked(now)
+	if _, ok := store.entries["expired"]; ok {
+		t.Fatal("pruneLocked() kept expired bundle plan")
+	}
+
+	store.trimLocked()
+	if len(store.entries) != 2 {
+		t.Fatalf("trimLocked() kept %d entries, want 2", len(store.entries))
+	}
+	if _, ok := store.entries["oldest"]; ok {
+		t.Fatal("trimLocked() kept oldest bundle plan beyond maxEntries")
+	}
+	if _, ok := store.entries["newest"]; !ok {
+		t.Fatal("trimLocked() dropped newest bundle plan, want it retained")
+	}
+}
+
+func TestBundleSnapshotStorePruneAndTrimLocked(t *testing.T) {
+	now := time.Date(2026, 7, 25, 23, 40, 0, 0, time.UTC)
+	store := &bundleSnapshotStore{
+		ttl:        time.Minute,
+		maxEntries: 2,
+		entries: map[string]bundleSnapshot{
+			"expired": {CreatedAt: now.Add(-2 * time.Minute)},
+			"oldest":  {CreatedAt: now.Add(-30 * time.Second)},
+			"middle":  {CreatedAt: now.Add(-20 * time.Second)},
+			"newest":  {CreatedAt: now.Add(-10 * time.Second)},
+		},
+	}
+
+	store.pruneLocked(now)
+	if _, ok := store.entries["expired"]; ok {
+		t.Fatal("pruneLocked() kept expired bundle snapshot")
+	}
+
+	store.trimLocked()
+	if len(store.entries) != 2 {
+		t.Fatalf("trimLocked() kept %d entries, want 2", len(store.entries))
+	}
+	if _, ok := store.entries["oldest"]; ok {
+		t.Fatal("trimLocked() kept oldest bundle snapshot beyond maxEntries")
+	}
+	if _, ok := store.entries["newest"]; !ok {
+		t.Fatal("trimLocked() dropped newest bundle snapshot, want it retained")
+	}
+}
+
 func TestSnapshotStorePruneAndTrimLocked(t *testing.T) {
 	now := time.Date(2026, 7, 25, 23, 40, 0, 0, time.UTC)
 	store := &snapshotStore{

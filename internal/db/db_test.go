@@ -294,6 +294,47 @@ func TestEphemeralRecordDeleteIsScopedToCaller(t *testing.T) {
 	}
 }
 
+func TestListEphemeralRecordsScopesByCallerAndExpiresByTTL(t *testing.T) {
+	d := openTestDB(t)
+	now := time.Now().UTC()
+	if err := d.PutEphemeralRecord("content_snapshot", "page-a\x00rev-1", "caller-a", []byte("first"), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("PutEphemeralRecord(rev-1): %v", err)
+	}
+	if err := d.PutEphemeralRecord("content_snapshot", "page-a\x00rev-2", "caller-a", []byte("second"), now); err != nil {
+		t.Fatalf("PutEphemeralRecord(rev-2): %v", err)
+	}
+	if err := d.PutEphemeralRecord("content_snapshot", "page-a\x00rev-3", "caller-b", []byte("other caller"), now); err != nil {
+		t.Fatalf("PutEphemeralRecord(rev-3): %v", err)
+	}
+
+	// TTL of one hour: the two-hour-old record for caller-a must be pruned
+	// from the result and from the table, mirroring GetEphemeralRecord's
+	// read-time TTL expiry.
+	records, err := d.ListEphemeralRecords("content_snapshot", "caller-a", time.Hour)
+	if err != nil {
+		t.Fatalf("ListEphemeralRecords: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != "page-a\x00rev-2" {
+		t.Fatalf("ListEphemeralRecords(caller-a) = %+v, want only the unexpired rev-2 record", records)
+	}
+	if string(records[0].Payload) != "second" {
+		t.Fatalf("ListEphemeralRecords payload = %q, want %q", records[0].Payload, "second")
+	}
+
+	if _, found, err := d.GetEphemeralRecord("content_snapshot", "page-a\x00rev-1", "caller-a", time.Hour); err != nil || found {
+		t.Fatalf("expired rev-1 must have been deleted by the list's own TTL sweep: found=%v err=%v", found, err)
+	}
+
+	// caller-b's record must never appear in caller-a's listing.
+	bRecords, err := d.ListEphemeralRecords("content_snapshot", "caller-b", time.Hour)
+	if err != nil {
+		t.Fatalf("ListEphemeralRecords(caller-b): %v", err)
+	}
+	if len(bRecords) != 1 || bRecords[0].ID != "page-a\x00rev-3" {
+		t.Fatalf("ListEphemeralRecords(caller-b) = %+v, want only rev-3", bRecords)
+	}
+}
+
 func TestPublicationManifestRejectsIncompleteFacts(t *testing.T) {
 	d := openTestDB(t)
 	if err := d.RecordPublicationManifest(db.PublicationManifest{BuildID: "build-1", Status: "ok"}); err == nil {
