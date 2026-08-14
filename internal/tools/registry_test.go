@@ -87,7 +87,7 @@ func TestReadScopeSeesOnlyPublicTools(t *testing.T) {
 
 // TestLegacyReaderScopeSeesOnlyPublicTools documents that, post-#450, the
 // literal string "reader" is no longer a scope the registry itself
-// recognizes (tools.KnownScopes is now just {"read", "write"}). Alias
+// recognizes (tools.KnownScopes is {"read", "write", "admin"}). Alias
 // resolution of deprecated scope strings like "reader" happens once, at the
 // oauth-layer boundary (oauth.CanonicalScope), before a scope value ever
 // reaches the registry. Because every public tool is RequiredScope: "" (and

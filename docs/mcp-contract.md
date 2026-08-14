@@ -366,9 +366,9 @@ each field.
 | `get_site_information`| structured  | `site`; supports `response_mode` compact envelope shaping (§5.2, #526) |
 | `get_changelog`       | structured  | `data.entries[*]` (`version`, `date?`, `body?`), `data.total`; content is embedded at build time (not read from a runtime path), so it always matches the running binary exactly, with zero drift. Without arguments, returns the 5 most recent versioned releases (default limit, max 20) — bounded, never a full dump of CHANGELOG.md. `since_version` returns every release strictly newer than that version instead; fails `invalid_params` if it doesn't match any release heading. `response_mode:"compact"` is audit-oriented: when `limit` is omitted it defaults to 1 entry instead of 5, and omits each entry's raw Markdown `body`; pass explicit `limit` to raise the compact entry count while keeping body omitted. Standard mode keeps each entry's `body` as the release section's raw Markdown verbatim, not parsed into structured Added/Fixed/Security subsections — CHANGELOG.md's own formatting is the source of truth. Anonymous tier: the changelog is already public on GitHub (#612, #720) |
 
-### `read` (reader tier; on OAuth-enabled deployments, obtain a Bearer token first; see [§6.12](#612-2-scope-model-readwrite-450))
+### `read` (reader tier; on OAuth-enabled deployments, obtain a Bearer token first; see [§6.12](#612-3-scope-model-readwriteadmin-450))
 
-Per [§6.12](#612-2-scope-model-readwrite-450), these tools require
+Per [§6.12](#612-3-scope-model-readwriteadmin-450), these tools require
 `RequiredScope: ""` — there is no additional per-tool split below `read`.
 On deployments with OAuth disabled they can be called directly; on
 OAuth-enabled deployments the transport still requires a Bearer token before
@@ -402,9 +402,9 @@ content, including drafts, for every tool in this table.
 | `validate_frontmatter` | structured  | `data.pages`, `data.pages_checked`; supports `response_mode` compact envelope shaping (§5.2, #526); top-level duplication removed (#495); each `data.pages[*].slug` is the canonical `/posts/x/`-form public slug, including for Hugo section-index pages (#519); `data.test_content_slugs` separately lists any slug (last segment, case-insensitive) matching a reserved test/audit prefix (`mcp-audit-`, `test-audit-`, `codex-`) — advisory only, never affects `data.invalid`/per-page `issues`/`data.status` (#584) |
 | `validate_site`         | structured  | `data.status` (`"valid"`/`"invalid"`, #568), `data.pages`, `data.pages_checked`; supports `response_mode` compact envelope shaping (§5.2, #526); defaults to invalid-only (`data.pages` omits passing pages unless `include_valid=true` or `invalid_only=false` is passed explicitly) — `data.pages_checked`/`data.pages_passed`/`data.invalid`/`data.status` always describe the full scan regardless (#456); top-level duplication removed (#495); each `data.pages[*].slug` is the canonical `/posts/x/`-form public slug (#519); `data.test_content_slugs` separately lists any slug (last segment, case-insensitive) matching a reserved test/audit prefix (`mcp-audit-`, `test-audit-`, `codex-`) — advisory only, never affects `data.invalid`/per-page `issues`/`data.status` (#584) |
 
-### `write` (requires a registered OAuth client, see [§6.12](#612-2-scope-model-readwrite-450))
+### `write` (requires a registered OAuth client, see [§6.12](#612-3-scope-model-readwriteadmin-450))
 
-Per [§6.12](#612-2-scope-model-readwrite-450), editorial and site-operation
+Per [§6.12](#612-3-scope-model-readwriteadmin-450), editorial and site-operation
 tools use `write`; managed Hugo binary lifecycle tools use the separate
 `admin` scope. `write` implies full `read` access plus everything below except
 the four explicitly admin-gated Hugo upgrade tools.
@@ -857,10 +857,13 @@ generalizes the fix so `scopes_supported` gaining a new value a client echoes
 back doesn't cause the same class of outage before `normalizeConfiguredScope`
 is updated to match it.
 
-## 6.12. 2-Scope Model: `read`/`write` (#450)
+## 6.12. 3-Scope Model: `read`/`write`/`admin` (#450)
 
 Collapses the pre-#450 4-tier scope model (`reader`, `content.read`,
-`content.write`, `site.admin`) down to exactly two scopes:
+`content.write`, `site.admin`) down to two scopes, then reintroduces a third,
+strictly-additive `admin` tier on top (extended by #1039/#1050) — not a
+return to the old 4-tier split, since every existing `read`/`write` caller
+keeps working unchanged:
 
 - **`read`** — full visibility, **including drafts and other
   source-only/pre-publication content**. This is an explicit operator
@@ -881,8 +884,10 @@ Collapses the pre-#450 4-tier scope model (`reader`, `content.read`,
   `write` with **no exceptions** — there is no longer a way to get write
   access to content without also getting the operational tools, or vice
   versa. Managed Hugo binary lifecycle tools are now the explicit `admin`
-  tier; legacy `site.admin` and `system.admin` inputs continue to resolve to
-  `write` so existing tokens are not silently elevated.
+  tier; legacy `site.admin` and `system.admin` inputs now resolve to `admin`
+  (see the alias table below), not `write` — already-issued tokens carrying
+  those strings retain the full capability they originally had, rather than
+  being silently downgraded.
 
 - **`admin`** — requires an explicitly approved administrator OAuth client.
   It implies `write` and is required for `stage_hugo_upgrade`,

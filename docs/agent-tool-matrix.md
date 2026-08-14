@@ -6,11 +6,14 @@ by trial and error.
 
 Access terminology in this document:
 
-- canonical runtime scopes are `read` and `write`
+- canonical runtime scopes are `read`, `write`, and `admin`
 - `read` includes full source-aware visibility, including drafts/source-only content
-- `write` implies `read` and includes mutations plus every former build/preview/admin tool
-- `reader` / `operator` are descriptive profile labels some docs still use for
-  those same two runtime scopes
+- `write` implies `read` and includes mutations plus every build/preview/site-operation tool
+- `admin` implies `write` and additionally gates the four managed Hugo binary
+  lifecycle tools (`stage_hugo_upgrade`, `activate_hugo`, `rollback_hugo`,
+  `bootstrap_hugo`)
+- `reader` / `operator` / `administrator` are descriptive profile labels some
+  docs still use for those same three runtime scopes
 
 The per-tool notes below still reference the current internal scopes where that
 detail matters for runtime setup.
