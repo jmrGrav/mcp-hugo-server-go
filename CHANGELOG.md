@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.6] - 2026-08-14
+
+### Security
+- **`golang.org/x/image` and `golang.org/x/mod` bumped for known CVEs** (#1083): GO-2026-6222 (excessive memory allocation during VP8L decoding in `x/image`, fixed in 0.45.0) and GO-2026-6180/GO-2026-6179 (unauthenticated hash/tile verification bypass in `x/mod/sumdb`, fixed in 0.40.0). `govulncheck` reported these as module-level (unreachable from this codebase's call graph) rather than directly exploitable, but bumping `go.mod` triggered this repo's first real Snyk manifest scan, which surfaces any known-vulnerable dependency regardless of reachability. `govulncheck ./...` now reports 0 vulnerabilities at every level.
+- **Root-level result fields on `check_sri_versions`/`run_post_build_hooks`/`preview_build` now carry a machine-readable deprecation warning** (#1060): `data.warnings` includes an explicit deprecation notice on every success response, in addition to the doc-level deprecation already noted in v1.5.9/#1043. `data.*` remains canonical; the root aliases are unchanged and will be removed in a future major version.
+
+### Contract
+- **`generate_hero_image.style` now advertises a JSON-Schema `enum` in `tools/list`, superseding the v1.8.5/#1047 decision** (#1056): a new `AdvertiseInputEnum` decorator (`internal/tools/advertised_schema.go`) clones only the outgoing `tools/list` copy of a tool's schema — the SDK-held validation schema `tools/call` actually enforces stays permissive, so an out-of-enum value still reaches the handler and returns the same structured `invalid_params` envelope #892 established, never the SDK's bare-text pre-handler validation error. This resolves the #892/#1047 tradeoff without reintroducing the regression #892 fixed.
+- **`diff_page`/`list_page_revisions`/`inspect_rendered`/`check_ai_readiness` gain explicit multilingual-resolution diagnostics** (#1063): each now accepts an optional `lang` to disambiguate a multilingual bundle explicitly (same `ambiguous_language` contract as `update_page`), and appends an explicit `data.warnings` entry naming which translation was implicitly selected when a bare slug resolves among ≥2 translations without `lang` — previously silent.
+- **`get_site_health` splits `advisories_count` into actionable vs. informational taxonomy findings** (#1061): `data.actionable_taxonomy_findings_count` (warning-severity only) and `data.translation_pairs_detected` (info-severity `translation_pair` findings only) let a client distinguish action-required drift from expected localization without inspecting `taxonomy_inconsistency_details[*].severity`/`kind` itself. `advisories_count` itself is unchanged, for existing clients.
+
+### Fix
+- **`get_runtime_status` no longer trusts volatile in-process bookkeeping alone after a restart** (#1066): the production registration now reconciles every non-draft source page against the reloaded public index and lifecycle state, in addition to the existing `BuildPending`/Git-dirty signals. `BuildPending` resets to `false` on every process restart while `build_site` always performs a full rebuild regardless, so the old status could report stale source drift after a successful rebuild, or miss real out-of-band drift after a restart. `get_site_health`'s score now caps at `99` when the last recorded `build_site` attempt failed — deliberately *not* when a source page simply lacks matching public output (`public_output_incomplete`, which also fires for the ordinary `create_page` → `build_site` window before a build has run, and affects `status`/`runtime_degraded_reasons` only).
+
+### Chore
+- **Go toolchain bumped to 1.26.6** (#1083): every Go build/test/release step runs on `ubuntu-latest` via `actions/setup-go` with `go-version-file: go.mod`, which auto-fetches the pinned toolchain; the self-hosted deploy runner only moves a prebuilt artifact and never compiles Go, so this carries no deploy-runner risk.
+- **Weekly Go toolchain freshness check** (#1083): `.github/workflows/go-version-freshness.yml` compares `go.mod`'s `go` directive against the latest stable release from `go.dev/dl` and files/updates a tracking issue when it falls behind. Advisory only.
+
+### Test
+- **`create_bundle` taxonomy-guard regression coverage** (#1062): direct `create_bundle` test proving the existing >100-char tag rejection (shared with `plan`/`update` paths per #886) also holds for this newer atomic bundle entry point, before any file write.
+- **`SourceIndex` diagnostic-view coverage**: pending-page counts/copies, language discovery, and taxonomy aggregation/deduplication for the read-side views runtime/build reporting depends on.
+
+### Docs
+- **Persistent content-state architecture decision record** (#1074): defines Markdown/Git, `public/`, operational SQLite, and in-memory cache authority boundaries for future work (#1076–#1081) reconciling source/public state durably instead of via volatile in-process flags. Documentation only — introduces no schema, watcher, or migration.
+
 ## [v1.8.5] - 2026-08-14
 
 ### Security
