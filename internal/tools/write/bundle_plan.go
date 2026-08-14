@@ -122,8 +122,6 @@ func (s *bundlePlanStore) put(id string, entry bundlePlanEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
-	s.entries[id] = entry
-	s.trimLocked()
 	if s.persistent != nil {
 		raw, err := json.Marshal(entry)
 		if err != nil {
@@ -133,46 +131,64 @@ func (s *bundlePlanStore) put(id string, entry bundlePlanEntry) error {
 			return err
 		}
 	}
+	s.entries[id] = entry
+	s.trimLocked()
 	return nil
 }
 
-func (s *bundlePlanStore) get(id, callerKey string) (bundlePlanEntry, bool) {
+func (s *bundlePlanStore) get(id, callerKey string) (bundlePlanEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
 	if !ok && s.persistent != nil {
-		if raw, found, err := s.persistent.GetEphemeralRecord("bundle_plan", id, callerKey, s.ttl); err == nil && found && json.Unmarshal(raw, &entry) == nil {
+		raw, found, err := s.persistent.GetEphemeralRecord("bundle_plan", id, callerKey, s.ttl)
+		if err != nil {
+			return bundlePlanEntry{}, false, fmt.Errorf("read persisted bundle plan: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return bundlePlanEntry{}, false, fmt.Errorf("decode persisted bundle plan: %w", err)
+			}
 			ok = true
 			s.entries[id] = entry
 		}
 	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return bundlePlanEntry{}, false
+		return bundlePlanEntry{}, false, nil
 	}
-	return entry, ok
+	return entry, ok, nil
 }
 
-func (s *bundlePlanStore) consume(id, callerKey string) (bundlePlanEntry, bool) {
+func (s *bundlePlanStore) consume(id, callerKey string) (bundlePlanEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
 	if !ok && s.persistent != nil {
-		if raw, found, err := s.persistent.GetEphemeralRecord("bundle_plan", id, callerKey, s.ttl); err == nil && found && json.Unmarshal(raw, &entry) == nil {
+		raw, found, err := s.persistent.GetEphemeralRecord("bundle_plan", id, callerKey, s.ttl)
+		if err != nil {
+			return bundlePlanEntry{}, false, fmt.Errorf("read persisted bundle plan: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return bundlePlanEntry{}, false, fmt.Errorf("decode persisted bundle plan: %w", err)
+			}
 			ok = true
 		}
 	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return bundlePlanEntry{}, false
+		return bundlePlanEntry{}, false, nil
 	}
 	if ok {
-		delete(s.entries, id)
 		if s.persistent != nil {
-			_ = s.persistent.DeleteEphemeralRecord("bundle_plan", id, callerKey)
+			if err := s.persistent.DeleteEphemeralRecord("bundle_plan", id, callerKey); err != nil {
+				return bundlePlanEntry{}, false, err
+			}
 		}
+		delete(s.entries, id)
 	}
-	return entry, ok
+	return entry, ok, nil
 }
 
 func (s *bundlePlanStore) pruneLocked(now time.Time) {
@@ -226,35 +242,64 @@ type bundleSnapshotStore struct {
 	ttl        time.Duration
 	maxEntries int
 	entries    map[string]bundleSnapshot
+	persistent *db.DB
 }
 
-func newBundleSnapshotStore(ttl time.Duration, maxEntries int) *bundleSnapshotStore {
-	return &bundleSnapshotStore{ttl: ttl, maxEntries: maxEntries, entries: make(map[string]bundleSnapshot)}
+func newBundleSnapshotStore(ttl time.Duration, maxEntries int, persistent ...*db.DB) *bundleSnapshotStore {
+	var journal *db.DB
+	if len(persistent) > 0 {
+		journal = persistent[0]
+	}
+	return &bundleSnapshotStore{ttl: ttl, maxEntries: maxEntries, entries: make(map[string]bundleSnapshot), persistent: journal}
 }
 
 func bundleSnapshotKey(dir, revision string) string { return dir + "\x00" + revision }
 
-func (s *bundleSnapshotStore) put(dir, revision, callerKey string, files map[string]string) {
+func (s *bundleSnapshotStore) put(dir, revision, callerKey string, files map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	s.pruneLocked(now)
-	s.entries[bundleSnapshotKey(dir, revision)] = bundleSnapshot{CallerKey: callerKey, Files: files, CreatedAt: now}
+	entry := bundleSnapshot{CallerKey: callerKey, Files: files, CreatedAt: now}
+	if s.persistent != nil {
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if err := s.persistent.PutEphemeralRecord("bundle_snapshot", bundleSnapshotKey(dir, revision), callerKey, raw, now); err != nil {
+			return err
+		}
+	}
+	s.entries[bundleSnapshotKey(dir, revision)] = entry
 	s.trimLocked()
+	return nil
 }
 
-func (s *bundleSnapshotStore) get(dir, revision, callerKey string) (map[string]string, bool) {
+func (s *bundleSnapshotStore) get(dir, revision, callerKey string) (map[string]string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[bundleSnapshotKey(dir, revision)]
+	if !ok && s.persistent != nil {
+		raw, found, err := s.persistent.GetEphemeralRecord("bundle_snapshot", bundleSnapshotKey(dir, revision), callerKey, s.ttl)
+		if err != nil {
+			return nil, false, fmt.Errorf("read persisted bundle snapshot: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return nil, false, fmt.Errorf("decode persisted bundle snapshot: %w", err)
+			}
+			ok = true
+			s.entries[bundleSnapshotKey(dir, revision)] = entry
+		}
+	}
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	if entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return nil, false
+		return nil, false, nil
 	}
-	return entry.Files, true
+	return entry.Files, true, nil
 }
 
 func (s *bundleSnapshotStore) pruneLocked(now time.Time) {
@@ -423,13 +468,9 @@ func writeBundleTranslations(pg *security.PathGuard, files []struct {
 	Path    string
 	Content string
 }) (priorContent map[string]string, err error) {
-	priorContent = make(map[string]string, len(files))
-	for _, f := range files {
-		raw, readErr := os.ReadFile(f.Path)
-		if readErr != nil && !os.IsNotExist(readErr) {
-			return nil, fmt.Errorf("read_error: failed to read %s", filepath.Base(f.Path))
-		}
-		priorContent[f.Path] = string(raw)
+	priorContent, err = captureBundleTranslations(files)
+	if err != nil {
+		return nil, err
 	}
 
 	written := make([]string, 0, len(files))
@@ -458,6 +499,21 @@ func writeBundleTranslations(pg *security.PathGuard, files []struct {
 			return nil, fmt.Errorf("write_error: failed to write %s (bundle rolled back)", filepath.Base(f.Path))
 		}
 		written = append(written, f.Path)
+	}
+	return priorContent, nil
+}
+
+func captureBundleTranslations(files []struct {
+	Path    string
+	Content string
+}) (map[string]string, error) {
+	priorContent := make(map[string]string, len(files))
+	for _, f := range files {
+		raw, readErr := os.ReadFile(f.Path)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, fmt.Errorf("read_error: failed to read %s", filepath.Base(f.Path))
+		}
+		priorContent[f.Path] = string(raw)
 	}
 	return priorContent, nil
 }
@@ -722,7 +778,10 @@ func registerApplyBundlePlan(
 		// Keep retryable bundle conflicts from consuming the plan (#1001):
 		// look the plan up without consuming it, and only consume it once
 		// the revision check below has passed.
-		entry, ok := plans.get(in.PlanID, isolationCallerKey(ctx))
+		entry, ok, planErr := plans.get(in.PlanID, isolationCallerKey(ctx))
+		if planErr != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to load bundle plan"))
+		}
 		if !ok {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_bundle_change again"))
 		}
@@ -746,12 +805,6 @@ func registerApplyBundlePlan(
 		if currentRev != entry.BundleRevision {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("bundle_conflict: bundle changed since the plan was created; call plan_bundle_change again"))
 		}
-		if !in.DryRun {
-			if _, ok := plans.consume(in.PlanID, isolationCallerKey(ctx)); !ok {
-				return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_bundle_change again"))
-			}
-		}
-
 		// Validate EVERY candidate before writing ANY — a single failure
 		// rejects the whole bundle with nothing applied (#854 AC5).
 		for _, tr := range entry.Translations {
@@ -783,13 +836,29 @@ func registerApplyBundlePlan(
 				Content string
 			}{Path: tr.FilePath, Content: tr.Content}
 		}
-		priorContent, writeErr := writeBundleTranslations(pg, files)
+		// Persist the complete pre-write bundle before the first filesystem
+		// rename. SQLite cannot join that rename atomically, but this ordering
+		// guarantees a successful apply never lacks its rollback payload after
+		// a process restart.
+		priorContent, captureErr := captureBundleTranslations(files)
+		if captureErr != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(captureErr)
+		}
+		if err := snapshots.put(entry.BundleDir, entry.BundleRevision, isolationCallerKey(ctx), priorContent); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to persist bundle rollback snapshot: %w", err))
+		}
+		// Consume only once all retryable/pre-write work has succeeded. A
+		// persistence or validation failure must leave the caller's plan
+		// available for a safe retry after the underlying service recovers.
+		if _, ok, err := plans.consume(in.PlanID, isolationCallerKey(ctx)); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to consume bundle plan: %w", err))
+		} else if !ok {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_bundle_change again"))
+		}
+		_, writeErr := writeBundleTranslations(pg, files)
 		if writeErr != nil {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(writeErr)
 		}
-		// Snapshot the whole pre-apply bundle, keyed by the revision it is
-		// about to stop being, so rollback_bundle can restore it (#854 AC).
-		snapshots.put(entry.BundleDir, entry.BundleRevision, isolationCallerKey(ctx), priorContent)
 
 		var warnings []string
 		outcomes := make([]bundleTranslationOutcomeDTO, 0, len(entry.Translations))
@@ -844,7 +913,7 @@ func registerRollbackBundle(
 		Name:  "rollback_bundle",
 		Title: "Rollback bundle",
 		Description: "Restore every translation of a page bundle to a prior bundle revision a previous apply_bundle_plan produced, atomically. " +
-			"`to_bundle_revision` must be a revision apply_bundle_plan snapshotted (24-hour retention); otherwise `snapshot_not_found`. " +
+			"`to_bundle_revision` must be a bundle snapshot from apply_bundle_plan or rollback_bundle (24-hour retention); otherwise `snapshot_not_found`. " +
 			"Non-dry-run calls require `expected_bundle_revision` (the bundle's current revision) — a stale value fails `bundle_conflict`, so this can never silently undo a newer change. " +
 			"All translations restore together or none do. `idempotency_key` safely replays; `dry_run` previews. Writes source only. " +
 			"Named rollback_bundle (not rollback_bundle_change) to stay within the 20-char connector tool-name budget (#329).",
@@ -931,9 +1000,13 @@ func registerRollbackBundle(
 			}
 		}
 
-		restore, ok := snapshots.get(dir, in.ToBundleRevision, isolationCallerKey(ctx))
+		restore, ok, snapshotErr := snapshots.get(dir, in.ToBundleRevision, isolationCallerKey(ctx))
+		if snapshotErr != nil {
+			slog.Error("rollback_bundle: snapshot persistence read failed", "slug", in.Slug, "error", snapshotErr)
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to load rollback snapshot"))
+		}
 		if !ok {
-			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no bundle snapshot recorded for revision %q — only revisions produced by a prior apply_bundle_plan (last 24h) can be rolled back to", in.ToBundleRevision))
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no bundle snapshot recorded for revision %q — snapshots from apply_bundle_plan or rollback_bundle are caller-isolated and retained for 24 hours", in.ToBundleRevision))
 		}
 
 		// Validate every snapshot file before touching disk (#636: a snapshot
@@ -975,6 +1048,13 @@ func registerRollbackBundle(
 				Path    string
 				Content string
 			}{Path: p, Content: restore[p]}
+		}
+		priorContent, captureErr := captureBundleTranslations(files)
+		if captureErr != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(captureErr)
+		}
+		if err := snapshots.put(dir, currentRev, isolationCallerKey(ctx), priorContent); err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to persist pre-rollback bundle snapshot: %w", err))
 		}
 		if _, writeErr := writeBundleTranslations(pg, files); writeErr != nil {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(writeErr)

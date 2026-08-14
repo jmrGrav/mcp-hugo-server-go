@@ -2,11 +2,11 @@ package write
 
 // rollback_change (#438, #340, amended #379 — see docs/transactional-edit-
 // design.md §4 and the comment thread on #379). Restores a page's source to
-// a state this server's own apply_content_plan captured, guarded by the
-// same expected_revision optimistic-concurrency check every other write
-// tool uses. Deliberately narrower than git-commit-based rollback: only
-// revisions apply_content_plan itself produced and snapshotted are
-// rollback-able, not arbitrary history.
+// a state this server's own apply_content_plan, update_page, or prior
+// rollback_change captured, guarded by the same expected_revision
+// optimistic-concurrency check every other write tool uses. Deliberately
+// narrower than git-commit-based rollback: only server-created content
+// snapshots are rollback-able, never arbitrary Git history.
 
 import (
 	"context"
@@ -81,42 +81,54 @@ func snapshotKey(filePath, revision string) string {
 	return filePath + "\x00" + revision
 }
 
-func (s *snapshotStore) put(filePath, revision, callerKey, content string) {
+func (s *snapshotStore) put(filePath, revision, callerKey, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	s.pruneLocked(now)
-	s.entries[snapshotKey(filePath, revision)] = snapshotEntry{CallerKey: callerKey, Content: content, CreatedAt: now}
-	s.trimLocked()
+	entry := snapshotEntry{CallerKey: callerKey, Content: content, CreatedAt: now}
 	if s.persistent != nil {
-		raw, err := json.Marshal(snapshotEntry{CallerKey: callerKey, Content: content, CreatedAt: now})
-		if err == nil {
-			_ = s.persistent.PutEphemeralRecord("content_snapshot", snapshotKey(filePath, revision), callerKey, raw, now)
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if err := s.persistent.PutEphemeralRecord("content_snapshot", snapshotKey(filePath, revision), callerKey, raw, now); err != nil {
+			return err
 		}
 	}
+	s.entries[snapshotKey(filePath, revision)] = entry
+	s.trimLocked()
+	return nil
 }
 
-func (s *snapshotStore) get(filePath, revision, callerKey string) (string, bool) {
+func (s *snapshotStore) get(filePath, revision, callerKey string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[snapshotKey(filePath, revision)]
 	if !ok && s.persistent != nil {
-		if raw, found, err := s.persistent.GetEphemeralRecord("content_snapshot", snapshotKey(filePath, revision), callerKey, s.ttl); err == nil && found && json.Unmarshal(raw, &entry) == nil {
+		raw, found, err := s.persistent.GetEphemeralRecord("content_snapshot", snapshotKey(filePath, revision), callerKey, s.ttl)
+		if err != nil {
+			return "", false, fmt.Errorf("read persisted content snapshot: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return "", false, fmt.Errorf("decode persisted content snapshot: %w", err)
+			}
 			ok = true
 			s.entries[snapshotKey(filePath, revision)] = entry
 		}
 	}
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
 	if entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return "", false
+		return "", false, nil
 	}
-	return entry.Content, true
+	return entry.Content, true, nil
 }
 
-func (s *snapshotStore) list(filePath, callerKey string) []snapshotListing {
+func (s *snapshotStore) list(filePath, callerKey string) ([]snapshotListing, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -124,16 +136,19 @@ func (s *snapshotStore) list(filePath, callerKey string) []snapshotListing {
 	items := make([]snapshotListing, 0)
 	prefix := filePath + "\x00"
 	if s.persistent != nil {
-		if records, err := s.persistent.ListEphemeralRecords("content_snapshot", callerKey, s.ttl); err == nil {
-			for _, record := range records {
-				if !strings.HasPrefix(record.ID, prefix) {
-					continue
-				}
-				var entry snapshotEntry
-				if json.Unmarshal(record.Payload, &entry) == nil {
-					s.entries[record.ID] = entry
-				}
+		records, err := s.persistent.ListEphemeralRecords("content_snapshot", callerKey, s.ttl)
+		if err != nil {
+			return nil, fmt.Errorf("list persisted content snapshots: %w", err)
+		}
+		for _, record := range records {
+			if !strings.HasPrefix(record.ID, prefix) {
+				continue
 			}
+			var entry snapshotEntry
+			if err := json.Unmarshal(record.Payload, &entry); err != nil {
+				return nil, fmt.Errorf("decode persisted content snapshot: %w", err)
+			}
+			s.entries[record.ID] = entry
 		}
 	}
 	for key, entry := range s.entries {
@@ -143,7 +158,7 @@ func (s *snapshotStore) list(filePath, callerKey string) []snapshotListing {
 		items = append(items, snapshotListing{Revision: strings.TrimPrefix(key, prefix), CreatedAt: entry.CreatedAt, ExpiresAt: entry.CreatedAt.Add(s.ttl)})
 	}
 	slices.SortFunc(items, func(a, b snapshotListing) int { return b.CreatedAt.Compare(a.CreatedAt) })
-	return items
+	return items, nil
 }
 
 func (s *snapshotStore) pruneLocked(now time.Time) {
@@ -254,7 +269,7 @@ func registerRollbackChange(
 		Name:  "rollback_change",
 		Title: "Rollback change",
 		Description: "Restore a page's source to a prior content snapshot captured by this server. " +
-			"`to_revision` must be a `content_snapshot` returned by list_page_snapshots; Git commits from list_page_revisions are not accepted. Snapshots may be produced by apply_content_plan or update_page, are caller-isolated, and retain for 24 hours. " +
+			"`to_revision` must be a `content_snapshot` returned by list_page_snapshots; Git commits from list_page_revisions are not accepted. Snapshots may be produced by apply_content_plan, update_page, or rollback_change, are caller-isolated, and retain for 24 hours. " +
 			"Fails with `snapshot_not_found` if no matching snapshot exists or the resolved file/language doesn't match what the snapshot was captured for. " +
 			"Non-dry-run calls require `expected_revision`, the page's *current* revision — a stale value fails with `revision_conflict`, the same optimistic-concurrency guard every other write tool uses, so this can never silently undo a newer, unrelated change. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run rollback after a timeout or uncertain delivery. " +
@@ -379,9 +394,13 @@ func registerRollbackChange(
 			}
 		}
 
-		snapshotContent, ok := snapshots.get(filePath, in.ToRevision, isolationCallerKey(ctx))
+		snapshotContent, ok, snapshotErr := snapshots.get(filePath, in.ToRevision, isolationCallerKey(ctx))
+		if snapshotErr != nil {
+			slog.Error("rollback_change: snapshot persistence read failed", "slug", in.Slug, "error", snapshotErr)
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to load rollback snapshot"))
+		}
 		if !ok {
-			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no snapshot recorded for revision %q of this page — only revisions produced by a prior apply_content_plan call, within the last 24 hours, can be rolled back to", in.ToRevision))
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no snapshot recorded for revision %q of this page — snapshots from update_page, apply_content_plan, or rollback_change are caller-isolated and retained for 24 hours", in.ToRevision))
 		}
 		if err := validateFrontmatterRoundTrip(snapshotContent); err != nil {
 			slog.Error("rollback_change: round-trip guard failed on stored snapshot", "slug", in.Slug, "error", err)
@@ -411,6 +430,12 @@ func registerRollbackChange(
 				BeforeRevision: currentRevision,
 				RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
+		}
+		// A rollback is itself a state transition. Preserve its pre-rollback
+		// bytes first so a later rollback can reverse this operation after a
+		// service restart, just like rollback_bundle does for translations.
+		if err := snapshots.put(filePath, currentRevision, isolationCallerKey(ctx), string(raw)); err != nil {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to persist pre-rollback snapshot: %w", err))
 		}
 
 		if err := pg.RevalidateForWrite(filePath); err != nil {
@@ -556,7 +581,11 @@ func registerListPageSnapshots(s *mcp.Server, cfg config.Config, snapshots *snap
 		if err != nil {
 			return nil, listPageSnapshotsOutput{}, err
 		}
-		items := snapshots.list(resolved.SourcePath, isolationCallerKey(ctx))
+		items, snapshotErr := snapshots.list(resolved.SourcePath, isolationCallerKey(ctx))
+		if snapshotErr != nil {
+			slog.Error("list_page_snapshots: persistence read failed", "slug", in.Slug, "error", snapshotErr)
+			return nil, listPageSnapshotsOutput{}, fmt.Errorf("persistence_error: failed to list rollback snapshots")
+		}
 		out := make([]pageSnapshotDTO, 0, len(items))
 		for _, item := range items {
 			out = append(out, pageSnapshotDTO{RevisionKind: "content_snapshot", Revision: item.Revision, CreatedAt: item.CreatedAt.UTC().Format(time.RFC3339), ExpiresAt: item.ExpiresAt.UTC().Format(time.RFC3339)})

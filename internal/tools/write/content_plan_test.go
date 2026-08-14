@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 )
 
 func readFileString(t *testing.T, contentRoot, relPath string) string {
@@ -63,6 +65,35 @@ func TestPlanContentChangeAndApplyRoundTrip(t *testing.T) {
 	}
 	if !strings.Contains(written, "hugo") {
 		t.Fatalf("apply_content_plan did not write the planned tag: %q", written)
+	}
+}
+
+func TestContentPlanSurvivesRestartAndApplies(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/restart-content-plan")
+	journal, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	first, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: journal})
+	plan := callTool(t, first, "plan_content_change", map[string]any{
+		"slug": "posts/restart-content-plan", "operations": []any{bodyOp("Applied after restart")},
+	})
+	if plan.IsError {
+		t.Fatalf("plan_content_change failed: %s", marshalContent(t, plan))
+	}
+	planID := decodeWriteData(t, plan)["plan_id"].(string)
+	done()
+
+	restarted, _, restartedDone := newTestServer(t, contentRoot, testServerOpts{SiteDB: journal})
+	defer restartedDone()
+	applied := callTool(t, restarted, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applied.IsError {
+		t.Fatalf("apply_content_plan after restart failed: %s", marshalContent(t, applied))
+	}
+	if got := readFileString(t, contentRoot, "posts/restart-content-plan/index.md"); !strings.Contains(got, "Applied after restart") {
+		t.Fatalf("restarted content plan did not update page: %q", got)
 	}
 }
 

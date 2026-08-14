@@ -750,7 +750,7 @@ func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, siteIdxs ...*site
 		plans:            newPlanStore(planTTL, planMaxEntries, siteDB),
 		snapshots:        newSnapshotStore(snapshotTTL, snapshotMaxEntries, siteDB),
 		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries, siteDB),
-		bundleSnapshots:  newBundleSnapshotStore(snapshotTTL, snapshotMaxEntries),
+		bundleSnapshots:  newBundleSnapshotStore(snapshotTTL, snapshotMaxEntries, siteDB),
 	}
 }
 
@@ -956,7 +956,6 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if !limiter.Allow() {
 			return nil, createPageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("create_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
 		}
-
 		if err := pg.RevalidateForWrite(filePath); err != nil {
 			slog.Warn("create_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
@@ -1344,20 +1343,19 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			slog.Warn("update_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
 		}
+		// Retain the exact pre-write bytes before the source rename. The
+		// snapshot journal is part of the rollback guarantee, not a derived
+		// index: accepting this mutation when it cannot be made durable would
+		// create a successful but unrollbackable update after a restart.
+		if err := rt.snapshots.put(filePath, currentRevision, isolationCallerKey(ctx), string(raw)); err != nil {
+			slog.Error("update_page: rollback snapshot persistence failed", "slug", in.Slug, "error", err)
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to retain rollback snapshot"))
+		}
 		if err := fileutil.AtomicWriteChecked(filePath, content, pg); err != nil {
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
 		}
-		// Snapshot the pre-write content, keyed by the revision it's about
-		// to stop being, so rollback_change can restore exactly this state
-		// later (#629 — extends apply_content_plan's own snapshot capture,
-		// see content_plan.go, to update_page's write path too; #379's
-		// amended invariant, docs/transactional-edit-design.md §4). Only
-		// captured on a successful write: a failed write never changed the
-		// file, so there's nothing new to roll back from. create_page is
-		// deliberately not snapshotted — there's no meaningful "pre-create"
-		// state to restore to.
-		rt.snapshots.put(filePath, currentRevision, isolationCallerKey(ctx), string(raw))
+		snapshotWarning := ""
 		updated := *currentSource
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang
@@ -1414,6 +1412,9 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			status = "updated"
 		}
 		warning := ""
+		if snapshotWarning != "" {
+			warning = snapshotWarning
+		}
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {
 				slog.Warn("update_page: db sync failed", "slug", in.Slug, "error", err)

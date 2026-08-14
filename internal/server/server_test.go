@@ -2611,6 +2611,7 @@ func TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = contentRoot
 	cfg.HugoRoot = t.TempDir()
+	cfg.DBPath = filepath.Join(t.TempDir(), "runtime-state.sqlite")
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const callerA = "bundle-owner-token"
@@ -2669,6 +2670,11 @@ func TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	if !strings.Contains(string(frAfterOwnerApply), "FR changed by owner") {
 		t.Fatalf("owner bundle apply did not change FR file: %q", string(frAfterOwnerApply))
 	}
+
+	// Simulate a process restart: a fresh server and source index must restore
+	// the durable bundle snapshot, while the bearer-token owner boundary
+	// remains enforced for an intruder.
+	srv = mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	bRollbackRec := doMCPCall(t, srv, callerB, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rollback_bundle","arguments":{"slug":"posts/e2e-bundle-owner","to_bundle_revision":"%s","expected_bundle_revision":"%s"}}}`, beforeBundleRevision, afterBundleRevision)))
 	if bRollbackRec.Code != http.StatusOK {

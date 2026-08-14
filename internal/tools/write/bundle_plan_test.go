@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 )
 
@@ -71,6 +72,70 @@ func TestBundleApplyFRENSuccess(t *testing.T) {
 	}
 	if got := readFileString(t, contentRoot, "posts/example/index.en.md"); !strings.Contains(got, "New body EN.") {
 		t.Fatalf("en file not updated: %q", got)
+	}
+}
+
+func TestRollbackBundleRestoresPersistedSnapshotAfterRestart(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/restart-bundle")
+	beforeFR := readFileString(t, contentRoot, "posts/restart-bundle/index.fr.md")
+	beforeEN := readFileString(t, contentRoot, "posts/restart-bundle/index.en.md")
+	siteDB, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer siteDB.Close()
+	first, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	plan := callTool(t, first, "plan_bundle_change", map[string]any{
+		"slug": "posts/restart-bundle",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("FR after")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("EN after")}},
+		},
+	})
+	if plan.IsError {
+		t.Fatalf("plan failed: %s", marshalContent(t, plan))
+	}
+	apply := callTool(t, first, "apply_bundle_plan", map[string]any{"plan_id": decodeWriteData(t, plan)["plan_id"]})
+	if apply.IsError {
+		t.Fatalf("apply failed: %s", marshalContent(t, apply))
+	}
+	applyData := decodeWriteData(t, apply)
+	beforeRevision := applyData["before_revision"].(string)
+	afterRevision := applyData["after_revision"].(string)
+	done()
+
+	restarted, _, restartedDone := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer restartedDone()
+	rollback := callTool(t, restarted, "rollback_bundle", map[string]any{
+		"slug": "posts/restart-bundle", "to_bundle_revision": beforeRevision, "expected_bundle_revision": afterRevision,
+	})
+	if rollback.IsError {
+		t.Fatalf("rollback after restart failed: %s", marshalContent(t, rollback))
+	}
+	if got := readFileString(t, contentRoot, "posts/restart-bundle/index.fr.md"); got != beforeFR {
+		t.Fatalf("FR after restart rollback = %q, want %q", got, beforeFR)
+	}
+	if got := readFileString(t, contentRoot, "posts/restart-bundle/index.en.md"); got != beforeEN {
+		t.Fatalf("EN after restart rollback = %q, want %q", got, beforeEN)
+	}
+	restartedDone()
+	// The rollback itself captured B before restoring A. A second fresh
+	// runtime must be able to use that durable pre-rollback snapshot to move
+	// atomically back to B.
+	again, _, againDone := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer againDone()
+	backToB := callTool(t, again, "rollback_bundle", map[string]any{
+		"slug": "posts/restart-bundle", "to_bundle_revision": afterRevision, "expected_bundle_revision": beforeRevision,
+	})
+	if backToB.IsError {
+		t.Fatalf("reverse rollback after restart failed: %s", marshalContent(t, backToB))
+	}
+	if got := readFileString(t, contentRoot, "posts/restart-bundle/index.fr.md"); !strings.Contains(got, "FR after") {
+		t.Fatalf("FR reverse rollback = %q, want B", got)
+	}
+	if got := readFileString(t, contentRoot, "posts/restart-bundle/index.en.md"); !strings.Contains(got, "EN after") {
+		t.Fatalf("EN reverse rollback = %q, want B", got)
 	}
 }
 

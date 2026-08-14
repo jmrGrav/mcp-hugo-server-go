@@ -86,8 +86,6 @@ func (s *planStore) put(id string, entry planEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
-	s.entries[id] = entry
-	s.trimLocked()
 	if s.persistent != nil {
 		raw, err := json.Marshal(entry)
 		if err != nil {
@@ -97,56 +95,70 @@ func (s *planStore) put(id string, entry planEntry) error {
 			return err
 		}
 	}
+	s.entries[id] = entry
+	s.trimLocked()
 	return nil
 }
 
 // get looks up a plan without consuming it (used for a dry-run apply, which
 // re-verifies but must not remove the plan).
-func (s *planStore) get(id, callerKey string) (planEntry, bool) {
+func (s *planStore) get(id, callerKey string) (planEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
 	if !ok && s.persistent != nil {
-		if raw, found, err := s.persistent.GetEphemeralRecord("content_plan", id, callerKey, s.ttl); err == nil && found {
-			if json.Unmarshal(raw, &entry) == nil {
-				ok = true
-				s.entries[id] = entry
+		raw, found, err := s.persistent.GetEphemeralRecord("content_plan", id, callerKey, s.ttl)
+		if err != nil {
+			return planEntry{}, false, fmt.Errorf("read persisted content plan: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return planEntry{}, false, fmt.Errorf("decode persisted content plan: %w", err)
 			}
+			ok = true
+			s.entries[id] = entry
 		}
 	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return planEntry{}, false
+		return planEntry{}, false, nil
 	}
-	return entry, ok
+	return entry, ok, nil
 }
 
 // consume looks up and atomically removes a plan. Per the design doc, a plan
 // is single-use: applying it (successfully or not) removes it from the
 // store, so it can never be replayed against a page that has since changed
 // without a fresh plan_content_change call.
-func (s *planStore) consume(id, callerKey string) (planEntry, bool) {
+func (s *planStore) consume(id, callerKey string) (planEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
 	if !ok && s.persistent != nil {
-		if raw, found, err := s.persistent.GetEphemeralRecord("content_plan", id, callerKey, s.ttl); err == nil && found {
-			if json.Unmarshal(raw, &entry) == nil {
-				ok = true
+		raw, found, err := s.persistent.GetEphemeralRecord("content_plan", id, callerKey, s.ttl)
+		if err != nil {
+			return planEntry{}, false, fmt.Errorf("read persisted content plan: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return planEntry{}, false, fmt.Errorf("decode persisted content plan: %w", err)
 			}
+			ok = true
 		}
 	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return planEntry{}, false
+		return planEntry{}, false, nil
 	}
 	if ok {
-		delete(s.entries, id)
 		if s.persistent != nil {
-			_ = s.persistent.DeleteEphemeralRecord("content_plan", id, callerKey)
+			if err := s.persistent.DeleteEphemeralRecord("content_plan", id, callerKey); err != nil {
+				return planEntry{}, false, err
+			}
 		}
+		delete(s.entries, id)
 	}
-	return entry, ok
+	return entry, ok, nil
 }
 
 func (s *planStore) pruneLocked(now time.Time) {
@@ -684,7 +696,7 @@ func registerContentPlanTools(
 			Categories: resolved.Categories,
 			CreatedAt:  now,
 		}); err != nil {
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("internal_error: failed to persist content plan"))
+			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("persistence_error: failed to persist content plan"))
 		}
 
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
@@ -780,7 +792,10 @@ func registerContentPlanTools(
 		// Keep retryable revision conflicts from consuming the plan (#1001):
 		// look the plan up without consuming it, and only consume it once
 		// the revision check below has passed.
-		entry, ok := plans.get(in.PlanID, isolationCallerKey(ctx))
+		entry, ok, planErr := plans.get(in.PlanID, isolationCallerKey(ctx))
+		if planErr != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to load content plan"))
+		}
 		if !ok {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_content_change again"))
 		}
@@ -818,12 +833,6 @@ func registerContentPlanTools(
 		if entry.Revision != currentRevision {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since the plan was created; call plan_content_change again"))
 		}
-		if !in.DryRun {
-			if _, ok := plans.consume(in.PlanID, isolationCallerKey(ctx)); !ok {
-				return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_content_change again"))
-			}
-		}
-
 		if err := validateFrontmatterRoundTrip(entry.Content); err != nil {
 			slog.Error("apply_content_plan: round-trip guard failed", "plan_id", in.PlanID, "error", err)
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("validation_error: %w", err))
@@ -846,6 +855,16 @@ func registerContentPlanTools(
 				RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil
 		}
+		if err := snapshots.put(entry.FilePath, entry.Revision, isolationCallerKey(ctx), string(raw)); err != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to retain rollback snapshot: %w", err))
+		}
+		// Keep a plan retryable until all validation and snapshot persistence
+		// have succeeded; consume it only at the durable write boundary.
+		if _, ok, err := plans.consume(in.PlanID, isolationCallerKey(ctx)); err != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to consume plan: %w", err))
+		} else if !ok {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_content_change again"))
+		}
 
 		if err := pg.RevalidateForWrite(entry.FilePath); err != nil {
 			slog.Warn("apply_content_plan: symlink-swap detected before write", "plan_id", in.PlanID, "error", err)
@@ -855,14 +874,6 @@ func registerContentPlanTools(
 			slog.Error("apply_content_plan: write failed", "plan_id", in.PlanID, "error", err)
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
 		}
-		// Snapshot the pre-write content, keyed by the revision it's about
-		// to stop being, so rollback_change can restore exactly this state
-		// later (#379's amended invariant — see docs/transactional-edit-
-		// design.md §4). Only captured on a successful write: a failed
-		// write never changed the file, so there's nothing new to roll
-		// back from.
-		snapshots.put(entry.FilePath, entry.Revision, isolationCallerKey(ctx), string(raw))
-
 		var updated hugosite.SourcePage
 		if existing, hasExisting := idx.GetBySlug(entry.Slug); hasExisting {
 			updated = *existing

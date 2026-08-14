@@ -61,11 +61,11 @@ func TestBundlePlanStoreSurvivesReopenWithCallerIsolation(t *testing.T) {
 	}
 	defer second.Close()
 	restarted := newBundlePlanStore(time.Hour, 8, second)
-	got, ok := restarted.get("bundle-plan-1", "caller-a")
-	if !ok || got.BundleRevision != entry.BundleRevision {
-		t.Fatalf("restarted get = %+v, %v; want persisted entry", got, ok)
+	got, ok, err := restarted.get("bundle-plan-1", "caller-a")
+	if err != nil || !ok || got.BundleRevision != entry.BundleRevision {
+		t.Fatalf("restarted get = %+v, %v, %v; want persisted entry", got, ok, err)
 	}
-	if _, ok := restarted.get("bundle-plan-1", "caller-b"); ok {
+	if _, ok, err := restarted.get("bundle-plan-1", "caller-b"); err != nil || ok {
 		t.Fatal("caller-b read caller-a bundle plan")
 	}
 }
@@ -87,14 +87,84 @@ func TestSnapshotStoreSurvivesReopenAndListsOnlyItsCaller(t *testing.T) {
 	}
 	defer second.Close()
 	restarted := newSnapshotStore(time.Hour, 8, second)
-	if content, ok := restarted.get("/opaque/page.md", "sha256:before", "caller-a"); !ok || content != "before bytes" {
-		t.Fatalf("restarted snapshot = %q, %v", content, ok)
+	if content, ok, err := restarted.get("/opaque/page.md", "sha256:before", "caller-a"); err != nil || !ok || content != "before bytes" {
+		t.Fatalf("restarted snapshot = %q, %v, %v", content, ok, err)
 	}
-	if rows := restarted.list("/opaque/page.md", "caller-b"); len(rows) != 0 {
+	if rows, err := restarted.list("/opaque/page.md", "caller-b"); err != nil || len(rows) != 0 {
 		t.Fatalf("caller-b snapshots = %v, want none", rows)
 	}
-	if rows := restarted.list("/opaque/page.md", "caller-a"); len(rows) != 1 || rows[0].Revision != "sha256:before" {
+	if rows, err := restarted.list("/opaque/page.md", "caller-a"); err != nil || len(rows) != 1 || rows[0].Revision != "sha256:before" {
 		t.Fatalf("caller-a snapshots = %+v", rows)
+	}
+}
+
+func TestBundleSnapshotStoreSurvivesReopenWithAtomicPayloadAndCallerIsolation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	first, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newBundleSnapshotStore(time.Hour, 8, first)
+	files := map[string]string{"/opaque/index.fr.md": "FR before", "/opaque/index.en.md": "EN before"}
+	if err := store.put("/opaque", "sha256:bundle-before", "caller-a", files); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	restarted := newBundleSnapshotStore(time.Hour, 8, second)
+	got, ok, err := restarted.get("/opaque", "sha256:bundle-before", "caller-a")
+	if err != nil || !ok || got["/opaque/index.fr.md"] != "FR before" || got["/opaque/index.en.md"] != "EN before" || len(got) != 2 {
+		t.Fatalf("restarted bundle snapshot = %#v, %v, %v", got, ok, err)
+	}
+	if _, ok, err := restarted.get("/opaque", "sha256:bundle-before", "caller-b"); err != nil || ok {
+		t.Fatal("caller-b read caller-a bundle snapshot")
+	}
+}
+
+func TestPersistedSnapshotReadFailureIsNotReportedAsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	journal, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := newSnapshotStore(time.Hour, 8, journal)
+	bundle := newBundleSnapshotStore(time.Hour, 8, journal)
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := content.get("/opaque/page.md", "sha256:before", "caller-a"); err == nil || found {
+		t.Fatalf("content get after DB close = found %v, err %v; want persistence error", found, err)
+	}
+	if _, found, err := bundle.get("/opaque", "sha256:before", "caller-a"); err == nil || found {
+		t.Fatalf("bundle get after DB close = found %v, err %v; want persistence error", found, err)
+	}
+	if _, err := content.list("/opaque/page.md", "caller-a"); err == nil {
+		t.Fatal("list after DB close succeeded, want persistence error")
+	}
+}
+
+func TestPersistedPlanReadFailureIsNotReportedAsMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	journal, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := newPlanStore(time.Hour, 8, journal)
+	bundle := newBundlePlanStore(time.Hour, 8, journal)
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := content.get("plan-id", "caller-a"); err == nil || found {
+		t.Fatalf("content plan get after DB close = found %v, err %v; want persistence error", found, err)
+	}
+	if _, found, err := bundle.get("plan-id", "caller-a"); err == nil || found {
+		t.Fatalf("bundle plan get after DB close = found %v, err %v; want persistence error", found, err)
 	}
 }
 
