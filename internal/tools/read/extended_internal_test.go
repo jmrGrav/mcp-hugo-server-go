@@ -110,10 +110,16 @@ func TestBuildSiteHealthSurfacesRuntimeDegraded(t *testing.T) {
 	if health.Status != "degraded" || health.ContentStatus != "healthy" {
 		t.Fatalf("status/content_status after failed build = %q/%q, want degraded/healthy", health.Status, health.ContentStatus)
 	}
+	if health.Score != 99 {
+		t.Fatalf("score after failed build = %d, want 99 so a degraded runtime never advertises perfection", health.Score)
+	}
 	buildstatus.RecordSuccess(time.Now())
 	health = buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{})
 	if health.RuntimeDegraded == nil || *health.RuntimeDegraded {
 		t.Fatalf("runtime_degraded after successful build = %#v, want false", health.RuntimeDegraded)
+	}
+	if health.Score != 100 {
+		t.Fatalf("score after successful build = %d, want 100", health.Score)
 	}
 }
 
@@ -174,7 +180,7 @@ func TestBuildSiteHealthDetectsIncompleteMultilingualPublicOutput(t *testing.T) 
 		t.Fatalf("runtime/status = %#v/%q, want true/degraded", health.RuntimeDegraded, health.Status)
 	}
 	if health.ContentStatus != "healthy" || health.Score != 100 {
-		t.Fatalf("content status/score = %q/%d, want healthy/100", health.ContentStatus, health.Score)
+		t.Fatalf("content status/score = %q/%d, want healthy/100 (public_output_incomplete affects status, not score)", health.ContentStatus, health.Score)
 	}
 	if !slicesContain(health.RuntimeDegradedReasons, "public_output_incomplete") {
 		t.Fatalf("runtime_degraded_reasons = %#v, want public_output_incomplete", health.RuntimeDegradedReasons)

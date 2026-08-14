@@ -1927,11 +1927,16 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	health.AdvisoriesCount = len(health.TaxonomyInconsistencyDetails)
 
 	score := frontmatterScore
-	// #719: a perfect 100 alongside actionable warning-severity taxonomy
-	// drift is semantically misleading. Keep info-only translation pairs
-	// non-penalizing, but cap the exposed top-level score just below
-	// perfection when a real warning is still present.
+	// #719/#1066: a perfect 100 alongside either actionable taxonomy drift
+	// or a failed build_site attempt is semantically misleading. Keep
+	// info-only translation pairs non-penalizing, and don't cap for
+	// public_output_incomplete alone — that reason fires for perfectly
+	// normal create_page -> build_site windows and is already surfaced via
+	// status/runtime_degraded_reasons without needing to move score too.
 	if score == 100 && taxonomyWarnings > 0 {
+		score = 99
+	}
+	if score == 100 && snapshot.Attempted && snapshot.Status == "failed" {
 		score = 99
 	}
 	health.Score = score

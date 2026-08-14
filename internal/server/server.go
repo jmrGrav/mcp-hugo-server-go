@@ -583,6 +583,11 @@ func buildAdminScopedServer(core *serverCore, cfg config.Config, idx *site.Index
 func buildPrivilegedScopedServer(scopeName string, core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension, previews *previewstore.Store) *mcp.Server {
 	server := newScopedServer(scopeName, core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions)
 	admin.Register(server, cfg, core.srcIdx, postBuildCallbacks("build_site", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
+	// RegisterRuntimeStatus again with the live public index: the generic admin
+	// registration keeps its compatibility signature for unit registrations,
+	// while the production server can reconcile source and public output after
+	// restarts instead of trusting volatile BuildPending flags (#1066).
+	admin.RegisterRuntimeStatus(server, cfg, core.srcIdx, idx)
 	admin.RegisterVerifyPublication(server, idx, core.srcIdx, cfg)
 	admin.RegisterPublishChanges(server, idx, core.srcIdx, cfg, postBuildCallbacks("publish_changes", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
