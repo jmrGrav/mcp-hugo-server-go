@@ -472,6 +472,58 @@ func TestGenerateFeaturedImageDescriptionWhenConfigured(t *testing.T) {
 	t.Fatal("generate_hero_image not found in tools list")
 }
 
+// TestGenerateFeaturedImageAdvertisesStyleEnumButKeepsStructuredErrors proves
+// the two-schema adapter required by #1056. Discovery gets the useful finite
+// vocabulary, while tools/call still reaches the handler and therefore keeps
+// the normal structured invalid_params envelope for an invalid value.
+func TestGenerateFeaturedImageAdvertisesStyleEnumButKeepsStructuredErrors(t *testing.T) {
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	listed, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var style map[string]any
+	for _, tool := range listed.Tools {
+		if tool.Name != "generate_hero_image" {
+			continue
+		}
+		schema, ok := tool.InputSchema.(map[string]any)
+		if !ok {
+			t.Fatalf("generate_hero_image input schema type = %T, want map", tool.InputSchema)
+		}
+		style, _ = schema["properties"].(map[string]any)["style"].(map[string]any)
+	}
+	if style == nil {
+		t.Fatal("generate_hero_image.style absent from tools/list")
+	}
+	enum, _ := style["enum"].([]any)
+	if len(enum) != 2 || enum[0] != "tech" || enum[1] != "geo" {
+		t.Fatalf("generate_hero_image.style enum = %#v, want [tech geo]", enum)
+	}
+
+	res, err := callTool(t, session, "generate_hero_image", map[string]any{
+		"slug":    "posts/schema-style",
+		"style":   "watercolor",
+		"dry_run": true,
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError || res.StructuredContent == nil {
+		t.Fatalf("invalid style result = %#v, want structured error", res)
+	}
+	decoded := decodeStructuredResult(t, res)
+	errors, _ := decoded["errors"].([]any)
+	if len(errors) != 1 || errors[0].(map[string]any)["code"] != "invalid_params" {
+		t.Fatalf("invalid style structured errors = %#v, want invalid_params", decoded["errors"])
+	}
+}
+
 func TestGenerateFeaturedImageRejectsHostileSlugCorpus(t *testing.T) {
 	cases := []struct {
 		name string

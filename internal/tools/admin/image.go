@@ -300,19 +300,9 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			"`data.source_key` is the canonical page identifier after slug normalization, and `data.delete_slug` + `data.delete_scope` + `data.delete_filename` " +
 			"can be passed straight to delete_page_asset later to remove this generated file without re-deriving the cleanup contract. " +
 			"Set `dry_run:true` to preview the full output contract (path/public_path/source_key/delete_slug/delete_scope/delete_filename, plus `data.dry_run:true`) that a real call would return WITHOUT rendering or writing any file — input validation still runs, so you get the same invalid_params errors up front, and no image (and, in external-API mode, no network call) is produced (#897). Use it to confirm the resulting path/filename before committing, avoiding orphaned generated images.",
-		// style/accent are validated in the handler below (structured
-		// invalid_params errors), not as a published JSON-Schema enum: an
-		// enum constraint is enforced by the SDK's argument validation
-		// *before* our handler/WrapTool pipeline runs, so a violating value
-		// would surface as a bare text error with no StructuredContent/code
-		// (#892). Runtime rejection is unchanged. #1047 asked to publish
-		// style as a real enum; that's incompatible with preserving the
-		// structured invalid_params error #892 already fixed for this same
-		// field (verified: publishing it reproduces the exact bare-text,
-		// no-StructuredContent response #892 exists to prevent) — the
-		// existing invalid-parameter error is the one #1047 also asked to
-		// preserve, so that requirement wins. The description text above
-		// already documents the accepted values (tech|geo) for callers.
+		// Runtime validation stays permissive enough to reach WrapTool and
+		// return structured invalid_params. AdvertiseInputEnum below decorates
+		// only tools/list with the same finite vocabulary (#1056).
 		InputSchema:  tools.MustSchema[generateFeaturedImageInput](),
 		OutputSchema: tools.MustSchema[generateFeaturedImageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -436,6 +426,7 @@ func registerGenerateFeaturedImage(s *mcp.Server, cfg config.Config) {
 			DeleteFilename: filepath.Base(destPath),
 		}), nil
 	}))
+	tools.AdvertiseInputEnum(s, "generate_hero_image", "style", []string{"tech", "geo"})
 }
 
 func fallbackHeroImageTitle(slug, title, prompt string) string {
