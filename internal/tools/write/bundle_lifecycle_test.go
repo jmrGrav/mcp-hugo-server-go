@@ -119,6 +119,33 @@ func TestCreateBundleIsAtomicAcrossTranslations(t *testing.T) {
 	}
 }
 
+// TestCreateBundleRejectsOverlongTaxonomyBeforeWriting is the direct
+// create_bundle counterpart to the plan/update taxonomy guards from #886.
+// A bundle is a newer mutation entry point, so keep an explicit regression
+// test here rather than relying on its shared validation helper indirectly.
+func TestCreateBundleRejectsOverlongTaxonomyBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	session, _, done := newTestServer(t, root)
+	defer done()
+
+	res := callTool(t, session, "create_bundle", map[string]any{
+		"slug": "posts/overlong-bundle-taxonomy",
+		"pages": []any{
+			map[string]any{"lang": "fr", "title": "Bonjour", "body": "Corps FR", "tags": []any{strings.Repeat("x", 101)}},
+			map[string]any{"lang": "en", "title": "Hello", "body": "Body EN"},
+		},
+	})
+	if !res.IsError {
+		t.Fatal("create_bundle with an overlong tag must fail")
+	}
+	if got := marshalContent(t, res); !strings.Contains(got, "invalid_params") || !strings.Contains(got, "tag value exceeds 100 characters") {
+		t.Fatalf("create_bundle overlong-tag error = %s, want structured invalid_params tag-length error", got)
+	}
+	if _, err := os.Stat(filepath.Join(root, "posts/overlong-bundle-taxonomy")); !os.IsNotExist(err) {
+		t.Fatalf("pre-write validation failure left bundle files behind: %v", err)
+	}
+}
+
 func TestDeleteBundleChecksEveryRevisionBeforeUnlinking(t *testing.T) {
 	root := t.TempDir()
 	writeBilingualBundle(t, root, "posts/delete-atomic")
