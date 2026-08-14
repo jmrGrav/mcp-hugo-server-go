@@ -4202,7 +4202,7 @@ func TestCreatePageDBWarning(t *testing.T) {
 	}
 }
 
-func TestUpdatePageDBWarning(t *testing.T) {
+func TestUpdatePageFailsClosedWhenRollbackSnapshotCannotPersist(t *testing.T) {
 	contentRoot := t.TempDir()
 
 	siteDB, err := db.Open(filepath.Join(t.TempDir(), "test.sqlite"))
@@ -4226,16 +4226,15 @@ func TestUpdatePageDBWarning(t *testing.T) {
 	res = callTool(t, session, "update_page", map[string]any{
 		"slug": "posts/update-db-warning", "title": "Updated", "expected_revision": expected,
 	})
-	if res.IsError {
-		raw, _ := json.Marshal(res.Content)
-		t.Fatalf("update_page must not hard-fail on DB sync error: %s", raw)
+	if !res.IsError {
+		t.Fatal("update_page succeeded without a durable rollback snapshot")
 	}
 	raw, _ := json.Marshal(res.Content)
-	if !strings.Contains(string(raw), "warning") {
-		t.Fatalf("expected warning when update DB sync fails, got: %s", raw)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error when snapshot journal is unavailable, got: %s", raw)
 	}
-	if got := decodeWriteData(t, res)["status"]; got != "partial_success" {
-		t.Fatalf("expected partial_success status when update DB sync fails, got: %v", got)
+	if got := readFileString(t, contentRoot, "posts/update-db-warning/index.md"); strings.Contains(got, "Updated") {
+		t.Fatalf("update_page modified source despite snapshot persistence error: %q", got)
 	}
 }
 

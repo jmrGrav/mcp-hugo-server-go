@@ -11,6 +11,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
@@ -793,6 +794,52 @@ func TestRollbackChangeRestoresUpdatePageSnapshot(t *testing.T) {
 	after := readFileString(t, contentRoot, "posts/first/index.md")
 	if after != before {
 		t.Fatalf("rollback_change did not restore pre-update content:\nbefore=%q\nafter=%q", before, after)
+	}
+}
+
+func TestRollbackChangePersistsReverseSnapshotAcrossRestart(t *testing.T) {
+	contentRoot := t.TempDir()
+	journal, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	first, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: journal})
+	created := callTool(t, first, "create_page", map[string]any{
+		"slug": "posts/reverse-rollback", "title": "Before", "body": "Before body", "tags": []any{}, "categories": []any{},
+	})
+	if created.IsError {
+		t.Fatalf("create_page failed: %s", marshalContent(t, created))
+	}
+	before := decodeWriteData(t, created)["new_revision"].(string)
+	updated := callTool(t, first, "update_page", map[string]any{
+		"slug": "posts/reverse-rollback", "body": "After body", "expected_revision": before,
+	})
+	if updated.IsError {
+		t.Fatalf("update_page failed: %s", marshalContent(t, updated))
+	}
+	after := decodeWriteData(t, updated)["new_revision"].(string)
+	done()
+
+	second, _, secondDone := newTestServer(t, contentRoot, testServerOpts{SiteDB: journal})
+	rolledBack := callTool(t, second, "rollback_change", map[string]any{
+		"slug": "posts/reverse-rollback", "to_revision": before, "expected_revision": after,
+	})
+	if rolledBack.IsError {
+		t.Fatalf("rollback after restart failed: %s", marshalContent(t, rolledBack))
+	}
+	secondDone()
+
+	third, _, thirdDone := newTestServer(t, contentRoot, testServerOpts{SiteDB: journal})
+	defer thirdDone()
+	reversed := callTool(t, third, "rollback_change", map[string]any{
+		"slug": "posts/reverse-rollback", "to_revision": after, "expected_revision": before,
+	})
+	if reversed.IsError {
+		t.Fatalf("reverse rollback after restart failed: %s", marshalContent(t, reversed))
+	}
+	if got := readFileString(t, contentRoot, "posts/reverse-rollback/index.md"); !strings.Contains(got, "After body") {
+		t.Fatalf("reverse rollback did not restore after state: %q", got)
 	}
 }
 
