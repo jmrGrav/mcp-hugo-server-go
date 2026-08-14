@@ -4141,6 +4141,12 @@ func TestGetSiteHealthTranslationPairInfoFindingDoesNotMoveScore(t *testing.T) {
 	if advisoriesCount, _ := data["advisories_count"].(float64); advisoriesCount != 1 {
 		t.Fatalf("data.advisories_count = %v, want 1", advisoriesCount)
 	}
+	if actionable, _ := data["actionable_taxonomy_findings_count"].(float64); actionable != 0 {
+		t.Fatalf("actionable_taxonomy_findings_count = %v, want 0 for translation_pair", actionable)
+	}
+	if translations, _ := data["translation_pairs_detected"].(float64); translations != 1 {
+		t.Fatalf("translation_pairs_detected = %v, want 1", translations)
+	}
 	if data["content_status"] != "healthy" {
 		t.Fatalf("data.content_status = %v, want healthy", data["content_status"])
 	}
@@ -4212,6 +4218,12 @@ func TestGetSiteHealthPossibleDuplicateWarningReducesCategoryScoreOnly(t *testin
 	// info-severity one.
 	if advisoriesCount, _ := data["advisories_count"].(float64); advisoriesCount != 1 {
 		t.Fatalf("data.advisories_count = %v, want 1 (this fixture's warning-severity finding must still be counted)", advisoriesCount)
+	}
+	if actionable, _ := data["actionable_taxonomy_findings_count"].(float64); actionable != 1 {
+		t.Fatalf("actionable_taxonomy_findings_count = %v, want 1 for a warning-severity finding", actionable)
+	}
+	if translations, present := data["translation_pairs_detected"]; present && translations != float64(0) {
+		t.Fatalf("translation_pairs_detected = %v, want omitted or 0 without translation pairs", translations)
 	}
 }
 
