@@ -155,6 +155,16 @@ type contentEnvelopeData struct {
 	// of deliberately drilling into score_breakdown.<category>. Never moves
 	// score/status.
 	AdvisoriesCount int `json:"advisories_count,omitempty"`
+	// ActionableTaxonomyFindingsCount is the warning-severity subset of
+	// advisories_count: alias mismatches, possible duplicates, and casing
+	// variants that need editorial attention. It deliberately excludes
+	// translation_pair/info findings, which describe expected multilingual
+	// localization (#1061).
+	ActionableTaxonomyFindingsCount int `json:"actionable_taxonomy_findings_count,omitempty"`
+	// TranslationPairsDetected is the informational subset of taxonomy
+	// findings. It is separate from actionable_taxonomy_findings_count so an
+	// agent never has to infer whether an advisory asks for a correction.
+	TranslationPairsDetected int `json:"translation_pairs_detected,omitempty"`
 	// RuntimeDegraded is populated only by get_site_health. Content health and
 	// operational/build health are separate signals, so expose the latest
 	// failed build state without requiring an agent to infer it from a second
@@ -712,30 +722,32 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			}
 			health := buildSiteHealth(ctx, idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases, cfg)
 			return nil, newContentEnvelope(contentEnvelopeData{
-				Status:                       health.Status,
-				Score:                        health.Score,
-				ContentStatus:                health.ContentStatus,
-				AdvisoriesCount:              health.AdvisoriesCount,
-				RuntimeDegraded:              health.RuntimeDegraded,
-				RuntimeDegradedReasons:       health.RuntimeDegradedReasons,
-				ScoreBreakdown:               health.ScoreBreakdown,
-				PublishedPages:               health.PublishedPages,
-				SourcePages:                  health.SourcePages,
-				DraftPages:                   health.DraftPages,
-				PublishableSourcePages:       health.PublishableSourcePages,
-				PublishableContentPages:      health.PublishableContentPages,
-				SectionIndexPages:            health.SectionIndexPages,
-				MissingPublicPages:           health.MissingPublicPages,
-				PublicOutputComplete:         health.PublicOutputComplete,
-				PublicationCoverage:          health.PublicationCoverage,
-				Tags:                         health.Tags,
-				Categories:                   health.Categories,
-				MissingTitles:                health.MissingTitles,
-				MissingDates:                 health.MissingDates,
-				ValidationErrors:             health.ValidationErrors,
-				TaxonomyInconsistencies:      health.TaxonomyInconsistencies,
-				TaxonomyInconsistencyDetails: health.TaxonomyInconsistencyDetails,
-				UntrackedSourcePages:         health.UntrackedSourcePages,
+				Status:                          health.Status,
+				Score:                           health.Score,
+				ContentStatus:                   health.ContentStatus,
+				AdvisoriesCount:                 health.AdvisoriesCount,
+				ActionableTaxonomyFindingsCount: health.ActionableTaxonomyFindingsCount,
+				TranslationPairsDetected:        health.TranslationPairsDetected,
+				RuntimeDegraded:                 health.RuntimeDegraded,
+				RuntimeDegradedReasons:          health.RuntimeDegradedReasons,
+				ScoreBreakdown:                  health.ScoreBreakdown,
+				PublishedPages:                  health.PublishedPages,
+				SourcePages:                     health.SourcePages,
+				DraftPages:                      health.DraftPages,
+				PublishableSourcePages:          health.PublishableSourcePages,
+				PublishableContentPages:         health.PublishableContentPages,
+				SectionIndexPages:               health.SectionIndexPages,
+				MissingPublicPages:              health.MissingPublicPages,
+				PublicOutputComplete:            health.PublicOutputComplete,
+				PublicationCoverage:             health.PublicationCoverage,
+				Tags:                            health.Tags,
+				Categories:                      health.Categories,
+				MissingTitles:                   health.MissingTitles,
+				MissingDates:                    health.MissingDates,
+				ValidationErrors:                health.ValidationErrors,
+				TaxonomyInconsistencies:         health.TaxonomyInconsistencies,
+				TaxonomyInconsistencyDetails:    health.TaxonomyInconsistencyDetails,
+				UntrackedSourcePages:            health.UntrackedSourcePages,
 			}, time.Now().UTC()), nil
 		})
 
@@ -1925,6 +1937,8 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	// Using the narrower info-only definition would have reported 0 for the
 	// exact casing_variant case #591 was filed to catch.
 	health.AdvisoriesCount = len(health.TaxonomyInconsistencyDetails)
+	health.ActionableTaxonomyFindingsCount = taxonomyWarnings
+	health.TranslationPairsDetected = taxonomyAdvisories
 
 	score := frontmatterScore
 	// #719: a perfect 100 alongside actionable warning-severity taxonomy
