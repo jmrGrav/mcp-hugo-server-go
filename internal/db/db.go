@@ -54,6 +54,17 @@ type PublicationManifest struct {
 	ObservedAt     time.Time
 }
 
+// MutationJournalEntry is a caller-scoped successful mutation result retained
+// for idempotent replay and get_mutation_status after a process restart.
+type MutationJournalEntry struct {
+	CallerKey   string
+	Tool        string
+	Key         string
+	RequestHash string
+	ResultJSON  []byte
+	CreatedAt   time.Time
+}
+
 // Open opens (or creates) the SQLite database at path and runs migrations.
 func Open(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
@@ -137,6 +148,12 @@ func (d *DB) createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_publication_manifests_observed_at
 			ON publication_manifests(observed_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS mutation_journal (
+			caller_key TEXT NOT NULL, tool TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+			request_hash TEXT NOT NULL, result_json BLOB NOT NULL, created_at TEXT NOT NULL,
+			PRIMARY KEY(caller_key, tool, idempotency_key)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_mutation_journal_created_at ON mutation_journal(created_at)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -201,6 +218,39 @@ func (d *DB) LatestPublicationManifest() (*PublicationManifest, error) {
 	}
 	m.ObservedAt = parsed.UTC()
 	return &m, nil
+}
+
+func (d *DB) RememberMutation(e MutationJournalEntry) error {
+	if e.CallerKey == "" || e.Tool == "" || e.Key == "" || e.RequestHash == "" || len(e.ResultJSON) == 0 {
+		return fmt.Errorf("mutation journal: caller, tool, key, request hash, and result are required")
+	}
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
+	_, err := d.db.Exec(`INSERT INTO mutation_journal(caller_key, tool, idempotency_key, request_hash, result_json, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(caller_key, tool, idempotency_key) DO UPDATE SET request_hash=excluded.request_hash, result_json=excluded.result_json, created_at=excluded.created_at`, e.CallerKey, e.Tool, e.Key, e.RequestHash, e.ResultJSON, e.CreatedAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (d *DB) LookupMutation(callerKey, tool, key string, ttl time.Duration) (*MutationJournalEntry, error) {
+	var e MutationJournalEntry
+	var created string
+	err := d.db.QueryRow(`SELECT request_hash, result_json, created_at FROM mutation_journal WHERE caller_key=? AND tool=? AND idempotency_key=?`, callerKey, tool, key).Scan(&e.RequestHash, &e.ResultJSON, &created)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	e.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return nil, fmt.Errorf("mutation journal: parse created_at: %w", err)
+	}
+	if ttl > 0 && time.Since(e.CreatedAt) > ttl {
+		_, _ = d.db.Exec(`DELETE FROM mutation_journal WHERE caller_key=? AND tool=? AND idempotency_key=?`, callerKey, tool, key)
+		return nil, nil
+	}
+	e.CallerKey, e.Tool, e.Key = callerKey, tool, key
+	return &e, nil
 }
 
 // SyncPublicPage upserts a public (published) page, its taxonomy, its link graph,

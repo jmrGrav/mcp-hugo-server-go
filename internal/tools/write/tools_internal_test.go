@@ -218,7 +218,7 @@ func TestNewWriteRegisterRuntimeUsesFirstSiteIndexAndConfiguresStores(t *testing
 	primary := &site.Index{}
 	secondary := &site.Index{}
 
-	rt := newWriteRegisterRuntime(cfg, primary, secondary)
+	rt := newWriteRegisterRuntime(cfg, nil, primary, secondary)
 
 	if rt.siteIdx != primary {
 		t.Fatalf("siteIdx = %p, want first site index %p", rt.siteIdx, primary)
