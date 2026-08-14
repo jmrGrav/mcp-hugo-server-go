@@ -709,7 +709,7 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	if s == nil {
 		return
 	}
-	rt := newWriteRegisterRuntime(cfg, siteIdxs...)
+	rt := newWriteRegisterRuntime(cfg, siteDB, siteIdxs...)
 	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots)
 	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots)
 	registerListPageSnapshots(s, cfg, rt.snapshots)
@@ -737,7 +737,7 @@ type writeRegisterRuntime struct {
 	bundleSnapshots  *bundleSnapshotStore
 }
 
-func newWriteRegisterRuntime(cfg config.Config, siteIdxs ...*site.Index) *writeRegisterRuntime {
+func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) *writeRegisterRuntime {
 	var siteIdx *site.Index
 	if len(siteIdxs) > 0 {
 		siteIdx = siteIdxs[0]
@@ -746,7 +746,7 @@ func newWriteRegisterRuntime(cfg config.Config, siteIdxs ...*site.Index) *writeR
 		siteIdx:          siteIdx,
 		deleteLimiters:   make(map[string]*rate.Limiter),
 		mutationLimiters: make(map[string]*rate.Limiter),
-		idem:             newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256),
+		idem:             newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256, siteDB),
 		plans:            newPlanStore(planTTL, planMaxEntries),
 		snapshots:        newSnapshotStore(snapshotTTL, snapshotMaxEntries),
 		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries),

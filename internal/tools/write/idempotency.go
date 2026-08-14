@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 )
 
 // maxIdempotencyKeyLen and idempotencyKeyPattern bound a caller-supplied
@@ -95,19 +96,37 @@ type idempotencyStore struct {
 	ttl        time.Duration
 	maxEntries int
 	entries    map[string]idempotencyEntry
+	persistent *db.DB
 }
 
-func newIdempotencyStore(ttl time.Duration, maxEntries int) *idempotencyStore {
+func newIdempotencyStore(ttl time.Duration, maxEntries int, persistent ...*db.DB) *idempotencyStore {
+	var journal *db.DB
+	if len(persistent) > 0 {
+		journal = persistent[0]
+	}
 	return &idempotencyStore{
 		ttl:        ttl,
 		maxEntries: maxEntries,
 		entries:    make(map[string]idempotencyEntry),
+		persistent: journal,
 	}
 }
 
 func (s *idempotencyStore) replay(callerKey, tool, key, requestHash string, out any) (bool, error) {
 	if s == nil || key == "" {
 		return false, nil
+	}
+	if s.persistent != nil {
+		entry, err := s.persistent.LookupMutation(callerKey, tool, key, s.ttl)
+		if err != nil {
+			return false, err
+		}
+		if entry != nil {
+			if entry.RequestHash != requestHash {
+				return false, fmt.Errorf("idempotency_conflict: idempotency_key was already used for a different %s request", tool)
+			}
+			return true, json.Unmarshal(entry.ResultJSON, out)
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -133,6 +152,11 @@ func (s *idempotencyStore) remember(callerKey, tool, key, requestHash string, ou
 	if err != nil {
 		return err
 	}
+	if s.persistent != nil {
+		if err := s.persistent.RememberMutation(db.MutationJournalEntry{CallerKey: callerKey, Tool: tool, Key: key, RequestHash: requestHash, ResultJSON: raw}); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -157,18 +181,27 @@ func (s *idempotencyStore) remember(callerKey, tool, key, requestHash string, ou
 // not proof of failure, only "no confirmed success on record for this key,"
 // which also covers still-in-flight, genuinely failed, expired (TTL), or
 // never-attempted-with-this-key.
-func (s *idempotencyStore) lookup(callerKey, tool, key string) (json.RawMessage, bool) {
+func (s *idempotencyStore) lookup(callerKey, tool, key string) (json.RawMessage, bool, error) {
 	if s == nil || key == "" {
-		return nil, false
+		return nil, false, nil
+	}
+	if s.persistent != nil {
+		entry, err := s.persistent.LookupMutation(callerKey, tool, key, s.ttl)
+		if err != nil {
+			return nil, false, err
+		}
+		if entry != nil {
+			return json.RawMessage(entry.ResultJSON), true, nil
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[s.cacheKey(callerKey, tool, key)]
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
-	return json.RawMessage(entry.ResultJSON), true
+	return json.RawMessage(entry.ResultJSON), true, nil
 }
 
 // cacheKey namespaces every entry by callerKey (the requesting bearer

@@ -105,7 +105,10 @@ func registerGetMutationStatus(s *mcp.Server, idem *idempotencyStore) {
 		// Scoped to the requesting caller's own bearer token (#627): without
 		// this, any write-scoped caller could look up any other caller's
 		// mutation result just by knowing (or guessing) their tool+key.
-		raw, found := idem.lookup(idempotencyCallerKey(ctx), in.Tool, in.IdempotencyKey)
+		raw, found, lookupErr := idem.lookup(idempotencyCallerKey(ctx), in.Tool, in.IdempotencyKey)
+		if lookupErr != nil {
+			return nil, getMutationStatusOutput{}, fmt.Errorf("internal_error: failed to read mutation journal")
+		}
 		status := "unknown"
 		var result map[string]any
 		if found {

@@ -62,14 +62,14 @@ func TestIdempotencyStoreExpiresByConfiguredTTL(t *testing.T) {
 	}
 
 	// Immediately after remember, the entry must still be present.
-	if _, found := store.lookup("caller-a", "create_page", "ttl-key"); !found {
+	if _, found, err := store.lookup("caller-a", "create_page", "ttl-key"); err != nil || !found {
 		t.Fatal("lookup immediately after remember: expected entry to be present")
 	}
 
 	// After the configured 1-second TTL elapses, the entry must be gone —
 	// with the hardcoded 15-minute default this assertion would fail.
 	time.Sleep(1200 * time.Millisecond)
-	if _, found := store.lookup("caller-a", "create_page", "ttl-key"); found {
+	if _, found, err := store.lookup("caller-a", "create_page", "ttl-key"); err != nil || found {
 		t.Fatal("lookup after configured TTL elapsed: expected entry to have expired")
 	}
 }
@@ -102,12 +102,12 @@ func TestIdempotencyStoreIsolatesByCallerKey(t *testing.T) {
 	}
 
 	// caller-a can look up its own result.
-	if _, found := store.lookup("caller-a", sharedTool, sharedKey); !found {
+	if _, found, err := store.lookup("caller-a", sharedTool, sharedKey); err != nil || !found {
 		t.Fatal("caller-a lookup: expected its own entry to be present")
 	}
 
 	// caller-b, using the identical tool+key, must NOT see caller-a's result.
-	if _, found := store.lookup("caller-b", sharedTool, sharedKey); found {
+	if _, found, err := store.lookup("caller-b", sharedTool, sharedKey); err != nil || found {
 		t.Fatal("caller-b lookup: leaked caller-a's mutation result across the caller boundary (#627)")
 	}
 
