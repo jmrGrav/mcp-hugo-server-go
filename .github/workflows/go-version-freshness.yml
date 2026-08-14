@@ -1,0 +1,59 @@
+name: Go version freshness
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-go-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Compare go.mod against latest stable Go release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          current="$(grep -E '^go [0-9]+\.[0-9]+\.[0-9]+$' go.mod | awk '{print $2}')"
+          if [ -z "$current" ]; then
+            echo "::error::could not parse a go directive from go.mod"
+            exit 1
+          fi
+
+          latest="$(curl -fsSL 'https://go.dev/dl/?mode=json' \
+            | jq -r '[.[] | select(.stable == true)][0].version' \
+            | sed 's/^go//')"
+          if [ -z "$latest" ] || [ "$latest" = "null" ]; then
+            echo "::error::could not resolve the latest stable Go release from go.dev/dl"
+            exit 1
+          fi
+
+          echo "go.mod: $current"
+          echo "latest stable: $latest"
+
+          if [ "$current" = "$latest" ]; then
+            echo "go.mod is current."
+            exit 0
+          fi
+
+          title="Go toolchain is behind: go.mod has $current, latest stable is $latest"
+          existing="$(gh issue list --state open --search "in:title \"Go toolchain is behind\"" --json number,title \
+            --jq '.[] | select(.title | startswith("Go toolchain is behind")) | .number' | head -1)"
+
+          body="$(printf 'go.mod pins `go %s`. The latest stable Go release is `%s`.\n\nEvery Go build/test/release step runs on `ubuntu-latest` via `actions/setup-go` with `go-version-file: go.mod`, which auto-fetches whatever toolchain is pinned - the self-hosted deploy runner only moves a prebuilt binary and never compiles Go itself, so bumping this carries no deploy-runner risk.\n\nTo resolve: bump the `go` directive in go.mod to `%s`, run `go build ./...`, `go vet ./...`, `go test ./...`, and `govulncheck ./...` under the new toolchain, then open a PR.\n\nThis issue was filed automatically by the Go version freshness workflow. It will stay open until go.mod is updated; re-running the workflow after a fix closes nothing automatically - close it manually once merged.\n' "$current" "$latest" "$latest")"
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue edit "$existing" --title "$title" --body "$body"
+          else
+            echo "Filing new issue"
+            gh issue create --title "$title" --body "$body" --label "dependencies" || \
+              gh issue create --title "$title" --body "$body"
+          fi
