@@ -65,6 +65,15 @@ type MutationJournalEntry struct {
 	CreatedAt   time.Time
 }
 
+// EphemeralRecord is caller-owned TTL state returned for one record kind.
+// Domain payloads remain in the write package; SQLite only enforces lifetime
+// and ownership across a process restart.
+type EphemeralRecord struct {
+	ID        string
+	Payload   []byte
+	CreatedAt time.Time
+}
+
 // Open opens (or creates) the SQLite database at path and runs migrations.
 func Open(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
@@ -209,6 +218,38 @@ func (d *DB) GetEphemeralRecord(kind, id, callerKey string, ttl time.Duration) (
 func (d *DB) DeleteEphemeralRecord(kind, id, callerKey string) error {
 	_, err := d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=? AND caller_key=?`, kind, id, callerKey)
 	return err
+}
+
+// ListEphemeralRecords returns only unexpired records owned by callerKey.
+// Expiry is enforced here as well as on point lookup so a restart cannot make
+// an old snapshot listable beyond its advertised retention window.
+func (d *DB) ListEphemeralRecords(kind, callerKey string, ttl time.Duration) ([]EphemeralRecord, error) {
+	rows, err := d.db.Query(`SELECT record_id,payload,created_at FROM ephemeral_records WHERE kind=? AND caller_key=? ORDER BY created_at DESC`, kind, callerKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var records []EphemeralRecord
+	for rows.Next() {
+		var record EphemeralRecord
+		var created string
+		if err := rows.Scan(&record.ID, &record.Payload, &created); err != nil {
+			return nil, err
+		}
+		at, err := time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			return nil, err
+		}
+		if ttl > 0 && time.Since(at) > ttl {
+			if _, err := d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=? AND caller_key=?`, kind, record.ID, callerKey); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		record.CreatedAt = at.UTC()
+		records = append(records, record)
+	}
+	return records, rows.Err()
 }
 
 // RecordPublicationManifest persists a completed build's observed source and

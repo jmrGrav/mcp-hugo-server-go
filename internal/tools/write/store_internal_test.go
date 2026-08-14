@@ -70,6 +70,34 @@ func TestBundlePlanStoreSurvivesReopenWithCallerIsolation(t *testing.T) {
 	}
 }
 
+func TestSnapshotStoreSurvivesReopenAndListsOnlyItsCaller(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.sqlite")
+	first, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := newSnapshotStore(time.Hour, 8, first)
+	store.put("/opaque/page.md", "sha256:before", "caller-a", "before bytes")
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	restarted := newSnapshotStore(time.Hour, 8, second)
+	if content, ok := restarted.get("/opaque/page.md", "sha256:before", "caller-a"); !ok || content != "before bytes" {
+		t.Fatalf("restarted snapshot = %q, %v", content, ok)
+	}
+	if rows := restarted.list("/opaque/page.md", "caller-b"); len(rows) != 0 {
+		t.Fatalf("caller-b snapshots = %v, want none", rows)
+	}
+	if rows := restarted.list("/opaque/page.md", "caller-a"); len(rows) != 1 || rows[0].Revision != "sha256:before" {
+		t.Fatalf("caller-a snapshots = %+v", rows)
+	}
+}
+
 func TestSnapshotStorePruneAndTrimLocked(t *testing.T) {
 	now := time.Date(2026, 7, 25, 23, 40, 0, 0, time.UTC)
 	store := &snapshotStore{

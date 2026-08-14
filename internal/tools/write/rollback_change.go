@@ -10,6 +10,7 @@ package write
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -60,13 +61,19 @@ type snapshotStore struct {
 	ttl        time.Duration
 	maxEntries int
 	entries    map[string]snapshotEntry
+	persistent *db.DB
 }
 
-func newSnapshotStore(ttl time.Duration, maxEntries int) *snapshotStore {
+func newSnapshotStore(ttl time.Duration, maxEntries int, persistent ...*db.DB) *snapshotStore {
+	var journal *db.DB
+	if len(persistent) > 0 {
+		journal = persistent[0]
+	}
 	return &snapshotStore{
 		ttl:        ttl,
 		maxEntries: maxEntries,
 		entries:    make(map[string]snapshotEntry),
+		persistent: journal,
 	}
 }
 
@@ -81,6 +88,12 @@ func (s *snapshotStore) put(filePath, revision, callerKey, content string) {
 	s.pruneLocked(now)
 	s.entries[snapshotKey(filePath, revision)] = snapshotEntry{CallerKey: callerKey, Content: content, CreatedAt: now}
 	s.trimLocked()
+	if s.persistent != nil {
+		raw, err := json.Marshal(snapshotEntry{CallerKey: callerKey, Content: content, CreatedAt: now})
+		if err == nil {
+			_ = s.persistent.PutEphemeralRecord("content_snapshot", snapshotKey(filePath, revision), callerKey, raw, now)
+		}
+	}
 }
 
 func (s *snapshotStore) get(filePath, revision, callerKey string) (string, bool) {
@@ -88,6 +101,12 @@ func (s *snapshotStore) get(filePath, revision, callerKey string) (string, bool)
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[snapshotKey(filePath, revision)]
+	if !ok && s.persistent != nil {
+		if raw, found, err := s.persistent.GetEphemeralRecord("content_snapshot", snapshotKey(filePath, revision), callerKey, s.ttl); err == nil && found && json.Unmarshal(raw, &entry) == nil {
+			ok = true
+			s.entries[snapshotKey(filePath, revision)] = entry
+		}
+	}
 	if !ok {
 		return "", false
 	}
@@ -104,6 +123,19 @@ func (s *snapshotStore) list(filePath, callerKey string) []snapshotListing {
 	s.pruneLocked(now)
 	items := make([]snapshotListing, 0)
 	prefix := filePath + "\x00"
+	if s.persistent != nil {
+		if records, err := s.persistent.ListEphemeralRecords("content_snapshot", callerKey, s.ttl); err == nil {
+			for _, record := range records {
+				if !strings.HasPrefix(record.ID, prefix) {
+					continue
+				}
+				var entry snapshotEntry
+				if json.Unmarshal(record.Payload, &entry) == nil {
+					s.entries[record.ID] = entry
+				}
+			}
+		}
+	}
 	for key, entry := range s.entries {
 		if !strings.HasPrefix(key, prefix) || (entry.CallerKey != "" && entry.CallerKey != callerKey) {
 			continue
