@@ -465,6 +465,19 @@ func postBuildCallbacks(
 			}
 			return nil
 		}},
+		{Name: "publication_manifest", OnBuildComplete: func(completion admin.BuildCompletion) error {
+			if siteDB == nil {
+				return nil
+			}
+			return siteDB.RecordPublicationManifest(db.PublicationManifest{
+				BuildID:        completion.BuildID,
+				SourceRevision: completion.SourceRevision,
+				OutputRevision: completion.OutputRevision,
+				HugoVersion:    completion.HugoVersion,
+				Status:         completion.Status,
+				ObservedAt:     completion.ObservedAt,
+			})
+		}},
 		{Name: "cloudflare_purge", Fn: func() error {
 			if err := cloudflare.PurgeAll(cfg.Cloudflare); err != nil {
 				logger.Warn(action+": cloudflare purge failed", "error", err)
@@ -587,7 +600,7 @@ func buildPrivilegedScopedServer(scopeName string, core *serverCore, cfg config.
 	// registration keeps its compatibility signature for unit registrations,
 	// while the production server can reconcile source and public output after
 	// restarts instead of trusting volatile BuildPending flags (#1066).
-	admin.RegisterRuntimeStatus(server, cfg, core.srcIdx, idx)
+	admin.RegisterRuntimeStatusWithDB(server, cfg, core.srcIdx, core.siteDB, idx)
 	admin.RegisterVerifyPublication(server, idx, core.srcIdx, cfg)
 	admin.RegisterPublishChanges(server, idx, core.srcIdx, cfg, postBuildCallbacks("publish_changes", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")

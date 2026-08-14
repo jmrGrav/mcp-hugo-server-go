@@ -1,6 +1,7 @@
 package admin_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,9 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func runGitCmd(t *testing.T, dir string, args ...string) {
@@ -140,6 +144,59 @@ func TestGetRuntimeStatusReportsHugoAndGitAvailability(t *testing.T) {
 	}
 	if got := data["build_channel"]; got != "main" {
 		t.Fatalf("build_channel = %v, want main", got)
+	}
+}
+
+func TestGetRuntimeStatusUsesPersistedPublicationManifestAfterRestart(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+	d, err := db.Open(filepath.Join(t.TempDir(), "site.db"))
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	observed := time.Date(2026, time.August, 14, 10, 11, 12, 0, time.UTC)
+	if err := d.RecordPublicationManifest(db.PublicationManifest{
+		BuildID:        "20260814-101112-abcd",
+		SourceRevision: "sha256:source",
+		OutputRevision: "sha256:public",
+		HugoVersion:    "hugo v0.164.0+extended",
+		Status:         "ok",
+		ObservedAt:     observed,
+	}); err != nil {
+		t.Fatalf("RecordPublicationManifest: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterRuntimeStatusWithDB(s, cfg, nil, d)
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer session.Close()
+
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("get_runtime_status error = %v, result = %s", err, resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+	if data["last_build_persistence"] != "sqlite_manifest" {
+		t.Fatalf("last_build_persistence = %v, want sqlite_manifest", data["last_build_persistence"])
+	}
+	lastBuild, ok := data["last_build"].(map[string]any)
+	if !ok {
+		t.Fatalf("last_build = %T, want persisted manifest", data["last_build"])
+	}
+	if lastBuild["build_id"] != "20260814-101112-abcd" || lastBuild["status"] != "ok" || lastBuild["at"] != observed.Format(time.RFC3339) {
+		t.Fatalf("last_build = %#v, want persisted build fact", lastBuild)
 	}
 }
 

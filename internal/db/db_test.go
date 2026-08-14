@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
@@ -177,6 +178,65 @@ func TestSnapshotHealth(t *testing.T) {
 	payload := `{"broken_links":0,"total_pages":42}`
 	if err := d.SnapshotHealth(payload); err != nil {
 		t.Fatalf("SnapshotHealth: %v", err)
+	}
+}
+
+func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	observed := time.Date(2026, time.August, 14, 10, 11, 12, 0, time.UTC)
+	manifest := db.PublicationManifest{
+		BuildID:        "20260814-101112-abcd",
+		SourceRevision: "source-v1",
+		OutputRevision: "public-v1",
+		HugoVersion:    "0.164.0+extended",
+		Status:         "ok",
+		ObservedAt:     observed,
+	}
+	if err := d.RecordPublicationManifest(manifest); err != nil {
+		t.Fatalf("RecordPublicationManifest: %v", err)
+	}
+	// A retry after an uncertain transport result updates the same durable
+	// fact instead of producing a second ambiguous build record.
+	manifest.OutputRevision = "public-v1-reconciled"
+	if err := d.RecordPublicationManifest(manifest); err != nil {
+		t.Fatalf("RecordPublicationManifest replay: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	got, err := d.LatestPublicationManifest()
+	if err != nil {
+		t.Fatalf("LatestPublicationManifest: %v", err)
+	}
+	if got == nil {
+		t.Fatal("LatestPublicationManifest = nil, want persisted record")
+	}
+	if got.BuildID != manifest.BuildID || got.SourceRevision != manifest.SourceRevision || got.OutputRevision != manifest.OutputRevision || got.HugoVersion != manifest.HugoVersion || got.Status != manifest.Status || !got.ObservedAt.Equal(observed) {
+		t.Fatalf("persisted manifest = %+v, want %+v", got, manifest)
+	}
+}
+
+func TestPublicationManifestRejectsIncompleteFacts(t *testing.T) {
+	d := openTestDB(t)
+	if err := d.RecordPublicationManifest(db.PublicationManifest{BuildID: "build-1", Status: "ok"}); err == nil {
+		t.Fatal("RecordPublicationManifest accepted missing revisions")
+	}
+	got, err := d.LatestPublicationManifest()
+	if err != nil {
+		t.Fatalf("LatestPublicationManifest: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("LatestPublicationManifest = %+v after rejected write, want nil", got)
 	}
 }
 
