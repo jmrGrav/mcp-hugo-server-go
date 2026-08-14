@@ -378,6 +378,41 @@ func TestHasPendingBuildNilSafe(t *testing.T) {
 	}
 }
 
+// TestSourceIndexPendingAndLanguageViews exercises the read-side views used
+// by runtime/build reporting. These return copies and sorted values, so a
+// caller cannot mutate SourceIndex bookkeeping through a diagnostic response.
+func TestSourceIndexPendingAndLanguageViews(t *testing.T) {
+	idx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx.Upsert(hugosite.SourcePage{Slug: "posts/fr", Lang: "fr", BuildPending: true, Tags: []string{"Go"}, Categories: []string{"Dev"}})
+	idx.Upsert(hugosite.SourcePage{Slug: "posts/en", Lang: "en", BuildPending: true, Tags: []string{"go", "MCP"}, Categories: []string{"dev", "API"}})
+	idx.Upsert(hugosite.SourcePage{Slug: "posts/default", BuildPending: false})
+
+	if got := idx.PendingCount(); got != 2 {
+		t.Fatalf("PendingCount() = %d, want 2", got)
+	}
+	pending := idx.PendingPages()
+	if len(pending) != 2 || pending[0].Slug != "posts/fr" || pending[1].Slug != "posts/en" {
+		t.Fatalf("PendingPages() = %#v, want pending copies in index order", pending)
+	}
+	pending[0].BuildPending = false
+	if got := idx.PendingCount(); got != 2 {
+		t.Fatalf("PendingPages returned mutable index entry: PendingCount() = %d, want 2", got)
+	}
+	langs := idx.Languages()
+	if len(langs) != 2 || langs[0] != "en" || langs[1] != "fr" {
+		t.Fatalf("Languages() = %#v, want [en fr]", langs)
+	}
+	if tags := idx.AllTags(); len(tags) != 2 || tags[0] != "Go" || tags[1] != "MCP" {
+		t.Fatalf("AllTags() = %#v, want deduplicated tags", tags)
+	}
+	if cats := idx.AllCategories(); len(cats) != 2 || cats[0] != "API" || cats[1] != "Dev" {
+		t.Fatalf("AllCategories() = %#v, want deduplicated categories", cats)
+	}
+}
+
 func TestSourceIndexReloadRefreshesExistingReceiverFromDisk(t *testing.T) {
 	root := t.TempDir()
 	write := func(rel, raw string) {
