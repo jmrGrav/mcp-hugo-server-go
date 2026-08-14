@@ -1621,6 +1621,10 @@
           "type": "string"
         },
         "style": {
+          "enum": [
+            "tech",
+            "geo"
+          ],
           "type": "string"
         },
         "subtitle": {

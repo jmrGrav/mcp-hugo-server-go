@@ -84,12 +84,14 @@ func TestRunPostBuildHooksSchemaPublishesDryRunBooleanContract(t *testing.T) {
 
 // TestGenerateHeroImageInvalidStyleReturnsStructuredError covers #892:
 // generate_hero_image.style is validated in the handler (invalid_params:
-// "style must be 'tech' or 'geo'"), not published as a JSON-Schema enum. A
-// published enum would be enforced by the SDK's argument validation *before*
-// the handler runs, so an out-of-enum value would return a bare text error
-// with no StructuredContent/code, bypassing the toolcontract pipeline. This
-// asserts (a) the field is not re-published as an enum, and (b) an invalid
-// value produces a structured error envelope with a recognized code.
+// "style must be 'tech' or 'geo'"), not enforced by the SDK's argument
+// validation before the handler runs — otherwise an out-of-enum value would
+// return a bare text error with no StructuredContent/code, bypassing the
+// toolcontract pipeline. #1056 later added AdvertiseInputEnum, which
+// decorates only the outgoing tools/list copy with the enum for discovery;
+// the SDK-held validation schema used by CallTool stays permissive, so this
+// still asserts an invalid value produces a structured error envelope with
+// a recognized code.
 func TestGenerateHeroImageInvalidStyleReturnsStructuredError(t *testing.T) {
 	cfg := config.Default()
 	cfg.SiteRoot = t.TempDir()
@@ -97,28 +99,6 @@ func TestGenerateHeroImageInvalidStyleReturnsStructuredError(t *testing.T) {
 
 	session, done := newTestServer(t, cfg)
 	defer done()
-
-	result, err := session.ListTools(context.Background(), &mcp.ListToolsParams{})
-	if err != nil {
-		t.Fatalf("ListTools: %v", err)
-	}
-	var tool *mcp.Tool
-	for i := range result.Tools {
-		if result.Tools[i].Name == "generate_hero_image" {
-			tool = result.Tools[i]
-			break
-		}
-	}
-	if tool == nil {
-		t.Fatal("generate_hero_image not found in tools list")
-	}
-	// Regression guard: re-publishing the enum would reintroduce the
-	// schema-layer bypass this test exists to prevent.
-	style := schemaAt(t, tool, "inputSchema.style")
-	if _, hasEnum := style["enum"]; hasEnum {
-		t.Fatalf("generate_hero_image.style re-published as a JSON-Schema enum; out-of-enum "+
-			"values would be rejected before the handler and lose StructuredContent (#892): %v", style["enum"])
-	}
 
 	res, err := session.CallTool(context.Background(), &mcp.CallToolParams{
 		Name: "generate_hero_image",
