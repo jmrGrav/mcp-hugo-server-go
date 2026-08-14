@@ -747,7 +747,7 @@ func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, siteIdxs ...*site
 		deleteLimiters:   make(map[string]*rate.Limiter),
 		mutationLimiters: make(map[string]*rate.Limiter),
 		idem:             newIdempotencyStore(idempotencyTTLFromConfig(cfg), 256, siteDB),
-		plans:            newPlanStore(planTTL, planMaxEntries),
+		plans:            newPlanStore(planTTL, planMaxEntries, siteDB),
 		snapshots:        newSnapshotStore(snapshotTTL, snapshotMaxEntries),
 		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries),
 		bundleSnapshots:  newBundleSnapshotStore(snapshotTTL, snapshotMaxEntries),

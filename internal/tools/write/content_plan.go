@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -65,13 +66,19 @@ type planStore struct {
 	ttl        time.Duration
 	maxEntries int
 	entries    map[string]planEntry
+	persistent *db.DB
 }
 
-func newPlanStore(ttl time.Duration, maxEntries int) *planStore {
+func newPlanStore(ttl time.Duration, maxEntries int, persistent ...*db.DB) *planStore {
+	var journal *db.DB
+	if len(persistent) > 0 {
+		journal = persistent[0]
+	}
 	return &planStore{
 		ttl:        ttl,
 		maxEntries: maxEntries,
 		entries:    make(map[string]planEntry),
+		persistent: journal,
 	}
 }
 
@@ -81,6 +88,11 @@ func (s *planStore) put(id string, entry planEntry) {
 	s.pruneLocked(time.Now())
 	s.entries[id] = entry
 	s.trimLocked()
+	if s.persistent != nil {
+		if raw, err := json.Marshal(entry); err == nil {
+			_ = s.persistent.PutEphemeralRecord("content_plan", id, entry.CallerKey, raw, entry.CreatedAt)
+		}
+	}
 }
 
 // get looks up a plan without consuming it (used for a dry-run apply, which
@@ -90,6 +102,14 @@ func (s *planStore) get(id, callerKey string) (planEntry, bool) {
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if !ok && s.persistent != nil {
+		if raw, found, err := s.persistent.GetEphemeralRecord("content_plan", id, callerKey, s.ttl); err == nil && found {
+			if json.Unmarshal(raw, &entry) == nil {
+				ok = true
+				s.entries[id] = entry
+			}
+		}
+	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
 		return planEntry{}, false
 	}
@@ -105,11 +125,21 @@ func (s *planStore) consume(id, callerKey string) (planEntry, bool) {
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if !ok && s.persistent != nil {
+		if raw, found, err := s.persistent.GetEphemeralRecord("content_plan", id, callerKey, s.ttl); err == nil && found {
+			if json.Unmarshal(raw, &entry) == nil {
+				ok = true
+			}
+		}
+	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
 		return planEntry{}, false
 	}
 	if ok {
 		delete(s.entries, id)
+		if s.persistent != nil {
+			_ = s.persistent.DeleteEphemeralRecord("content_plan", id, callerKey)
+		}
 	}
 	return entry, ok
 }

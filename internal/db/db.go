@@ -154,6 +154,11 @@ func (d *DB) createTables() error {
 			PRIMARY KEY(caller_key, tool, idempotency_key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_mutation_journal_created_at ON mutation_journal(created_at)`,
+		`CREATE TABLE IF NOT EXISTS ephemeral_records (
+			kind TEXT NOT NULL, record_id TEXT NOT NULL, caller_key TEXT NOT NULL,
+			payload BLOB NOT NULL, created_at TEXT NOT NULL,
+			PRIMARY KEY(kind, record_id)
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -161,6 +166,49 @@ func (d *DB) createTables() error {
 		}
 	}
 	return nil
+}
+
+// PutEphemeralRecord stores server-owned TTL state such as plans/snapshots.
+// The caller key is persisted with the payload boundary so a restarted server
+// retains the same isolation rule as the in-memory stores.
+func (d *DB) PutEphemeralRecord(kind, id, callerKey string, payload []byte, createdAt time.Time) error {
+	if kind == "" || id == "" || len(payload) == 0 {
+		return fmt.Errorf("ephemeral record: kind, id, and payload are required")
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err := d.db.Exec(`INSERT INTO ephemeral_records(kind,record_id,caller_key,payload,created_at) VALUES(?,?,?,?,?) ON CONFLICT(kind,record_id) DO UPDATE SET caller_key=excluded.caller_key,payload=excluded.payload,created_at=excluded.created_at`, kind, id, callerKey, payload, createdAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (d *DB) GetEphemeralRecord(kind, id, callerKey string, ttl time.Duration) ([]byte, bool, error) {
+	var owner, created string
+	var payload []byte
+	err := d.db.QueryRow(`SELECT caller_key,payload,created_at FROM ephemeral_records WHERE kind=? AND record_id=?`, kind, id).Scan(&owner, &payload, &created)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if owner != callerKey {
+		return nil, false, nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return nil, false, err
+	}
+	if ttl > 0 && time.Since(at) > ttl {
+		_, _ = d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=?`, kind, id)
+		return nil, false, nil
+	}
+	return payload, true, nil
+}
+
+func (d *DB) DeleteEphemeralRecord(kind, id, callerKey string) error {
+	_, err := d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=? AND caller_key=?`, kind, id, callerKey)
+	return err
 }
 
 // RecordPublicationManifest persists a completed build's observed source and
