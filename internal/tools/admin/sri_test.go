@@ -87,6 +87,16 @@ func TestSRICheckVersionsHasEnvelopeMatchingRootFields(t *testing.T) {
 	if _, ok := out["meta"].(map[string]any); !ok {
 		t.Fatalf("meta type = %T, want map[string]any (#552)", out["meta"])
 	}
+	warnings, _ := out["warnings"].([]any)
+	found := false
+	for _, w := range warnings {
+		if w == "root-level result fields are deprecated; use data.*. Root aliases will be removed in a future major version." {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("warnings = %#v, want root-alias deprecation warning present (#1060)", out["warnings"])
+	}
 	for _, field := range []string{"files_scanned", "files_with_sri_attributes", "sri_entries_loaded", "sri_checked", "status", "summary"} {
 		if data[field] != out[field] {
 			t.Fatalf("data.%s = %v, root %s = %v — must match (#552)", field, data[field], field, out[field])
