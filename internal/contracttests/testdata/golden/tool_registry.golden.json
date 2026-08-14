@@ -1331,6 +1331,7 @@
       "type": "object"
     },
     "output_schema_fields": [
+      "data.actionable_taxonomy_findings_count:integer",
       "data.advisories_count:integer",
       "data.categories:integer",
       "data.category:string",
@@ -1445,6 +1446,7 @@
       "data.taxonomy_inconsistency_details[].term_a:string:required",
       "data.taxonomy_inconsistency_details[].term_b:string",
       "data.total:integer",
+      "data.translation_pairs_detected:integer",
       "data.type:string",
       "data.untracked_source_pages:unspecified",
       "data.validation_errors:integer",
@@ -1478,7 +1480,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "3645b4024cb98c2a1b545c60cf67fec971be96de49fc6d29bfc96908015e8330"
+    "output_schema_sha256": "dfe868651abeb9f08f4b0dd47154914b6eb0c73e38ba30966bc6b1e2968b12e7"
   },
   {
     "name": "export_agent_context",
@@ -2971,6 +2973,7 @@
       "type": "object"
     },
     "output_schema_fields": [
+      "data.actionable_taxonomy_findings_count:integer",
       "data.advisories_count:integer",
       "data.categories:integer",
       "data.category:string",
@@ -3085,6 +3088,7 @@
       "data.taxonomy_inconsistency_details[].term_a:string:required",
       "data.taxonomy_inconsistency_details[].term_b:string",
       "data.total:integer",
+      "data.translation_pairs_detected:integer",
       "data.type:string",
       "data.untracked_source_pages:unspecified",
       "data.validation_errors:integer",
@@ -3118,7 +3122,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "3645b4024cb98c2a1b545c60cf67fec971be96de49fc6d29bfc96908015e8330"
+    "output_schema_sha256": "dfe868651abeb9f08f4b0dd47154914b6eb0c73e38ba30966bc6b1e2968b12e7"
   },
   {
     "name": "get_site_information",
