@@ -70,6 +70,9 @@ func TestPreviewBuildHasEnvelopeMatchingRootFields(t *testing.T) {
 	if _, ok := out["meta"].(map[string]any); !ok {
 		t.Fatalf("meta type = %T, want map[string]any (#552)", out["meta"])
 	}
+	if warnings, _ := out["warnings"].([]any); len(warnings) != 1 || warnings[0] != "root-level result fields are deprecated; use data.*. Root aliases will be removed in a future major version." {
+		t.Fatalf("warnings = %#v, want root-alias deprecation warning (#1060)", out["warnings"])
+	}
 	for _, field := range []string{"status", "duration_ms"} {
 		if data[field] != out[field] {
 			t.Fatalf("data.%s = %v, root %s = %v — must match (#552)", field, data[field], field, out[field])

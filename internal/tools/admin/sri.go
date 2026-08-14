@@ -67,8 +67,12 @@ type sriCheckOutput struct {
 	Findings               []sriCheckEntry `json:"findings"`
 }
 
+const rootLevelFieldsDeprecationWarning = "root-level result fields are deprecated; use data.*. Root aliases will be removed in a future major version."
+
 func sriSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
-	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+	out := toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+	out.Warnings = append(out.Warnings, rootLevelFieldsDeprecationWarning)
+	return out
 }
 
 func newSRICheckOutput(data sriCheckData) sriCheckOutput {

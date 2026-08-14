@@ -60,7 +60,9 @@ type runPostBuildHooksOutput struct {
 }
 
 func hooksSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
-	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+	out := toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
+	out.Warnings = append(out.Warnings, rootLevelFieldsDeprecationWarning)
+	return out
 }
 
 func newRunPostBuildHooksOutput(data runPostBuildHooksData) runPostBuildHooksOutput {
