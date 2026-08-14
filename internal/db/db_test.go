@@ -198,6 +198,53 @@ func TestRecoveryJournalListsOnlyUncommittedOperations(t *testing.T) {
 	}
 }
 
+func TestRecoveryJournalSurvivesReopenAndAdvancesStateInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recovery.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "in_progress", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(in_progress): %v", err)
+	}
+	// Advancing state for the same operation_id must update the existing
+	// row, not create a second pending entry — startup recovery needs one
+	// current fact per operation, not a full history.
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "file_written", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(file_written): %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: the crash-recovery scenario this table exists for is a process
+	// restart finding an operation that never reached "committed".
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	pending, err := d.PendingRecovery()
+	if err != nil {
+		t.Fatalf("PendingRecovery after reopen: %v", err)
+	}
+	if len(pending) != 1 || pending[0].OperationID != "op-1" || pending[0].State != "file_written" {
+		t.Fatalf("PendingRecovery after reopen = %+v, want one op-1 entry in state file_written", pending)
+	}
+
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "committed", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(committed): %v", err)
+	}
+	pending, err = d.PendingRecovery()
+	if err != nil {
+		t.Fatalf("PendingRecovery after commit: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("PendingRecovery after commit = %+v, want empty", pending)
+	}
+}
+
 func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.db")
 	d, err := db.Open(path)
