@@ -40,6 +40,20 @@ type DB struct {
 	db *sql.DB
 }
 
+// PublicationManifest records facts observed after a successful Hugo build.
+// It is deliberately a derived operational record: Markdown/Git remain the
+// source-of-truth for source content and public/ remains the source-of-truth
+// for rendered output. The revisions are fingerprints of those two trees at
+// the point the build completed, not revisions to be trusted over the files.
+type PublicationManifest struct {
+	BuildID        string
+	SourceRevision string
+	OutputRevision string
+	HugoVersion    string
+	Status         string
+	ObservedAt     time.Time
+}
+
 // Open opens (or creates) the SQLite database at path and runs migrations.
 func Open(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
@@ -112,6 +126,17 @@ func (d *DB) createTables() error {
 			captured_at TEXT NOT NULL,
 			payload     TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS publication_manifests (
+			id              INTEGER PRIMARY KEY,
+			build_id        TEXT NOT NULL UNIQUE,
+			source_revision TEXT NOT NULL,
+			output_revision TEXT NOT NULL,
+			hugo_version    TEXT NOT NULL DEFAULT '',
+			status          TEXT NOT NULL,
+			observed_at     TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_publication_manifests_observed_at
+			ON publication_manifests(observed_at DESC)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -119,6 +144,63 @@ func (d *DB) createTables() error {
 		}
 	}
 	return nil
+}
+
+// RecordPublicationManifest persists a completed build's observed source and
+// public fingerprints. Replaying the same build ID is idempotent, which is
+// important if the process dies after the output swap but before the callback
+// returns to the MCP transport.
+func (d *DB) RecordPublicationManifest(m PublicationManifest) error {
+	if strings.TrimSpace(m.BuildID) == "" {
+		return fmt.Errorf("publication manifest: build_id is required")
+	}
+	if strings.TrimSpace(m.SourceRevision) == "" || strings.TrimSpace(m.OutputRevision) == "" {
+		return fmt.Errorf("publication manifest: source_revision and output_revision are required")
+	}
+	if strings.TrimSpace(m.Status) == "" {
+		return fmt.Errorf("publication manifest: status is required")
+	}
+	if m.ObservedAt.IsZero() {
+		m.ObservedAt = time.Now().UTC()
+	}
+	_, err := d.db.Exec(`
+		INSERT INTO publication_manifests(build_id, source_revision, output_revision, hugo_version, status, observed_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+		ON CONFLICT(build_id) DO UPDATE SET
+			source_revision=excluded.source_revision,
+			output_revision=excluded.output_revision,
+			hugo_version=excluded.hugo_version,
+			status=excluded.status,
+			observed_at=excluded.observed_at`,
+		m.BuildID, m.SourceRevision, m.OutputRevision, m.HugoVersion, m.Status,
+		m.ObservedAt.UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+// LatestPublicationManifest returns the newest completed build record, or
+// nil when this server has not recorded a build yet. Callers must still
+// reconcile it against the filesystem before treating it as current.
+func (d *DB) LatestPublicationManifest() (*PublicationManifest, error) {
+	var m PublicationManifest
+	var observed string
+	err := d.db.QueryRow(`
+		SELECT build_id, source_revision, output_revision, hugo_version, status, observed_at
+		FROM publication_manifests
+		ORDER BY observed_at DESC, id DESC
+		LIMIT 1`).Scan(&m.BuildID, &m.SourceRevision, &m.OutputRevision, &m.HugoVersion, &m.Status, &observed)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, observed)
+	if err != nil {
+		return nil, fmt.Errorf("publication manifest: parse observed_at: %w", err)
+	}
+	m.ObservedAt = parsed.UTC()
+	return &m, nil
 }
 
 // SyncPublicPage upserts a public (published) page, its taxonomy, its link graph,

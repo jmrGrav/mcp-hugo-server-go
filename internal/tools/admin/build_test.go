@@ -84,6 +84,54 @@ func TestBuildSiteSucceeds(t *testing.T) {
 	}
 }
 
+func TestBuildSiteCompletionCallbackReceivesDiskFingerprints(t *testing.T) {
+	hugoRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'built' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	contentRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(contentRoot, "page.md"), []byte("---\ntitle: manifest\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+
+	var got admin.BuildCompletion
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterBuild(s, cfg, nil, admin.PostBuildCallback{
+		Name: "publication_manifest",
+		OnBuildComplete: func(completion admin.BuildCompletion) error {
+			got = completion
+			return nil
+		},
+	})
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	done := func() { _ = session.Close() }
+	defer done()
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("build_site error = %v, result = %s", err, resultText(res))
+	}
+	if !matchesBuildIDPattern(got.BuildID) {
+		t.Fatalf("completion build_id = %q, want generated ID", got.BuildID)
+	}
+	if !strings.HasPrefix(got.SourceRevision, "sha256:") || !strings.HasPrefix(got.OutputRevision, "sha256:") {
+		t.Fatalf("completion revisions = source %q output %q, want sha256 fingerprints", got.SourceRevision, got.OutputRevision)
+	}
+	if got.Status != "ok" || got.ObservedAt.IsZero() {
+		t.Fatalf("completion = %+v, want successful observed build", got)
+	}
+}
+
 // TestBuildSiteHasEnvelopeMatchingRootFields is a regression test for #572:
 // build_site was the last tool with zero envelope (no data/errors/meta/
 // success at all). Root fields are kept as compatibility aliases, additive

@@ -11,6 +11,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -84,13 +85,12 @@ type siteRuntimeStatus struct {
 	OverdueTestContent    []StaleTestContentEntry `json:"overdue_test_content,omitempty"`
 }
 
-// lastBuildRuntimeStatus reports the outcome of the most recent build_site
-// attempt in this process (#467), so an agent can notice a broken publish
-// pipeline from a read-only status check instead of only discovering it by
-// calling build_site itself at the end of a write cycle. Omitted entirely
-// (via omitempty on the pointer) until build_site has been called at least
-// once in this process's lifetime — there is no attempt to report yet.
+// lastBuildRuntimeStatus reports the latest build fact. In a deployment with
+// db_path it can be restored from the durable publication manifest after a
+// restart; otherwise it is the most recent in-process build_site attempt
+// (#467). Omitted entirely when neither source has a build to report.
 type lastBuildRuntimeStatus struct {
+	BuildID    string `json:"build_id,omitempty"`
 	Status     string `json:"status"`
 	ErrorClass string `json:"error_class,omitempty"`
 	At         string `json:"at"`
@@ -137,6 +137,18 @@ func containsString(values []string, want string) bool {
 
 // RegisterRuntimeStatus wires get_runtime_status (site.admin scope).
 func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, publicIndexes ...*site.Index) {
+	registerRuntimeStatus(s, cfg, srcIdx, nil, publicIndexes...)
+}
+
+// RegisterRuntimeStatusWithDB is the production registration path when the
+// optional derived SQLite database is configured. It retains the public
+// RegisterRuntimeStatus signature for focused tool tests while allowing a
+// restarted process to report the most recently persisted build fact.
+func RegisterRuntimeStatusWithDB(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteDB *db.DB, publicIndexes ...*site.Index) {
+	registerRuntimeStatus(s, cfg, srcIdx, siteDB, publicIndexes...)
+}
+
+func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteDB *db.DB, publicIndexes ...*site.Index) {
 	if s == nil {
 		return
 	}
@@ -145,7 +157,7 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		Title: "Get runtime status",
 		Description: "Report the actual runtime/build/git/site status of this server in one compact structured surface: " +
 			"server version and build commit, whether the hugo and git binaries are usable, the outcome of the most " +
-			"recent build_site attempt (last_build, omitted until build_site has been called at least once), and " +
+			"recent build_site attempt (`last_build`: persisted across restart when `db_path` is configured, otherwise process-memory only), and " +
 			"(opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public " +
 			"revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` " +
 			"surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) " +
@@ -240,6 +252,21 @@ func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			}
 			if snap.Status == "failed" {
 				data.Degraded = append(data.Degraded, "build_site: last attempt failed ("+snap.ErrorClass+") at "+data.LastBuild.At)
+			}
+		} else if siteDB != nil {
+			// The manifest is deliberately only a durable observation. The
+			// source/public revision checks below still read the filesystem;
+			// an out-of-band edit can make a persisted build fact stale.
+			manifest, err := siteDB.LatestPublicationManifest()
+			if err != nil {
+				data.Degraded = append(data.Degraded, "publication manifest unavailable: "+err.Error())
+			} else if manifest != nil {
+				data.LastBuildPersistence = "sqlite_manifest"
+				data.LastBuild = &lastBuildRuntimeStatus{
+					BuildID: manifest.BuildID,
+					Status:  manifest.Status,
+					At:      manifest.ObservedAt.UTC().Format(time.RFC3339),
+				}
 			}
 		}
 

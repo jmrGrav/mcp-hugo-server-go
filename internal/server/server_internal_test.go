@@ -198,6 +198,7 @@ func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
 	want := []string{
 		"index_reload",
 		"db_reindex",
+		"publication_manifest",
 		"cloudflare_purge",
 		"search_index_submit",
 		"stale_test_content_check",
@@ -214,8 +215,13 @@ func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
 			got := make([]string, 0, len(callbacks))
 			for _, cb := range callbacks {
 				got = append(got, cb.Name)
-				if cb.Fn == nil {
-					t.Fatalf("postBuildCallbacks(%q) returned nil Fn for %q", action, cb.Name)
+				// A callback runs via exactly one of these two signatures
+				// (build.go's runner dispatches on whichever is set) — never
+				// require Fn specifically, or a legitimate
+				// OnBuildComplete-only callback like publication_manifest
+				// reads as broken.
+				if cb.Fn == nil && cb.OnBuildComplete == nil {
+					t.Fatalf("postBuildCallbacks(%q) returned nil Fn and nil OnBuildComplete for %q", action, cb.Name)
 				}
 			}
 			if !slices.Equal(got, want) {

@@ -512,6 +512,25 @@ func ownershipDriftSuggestion(summary string) (string, bool) {
 type PostBuildCallback struct {
 	Name string
 	Fn   func() error
+	// OnBuildComplete runs after the output has been swapped, the normal
+	// callbacks have completed, and source/public tree fingerprints have been
+	// observed under ContentMu. It is intended for durable operational facts
+	// such as the publication manifest; it must not treat those derived facts
+	// as a replacement for the filesystem.
+	OnBuildComplete func(BuildCompletion) error
+}
+
+// BuildCompletion contains the facts a post-build recorder may persist. The
+// hashes are calculated while runBuild holds hugosite.ContentMu, so they
+// describe bytes read from disk for this completed build, not an earlier
+// in-memory index snapshot.
+type BuildCompletion struct {
+	BuildID        string
+	SourceRevision string
+	OutputRevision string
+	HugoVersion    string
+	Status         string
+	ObservedAt     time.Time
 }
 
 func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...PostBuildCallback) {
@@ -797,7 +816,7 @@ cbLoop:
 	}
 	// Mark registered-but-not-reached callbacks (post-break) as skipped.
 	for _, cb := range siteReload {
-		if cb.Fn == nil || cb.Name == "" {
+		if (cb.Fn == nil && cb.OnBuildComplete == nil) || cb.Name == "" {
 			continue
 		}
 		if _, seen := callbackOutcomes[cb.Name]; !seen {
@@ -820,6 +839,50 @@ cbLoop:
 		}
 		status = "partial_success"
 	}
+	sourceRevision := ""
+	if strings.TrimSpace(cfg.ContentRoot) != "" {
+		var sourceHashErr error
+		sourceRevision, sourceHashErr = hashTree(cfg.ContentRoot)
+		if sourceHashErr != nil {
+			slog.Warn("build_site: failed to hash source tree", "error", sourceHashErr)
+			if cbWarning == "" {
+				cbWarning = "source revision unavailable after build"
+			} else {
+				cbWarning += "; source revision unavailable after build"
+			}
+			status = "partial_success"
+		}
+	}
+	completion := BuildCompletion{
+		BuildID:        runID,
+		SourceRevision: sourceRevision,
+		OutputRevision: outputRevision,
+		// A build command is the only Hugo process this path is allowed to
+		// invoke. Version probing is intentionally left to runtime status so
+		// wrappers with side effects cannot be run twice (#1077).
+		HugoVersion: "",
+		Status:      status,
+		ObservedAt:  time.Now().UTC(),
+	}
+	for i, cb := range siteReload {
+		if cb.OnBuildComplete == nil {
+			continue
+		}
+		name := cb.Name
+		if name == "" {
+			name = fmt.Sprintf("callback %d", i)
+		}
+		if err := cb.OnBuildComplete(completion); err != nil {
+			callbackOutcomes[name] = "failed"
+			cbWarning = fmt.Sprintf("post-build callback %q failed: %v", name, err)
+			slog.Warn("build_site: post-build completion callback failed", "callback", name, "error", err)
+			status = "partial_success"
+			completion.Status = status
+		} else {
+			callbackOutcomes[name] = "ok"
+		}
+	}
+	stages = buildStages(callbackOutcomes)
 	publishReady := status == "ok"
 	slog.Info("build_site completed",
 		"build_id", runID,
