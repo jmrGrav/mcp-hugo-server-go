@@ -226,6 +226,74 @@ func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
 	}
 }
 
+func TestEphemeralRecordSurvivesReopenAndRespectsCallerAndTTL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ephemeral.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	createdAt := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
+	if err := d.PutEphemeralRecord("content_plan", "plan-1", "caller-a", []byte(`{"field":"title"}`), createdAt); err != nil {
+		t.Fatalf("PutEphemeralRecord: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: this is the actual restart this mechanism exists for — a fresh
+	// DB handle standing in for a fresh process, no in-memory state carried
+	// over except what's in the file.
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	payload, found, err := d.GetEphemeralRecord("content_plan", "plan-1", "caller-a", 0)
+	if err != nil {
+		t.Fatalf("GetEphemeralRecord after reopen: %v", err)
+	}
+	if !found || string(payload) != `{"field":"title"}` {
+		t.Fatalf("GetEphemeralRecord after reopen = (%q, %v), want (%q, true)", payload, found, `{"field":"title"}`)
+	}
+
+	// A different caller_key must not read caller-a's plan back, even though
+	// the (kind, record_id) pair matches exactly — this is the persisted
+	// form of the same isolation the in-memory planStore already enforces.
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-1", "caller-b", 0); err != nil || found {
+		t.Fatalf("GetEphemeralRecord(caller-b) = found=%v err=%v, want found=false, no error (#627 caller isolation)", found, err)
+	}
+
+	// A TTL in the past must expire the record on read, mirroring the
+	// in-memory store's TTL semantics.
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-1", "caller-a", time.Nanosecond); err != nil || found {
+		t.Fatalf("GetEphemeralRecord with elapsed TTL = found=%v err=%v, want found=false, no error", found, err)
+	}
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-1", "caller-a", 0); err != nil || found {
+		t.Fatalf("GetEphemeralRecord after TTL expiry deleted the row = found=%v err=%v, want found=false (TTL read also deletes)", found, err)
+	}
+}
+
+func TestEphemeralRecordDeleteIsScopedToCaller(t *testing.T) {
+	d := openTestDB(t)
+	if err := d.PutEphemeralRecord("content_plan", "plan-2", "caller-a", []byte(`{}`), time.Time{}); err != nil {
+		t.Fatalf("PutEphemeralRecord: %v", err)
+	}
+	// A delete from the wrong caller must not remove someone else's record.
+	if err := d.DeleteEphemeralRecord("content_plan", "plan-2", "caller-b"); err != nil {
+		t.Fatalf("DeleteEphemeralRecord(caller-b): %v", err)
+	}
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-2", "caller-a", 0); err != nil || !found {
+		t.Fatalf("record after mismatched-caller delete = found=%v err=%v, want found=true (delete must not cross caller boundary)", found, err)
+	}
+	if err := d.DeleteEphemeralRecord("content_plan", "plan-2", "caller-a"); err != nil {
+		t.Fatalf("DeleteEphemeralRecord(caller-a): %v", err)
+	}
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-2", "caller-a", 0); err != nil || found {
+		t.Fatalf("record after correct-caller delete = found=%v err=%v, want found=false", found, err)
+	}
+}
+
 func TestPublicationManifestRejectsIncompleteFacts(t *testing.T) {
 	d := openTestDB(t)
 	if err := d.RecordPublicationManifest(db.PublicationManifest{BuildID: "build-1", Status: "ok"}); err == nil {
