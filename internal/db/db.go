@@ -86,6 +86,26 @@ type RecoveryEntry struct {
 	UpdatedAt   time.Time
 }
 
+// PreviewLease is non-secret lifecycle metadata for one on-disk preview.
+// Entry/session bearer tokens are intentionally never persisted here.
+type PreviewLease struct {
+	ID          string
+	Owner       string
+	DirName     string
+	BuildStatus string
+	State       string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+}
+
+// MutationJournalStats exposes retention maintenance without exposing caller,
+// tool, key, or result data.
+type MutationJournalStats struct {
+	ActiveEntries     int
+	LastPrunedAt      time.Time
+	LastPrunedEntries int
+}
+
 // Open opens (or creates) the SQLite database at path and runs migrations.
 func Open(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
@@ -207,6 +227,17 @@ func (d *DB) createTables() error {
 			payload BLOB NOT NULL, updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_recovery_journal_state ON recovery_journal(state)`,
+		`CREATE TABLE IF NOT EXISTS preview_leases (
+			preview_id TEXT PRIMARY KEY, owner TEXT NOT NULL, dir_name TEXT NOT NULL,
+			build_status TEXT NOT NULL, state TEXT NOT NULL,
+			created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_preview_leases_owner_expiry
+			ON preview_leases(owner, expires_at)`,
+		`CREATE TABLE IF NOT EXISTS mutation_journal_maintenance (
+			id INTEGER PRIMARY KEY CHECK (id = 1), last_pruned_at TEXT NOT NULL,
+			last_pruned_entries INTEGER NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -214,6 +245,68 @@ func (d *DB) createTables() error {
 		}
 	}
 	return nil
+}
+
+// PutPreviewLease upserts metadata only. Callers must never include a bearer
+// or session token in the lease fields.
+func (d *DB) PutPreviewLease(lease PreviewLease) error {
+	if strings.TrimSpace(lease.ID) == "" || strings.TrimSpace(lease.DirName) == "" {
+		return fmt.Errorf("preview lease: preview_id and dir_name are required")
+	}
+	if lease.CreatedAt.IsZero() || lease.ExpiresAt.IsZero() {
+		return fmt.Errorf("preview lease: creation and expiry timestamps are required")
+	}
+	if lease.State == "" {
+		lease.State = "active"
+	}
+	_, err := d.db.Exec(`INSERT INTO preview_leases(preview_id,owner,dir_name,build_status,state,created_at,expires_at)
+		VALUES(?,?,?,?,?,?,?) ON CONFLICT(preview_id) DO UPDATE SET
+		owner=excluded.owner,dir_name=excluded.dir_name,build_status=excluded.build_status,
+		state=excluded.state,created_at=excluded.created_at,expires_at=excluded.expires_at`,
+		lease.ID, lease.Owner, lease.DirName, lease.BuildStatus, lease.State,
+		lease.CreatedAt.UTC().Format(time.RFC3339Nano), lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (d *DB) ListPreviewLeases() ([]PreviewLease, error) {
+	rows, err := d.db.Query(`SELECT preview_id,owner,dir_name,build_status,state,created_at,expires_at
+		FROM preview_leases ORDER BY created_at,preview_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PreviewLease
+	for rows.Next() {
+		var lease PreviewLease
+		var createdAt, expiresAt string
+		if err := rows.Scan(&lease.ID, &lease.Owner, &lease.DirName, &lease.BuildStatus, &lease.State, &createdAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		lease.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("preview lease %q created_at: %w", lease.ID, err)
+		}
+		lease.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("preview lease %q expires_at: %w", lease.ID, err)
+		}
+		out = append(out, lease)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) DeletePreviewLease(id string) error {
+	_, err := d.db.Exec(`DELETE FROM preview_leases WHERE preview_id=?`, id)
+	return err
+}
+
+func (d *DB) DeletePreviewLeasesByOwner(owner string) error {
+	if owner == "" {
+		_, err := d.db.Exec(`DELETE FROM preview_leases`)
+		return err
+	}
+	_, err := d.db.Exec(`DELETE FROM preview_leases WHERE owner=?`, owner)
+	return err
 }
 
 // PutEphemeralRecord stores server-owned TTL state such as plans/snapshots.
@@ -422,11 +515,70 @@ func (d *DB) LookupMutation(callerKey, tool, key string, ttl time.Duration) (*Mu
 		return nil, fmt.Errorf("mutation journal: parse created_at: %w", err)
 	}
 	if ttl > 0 && time.Since(e.CreatedAt) > ttl {
-		_, _ = d.db.Exec(`DELETE FROM mutation_journal WHERE caller_key=? AND tool=? AND idempotency_key=?`, callerKey, tool, key)
+		if _, err := d.db.Exec(`DELETE FROM mutation_journal WHERE caller_key=? AND tool=? AND idempotency_key=?`, callerKey, tool, key); err != nil {
+			return nil, fmt.Errorf("mutation journal: delete expired entry: %w", err)
+		}
 		return nil, nil
 	}
 	e.CallerKey, e.Tool, e.Key = callerKey, tool, key
 	return &e, nil
+}
+
+// PruneMutationJournal deletes expired mutation outcomes and records the
+// maintenance fact in the same transaction. The durable fact lets operators
+// distinguish an empty journal from one that has never been maintained.
+func (d *DB) PruneMutationJournal(ttl time.Duration, now time.Time) (MutationJournalStats, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	removed := int64(0)
+	if ttl > 0 {
+		result, err := tx.Exec(`DELETE FROM mutation_journal WHERE created_at < ?`, now.Add(-ttl).UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return MutationJournalStats{}, err
+		}
+		removed, err = result.RowsAffected()
+		if err != nil {
+			return MutationJournalStats{}, err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO mutation_journal_maintenance(id,last_pruned_at,last_pruned_entries) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET last_pruned_at=excluded.last_pruned_at,last_pruned_entries=excluded.last_pruned_entries`, now.UTC().Format(time.RFC3339Nano), removed); err != nil {
+		return MutationJournalStats{}, err
+	}
+	var active int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM mutation_journal`).Scan(&active); err != nil {
+		return MutationJournalStats{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MutationJournalStats{}, err
+	}
+	return MutationJournalStats{ActiveEntries: active, LastPrunedAt: now.UTC(), LastPrunedEntries: int(removed)}, nil
+}
+
+func (d *DB) MutationJournalStats() (MutationJournalStats, error) {
+	var stats MutationJournalStats
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM mutation_journal`).Scan(&stats.ActiveEntries); err != nil {
+		return MutationJournalStats{}, err
+	}
+	var at string
+	err := d.db.QueryRow(`SELECT last_pruned_at,last_pruned_entries FROM mutation_journal_maintenance WHERE id=1`).Scan(&at, &stats.LastPrunedEntries)
+	if err == sql.ErrNoRows {
+		return stats, nil
+	}
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	stats.LastPrunedAt = parsed.UTC()
+	return stats, nil
 }
 
 // SyncPublicPage upserts a public (published) page, its taxonomy, its link graph,

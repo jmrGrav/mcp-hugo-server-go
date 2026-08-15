@@ -125,7 +125,9 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		// Opportunistic cleanup of expired previews before adding a new one,
 		// so disk usage doesn't grow unbounded even if nobody ever revisits
 		// an expired preview URL (which is what triggers cleanup in Get).
-		store.Sweep()
+		if err := store.SweepPersistent(); err != nil {
+			return nil, createPreviewOutput{}, fmt.Errorf("persistence_error: failed to expire preview leases")
+		}
 
 		// Enforce the active-preview and preview-disk caps (#871) before doing
 		// any build work. These are soft caps: create_preview runs under only
@@ -164,7 +166,7 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		}
 		defer hugosite.ContentMu.RUnlock()
 
-		destDir, err := os.MkdirTemp("", "mcp-preview-*")
+		destDir, err := store.NewDir()
 		if err != nil {
 			return nil, createPreviewOutput{}, fmt.Errorf("config_error: failed to create isolated preview directory")
 		}
@@ -242,14 +244,17 @@ func RegisterCreatePreview(s *mcp.Server, cfg config.Config, store *previewstore
 		}
 
 		expiresAt := time.Now().Add(ttl)
-		store.Put(previewID, &previewstore.Entry{
+		if err := store.Put(previewID, &previewstore.Entry{
 			Dir:         destDir,
 			Token:       token,
 			ExpiresAt:   expiresAt,
 			BuildStatus: "passed",
 			CreatedAt:   time.Now().UTC(),
 			Owner:       owner,
-		})
+		}); err != nil {
+			_ = os.RemoveAll(destDir)
+			return nil, createPreviewOutput{}, fmt.Errorf("persistence_error: failed to persist preview lease")
+		}
 
 		externalVerification := "not_configured"
 		if cfg.PreviewExternalVerification {

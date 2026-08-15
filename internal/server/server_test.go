@@ -21,6 +21,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/server"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
@@ -2716,6 +2717,7 @@ func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
 	cfg.HugoRoot = t.TempDir()
+	cfg.DBPath = filepath.Join(t.TempDir(), "runtime-state.sqlite")
 	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
 
 	const callerA = "preview-owner-token"
@@ -2731,6 +2733,32 @@ func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	previewID := createData["preview_id"].(string)
 	if previewID == "" {
 		t.Fatal("create_preview returned empty preview_id")
+	}
+	entryURL := createData["url"].(string)
+	entryReq := httptest.NewRequest(http.MethodGet, entryURL, nil)
+	entryRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(entryRec, entryReq)
+	if entryRec.Code != http.StatusFound || len(entryRec.Result().Cookies()) != 1 {
+		t.Fatalf("initial preview token exchange = %d cookies=%v", entryRec.Code, entryRec.Result().Cookies())
+	}
+	oldCookie := entryRec.Result().Cookies()[0]
+
+	// Recreate the full runtime against the same operational DB. Lease
+	// ownership and TTL remain visible, but the old URL token and cookie are
+	// process-memory secrets and must no longer authorize preview content.
+	srv = mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+	oldEntryReq := httptest.NewRequest(http.MethodGet, entryURL, nil)
+	oldEntryRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(oldEntryRec, oldEntryReq)
+	if oldEntryRec.Code != http.StatusNotFound {
+		t.Fatalf("old entry token after restart status = %d, want 404", oldEntryRec.Code)
+	}
+	oldCookieReq := httptest.NewRequest(http.MethodGet, "https://mcp.test"+previewstore.CleanPath(previewID, ""), nil)
+	oldCookieReq.AddCookie(oldCookie)
+	oldCookieRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(oldCookieRec, oldCookieReq)
+	if oldCookieRec.Code != http.StatusNotFound {
+		t.Fatalf("old preview cookie after restart status = %d, want 404", oldCookieRec.Code)
 	}
 
 	bListRec := doMCPCall(t, srv, callerB, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_previews","arguments":{}}}`))
@@ -2757,6 +2785,14 @@ func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	if !toolCallBodyHasError(bRevokeRec, "preview_not_found") {
 		t.Fatalf("revoke_preview intruder body = %q, want preview_not_found", bRevokeRec.Body.String())
 	}
+	bRevokeAllRec := doMCPCall(t, srv, callerB, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"revoke_all_previews","arguments":{}}}`))
+	if bRevokeAllRec.Code != http.StatusOK {
+		t.Fatalf("revoke_all_previews intruder status = %d body = %q", bRevokeAllRec.Code, bRevokeAllRec.Body.String())
+	}
+	bRevokeAllData := toolCallResultData(t, bRevokeAllRec.Body.String())["data"].(map[string]any)
+	if got := int(bRevokeAllData["revoked_count"].(float64)); got != 0 {
+		t.Fatalf("intruder revoke_all count = %d, want 0", got)
+	}
 
 	aListRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_previews","arguments":{}}}`))
 	if aListRec.Code != http.StatusOK {
@@ -2771,6 +2807,12 @@ func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	if got, _ := previewItem["preview_id"].(string); got != previewID {
 		t.Fatalf("owner list_previews preview_id = %q, want %q", got, previewID)
 	}
+	if got, _ := previewItem["access_status"].(string); got != "restart_invalidated" {
+		t.Fatalf("recovered preview access_status = %q, want restart_invalidated", got)
+	}
+	if got, _ := previewItem["url"].(string); got != "" {
+		t.Fatalf("recovered preview url = %q, want empty because old browser credentials are invalid", got)
+	}
 
 	aInspectRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"inspect_preview","arguments":{"slug":"posts/hello","preview_id":"%s"}}}`, previewID)))
 	if aInspectRec.Code != http.StatusOK {
@@ -2781,6 +2823,13 @@ func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 		t.Fatalf("inspect_preview owner preview_id = %q, want %q", got, previewID)
 	}
 
+	// Keep a second owner lease so both single and bulk revocation paths are
+	// proven after restart, including the distinct owner-filtered SQL delete.
+	secondCreateRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_preview","arguments":{}}}`))
+	if secondCreateRec.Code != http.StatusOK {
+		t.Fatalf("second create_preview status = %d body = %q", secondCreateRec.Code, secondCreateRec.Body.String())
+	}
+
 	aRevokeRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"revoke_preview","arguments":{"preview_id":"%s"}}}`, previewID)))
 	if aRevokeRec.Code != http.StatusOK {
 		t.Fatalf("revoke_preview owner status = %d body = %q", aRevokeRec.Code, aRevokeRec.Body.String())
@@ -2788,6 +2837,14 @@ func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	aRevokeData := toolCallResultData(t, aRevokeRec.Body.String())["data"].(map[string]any)
 	if got, _ := aRevokeData["status"].(string); got != "revoked" {
 		t.Fatalf("revoke_preview owner status = %q, want revoked: %#v", got, aRevokeData)
+	}
+	aRevokeAllRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"revoke_all_previews","arguments":{}}}`))
+	if aRevokeAllRec.Code != http.StatusOK {
+		t.Fatalf("revoke_all_previews owner status = %d body = %q", aRevokeAllRec.Code, aRevokeAllRec.Body.String())
+	}
+	aRevokeAllData := toolCallResultData(t, aRevokeAllRec.Body.String())["data"].(map[string]any)
+	if got := int(aRevokeAllData["revoked_count"].(float64)); got != 1 {
+		t.Fatalf("owner revoke_all count = %d, want 1", got)
 	}
 }
 

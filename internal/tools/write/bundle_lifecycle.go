@@ -263,6 +263,19 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			}
 			_ = os.Remove(dir)
 		}
+		recoveryFiles := make([]bundleRecoveryFile, 0, len(files))
+		recoveryRevisions := make(map[string]string, len(files))
+		for _, f := range files {
+			after := f.content
+			recoveryFiles = append(recoveryFiles, recoveryFile(f.path, nil, &after))
+			recoveryRevisions[f.page.Lang] = contentmodel.SourceRevisionBytes([]byte(f.content))
+		}
+		recoveryOp, err := beginBundleWriteRecovery(siteDB, dir, recoveryFiles, recoveryIdempotencyFor(ctx, "create_bundle", in.IdempotencyKey, idemHash, map[string]any{
+			"slug": canonicalPublicSlug(in.Slug), "languages": langs, "revisions": recoveryRevisions,
+		}))
+		if err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("persistence_error: failed to record bundle create intent"))
+		}
 		for _, f := range files {
 			if e := fileutil.AtomicCreateChecked(f.path, f.content, pg); e != nil {
 				rollback()
@@ -272,6 +285,12 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 				return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("write_error: bundle creation rolled back: %v", e))
 			}
 			created = append(created, f.path)
+		}
+		if err := recoveryFilesystemBoundary("create_bundle", "after_bundle_write"); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("persistence_error: interrupted after bundle write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("create_bundle: could not advance recovery journal", "slug", in.Slug, "error", err)
 		}
 		revs := map[string]string{}
 		expires := map[string]string{}
@@ -310,10 +329,16 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			}
 		}
 		out := bundleLifecycleSuccess(bundleLifecycleData{Status: "created", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs, TestContentExpiresAt: expires})
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := rt.idem.remember(idempotencyCallerKey(ctx), "create_bundle", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("create_bundle: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("create_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
 		return nil, out, nil
 	}))
@@ -441,6 +466,26 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 				return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("revision_conflict: bundle changed during delete"))
 			}
 		}
+		recoveryFiles := make([]bundleRecoveryFile, 0, len(paths))
+		selectedPaths := make(map[string]bool, len(paths))
+		recoveryRevisions := make(map[string]string, len(paths))
+		for _, p := range paths {
+			before := p.content
+			recoveryFiles = append(recoveryFiles, recoveryFile(p.path, &before, nil))
+			selectedPaths[p.path] = true
+			recoveryRevisions[p.lang] = p.rev
+		}
+		willRemoveBundle := !bundleHasUnselectedLangFiles(dir, selectedPaths)
+		var recoveryCleanup []string
+		if willRemoveBundle {
+			recoveryCleanup = append(recoveryCleanup, dir)
+		}
+		recoveryOp, err := beginBundleWriteRecovery(siteDB, dir, recoveryFiles, recoveryIdempotencyFor(ctx, "delete_bundle", in.IdempotencyKey, idemHash, map[string]any{
+			"slug": canonicalPublicSlug(in.Slug), "languages": langs, "revisions": recoveryRevisions,
+		}), recoveryCleanup...)
+		if err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("persistence_error: failed to record bundle delete intent"))
+		}
 		removed := []struct{ path, content string }{}
 		rollback := func() {
 			for _, p := range removed {
@@ -454,8 +499,16 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			}
 			removed = append(removed, struct{ path, content string }{p.path, p.content})
 		}
+		if err := recoveryFilesystemBoundary("delete_bundle", "after_bundle_write"); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("persistence_error: interrupted after bundle write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("delete_bundle: could not advance recovery journal", "slug", in.Slug, "error", err)
+		}
 		if !bundleHasRemainingLangFiles(dir) {
-			_ = os.Remove(dir)
+			if err := os.RemoveAll(dir); err != nil {
+				return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("delete_error: failed to remove completed bundle: %v", err))
+			}
 			idx.Delete(in.Slug)
 		} else {
 			for _, p := range paths {
@@ -476,10 +529,16 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			revs[p.lang] = p.rev
 		}
 		out := bundleLifecycleSuccess(bundleLifecycleData{Status: "deleted", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs})
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := rt.idem.remember(idempotencyCallerKey(ctx), "delete_bundle", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("delete_bundle: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("delete_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
 		return nil, out, nil
 	}))

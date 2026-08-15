@@ -2878,7 +2878,7 @@
   {
     "name": "get_runtime_status",
     "required_scope": "write",
-    "description": "Report the actual runtime/build/git/site status of this server in one compact structured surface: server version and build commit, whether the hugo and git binaries are usable, the outcome of the most recent build_site attempt (`last_build`: persisted across restart when `db_path` is configured, otherwise process-memory only), and (opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) so cleanup does not depend on remembering to run a build first. When the git baseline is dirty, `data.git.dirty_classes` (#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, `preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` is the honest default for anything not confidently recognized). `source_ahead_of_public` and `unpublished_changes_count` report server-known source changes awaiting publication. `source_ahead_reason` distinguishes `pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only language/representation counts, counterpart gaps, and legacy mismatch facts; `build_reconciliation` reports aggregate source/public drift recomputed from filesystem fingerprints rather than volatile BuildPending flags. No page identity or body is exposed. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
+    "description": "Report the actual runtime/build/git/site status of this server in one compact structured surface: server version and build commit, whether the hugo and git binaries are usable, the outcome of the most recent build_site attempt (`last_build`: persisted across restart when `db_path` is configured, otherwise process-memory only), and (opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) so cleanup does not depend on remembering to run a build first. When the git baseline is dirty, `data.git.dirty_classes` (#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, `preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` is the honest default for anything not confidently recognized). `source_ahead_of_public` and `unpublished_changes_count` report server-known source changes awaiting publication. `source_ahead_reason` distinguishes `pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only language/representation counts, counterpart gaps, and legacy mismatch facts; `build_reconciliation` reports aggregate source/public drift recomputed from filesystem fingerprints rather than volatile BuildPending flags. No page identity or body is exposed. When SQLite is configured, `mutation_journal` reports only aggregate retention facts; `last_pruned_entries` is the number removed by the most recent successful maintenance transaction. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -2931,6 +2931,10 @@
       "data.last_build.status:string:required",
       "data.last_build:unspecified",
       "data.last_build_persistence:string:required",
+      "data.mutation_journal.active_entries:integer:required",
+      "data.mutation_journal.last_pruned_at:string",
+      "data.mutation_journal.last_pruned_entries:integer:required",
+      "data.mutation_journal:unspecified",
       "data.process_started_at:string:required",
       "data.publication_state:string:required",
       "data.release_version:string:required",
@@ -2980,7 +2984,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "1631a2924cc01cae1401005cd1ee11e916222e79257b4e6a2a42a55384523507"
+    "output_schema_sha256": "cfeadde53fc7066f7baf57a763cc8e36d52a9a4414b58bc3469c325f3c6e05ba"
   },
   {
     "name": "get_site_health",
@@ -3916,7 +3920,7 @@
   {
     "name": "list_previews",
     "required_scope": "write",
-    "description": "List currently active preview sessions with owner and expiry metadata, plus current usage against the configured caps (caller_active_count/max_previews_per_caller and preview_disk_used_bytes/preview_disk_max_bytes) so an agent can self-regulate before create_preview refuses a new preview at a cap boundary (#871). Returns clean preview URLs without re-emitting the entry token; the entry token is single-use — once its session has fetched content it can no longer mint a new session, so a leaked entry URL that was already opened is inert, but use revoke_preview to cut off access to an active preview immediately. Requires write.",
+    "description": "List the current caller's preview leases with owner, expiry, build, and access status, plus usage against the configured caps. Returns clean URLs without re-emitting entry tokens. After a server restart, durable leases remain listable/revocable and inspect_preview remains available, but old browser credentials are invalid and access_status is restart_invalidated; create a new preview for browser access. Requires write.",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"
@@ -3928,6 +3932,7 @@
       "data.preview_disk_max_bytes:integer:required",
       "data.preview_disk_used_bytes:integer:required",
       "data.previews:unspecified:required",
+      "data.previews[].access_status:string:required",
       "data.previews[].build_status:string:required",
       "data.previews[].created_at:string:required",
       "data.previews[].expires_at:string:required",
@@ -3964,7 +3969,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "03af285c71a654499f800cea4f3c57cedd00c0a8222857d569738f726e6d4289"
+    "output_schema_sha256": "6d9540f3a50dc2e8c52574d06e91f52a03ae8ad57effbd30375576a041179808"
   },
   {
     "name": "list_tags",
@@ -4473,7 +4478,7 @@
   {
     "name": "revoke_all_previews",
     "required_scope": "write",
-    "description": "Revoke every active preview and delete all isolated preview directories. Requires write.",
+    "description": "Revoke every preview owned by the current caller and delete those isolated preview directories. Never revokes another caller's previews. Requires write.",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"
