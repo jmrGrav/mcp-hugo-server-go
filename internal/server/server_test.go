@@ -2775,6 +2775,14 @@ func TestConcurrentUpdatePageByDistinctPrincipalsIsolatesMutationStatus(t *testi
 	<-started
 	hugosite.ContentMu.Unlock()
 	wg.Wait()
+	// If doMCPCall hit t.Fatalf inside a goroutine, runtime.Goexit unwound
+	// it without ever sending on recA/recB — wg.Wait() still returns (the
+	// deferred wg.Done() runs during Goexit), but reading the channels below
+	// would then block forever instead of failing clearly. Bail out now so
+	// a real failure reports its own message instead of a silent timeout.
+	if t.Failed() {
+		t.FailNow()
+	}
 
 	aRec, bRec := <-recA, <-recB
 	if aRec.Code != http.StatusOK || bRec.Code != http.StatusOK {
