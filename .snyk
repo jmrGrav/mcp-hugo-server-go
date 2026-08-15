@@ -1,0 +1,18 @@
+version: v1.5.0
+ignore:
+  GO-2026-5932:
+    - '*':
+        reason: >-
+          golang.org/x/crypto/openpgp is unmaintained/unsafe-by-design per its
+          own advisory, but this repo never imports x/crypto directly or the
+          openpgp subpackage (`go mod why golang.org/x/crypto` reports it is
+          not needed by the main module; it's pulled in transitively only via
+          golang.org/x/net per `go mod graph`). govulncheck, which performs
+          reachability analysis, reports zero vulnerabilities. Pre-existing on
+          main before this dependency bump -- same version of the advisory
+          already applies to golang.org/x/crypto v0.53.0. Same
+          manifest-vs-reachability divergence already documented in the
+          v1.8.6 CHANGELOG for GO-2026-6222/GO-2026-6180/GO-2026-6179.
+        expires: 2026-11-15T00:00:00.000Z
+        created: 2026-08-15T00:00:00.000Z
+patch: {}
