@@ -1121,7 +1121,17 @@ curl -sS -o /dev/null -w '%{content_type}' \
 
 **Symptom:** No errors anywhere. The server starts, serves traffic normally, and every tool works — but a restart still loses in-flight mutation state, preview leases don't survive a restart, and `get_runtime_status`'s `content_index_shadow`, `mutation_journal`, and `build_reconciliation` fields are simply absent from the response instead of present-but-empty.
 
-**Cause:** All of this is backed by the *operational* SQLite database at `db_path` (see [Operational SQLite Persistence](#operational-sqlite-persistence) above) — not `oauth.storage_path`, which is a separate database for a separate purpose (OAuth tokens). Every one of these subsystems was deliberately built with an in-memory fallback so a deployment without `db_path` set keeps working exactly as before v1.8.6, with no crash and no error — which also means nothing tells you it's missing. This bit the actual v1.8.6 production deploy: only `oauth.storage_backend: sqlite` was configured, `db_path` never was, so the whole restart-safety programme ran silently degraded until caught by manually cross-checking `get_runtime_status`'s response shape against what the release notes said should be there.
+**Cause:** All of this is backed by the *operational* SQLite database at `db_path` (see [Operational SQLite Persistence](#operational-sqlite-persistence) above) — not `oauth.storage_path`, which is a separate database for a separate purpose (OAuth tokens). Every one of these subsystems was deliberately built with an in-memory fallback so a deployment without `db_path` set keeps working exactly as before v1.8.6, with no crash and no error. This bit the actual v1.8.6 production deploy: only `oauth.storage_backend: sqlite` was configured, `db_path` never was, so the whole restart-safety programme ran silently degraded for hours until caught by manually cross-checking `get_runtime_status`'s response shape against what the release notes said should be there.
+
+**Since the follow-up fix, this is no longer a silent gap** — `get_capabilities` now reports it directly:
+
+```json
+"disabled_features": [
+  {"name": "durable_persistence", "reason": "feature_disabled", "required_configuration": "db_path"}
+]
+```
+
+and the server logs a startup warning on any http deployment with a `content_root` configured. Check `get_capabilities` first; the rest of this section is the fix once you've confirmed the gap.
 
 **Fix:**
 
@@ -1138,13 +1148,13 @@ If the target directory isn't already in the service unit's `ReadWritePaths` (ch
 **Verify the fix actually took effect** — don't just check for a clean restart:
 
 ```bash
-# content_index_shadow and mutation_journal must both be present in .data
+# durable_persistence must be gone from disabled_features
 curl -sS -X POST https://mcp.arleo.eu/mcp \
   -H 'Content-Type: application/json' -H 'Authorization: Bearer <token>' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_runtime_status","arguments":{}}}' \
-  | python3 -c 'import json,sys; d=json.load(sys.stdin); data=d["result"]["structuredContent"]["data"]; print("content_index_shadow" in data, "mutation_journal" in data)'
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_capabilities","arguments":{}}}' \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); data=d["result"]["structuredContent"]["data"]; names={f["name"] for f in data.get("disabled_features",[])}; print("durable_persistence" not in names)'
 ```
-Both should print `True`. `build_reconciliation` only appears after the first `build_site` call post-restart, so its absence alone is not diagnostic.
+Should print `True`. `get_runtime_status`'s `content_index_shadow`/`mutation_journal` fields are the equivalent older signal; `build_reconciliation` only appears after the first `build_site` call post-restart, so its absence alone is not diagnostic.
 
 ---
 
