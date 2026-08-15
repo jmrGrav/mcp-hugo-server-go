@@ -2,6 +2,33 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.8] - 2026-08-15
+
+### BREAKING
+- **Root-level payload aliases removed from `check_sri_versions`/`run_post_build_hooks`/`preview_build`** (#1118, #1119): finishes the #520/#573 root/data convergence — these were the last 3 structured tools still mirroring their payload at the root as a v1.x compatibility shape (added by #552, deprecated with a warning field in v1.8.6/#1060). `data.*` is now the sole payload location for every structured tool this server exposes. A caller still reading the removed root fields on these three tools will see them disappear; `meta.schema_version` bumps from `v1.1.0` to `v2.0.0` accordingly, per the additive→minor, breaking→major policy established in #1042/#1043.
+
+### Fix
+- **A canonical-collapsed alias's own URL no longer reports as a broken link** (#1112): a Grav-legacy alias page whose own `<link rel=canonical>` points at a different, real page is a genuine, walkable file — its own URL previously read as a missing target to `get_broken_links` on both the in-memory and SQL-backed paths, the same false-positive shape #1101 fixed for pagination. `Index.aliasSlugs` (populated during the disk walk) and a new `Index.ResolveAlias(slug)` fix this on both paths.
+- **Latent index-corruption bug found while fixing the above**: `filepath.WalkDir` order is lexical, not canonical-aware, so an alias walked before its canonical target could permanently squat that slug's slot — the real page's own content would never get indexed at all. The genuine owner now always displaces an alias that got there first.
+
+### Feat
+- **`get_site_health` now folds broken-link volume into its status, not just scoring weight 0** (#1105): resolves the open design question left by v1.8.7's `title_shape` work. New `data.broken_links_count` and `data.score_breakdown.broken_links` (both nil when `db_path` isn't configured, distinguishing "not computed" from "checked, zero broken links"). When nonzero, `status`/`content_status` are forced off `healthy`/`healthy_with_advisories` and score caps at 99 — closing the gap where a previously-clean site with a fresh regression could still report `healthy`/100. Gated on `db_path` so a plain in-memory deployment never pays a full-HTML-rescan cost on every `get_site_health` call.
+
+### Test
+- **Rate-limit bucket map races two OAuth principals concurrently** (#1067): proves `mutationLimiters` (keyed by principal) never leaks quota across two distinct callers hitting it from separate goroutines at the same instant — the last gap in #1067's concurrency matrix.
+- **Hugo mid-execution cancellation preserves previous output** (#1068): proves a context-timeout kill of Hugo mid-run, not just a normal exit-1 failure, leaves the previous public tree untouched, leaks no partial output, and releases the build lock for a subsequent build.
+- **A write-scope OAuth token cannot invoke admin-only Hugo-lifecycle tools at call time** (#1069): closes the last gap in the ACL matrix — prior coverage proved these tools are absent from a write-scope token's `tools/list`, but nothing had actually attempted the call. All four (`stage_hugo_upgrade`/`activate_hugo`/`rollback_hugo`/`bootstrap_hugo`) now have direct call-time-403 coverage.
+- **Repo-wide security coverage sweep** (#1129): `internal/oauth/ratelimit.go`'s bucket-creation path (fronts every request on any OAuth-enabled deployment) gains a concurrent-access/race test; `internal/config`'s SSRF guard (`validateExternalURL`/`isPrivateOrLinkLocal`, gating `post_build_hooks`/`image_gen_url`) gains table-driven coverage across every CIDR block it claims to cover; `internal/oauth/redirects.go`'s open-redirect guard (`matchRedirectURI`) gains coverage for userinfo-injection, trailing-dot, path-traversal, and wildcard-host-confusion bypass shapes.
+
+### Chore
+- **`golang.org/x/net`/`golang.org/x/oauth2` bumped** (#1130): routine hygiene, no CVE driving it — `govulncheck` was already clean before and after. Snyk's manifest scan separately flags `golang.org/x/crypto`'s `openpgp` subpackage (GO-2026-5932, unmaintained/unsafe-by-design) as a transitive dependency of `x/net`; this predates the bump (same finding applies to the pre-bump version already on `main`), and the subpackage is never imported by this codebase — same manifest-vs-reachability divergence as v1.8.6's GO-2026-6222/6180/6179. Ignored via a scoped, expiring `.snyk` policy entry.
+- **New weekly dependency-freshness check** (#1129): `scripts/check-deps-fresh.sh` (`go list -u -m all`-based) plus a `make check-deps-fresh` target, an advisory CI step, and `.github/workflows/dependency-freshness.yml` — files/updates/auto-closes a tracking issue, mirroring the existing `go-version-freshness.yml` pattern.
+- **`github.com/modelcontextprotocol/go-sdk` bumped to v1.7.0** (#1131): routine hygiene, no CVE driving it. Pulls in a new indirect dependency, `golang.org/x/sync`. The new SDK version deprecates `mcp.LoggingCapabilities`/`ServerCapabilities.Logging` per SEP-2577 (the MCP logging feature is deprecated as of protocol version 2026-07-28 but stays functional for at least 12 months) — this server still declares it explicitly during the deprecation window, with a scoped `staticcheck` suppression noting the timeline to revisit.
+- **Badge publishing consolidated onto GitHub Pages** (#1116, #1117, #1120, #1122, #1123): the Go-version, LOC, and test-coverage badges (previously split between a `badges` git branch and ad hoc release assets, after shields.io's `endpoint` proxy turned out to domain-block `github.com` but not `github.io`) now all publish to and read from GitHub Pages via a single `deploy-badges-pages` job. The `badges` branch and its separate publish jobs are removed.
+
+### Docs
+- **`list_pages`/`get_recent_posts` cross-reference their `total` field's scope in their own tool descriptions** (#1121), avoiding a documentation-only lookup elsewhere.
+
 ## [v1.8.7] - 2026-08-15
 
 Closes out the v1.8.7 assurance campaign (#993): multi-principal concurrency races, build-recovery determinism, and a `get_site_health` blind spot found during the v1.8.6 live sweep.
