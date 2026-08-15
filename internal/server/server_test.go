@@ -3014,6 +3014,95 @@ func TestConcurrentUpdatePageByDistinctPrincipalsIsolatesMutationStatus(t *testi
 	}
 }
 
+// TestConcurrentCreatePageByDistinctPrincipalsRacesRateLimitBucketsCorrectly
+// is #1067's remaining rate-limit gap: the mutation-tool rate limiter
+// (internal/tools/write's mutationLimiters map, keyed by mutationCallerKey —
+// the OAuth principal, separate from the IP-based internal/oauth.RateLimiter
+// HTTP middleware) is a single shared map accessed by every mutation call.
+// Existing rate-limit tests are all sequential, single-goroutine loops —
+// none exercise two distinct principals hitting that shared map from
+// separate goroutines at the same instant. This races real concurrent
+// access under -race and proves each principal's bucket accounts for
+// exactly its own calls, never the other's — the isolation a
+// map-keyed-by-principal design implies but a lock-scoping bug could still
+// violate under real concurrent load.
+func TestConcurrentCreatePageByDistinctPrincipalsRacesRateLimitBucketsCorrectly(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	cfg.RateLimit.CreateUpdatePerMin = 5
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const callerA = "ratelimit-race-principal-a"
+	const callerB = "ratelimit-race-principal-b"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	const callsPerCaller = 3
+	payloadFor := func(caller string, i int) []byte {
+		return []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/ratelimit-race-%s-%d","title":"Title","body":"Body","tags":[],"categories":[]}}}`, caller, i))
+	}
+
+	// Pre-lock the content mutex so all 2*callsPerCaller goroutines queue up
+	// and are released together, forcing genuine concurrent map access on
+	// the shared mutationLimiters map instead of a race that might happen
+	// to serialize by scheduling luck (same technique used throughout this
+	// file's other race tests).
+	hugosite.ContentMu.Lock()
+	started := make(chan struct{}, 2*callsPerCaller)
+	recs := make(chan *httptest.ResponseRecorder, 2*callsPerCaller)
+	var wg sync.WaitGroup
+	fire := func(caller string) {
+		for i := 0; i < callsPerCaller; i++ {
+			wg.Add(1)
+			payload := payloadFor(caller, i)
+			go func() {
+				defer wg.Done()
+				started <- struct{}{}
+				recs <- doMCPCall(t, srv, caller, payload)
+			}()
+		}
+	}
+	fire(callerA)
+	fire(callerB)
+	for i := 0; i < 2*callsPerCaller; i++ {
+		<-started
+	}
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	if t.Failed() {
+		t.FailNow()
+	}
+	for i := 0; i < 2*callsPerCaller; i++ {
+		rec := <-recs
+		if rec.Code != http.StatusOK {
+			t.Fatalf("create_page race transport failure: status=%d body=%q", rec.Code, rec.Body.String())
+		}
+	}
+
+	remainingFor := func(caller string) int {
+		t.Helper()
+		rec := doMCPCall(t, srv, caller, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_rate_limits","arguments":{}}}`))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("get_rate_limits status = %d body = %q", rec.Code, rec.Body.String())
+		}
+		data := toolCallResultData(t, rec.Body.String())["data"].(map[string]any)
+		bucket := data["create_update_upload"].(map[string]any)
+		return int(bucket["remaining"].(float64))
+	}
+
+	wantRemaining := cfg.RateLimit.CreateUpdatePerMin - callsPerCaller
+	if got := remainingFor(callerA); got != wantRemaining {
+		t.Fatalf("caller A remaining = %d, want %d (%d/%d quota consumed by exactly its own %d concurrent calls, none of caller B's)", got, wantRemaining, callsPerCaller, cfg.RateLimit.CreateUpdatePerMin, callsPerCaller)
+	}
+	if got := remainingFor(callerB); got != wantRemaining {
+		t.Fatalf("caller B remaining = %d, want %d — a cross-principal leak in the shared rate-limit map under concurrent access", got, wantRemaining)
+	}
+}
+
 // racePNG is a minimal PNG signature, enough for the asset-upload path's
 // content-type sniffing; content correctness isn't what this race exercises.
 var racePNG = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0}
