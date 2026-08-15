@@ -478,20 +478,20 @@ Prior to #984, this bit a production deploy: `build_site` reported success
 while `site_root` ended up `0700`, and a reverse proxy running as a
 different Unix user got `403` on every page until manually `chmod`'d.
 
-#### `get_broken_links` (and other index tools) return stale results after `build_site`
+#### `get_broken_links` (and other index tools) reported stale results after `build_site` — fixed (#212)
 
-The site index is built once at startup by walking the public HTML directory. A
-`build_site` call regenerates those files on disk, but the in-memory index is **not
-refreshed automatically** until issue #212 is resolved.
+The site index is built once at startup by walking the public HTML directory.
+`build_site` now reloads the public and source indexes automatically as one of
+its post-build callbacks (`index_reload`), so `get_broken_links`,
+`search_content`, and page-count results reflect the just-completed build
+without any operator action. A manual restart is no longer required for this.
 
-Workaround: restart the service after every Hugo build to force a fresh index scan.
-
-```bash
-sudo systemctl restart mcp-hugo-server-go
-```
-
-Until #212 ships, any `get_broken_links`, `search_content`, or page-count result
-obtained immediately after `build_site` reflects the index from the previous build.
+If `get_runtime_status`/`get_site_health` ever disagree with a fresh Hugo
+rebuild after a restart or an out-of-band source edit, see the restart-safe
+persistence layer added in v1.8.6 (#1074) — `data.build_reconciliation` and
+`data.content_index_shadow` in `get_runtime_status` report exact filesystem
+fingerprint drift, which is now the authoritative signal rather than
+process-local `BuildPending` bookkeeping.
 
 ### Configuration File
 
@@ -726,7 +726,12 @@ directly (not the page bundle). `delete_page_asset` removes only the source
 file, not any already-built public copy or CDN cache, so run `build_site` /
 `publish_changes` afterward if the site was already built with the stale
 reference. `expired_preview_residue` findings (leftover `mcp-preview-*`
-directories after a restart) are handled separately via `revoke_preview`.
+directories with no live preview backing them) are handled separately via
+`revoke_preview`. As of v1.8.6 (#1081), a restart with `db_path` configured
+restores and reconciles preview leases automatically at startup instead of
+orphaning them — this finding now mainly catches TTL expiry between health
+checks, or process-local (no `db_path`) deployments where leases still don't
+survive a restart.
 
 ### View Service Status
 
