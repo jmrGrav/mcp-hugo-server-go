@@ -187,6 +187,46 @@ func TestGetBrokenLinksIgnoresRawMarkdownSourceLinks(t *testing.T) {
 	}
 }
 
+// TestSyncPublicPageRecordsExternalMarkdownLinkAsExternalNotDropped checks
+// the .md exclusion added for #1101 is ordered after the external-host
+// check, matching internal/tools/read/extended.go's resolveInternalLink: an
+// external link that happens to end in .md (e.g. a GitHub README, common on
+// this site's posts) must still get an 'external' row, not be silently
+// dropped by an .md check that fires first.
+func TestSyncPublicPageRecordsExternalMarkdownLinkAsExternalNotDropped(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	p := site.Page{
+		Slug:    "/source/",
+		Title:   "Source Page",
+		URL:     "https://x.com/source/",
+		Lang:    "en",
+		RawHTML: `<a href="https://github.com/example/repo/blob/main/README.md">README</a>`,
+	}
+	if err := d.SyncPublicPage(p, nil); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	defer raw.Close()
+	var status string
+	err = raw.QueryRow("SELECT status FROM links WHERE target LIKE '%README.md%'").Scan(&status)
+	if err != nil {
+		t.Fatalf("external .md link row missing entirely (silently dropped): %v", err)
+	}
+	if status != "external" {
+		t.Fatalf("external .md link status = %q, want external", status)
+	}
+}
+
 func TestSyncSourcePage(t *testing.T) {
 	d := openTestDB(t)
 	sp := hugosite.SourcePage{
