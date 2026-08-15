@@ -13,10 +13,12 @@ name: Deploy to Production
 #     touching anything (that prep — writing the release notes — is a
 #     separate, normally-reviewed PR merged to main first, not something
 #     this workflow generates), then builds, tests, deploys, and — once the
-#     deploy succeeds — tags, publishes the GitHub release, and attaches
-#     binaries + the .mcpb bundle. One `workflow_dispatch` call now produces
-#     a fully consistent release: binary live, tag pushed, GitHub release
-#     published, version numbers matching everywhere.
+#     deploy succeeds — tags, publishes the GitHub release, attaches
+#     binaries + the .mcpb bundle, and publishes to npm (publish-npm.yml,
+#     invoked as a reusable workflow once the release's binaries are
+#     confirmed attached). One `workflow_dispatch` call now produces a
+#     fully consistent release: binary live, tag pushed, GitHub release
+#     published, npm package published, version numbers matching everywhere.
 #
 # Required secrets (configure in repo Settings → Secrets → Actions):
 #   PRODUCTION_URL    — Base URL of the MCP server (e.g. https://mcp.arleo.eu)
@@ -315,6 +317,19 @@ jobs:
           npm install -g @anthropic-ai/mcpb
           mcpb pack . "mcp-hugo-server-go-${VERSION#v}.mcpb"
           gh release upload "${VERSION}" "mcp-hugo-server-go-${VERSION#v}.mcpb" --repo "${{ github.repository }}"
+
+  publish-npm:
+    name: Publish npm package
+    if: inputs.dry_run == 'false' && inputs.release_version != ''
+    needs: release
+    uses: ./.github/workflows/publish-npm.yml
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+    with:
+      version: ${{ inputs.release_version }}
+    secrets: inherit
 
   dry-run:
     name: Dry-run validation
