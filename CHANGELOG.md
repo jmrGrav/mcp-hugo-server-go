@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.7] - 2026-08-15
+
+Closes out the v1.8.7 assurance campaign (#993): multi-principal concurrency races, build-recovery determinism, and a `get_site_health` blind spot found during the v1.8.6 live sweep.
+
+### Fix
+- **`get_broken_links` no longer reports Hugo pagination targets as broken on the SQL-backed path** (#1101): `/page/N/`, taxonomy, and other non-content-classified link targets are now excluded from both the in-memory and SQLite-backed broken-link checkers via a shared `site.ShouldIgnoreBrokenLinkTarget` predicate, closing the drift between the two implementations that #1104 partially addressed. A one-time startup migration (`reconcileBrokenLinksAgainstIgnorePolicy`) re-evaluates every existing `links` row with status `broken` against the corrected policy on first open after upgrade, flipping stale false-positives to `ok` — this mutates existing rows in place; no action needed from operators.
+- **`get_site_health` no longer reports `healthy` while a page's title is corrupted to a raw URL** (#1105): a new `score_breakdown.title_shape` category (weight 0, like `taxonomy`) flags titles equal to their own `http(s)://` URL. `data.bad_title_shape_pages` lists affected slugs, `status`/`content_status` are forced off `healthy`/`healthy_with_advisories`, and `score` is capped at 99 when present — weight 0 does not mean the finding is cosmetic for this category. Whether `get_broken_links` volume should also factor into this tool's scoring remains an open design question, now unblocked by the #1101 fix above and tracked on #1105.
+
+### Test
+- **OAuth authorization-code and refresh-token single-use races** (#1067, #1069): `TestAuthorizationCodeCannotBeReplayed` proves a code cannot be exchanged twice; `TestRefreshTokenGrantIsSingleUseUnderConcurrentRace` races two goroutines presenting the same refresh token and asserts exactly one winner whose issued access token's stamped principal is correct, not just that the token re-validates.
+- **Cross-principal mutation-status isolation under concurrency** (#1067): `TestConcurrentDeletePageAssetByDistinctPrincipalsIsolatesMutationStatus` and `TestConcurrentApplyBundlePlanByDistinctPrincipalsIsolatesMutationStatus` race two distinct OAuth principals against the same asset/bundle and assert `get_mutation_status` never leaks one caller's result to another — the latter also confirms `apply_bundle_plan`'s optimistic-concurrency check rejects the loser rather than silently double-applying.
+- **Query-string bearer tokens are never accepted as credentials** (#1069): `TestMCPRejectsQueryStringBearerToken` proves a token passed as `?access_token=` is rejected as `missing_bearer`, guarding against an accidental fallback to URL-based auth.
+- **Build-output swap recovers from worst-case double-rename failure** (#1068): `TestSwapBuildOutputRetryAfterDoubleRenameFailureReconciles` simulates both the install-rename and the restore-rename failing (public output absent, old tree orphaned under a backup path), then proves a retried `build_site` swap reconciles deterministically without manual cleanup.
+- **`OnOutputSwapped` callback failures degrade to `partial_success`, never a rollback** (#1068): `TestBuildSiteMarksPartialSuccessWhenOnOutputSwappedCallbackFails` proves a post-swap callback error surfaces as a warning on an already-successful build rather than reverting the newly installed output.
+- **SQL-backed broken-link checker excludes pagination targets** (#1101): `TestGetBrokenLinksIgnoresPaginationTargets` and `TestReconcileBrokenLinksAgainstIgnorePolicyFixesStaleRows` (the latter seeds a pre-fix-shaped stale row directly and confirms the startup migration corrects it on reopen).
+- **`get_site_health` title-shape detection** (#1105): `TestGetSiteHealthURLShapedTitleNeverReportsHealthy` and `TestGetSiteHealthOrdinaryTitleDoesNotTriggerTitleShapeFinding` (guards against a title that merely mentions a URL in prose).
+
+### Docs
+- **`docs/mcp-contract.md` §6.8 updated** for the new `title_shape` scoring category and the `get_broken_links` pagination-exclusion behavior (#1101, #1105).
+
 ## [v1.8.6] - 2026-08-15
 
 ### Security
