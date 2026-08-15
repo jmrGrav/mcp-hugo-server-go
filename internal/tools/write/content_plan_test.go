@@ -1,6 +1,7 @@
 package write_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 )
 
 func readFileString(t *testing.T, contentRoot, relPath string) string {
@@ -632,5 +634,54 @@ func TestApplyContentPlanSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
 	warning, _ := data["warning"].(string)
 	if !strings.Contains(warning, "derived DB could not be updated") {
 		t.Fatalf("apply_content_plan warning = %q, want derived-DB warning", warning)
+	}
+}
+
+// TestApplyContentPlanSurvivesPostWriteConsumeFailureWithWarning exercises
+// apply_content_plan's plans.consume() soft-degrade branch: the source write
+// and recovery journal already succeeded by the time consume() runs, so a
+// failure to free the plan slot afterward must downgrade to partial_success
+// with a warning rather than fail the whole apply — the write already
+// happened and cannot be un-happened by that bookkeeping failure.
+func TestApplyContentPlanSurvivesPostWriteConsumeFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/plan-consume-warning")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/plan-consume-warning",
+		"operations": []any{
+			map[string]any{"op": "set_title", "value": "Consume Warning Title"},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_content_change failed: %s", marshalContent(t, planRes))
+	}
+	planID, _ := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	restore := write.SetPlanConsumeFailureHook(func(tool string) error {
+		if tool == "apply_content_plan" {
+			return errors.New("injected plan consumption failure")
+		}
+		return nil
+	})
+	defer restore()
+
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan must survive a post-write consume failure, got error: %s", marshalContent(t, applyRes))
+	}
+	data := decodeWriteData(t, applyRes)
+	if data["status"] != "partial_success" {
+		t.Fatalf("apply_content_plan status = %v, want partial_success", data["status"])
+	}
+	warning, _ := data["warning"].(string)
+	if !strings.Contains(warning, "plan consumption could not be persisted") {
+		t.Fatalf("apply_content_plan warning = %q, want plan-consumption warning", warning)
+	}
+	written := readFileString(t, contentRoot, "posts/plan-consume-warning/index.md")
+	if !strings.Contains(written, "Consume Warning Title") {
+		t.Fatalf("apply_content_plan did not apply the write despite consume failure: %q", written)
 	}
 }

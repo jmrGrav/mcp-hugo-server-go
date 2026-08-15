@@ -878,13 +878,18 @@ func registerApplyBundlePlan(
 		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
 			slog.Warn("apply_bundle_plan: could not advance recovery journal", "plan_id", in.PlanID, "error", err)
 		}
-		if _, ok, err := plans.consume(in.PlanID, isolationCallerKey(ctx)); err != nil {
-			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: bundle changed but plan consumption could not be persisted; retry with the same idempotency_key: %w", err))
-		} else if !ok {
-			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: bundle changed but plan consumption could not be persisted; retry with the same idempotency_key"))
-		}
-
 		var warnings []string
+		_, ok, err = plans.consume(in.PlanID, isolationCallerKey(ctx))
+		if err == nil {
+			err = planConsumeFailure("apply_bundle_plan")
+		}
+		if err != nil {
+			slog.Warn("apply_bundle_plan: plan consumption failed after write", "plan_id", in.PlanID, "error", err)
+			warnings = append(warnings, fmt.Sprintf("bundle changed but plan consumption could not be persisted: %v", err))
+		} else if !ok {
+			slog.Warn("apply_bundle_plan: plan consumption reported not-ok after write", "plan_id", in.PlanID)
+			warnings = append(warnings, "bundle changed but plan consumption could not be persisted")
+		}
 		outcomes := make([]bundleTranslationOutcomeDTO, 0, len(entry.Translations))
 		for _, tr := range entry.Translations {
 			if w := indexBundleTranslation(idx, siteIdx, siteDB, entry.Slug, tr.Lang, tr.FilePath, tr.Content); w != "" {
