@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -96,9 +97,18 @@ func resolveThemeNames(ctx context.Context, cfg config.Config) (names []string, 
 	cmd := exec.CommandContext(tctx, "hugo", "config", "--format", "json")
 	cmd.Dir = cfg.HugoRoot
 	cmd.Env = boundedCommandEnv()
-	out, err := cmd.CombinedOutput()
+	// Stdout only: Hugo routinely writes deprecation warnings to stderr on
+	// every invocation (e.g. the languageCode/languageName renames as of
+	// v0.158.0), completely independent of whether the config itself is
+	// valid. CombinedOutput would merge those warnings into the JSON blob
+	// this function must parse, breaking it deterministically on any config
+	// that trips a warning — which is not a "config is invalid" condition
+	// at all. Only stderr goes into the error report, and only on failure.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
 	if err != nil {
-		reason := strings.TrimSpace(string(out))
+		reason := strings.TrimSpace(stderr.String())
 		if reason == "" {
 			reason = err.Error()
 		}

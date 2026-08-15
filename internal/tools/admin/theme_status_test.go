@@ -180,3 +180,55 @@ func TestGetThemeStatusSurfacesHugoConfigError(t *testing.T) {
 		t.Fatalf("themes = %#v, want empty list when config probing failed", themes)
 	}
 }
+
+// TestGetThemeStatusIgnoresHugoConfigStderrWarnings is a regression test for
+// a real production bug: `hugo config --format json` routinely writes
+// deprecation warnings to stderr (e.g. Hugo v0.158.0+ warning about the
+// languageCode/languageName config key renames) on a perfectly valid,
+// successfully-parsing config — completely independent of whether the site
+// config itself has a problem. resolveThemeNames previously used
+// CombinedOutput(), which merged those stderr warnings into the stdout
+// bytes it then tried to json.Unmarshal, deterministically breaking
+// get_theme_status on any Hugo install/config combination that emits one.
+func TestGetThemeStatusIgnoresHugoConfigStderrWarnings(t *testing.T) {
+	dir := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"version\" ]; then\n  echo 'hugo v0.165.0 linux/amd64'\n  exit 0\n" +
+		"elif [ \"$1\" = \"config\" ]; then\n" +
+		"  echo 'WARN  deprecated: project config key languageCode was deprecated in Hugo v0.158.0 and will be removed in a future release. Use locale instead.' >&2\n" +
+		"  echo '{\"theme\":\"PaperMod\"}'\n  exit 0\n" +
+		"fi\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "hugo"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write mock hugo: %v", err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "get_theme_status", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("stderr deprecation warnings alongside valid JSON must not fail the tool: %s", resultText(res))
+	}
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	hugo := data["hugo"].(map[string]any)
+	if got, ok := hugo["error"].(string); ok && got != "" {
+		t.Fatalf("hugo.error = %q, want empty — a stderr warning is not a config error", got)
+	}
+	themes, ok := data["themes"].([]any)
+	if !ok || len(themes) != 1 {
+		t.Fatalf("themes = %#v, want 1 entry (PaperMod), got lost to the stderr-corrupted JSON parse", data["themes"])
+	}
+	theme := themes[0].(map[string]any)
+	if theme["name"] != "PaperMod" {
+		t.Fatalf("theme.name = %v, want PaperMod", theme["name"])
+	}
+}
