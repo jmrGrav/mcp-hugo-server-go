@@ -862,8 +862,20 @@ func TestRefreshTokenGrantIsSingleUseUnderConcurrentRace(t *testing.T) {
 		t.Fatalf("concurrent refresh must resolve to exactly one winner and one invalid_grant loser, got %d winners, %d losers", len(winners), losers)
 	}
 
-	// The winning access token must still authenticate as this same client —
-	// the race must not have corrupted or duplicated ownership identity.
+	// The winning access token must carry the same principal the original
+	// grant did — ownership and quota identity key off this value, not off
+	// the token string, so the race must not have corrupted or dropped it.
+	_, _, principal, _, ok := svc.ValidateBearerInfo(winners[0].AccessToken)
+	if !ok {
+		t.Fatal("race winner's access_token does not validate")
+	}
+	if principal != clientID {
+		t.Fatalf("race winner's access_token principal = %q, want %q (ownership identity corrupted by the race)", principal, clientID)
+	}
+
+	// The new refresh_token must also still be bound to this same client —
+	// a distinct check from the access-token principal above, since
+	// exchangeRefreshToken validates client_id independently of AddAccessToken.
 	bearerReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {clientID},
