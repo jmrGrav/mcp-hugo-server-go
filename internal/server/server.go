@@ -134,6 +134,18 @@ func initWriteBootstrap(cfg config.Config) (*security.PathGuard, *hugosite.Sourc
 
 func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex) (*db.DB, error) {
 	if cfg.DBPath == "" {
+		// A one-off stdio/desktop install has no sane writable location to
+		// guess, and every subsystem gated on db_path already degrades
+		// gracefully to an in-memory fallback — so this stays opt-in rather
+		// than defaulting to a path (that would crash under a
+		// ProtectSystem=strict unit whose ReadWritePaths allowlist doesn't
+		// happen to include it). A long-running http server deployment is
+		// the case worth calling out loudly: it silently loses restart-safe
+		// persistence otherwise (#1099 follow-up; see get_capabilities'
+		// disabled_features "durable_persistence" for the same signal).
+		if cfg.Transport == "http" && strings.TrimSpace(cfg.ContentRoot) != "" {
+			slog.Warn("server: db_path is not configured — restart-safe persistence (build reconciliation, mutation journal, recovery journal, multilingual shadow, preview leases) is disabled and falls back to in-memory/filesystem state; set db_path to enable it")
+		}
 		return nil, nil
 	}
 	siteDB, err := db.Open(cfg.DBPath)
