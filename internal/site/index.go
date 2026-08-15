@@ -552,7 +552,7 @@ func parseHTMLPage(raw []byte, rel string, modTime time.Time, siteURL, defaultLa
 		Categories: cats,
 		Date:       dateStr,
 		URL:        canonicalURL,
-		Lang:       firstNonEmptyStr(primaryLangSubtag(meta.lang), defaultLang),
+		Lang:       firstNonEmptyStr(collapseToDefaultLangSubtag(meta.lang, defaultLang), defaultLang),
 		RawHTML:    bodyHTML(raw),
 	}
 	return pg, parsedDate, nil
@@ -826,12 +826,8 @@ func joinURL(siteURL, slug string) string {
 	return siteURL + normalizeSlug(slug)
 }
 
-// primaryLangSubtag collapses an HTML `<html lang>` attribute to its BCP-47
-// primary subtag ("fr-FR" -> "fr"). Themes commonly render the SEO-preferred
-// region-qualified form even though Hugo's own language key (and this
-// server's frontmatter `lang` field) is the short primary subtag, so
-// comparing the raw attribute against source languages silently orphans
-// every non-default-language page (#1096 runtime shadow investigation).
+// primaryLangSubtag returns an HTML `<html lang>` attribute's BCP-47 primary
+// subtag ("fr-FR" -> "fr").
 func primaryLangSubtag(lang string) string {
 	lang = strings.TrimSpace(lang)
 	if lang == "" {
@@ -841,6 +837,28 @@ func primaryLangSubtag(lang string) string {
 		lang = lang[:i]
 	}
 	return strings.ToLower(lang)
+}
+
+// collapseToDefaultLangSubtag collapses a raw `<html lang>` attribute to its
+// primary subtag only when that subtag matches the configured default
+// language. Themes commonly render the SEO-preferred region-qualified form
+// for the default language ("fr-FR") even though Hugo's own language key
+// (and this server's frontmatter `lang` field) is the short primary subtag
+// ("fr") — comparing the raw attribute as-is against source languages then
+// silently orphans every default-language page (#1099). Left untouched
+// otherwise, so a site whose Hugo language key is itself region-qualified
+// (e.g. `languages.pt-BR`, with `<html lang="pt-BR">` matching frontmatter
+// `lang: pt-BR` exactly) keeps its existing exact-match behavior.
+func collapseToDefaultLangSubtag(lang, defaultLang string) string {
+	lang = strings.TrimSpace(lang)
+	if lang == "" || strings.EqualFold(lang, defaultLang) {
+		return lang
+	}
+	primary := primaryLangSubtag(lang)
+	if primary != "" && primary == primaryLangSubtag(defaultLang) {
+		return primary
+	}
+	return lang
 }
 
 func firstNonEmptyStr(values ...string) string {

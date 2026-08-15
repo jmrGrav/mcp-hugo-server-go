@@ -134,7 +134,7 @@ func TestSiteIndexHelpers(t *testing.T) {
   </head>
   <body><article><p>Corps</p></article></body>
 </html>`)
-		pg, _, err := parseHTMLPage(raw, "posts/hello/index.html", time.Unix(0, 0), "https://example.test", "en")
+		pg, _, err := parseHTMLPage(raw, "posts/hello/index.html", time.Unix(0, 0), "https://example.test", "fr")
 		if err != nil {
 			t.Fatalf("parseHTMLPage() error = %v", err)
 		}
@@ -149,6 +149,20 @@ func TestSiteIndexHelpers(t *testing.T) {
 		}
 		if got := primaryLangSubtag("fr"); got != "fr" {
 			t.Fatalf("primaryLangSubtag(%q) = %q", "fr", got)
+		}
+		if got := collapseToDefaultLangSubtag("fr-FR", "fr"); got != "fr" {
+			t.Fatalf("collapseToDefaultLangSubtag(%q, %q) = %q, want %q", "fr-FR", "fr", got, "fr")
+		}
+		// A site whose Hugo language key is itself region-qualified (e.g.
+		// languages.pt-BR) must not have its exact match broken by the
+		// collapse: raw and defaultLang already match exactly, so the
+		// region-qualified form is preserved rather than shortened to "pt".
+		if got := collapseToDefaultLangSubtag("pt-BR", "pt-BR"); got != "pt-BR" {
+			t.Fatalf("collapseToDefaultLangSubtag(%q, %q) = %q, want unchanged %q", "pt-BR", "pt-BR", got, "pt-BR")
+		}
+		// An unrelated non-default language must never be collapsed.
+		if got := collapseToDefaultLangSubtag("en", "fr"); got != "en" {
+			t.Fatalf("collapseToDefaultLangSubtag(%q, %q) = %q, want unchanged %q", "en", "fr", got, "en")
 		}
 	})
 

@@ -476,6 +476,52 @@ func TestPageResolverPairsDefaultLanguageAcrossRegionQualifiedHTMLLang(t *testin
 	}
 }
 
+// TestPageResolverKeepsExactMatchForRegionQualifiedDefaultLanguageKey is the
+// counterpart regression to the fr-FR collapse above: a site whose Hugo
+// language key is itself region-qualified (e.g. `languages.pt-BR`, with
+// frontmatter `lang: pt-BR` and `<html lang="pt-BR">`) must keep resolving
+// via its existing exact match rather than having the primary-subtag
+// collapse applied where it isn't needed.
+func TestPageResolverKeepsExactMatchForRegionQualifiedDefaultLanguageKey(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSourcePage(t, contentRoot, "posts/hello/index.md", "---\ntitle: Ola\nlang: pt-BR\n---\n# Ola\n\nSource body\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	publicRoot := t.TempDir()
+	writeSourcePage(t, publicRoot, "posts/hello/index.html", `<!doctype html>
+<html lang="pt-BR">
+<head><title>Ola</title><link rel="canonical" href="https://example.test/posts/hello/"></head>
+<body><article><p>Rendered body</p></article></body>
+</html>`)
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "pt-BR"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+
+	resolver := NewPageResolver(idx, srcIdx, config.Config{ContentRoot: contentRoot, DefaultLanguage: "pt-BR"})
+	got, ok := resolver.ResolveWithLang("posts/hello", "pt-BR")
+	if !ok {
+		t.Fatal("ResolveWithLang(\"posts/hello\", \"pt-BR\") not found")
+	}
+	if got.Public == nil {
+		t.Fatalf("ResolveWithLang(...).Public = nil, want the pt-BR public page paired to the pt-BR source")
+	}
+	if got.Source == nil || got.Source.Body != "# Ola\n\nSource body" {
+		t.Fatalf("ResolveWithLang(...).Source = %#v", got.Source)
+	}
+}
+
 func writeSourcePage(t *testing.T, root, rel, raw string) {
 	t.Helper()
 	full := filepath.Join(root, rel)
