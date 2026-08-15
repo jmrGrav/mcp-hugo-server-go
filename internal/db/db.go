@@ -981,13 +981,27 @@ func txSyncLinks(tx *sql.Tx, pageID int64, p site.Page, siteIdx *site.Index) err
 		target := base.ResolveReference(ref)
 
 		if target.Host != "" && target.Host != base.Host {
-			// External — store but don't count as broken.
+			// External — store but don't count as broken. Checked before the
+			// .md exclusion below (matching resolveInternalLink's order in
+			// internal/tools/read/extended.go) so an external link that
+			// happens to end in .md — e.g. a GitHub README — still gets an
+			// 'external' row instead of being silently dropped.
 			if _, err := tx.Exec(
 				"INSERT INTO links(source_page_id, target, target_slug, anchor_text, status) VALUES(?,?,'','','external')",
 				pageID, href,
 			); err != nil {
 				return err
 			}
+			continue
+		}
+
+		// A link to a raw .md source path (e.g. a theme's "view source" link)
+		// is never expected to resolve against the rendered public index —
+		// internal/tools/read/extended.go's resolveInternalLink excludes the
+		// same pattern for the in-memory broken-link path; this sibling
+		// implementation drifted from it and flagged every such link as
+		// broken (confirmed live: dozens of spurious index.md self-links).
+		if strings.HasSuffix(target.Path, ".md") {
 			continue
 		}
 
