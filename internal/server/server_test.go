@@ -662,6 +662,35 @@ func TestUnauthenticatedMCPReturns401WithWWWAuthenticate(t *testing.T) {
 	}
 }
 
+// TestMCPRejectsQueryStringBearerToken proves a valid access token passed as
+// a URL query parameter (?access_token=...) is never accepted as a
+// substitute for the Authorization header (#1069). Query strings land in
+// server access logs and browser history, so RFC 6750 forbids this transport
+// for confidential clients; newMCPBearerAuthMiddleware only ever inspects the
+// Authorization header, so this also guards against a future refactor that
+// starts consulting the query string.
+func TestMCPRejectsQueryStringBearerToken(t *testing.T) {
+	srv := mustOAuthServer(t)
+	bearer := obtainBearerToken(t, srv)
+
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp?access_token="+bearer, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d want 401 for a query-string-only bearer token", rec.Code)
+	}
+	// missing_bearer (no Authorization header at all), not invalid_token —
+	// the query string must never be evaluated as a bearer credential.
+	if wwwAuth := rec.Header().Get("WWW-Authenticate"); strings.Contains(wwwAuth, `error="invalid_token"`) {
+		t.Fatalf("WWW-Authenticate = %q: query-string token must be ignored (missing_bearer), not evaluated as invalid_token", wwwAuth)
+	}
+}
+
 func TestInSessionMissingBearerEmitsStructuredLog(t *testing.T) {
 	srv := mustOAuthServer(t)
 	logBuf := withDefaultLogger(t)

@@ -468,6 +468,79 @@ func TestPKCEFlow(t *testing.T) {
 	}
 }
 
+// TestAuthorizationCodeCannotBeReplayed proves an authorization code is
+// single-use: exchanging it a second time must fail even with the correct
+// client, redirect_uri, and PKCE verifier, and must not mint a second token
+// pair (#1069).
+func TestAuthorizationCodeCannotBeReplayed(t *testing.T) {
+	svc, _ := newTestService(t)
+	clientID := registerClient(t, svc, []string{"https://client.test/callback"})
+
+	verifier := "test-verifier-test-verifier-test-verifier-test"
+	challenge := oauth.CodeChallengeS256(verifier)
+
+	authURL := "/authorize?" + url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://client.test/callback"},
+		"state":                 {"state-xyz"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	location, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("authorize: parse location: %v", err)
+	}
+	code := location.Query().Get("code")
+	if code == "" {
+		t.Fatal("authorize: missing code in redirect")
+	}
+
+	exchange := func() *httptest.ResponseRecorder {
+		tokenForm := url.Values{
+			"grant_type":    {"authorization_code"},
+			"client_id":     {clientID},
+			"code":          {code},
+			"redirect_uri":  {"https://client.test/callback"},
+			"code_verifier": {verifier},
+		}
+		tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+		tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		tokenRec := httptest.NewRecorder()
+		svc.HandleToken(tokenRec, tokenReq)
+		return tokenRec
+	}
+
+	first := exchange()
+	if first.Code != http.StatusOK {
+		t.Fatalf("first exchange: status = %d body = %q", first.Code, first.Body.String())
+	}
+	var firstResp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &firstResp); err != nil {
+		t.Fatalf("first exchange: decode: %v", err)
+	}
+	if firstResp.AccessToken == "" {
+		t.Fatal("first exchange: empty access_token")
+	}
+
+	second := exchange()
+	if second.Code == http.StatusOK {
+		t.Fatalf("replayed code: status = %d, want rejection; body = %q", second.Code, second.Body.String())
+	}
+	var secondResp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &secondResp); err == nil && secondResp.AccessToken != "" {
+		t.Fatalf("replayed code minted a second access token: %q", secondResp.AccessToken)
+	}
+}
+
 func TestPKCEFlowIsObservableInLogs(t *testing.T) {
 	// #378/OAuth-observability follow-up: the user needs to reconstruct which
 	// OAuth path a live client (Gemini, Le Chat, ...) actually took by
