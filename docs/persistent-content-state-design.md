@@ -42,6 +42,20 @@ The reconciliation result reports facts rather than guessing from a dirty Git
 worktree or a process-local flag. A full Hugo build can legitimately publish a
 dirty worktree; dirty Git alone is not proof of stale public output.
 
+The #1077 implementation stores one `build_runs` row and multilingual
+`build_pages` rows for each attempted build. Before Hugo runs, `build_site`
+reloads the source index from disk under the content lock and compares exact
+source-byte revisions with the latest completed run. Its `pages.included`,
+`pages.excluded_drafts`, and `pages.deleted_outputs` report that durable
+comparison; `BuildPending` remains only a compatibility fallback when the
+operational database is disabled. After the output swap and index reload, the
+run records the executing Hugo version and the observed public revisions.
+
+At startup and after every completed build, the server refreshes source and
+public representations from disk and publishes aggregate-only reconciliation
+facts through `get_runtime_status.data.build_reconciliation`. Per-page keys and
+paths remain internal so runtime diagnostics do not expose site content.
+
 ## Filesystem and SQLite recovery
 
 A filesystem rename and a SQLite transaction cannot be one atomic operation.

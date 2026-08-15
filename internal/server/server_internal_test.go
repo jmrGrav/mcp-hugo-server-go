@@ -709,6 +709,7 @@ func TestApplyOAuthCORS(t *testing.T) {
 
 func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
 	want := []string{
+		"build_pages",
 		"recovery_journal",
 		"index_reload",
 		"db_reindex",
@@ -736,7 +737,7 @@ func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
 				// require Fn specifically, or a legitimate
 				// OnBuildComplete-only callback like publication_manifest
 				// reads as broken.
-				if cb.Fn == nil && cb.OnBuildStart == nil && cb.OnOutputSwapped == nil && cb.OnBuildComplete == nil {
+				if cb.Fn == nil && cb.OnBuildPrepared == nil && cb.OnBuildStart == nil && cb.OnOutputSwapped == nil && cb.OnBuildComplete == nil && cb.OnBuildFailed == nil {
 					t.Fatalf("postBuildCallbacks(%q) returned no callback for %q", action, cb.Name)
 				}
 			}

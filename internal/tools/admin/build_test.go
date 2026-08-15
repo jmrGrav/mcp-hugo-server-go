@@ -87,7 +87,7 @@ func TestBuildSiteSucceeds(t *testing.T) {
 
 func TestBuildSiteCompletionCallbackReceivesDiskFingerprints(t *testing.T) {
 	hugoRoot := t.TempDir()
-	dir := writeMockHugo(t, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'built' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 0\n")
+	dir := writeMockHugo(t, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then\n  echo 'hugo v0.164.0+extended linux/amd64'\n  exit 0\nfi\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'built' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
 	contentRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(contentRoot, "page.md"), []byte("---\ntitle: manifest\n---\nbody"), 0o644); err != nil {
@@ -130,6 +130,9 @@ func TestBuildSiteCompletionCallbackReceivesDiskFingerprints(t *testing.T) {
 	}
 	if got.Status != "ok" || got.ObservedAt.IsZero() {
 		t.Fatalf("completion = %+v, want successful observed build", got)
+	}
+	if got.HugoVersion != "" {
+		t.Fatalf("completion HugoVersion = %q, want empty for non-Go shell wrapper", got.HugoVersion)
 	}
 }
 

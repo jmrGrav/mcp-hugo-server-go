@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	gobuildinfo "debug/buildinfo"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -417,6 +418,46 @@ func commandString(name string, args []string) string {
 	return name + " " + strings.Join(args, " ")
 }
 
+// hugoVersionFromBinary reads Go module metadata from the resolved Hugo
+// executable without launching a second process. That keeps build lifecycle
+// accounting truthful while avoiding side effects and process-group leaks from
+// operator-supplied shell wrappers named `hugo`.
+func hugoVersionFromBinary() string {
+	path, err := exec.LookPath("hugo")
+	if err != nil {
+		return ""
+	}
+	info, err := gobuildinfo.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return formatHugoBuildVersion(info)
+}
+
+func formatHugoBuildVersion(info *gobuildinfo.BuildInfo) string {
+	if info == nil || info.Main.Path != "github.com/gohugoio/hugo" {
+		return ""
+	}
+	version := strings.TrimPrefix(strings.TrimSpace(info.Main.Version), "v")
+	if version == "" || version == "(devel)" {
+		return ""
+	}
+	extended := false
+	for _, setting := range info.Settings {
+		if setting.Key == "-tags" {
+			for _, tag := range strings.Split(setting.Value, ",") {
+				if strings.TrimSpace(tag) == "extended" {
+					extended = true
+				}
+			}
+		}
+	}
+	if extended && !strings.Contains(version, "+extended") {
+		version += "+extended"
+	}
+	return version
+}
+
 func currentUserForLog() string {
 	u, err := user.Current()
 	if err != nil {
@@ -519,6 +560,14 @@ func ownershipDriftSuggestion(summary string) (string, bool) {
 type PostBuildCallback struct {
 	Name string
 	Fn   func() error
+	// OnBuildPrepared runs after the source index has been deterministically
+	// reloaded from disk but before Hugo starts. It may persist per-page build
+	// intent and return the durable changed/deleted set for reporting.
+	OnBuildPrepared func(BuildProgress) ([]BuildPageChange, error)
+	// OnBuildFailed finalizes durable build intent after Hugo/output-swap
+	// failure. A process crash intentionally leaves the run in_progress for
+	// startup recovery instead.
+	OnBuildFailed func(BuildProgress, string) error
 	// OnBuildStart runs while ContentMu is held, immediately before Hugo is
 	// invoked. It is for durable intent records: a database transaction cannot
 	// include the subsequent filesystem rename, so recovery needs this fact
@@ -544,6 +593,14 @@ type BuildProgress struct {
 	ObservedAt time.Time
 }
 
+type BuildPageChange struct {
+	SourceKey   string
+	Lang        string
+	Draft       bool
+	TestContent bool
+	Deleted     bool
+}
+
 // BuildCompletion contains the facts a post-build recorder may persist. The
 // hashes are calculated while runBuild holds hugosite.ContentMu, so they
 // describe bytes read from disk for this completed build, not an earlier
@@ -557,6 +614,18 @@ type BuildCompletion struct {
 	ObservedAt     time.Time
 }
 
+func notifyBuildFailed(callbacks []PostBuildCallback, progress BuildProgress, state string) {
+	progress.ObservedAt = time.Now().UTC()
+	for _, cb := range callbacks {
+		if cb.OnBuildFailed == nil {
+			continue
+		}
+		if err := cb.OnBuildFailed(progress, state); err != nil {
+			slog.Warn("build_site: failed to persist failed build state", "callback", cb.Name, "error", err)
+		}
+	}
+}
+
 func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...PostBuildCallback) {
 	if s == nil {
 		return
@@ -565,7 +634,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceInde
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "build_site",
 		Title:        "Build website",
-		Description:  "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts) — all additive to the pre-existing fields (#858).",
+		Description:  "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts or deleted). With operational SQLite configured, the page set is derived from fresh on-disk source fingerprints compared with the latest completed build and survives restart/external writes; without it, volatile BuildPending remains a compatibility fallback (#858, #1077).",
 		InputSchema:  tools.MustSchema[buildSiteInput](),
 		OutputSchema: tools.MustSchema[buildSiteOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -615,6 +684,25 @@ func classifyPendingPages(pending []hugosite.SourcePage) buildPagesDTO {
 	}
 }
 
+func classifyBuildPageChanges(changes []BuildPageChange) buildPagesDTO {
+	included, excluded, deleted := []string{}, []string{}, []string{}
+	for _, change := range changes {
+		key := sourceKeyOf(change.SourceKey, change.Lang)
+		switch {
+		case change.Deleted:
+			deleted = append(deleted, key)
+		case change.Draft || change.TestContent:
+			excluded = append(excluded, key)
+		default:
+			included = append(included, key)
+		}
+	}
+	sort.Strings(included)
+	sort.Strings(excluded)
+	sort.Strings(deleted)
+	return buildPagesDTO{Included: included, ExcludedDrafts: excluded, DeletedOutputs: deleted}
+}
+
 func isTruthyFrontmatter(v any) bool {
 	switch x := v.(type) {
 	case bool:
@@ -639,6 +727,11 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		return buildSiteData{}, fmt.Errorf("build_in_progress: a content mutation or build is already running")
 	}
 	defer hugosite.ContentMu.Unlock()
+	if srcIdx != nil && strings.TrimSpace(cfg.ContentRoot) != "" {
+		if err := srcIdx.Reload(cfg.ContentRoot); err != nil {
+			return buildSiteData{}, fmt.Errorf("source_index_reload_failed: refresh source before build: %w", err)
+		}
+	}
 
 	if err := checkDirWritable(filepath.Dir(cfg.SiteRoot)); err != nil {
 		buildstatus.RecordFailure("permission_denied", time.Now())
@@ -674,12 +767,34 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil { // #nosec G301 -- Hugo cache is a configured service-owned path
 		return buildSiteData{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
 	}
+	// Persist the actual binary version without executing an extra wrapper.
+	// Metadata can be absent on non-Go wrappers; that is an honest empty fact,
+	// never a reason to block the build itself.
+	hugoVersion := hugoVersionFromBinary()
 	tctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	runID := newBuildID(start)
 	progress := BuildProgress{BuildID: runID, ObservedAt: start.UTC()}
+	var preparedChanges []BuildPageChange
+	hasPreparedChanges := false
+	for i, cb := range siteReload {
+		if cb.OnBuildPrepared == nil {
+			continue
+		}
+		name := cb.Name
+		if name == "" {
+			name = fmt.Sprintf("callback %d", i)
+		}
+		changes, err := cb.OnBuildPrepared(progress)
+		if err != nil {
+			notifyBuildFailed(siteReload, progress, "failed:reconciliation")
+			return buildSiteData{}, fmt.Errorf("build_reconciliation_failed: %s: %w", name, err)
+		}
+		preparedChanges = append(preparedChanges, changes...)
+		hasPreparedChanges = true
+	}
 	for i, cb := range siteReload {
 		if cb.OnBuildStart == nil {
 			continue
@@ -689,6 +804,7 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 			name = fmt.Sprintf("callback %d", i)
 		}
 		if err := cb.OnBuildStart(progress); err != nil {
+			notifyBuildFailed(siteReload, progress, "failed:recovery_record")
 			return buildSiteData{}, fmt.Errorf("build_recovery_record_failed: %s: %w", name, err)
 		}
 	}
@@ -764,12 +880,14 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		}
 		jsonPayload, _ := json.Marshal(payload)
 		buildstatus.RecordFailure(errClass, time.Now())
+		notifyBuildFailed(siteReload, progress, "failed:"+errClass)
 		return buildSiteData{}, fmt.Errorf("build_error: %s", jsonPayload)
 	}
 	buildstatus.RecordSuccess(time.Now())
 	swapWarning, swapErr := swapBuildOutput(buildDir, cfg.SiteRoot)
 	if swapErr != nil {
 		buildstatus.RecordFailure("output_swap", time.Now())
+		notifyBuildFailed(siteReload, progress, "failed:output_swap")
 		return buildSiteData{}, swapErr
 	}
 	progress.ObservedAt = time.Now().UTC()
@@ -827,7 +945,12 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 	// Capture the page-aware "changed set" BEFORE the callback loop runs: the
 	// index_reload callback calls ClearAllBuildPending(), so pending pages
 	// must be snapshotted here or they vanish before we can report them (#858).
-	pages := classifyPendingPages(srcIdx.PendingPages())
+	pages := buildPagesDTO{Included: []string{}, ExcludedDrafts: []string{}, DeletedOutputs: []string{}}
+	if hasPreparedChanges {
+		pages = classifyBuildPageChanges(preparedChanges)
+	} else if srcIdx != nil {
+		pages = classifyPendingPages(srcIdx.PendingPages())
+	}
 
 	// Run post-build callbacks within a bounded deadline (#241). Optional
 	// side-effect callbacks (CDN purge, search indexing) swallow their errors
@@ -916,12 +1039,9 @@ cbLoop:
 		BuildID:        runID,
 		SourceRevision: sourceRevision,
 		OutputRevision: outputRevision,
-		// A build command is the only Hugo process this path is allowed to
-		// invoke. Version probing is intentionally left to runtime status so
-		// wrappers with side effects cannot be run twice (#1077).
-		HugoVersion: "",
-		Status:      status,
-		ObservedAt:  time.Now().UTC(),
+		HugoVersion:    hugoVersion,
+		Status:         status,
+		ObservedAt:     time.Now().UTC(),
 	}
 	for i, cb := range siteReload {
 		if cb.OnBuildComplete == nil {

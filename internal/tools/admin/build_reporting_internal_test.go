@@ -1,11 +1,75 @@
 package admin
 
 import (
+	"context"
+	gobuildinfo "debug/buildinfo"
+	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime/debug"
+	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 )
+
+func TestFormatHugoBuildVersionFromBinaryMetadata(t *testing.T) {
+	info := &gobuildinfo.BuildInfo{
+		Main:     debug.Module{Path: "github.com/gohugoio/hugo", Version: "v0.164.0"},
+		Settings: []debug.BuildSetting{{Key: "-tags", Value: "extended,nodeploy"}},
+	}
+	if got := formatHugoBuildVersion(info); got != "0.164.0+extended" {
+		t.Fatalf("formatHugoBuildVersion() = %q", got)
+	}
+	for _, invalid := range []*gobuildinfo.BuildInfo{nil, {}, {Main: debug.Module{Path: "example.test/wrapper", Version: "v1.0.0"}}, {Main: debug.Module{Path: "github.com/gohugoio/hugo", Version: "(devel)"}}} {
+		if got := formatHugoBuildVersion(invalid); got != "" {
+			t.Fatalf("formatHugoBuildVersion(%#v) = %q, want empty", invalid, got)
+		}
+	}
+}
+
+func TestRunBuildPreparationFailuresFinalizeDurableIntent(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "hugo"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+	cfg := config.Default()
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(cfg.SiteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		callback PostBuildCallback
+		want     string
+	}{
+		{name: "prepare", callback: PostBuildCallback{Name: "build_pages", OnBuildPrepared: func(BuildProgress) ([]BuildPageChange, error) {
+			return nil, errors.New("injected prepare failure")
+		}}, want: "build_reconciliation_failed"},
+		{name: "start", callback: PostBuildCallback{Name: "recovery", OnBuildStart: func(BuildProgress) error {
+			return errors.New("injected recovery failure")
+		}}, want: "build_recovery_record_failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failedState := ""
+			observer := PostBuildCallback{Name: "observer", OnBuildFailed: func(_ BuildProgress, state string) error {
+				failedState = state
+				return nil
+			}}
+			_, err := runBuild(context.Background(), cfg, nil, tc.callback, observer)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("runBuild error=%v, want %s", err, tc.want)
+			}
+			if failedState == "" {
+				t.Fatal("OnBuildFailed was not called for durable pre-build intent")
+			}
+		})
+	}
+}
 
 // TestClassifyPendingPages covers #858 AC1/AC3: the changed set is split into
 // published (included) vs draft/test-content (excluded_drafts), with stable
@@ -37,6 +101,21 @@ func TestClassifyPendingPagesEmpty(t *testing.T) {
 	got := classifyPendingPages(nil)
 	if len(got.Included) != 0 || len(got.ExcludedDrafts) != 0 || got.Included == nil || got.ExcludedDrafts == nil {
 		t.Fatalf("empty changed set should yield non-nil empty slices, got %+v", got)
+	}
+}
+
+func TestClassifyBuildPageChangesIncludesDurableDeletionAndDraftState(t *testing.T) {
+	got := classifyBuildPageChanges([]BuildPageChange{
+		{SourceKey: "posts/live", Lang: "fr"},
+		{SourceKey: "posts/wip", Lang: "en", Draft: true},
+		{SourceKey: "posts/test", Lang: "fr", TestContent: true},
+		{SourceKey: "posts/removed", Lang: "en", Deleted: true},
+	})
+	wantIncluded := []string{"posts/live:fr"}
+	wantExcluded := []string{"posts/test:fr", "posts/wip:en"}
+	wantDeleted := []string{"posts/removed:en"}
+	if !reflect.DeepEqual(got.Included, wantIncluded) || !reflect.DeepEqual(got.ExcludedDrafts, wantExcluded) || !reflect.DeepEqual(got.DeletedOutputs, wantDeleted) {
+		t.Fatalf("classifyBuildPageChanges = %#v, want included=%v excluded=%v deleted=%v", got, wantIncluded, wantExcluded, wantDeleted)
 	}
 }
 
