@@ -1460,7 +1460,7 @@ func resolveInternalLink(base *url.URL, raw string) (*url.URL, bool) {
 
 func shouldIgnoreBrokenLinkTarget(classifier *site.ContentClassifier, rawPath string) bool {
 	if classifier == nil {
-		classifier = site.NewClassifier(nil)
+		return site.ShouldIgnoreBrokenLinkTarget(rawPath)
 	}
 	return !classifier.IsContent(site.Page{Slug: rawPath})
 }

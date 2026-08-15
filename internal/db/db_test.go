@@ -187,6 +187,50 @@ func TestGetBrokenLinksIgnoresRawMarkdownSourceLinks(t *testing.T) {
 	}
 }
 
+// TestGetBrokenLinksIgnoresPaginationTargets is the #1101 regression test:
+// Hugo's paginated listing pages (/en/page/2/, ...) legitimately canonicalize
+// back to page 1 for SEO, so internal/site's NewIndex collapses them out of
+// GetBySlug the same way it collapses genuine alias duplicates (#184's Grav
+// legacy-route fix relies on that same mechanism). Before this fix, that made
+// txSyncLinks report every link to a pagination page — including the
+// pagination widget's own rel=next/prev links — as broken, confirmed live on
+// arleo.eu. siteIdx is nil here so every internal link would be "broken" by
+// the base existence check alone; the pagination target must be excluded by
+// policy (site.ShouldIgnoreBrokenLinkTarget), not by being found.
+func TestGetBrokenLinksIgnoresPaginationTargets(t *testing.T) {
+	d := openTestDB(t)
+
+	p := site.Page{
+		Slug:    "/en/page/3/",
+		Title:   "Page 3",
+		URL:     "https://x.com/en/page/3/",
+		Lang:    "en",
+		RawHTML: `<a href="/en/page/2/">Prev</a> <a href="/en/page/4/">Next</a> <a href="/missing/">Missing</a>`,
+	}
+	if err := d.SyncPublicPage(p, nil); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+
+	broken, err := d.GetBrokenLinks()
+	if err != nil {
+		t.Fatalf("GetBrokenLinks: %v", err)
+	}
+	for _, r := range broken {
+		if strings.Contains(r.Target, "/page/") {
+			t.Errorf("pagination target reported as broken: %+v", r)
+		}
+	}
+	var foundRealBroken bool
+	for _, r := range broken {
+		if strings.Contains(r.Target, "missing") {
+			foundRealBroken = true
+		}
+	}
+	if !foundRealBroken {
+		t.Errorf("a genuinely missing non-pagination target must still be reported: %+v", broken)
+	}
+}
+
 // TestSyncPublicPageRecordsExternalMarkdownLinkAsExternalNotDropped checks
 // the .md exclusion added for #1101 is ordered after the external-host
 // check, matching internal/tools/read/extended.go's resolveInternalLink: an

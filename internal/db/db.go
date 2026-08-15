@@ -1017,6 +1017,19 @@ func txSyncLinks(tx *sql.Tx, pageID int64, p site.Page, siteIdx *site.Index) err
 				status = "ok"
 			}
 		}
+		// A link to a Hugo paginated-listing route (/en/page/2/, ...) must
+		// never be "broken": those pages legitimately canonicalize back to
+		// page 1 for SEO, so the indexer's own alias-collapse (#1099) drops
+		// them from GetBySlug even though they're real, servable URLs
+		// (#1101, confirmed live on arleo.eu — including the pagination
+		// widget's own rel=next/prev links flagging themselves as broken).
+		// The in-memory broken-link scan (internal/tools/read) already
+		// applies this exact policy via shouldIgnoreBrokenLinkTarget; this
+		// sibling SQL-backed implementation lacked it — the same class of
+		// drift #1104 fixed for the .md-source-link exclusion above.
+		if status == "broken" && site.ShouldIgnoreBrokenLinkTarget(targetSlug) {
+			status = "ok"
+		}
 		if _, err := tx.Exec(
 			"INSERT INTO links(source_page_id, target, target_slug, anchor_text, status) VALUES(?,?,?,?,?)",
 			pageID, href, targetSlug, "", status,
