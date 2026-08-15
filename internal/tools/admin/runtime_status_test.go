@@ -13,6 +13,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -240,6 +241,72 @@ func TestGetRuntimeStatusReportsAggregateContentShadowDiagnostics(t *testing.T) 
 	}
 	if _, leaked := shadow["rows"]; leaked {
 		t.Fatalf("content_index_shadow leaked row identities: %#v", shadow)
+	}
+}
+
+func TestGetRuntimeStatusReportsDurableBuildReconciliationFacts(t *testing.T) {
+	buildstatus.ResetForTest()
+	t.Cleanup(buildstatus.ResetForTest)
+	root := t.TempDir()
+	contentRoot := filepath.Join(root, "content")
+	if err := os.MkdirAll(filepath.Join(contentRoot, "posts", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(contentRoot, "posts", "demo", "index.en.md"), []byte("---\ntitle: Demo\nlang: en\ndraft: false\n---\nBody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := db.Open(filepath.Join(root, "site.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+	if _, err := d.BeginBuildRun("durable-build", nil, srcIdx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteBuildRun(db.PublicationManifest{BuildID: "durable-build", SourceRevision: "source", OutputRevision: "public", Status: "ok", ObservedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.ReconcileLatestBuild(nil, srcIdx); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	cfg.SiteRoot = t.TempDir()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterRuntimeStatusWithDB(s, cfg, srcIdx, d)
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("get_runtime_status error=%v result=%s", err, resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+	reconciliation, ok := data["build_reconciliation"].(map[string]any)
+	if !ok {
+		t.Fatalf("build_reconciliation=%T", data["build_reconciliation"])
+	}
+	if reconciliation["build_id"] != "durable-build" || reconciliation["source_drift_count"] != float64(0) {
+		t.Fatalf("build_reconciliation=%#v", reconciliation)
+	}
+	if reconciliation["public_drift_count"] != float64(1) {
+		t.Fatalf("public_drift_count=%v, want missing-public drift", reconciliation["public_drift_count"])
+	}
+	if reconciliation["source_of_truth"] != "filesystem_fingerprints" || reconciliation["reconciled_at"] == "" {
+		t.Fatalf("build_reconciliation=%#v", reconciliation)
 	}
 }
 

@@ -108,6 +108,14 @@ type contentIndexShadowRuntimeStatus struct {
 	ObservedAt          string         `json:"observed_at"`
 }
 
+type buildReconciliationRuntimeStatus struct {
+	BuildID          string `json:"build_id"`
+	SourceDriftCount int    `json:"source_drift_count"`
+	PublicDriftCount int    `json:"public_drift_count"`
+	ReconciledAt     string `json:"reconciled_at,omitempty"`
+	SourceOfTruth    string `json:"source_of_truth"`
+}
+
 type runtimeStatusData struct {
 	// ReleaseVersion — see the comment on toolcontract.ResponseMeta.ReleaseVersion.
 	// Named ServerVersion/server_version through v1.5.7; renamed (#563).
@@ -130,6 +138,7 @@ type runtimeStatusData struct {
 	Site                    siteRuntimeStatus                `json:"site"`
 	LastBuild               *lastBuildRuntimeStatus          `json:"last_build,omitempty"`
 	ContentIndexShadow      *contentIndexShadowRuntimeStatus `json:"content_index_shadow,omitempty"`
+	BuildReconciliation    *buildReconciliationRuntimeStatus `json:"build_reconciliation,omitempty"`
 	Degraded                []string                         `json:"degraded,omitempty"`
 }
 
@@ -183,7 +192,7 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"`pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` " +
 			"is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` " +
 			"and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only " +
-			"language/representation counts, counterpart gaps, and legacy mismatch facts; no page identity or body is exposed. Read-only; does not expose secrets or arbitrary " +
+			"language/representation counts, counterpart gaps, and legacy mismatch facts; `build_reconciliation` reports aggregate source/public drift recomputed from filesystem fingerprints rather than volatile BuildPending flags. No page identity or body is exposed. Read-only; does not expose secrets or arbitrary " +
 			"host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
@@ -284,6 +293,19 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			}
 		}
 		if siteDB != nil {
+			buildRun, err := siteDB.LatestBuildRun()
+			if err != nil {
+				data.Degraded = append(data.Degraded, "build reconciliation unavailable: "+err.Error())
+			} else if buildRun != nil {
+				data.BuildReconciliation = &buildReconciliationRuntimeStatus{
+					BuildID: buildRun.BuildID, SourceDriftCount: buildRun.SourceDriftCount,
+					PublicDriftCount: buildRun.PublicDriftCount,
+					SourceOfTruth: "filesystem_fingerprints",
+				}
+				if !buildRun.ReconciledAt.IsZero() {
+					data.BuildReconciliation.ReconciledAt = buildRun.ReconciledAt.UTC().Format(time.RFC3339)
+				}
+			}
 			shadow, err := siteDB.LatestContentShadowStats()
 			if err != nil {
 				data.Degraded = append(data.Degraded, "content index shadow diagnostics unavailable: "+err.Error())

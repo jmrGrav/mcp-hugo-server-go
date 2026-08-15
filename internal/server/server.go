@@ -140,6 +140,9 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 		slog.Warn("server: startup db sync incomplete", "error", err)
 		return siteDB, nil
 	}
+	if _, err := siteDB.ReconcileLatestBuild(idx, srcIdx); err != nil {
+		slog.Warn("server: build manifest reconciliation failed", "error", err)
+	}
 	// A build journal record can remain at in_progress/file_written only when
 	// the previous process died between lifecycle callbacks. The public swap is
 	// an atomic directory rename, so after StartupSync has freshly indexed the
@@ -480,6 +483,46 @@ func postBuildCallbacks(
 		})
 	}
 	return []admin.PostBuildCallback{
+		{Name: "build_pages",
+			OnBuildPrepared: func(progress admin.BuildProgress) ([]admin.BuildPageChange, error) {
+				if siteDB == nil {
+					return nil, nil
+				}
+				changes, err := siteDB.BeginBuildRun(progress.BuildID, idx, srcIdx, progress.ObservedAt)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]admin.BuildPageChange, 0, len(changes))
+				for _, change := range changes {
+					out = append(out, admin.BuildPageChange{
+						SourceKey: change.SourceKey, Lang: change.Lang, Draft: change.Draft,
+						TestContent: change.TestContent, Deleted: change.Deleted,
+					})
+				}
+				return out, nil
+			},
+			OnBuildComplete: func(completion admin.BuildCompletion) error {
+				if siteDB == nil {
+					return nil
+				}
+				manifest := db.PublicationManifest{
+					BuildID: completion.BuildID, SourceRevision: completion.SourceRevision,
+					OutputRevision: completion.OutputRevision, HugoVersion: completion.HugoVersion,
+					Status: completion.Status, ObservedAt: completion.ObservedAt,
+				}
+				if err := siteDB.CompleteBuildRun(manifest); err != nil {
+					return err
+				}
+				_, err := siteDB.ReconcileLatestBuild(idx, srcIdx)
+				return err
+			},
+			OnBuildFailed: func(progress admin.BuildProgress, state string) error {
+				if siteDB == nil {
+					return nil
+				}
+				return siteDB.FailBuildRun(progress.BuildID, state, progress.ObservedAt)
+			},
+		},
 		{Name: "recovery_journal",
 			OnBuildStart: func(progress admin.BuildProgress) error {
 				return recordBuildRecovery(progress.BuildID, "in_progress", progress.ObservedAt)

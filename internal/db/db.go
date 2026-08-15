@@ -173,6 +173,24 @@ func (d *DB) createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_publication_manifests_observed_at
 			ON publication_manifests(observed_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS build_runs (
+			build_id TEXT PRIMARY KEY, source_revision TEXT NOT NULL DEFAULT '',
+			output_revision TEXT NOT NULL DEFAULT '', hugo_version TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL, source_drift_count INTEGER NOT NULL DEFAULT 0,
+			public_drift_count INTEGER NOT NULL DEFAULT 0,
+			observed_at TEXT NOT NULL, reconciled_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_build_runs_observed_at ON build_runs(observed_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS build_pages (
+			build_id TEXT NOT NULL REFERENCES build_runs(build_id) ON DELETE CASCADE,
+			source_key TEXT NOT NULL, lang TEXT NOT NULL,
+			source_revision TEXT NOT NULL DEFAULT '',
+			last_built_source_revision TEXT NOT NULL DEFAULT '',
+			public_revision TEXT NOT NULL DEFAULT '', publication_state TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			PRIMARY KEY(build_id,source_key,lang)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_build_pages_identity ON build_pages(source_key,lang)`,
 		`CREATE TABLE IF NOT EXISTS mutation_journal (
 			caller_key TEXT NOT NULL, tool TEXT NOT NULL, idempotency_key TEXT NOT NULL,
 			request_hash TEXT NOT NULL, result_json BLOB NOT NULL, created_at TEXT NOT NULL,
