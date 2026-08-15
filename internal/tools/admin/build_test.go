@@ -330,6 +330,9 @@ func TestBuildSiteMarksPartialSuccessWhenOnOutputSwappedCallbackFails(t *testing
 	if !strings.Contains(text, "injected post-swap failure") {
 		t.Fatalf("build_site result = %s, want callback failure surfaced in warnings", text)
 	}
+	if !strings.Contains(text, "partial_success") {
+		t.Fatalf("build_site result = %s, want status partial_success", text)
+	}
 	raw, readErr := os.ReadFile(filepath.Join(cfg.SiteRoot, "index.html"))
 	if readErr != nil || string(raw) != "new-complete-tree" {
 		t.Fatalf("public output = %q, %v, want new tree to stay installed despite post-swap callback failure", raw, readErr)
