@@ -1,15 +1,32 @@
 name: Publish npm package
 
-# Manual publish workflow for @jmrgrav/mcp-hugo-server-go (#782 Phase 4).
+# Publish workflow for @jmrgrav/mcp-hugo-server-go (#782 Phase 4).
 # Requires an npm Automation token stored as the NPM_TOKEN repo secret
 # (npmjs.com -> Account Settings -> Access Tokens -> Generate New Token ->
-# Automation). Deliberately does NOT run on every push/release — the npm
-# wrapper's postinstall downloads a specific GitHub Release's binaries by
-# exact version tag, so publishing must stay a distinct, explicit step
-# taken only once that release's assets are confirmed to exist, never
-# something that fires automatically ahead of them.
+# Automation). Deliberately does NOT run on every push — the npm wrapper's
+# postinstall downloads a specific GitHub Release's binaries by exact
+# version tag, so publishing must stay gated on that release's assets
+# actually existing (the "Verify release assets exist" step below), never
+# something that fires ahead of them.
+#
+# Two ways to run this:
+#   - workflow_call: deploy.yml's release job invokes this automatically
+#     once a release's tag/binaries/.mcpb are attached (v1.8.5-v1.8.8 were
+#     missed on npm for 4 releases running because this used to be a
+#     separate manual step nobody remembered to trigger).
+#   - workflow_dispatch: manual backfill/retry for a version that was
+#     skipped or whose automatic publish failed.
 
 on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to publish, for example v1.6.9. Must match npm/package.json's version field and an existing GitHub Release with binaries already attached."
+        required: true
+        type: string
+    secrets:
+      NPM_TOKEN:
+        required: true
   workflow_dispatch:
     inputs:
       version:
