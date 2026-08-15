@@ -65,9 +65,13 @@ func TestRunPostBuildHooksMultipleHooksWithRequestIntrospection(t *testing.T) {
 	}
 
 	out := decodeStructuredResult(t, res)
-	results, ok := out["results"].([]any)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	results, ok := data["results"].([]any)
 	if !ok || len(results) != 2 {
-		t.Fatalf("expected 2 results, got %#v", out["results"])
+		t.Fatalf("expected 2 results, got %#v", data["results"])
 	}
 
 	// Verify first hook.
@@ -148,9 +152,13 @@ func TestRunPostBuildHooksNonSuccessResponseCaptured(t *testing.T) {
 	}
 
 	out := decodeStructuredResult(t, res)
-	results, ok := out["results"].([]any)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	results, ok := data["results"].([]any)
 	if !ok || len(results) != 1 {
-		t.Fatalf("expected 1 result, got %#v", out["results"])
+		t.Fatalf("expected 1 result, got %#v", data["results"])
 	}
 
 	result := results[0].(map[string]any)
@@ -195,9 +203,13 @@ func TestRunPostBuildHooksMultipleHooksPartialFailure(t *testing.T) {
 	}
 
 	out := decodeStructuredResult(t, res)
-	results, ok := out["results"].([]any)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	results, ok := data["results"].([]any)
 	if !ok || len(results) != 2 {
-		t.Fatalf("expected 2 results, got %#v", out["results"])
+		t.Fatalf("expected 2 results, got %#v", data["results"])
 	}
 
 	// Verify first hook succeeded and was actually called.
@@ -260,9 +272,13 @@ func TestRunPostBuildHooksResponseBodyDiscarded(t *testing.T) {
 
 	// Verify no response body content in result (only URL and Status).
 	out := decodeStructuredResult(t, res)
-	results, ok := out["results"].([]any)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	results, ok := data["results"].([]any)
 	if !ok || len(results) != 1 {
-		t.Fatalf("expected 1 result, got %#v", out["results"])
+		t.Fatalf("expected 1 result, got %#v", data["results"])
 	}
 
 	result := results[0].(map[string]any)
@@ -293,15 +309,21 @@ func TestRunPostBuildHooksEmptyConfigNoHooksExecuted(t *testing.T) {
 	}
 
 	out := decodeStructuredResult(t, res)
-	results, ok := out["results"].([]any)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
+	}
+	results, ok := data["results"].([]any)
 	if !ok || len(results) != 0 {
-		t.Fatalf("expected 0 results for empty hook config, got %#v", out["results"])
+		t.Fatalf("expected 0 results for empty hook config, got %#v", data["results"])
 	}
 }
 
-// TestRunPostBuildHooksEnvelopeStructure verifies the top-level tool envelope
-// and the canonical data.* payload structure are both present and consistent (#552).
-func TestRunPostBuildHooksEnvelopeStructure(t *testing.T) {
+// TestRunPostBuildHooksNoRootFieldDuplication is a regression test for #1118:
+// finishes #520/#573's convergence for this tool — the payload must live
+// only under data.*, with no root-level compatibility aliases (which #552
+// originally added and #1060 deprecated).
+func TestRunPostBuildHooksNoRootFieldDuplication(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
@@ -319,35 +341,22 @@ func TestRunPostBuildHooksEnvelopeStructure(t *testing.T) {
 	}
 
 	out := decodeStructuredResult(t, res)
-
-	// Verify envelope structure (#552).
 	if got := out["success"]; got != true {
-		t.Errorf("success = %v, want true", got)
-	}
-
-	if _, hasData := out["data"]; !hasData {
-		t.Error("missing data field (#552)")
+		t.Errorf("success = %v, want true (#1118)", got)
 	}
 	data, ok := out["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("data type = %T, want map[string]any", out["data"])
+		t.Fatalf("data type = %T, want map[string]any (#1118)", out["data"])
 	}
-
-	if _, hasMeta := out["meta"]; !hasMeta {
-		t.Error("missing meta field (#552)")
+	if _, ok := out["meta"].(map[string]any); !ok {
+		t.Fatalf("meta type = %T, want map[string]any (#1118)", out["meta"])
 	}
-	_, ok = out["meta"].(map[string]any)
-	if !ok {
-		t.Fatalf("meta type = %T, want map[string]any", out["meta"])
-	}
-
-	// Root-level results for backwards compatibility.
-	if _, hasResults := out["results"]; !hasResults {
-		t.Error("missing root results field")
-	}
-
-	// Canonical data.results.
-	if _, hasDataResults := data["results"]; !hasDataResults {
-		t.Error("missing data.results field")
+	for _, field := range []string{"status", "results", "configured_count"} {
+		if _, present := data[field]; !present {
+			t.Fatalf("data.%s missing (#1118)", field)
+		}
+		if _, present := out[field]; present {
+			t.Fatalf("root %s = %v, want absent — no more root/data duplication (#1118)", field, out[field])
+		}
 	}
 }

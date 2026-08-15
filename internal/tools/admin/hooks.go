@@ -48,30 +48,20 @@ type runPostBuildHooksData struct {
 	ConfiguredCount int          `json:"configured_count"`
 }
 
-// runPostBuildHooksOutput carries legacy root aliases for compatibility with
-// clients predating the structured envelope (#552). `data.*` is canonical;
-// the root aliases are deprecated and kept only through the v1 window.
+// runPostBuildHooksOutput's payload lives only under data.* (#1118 finishes
+// #520/#573's root/data convergence for this tool — the root aliases #552
+// originally added, and #1060 deprecated, are removed).
 type runPostBuildHooksOutput struct {
 	toolcontract.ToolResponse[runPostBuildHooksData]
-	Status          string       `json:"status"`
-	Results         []hookResult `json:"results"`
-	DryRun          bool         `json:"dry_run,omitempty"`
-	ConfiguredCount int          `json:"configured_count"`
 }
 
 func hooksSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
-	out := toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
-	out.Warnings = append(out.Warnings, rootLevelFieldsDeprecationWarning)
-	return out
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
 func newRunPostBuildHooksOutput(data runPostBuildHooksData) runPostBuildHooksOutput {
 	return runPostBuildHooksOutput{
-		ToolResponse:    hooksSuccessEnvelope(data),
-		Status:          data.Status,
-		Results:         data.Results,
-		DryRun:          data.DryRun,
-		ConfiguredCount: data.ConfiguredCount,
+		ToolResponse: hooksSuccessEnvelope(data),
 	}
 }
 

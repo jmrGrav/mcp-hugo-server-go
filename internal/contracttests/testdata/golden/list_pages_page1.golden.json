@@ -45,7 +45,7 @@
     "build_channel": "main",
     "commit": "0123456789ab",
     "release_version": "test-server-version",
-    "schema_version": "v1.1.0"
+    "schema_version": "v2.0.0"
   },
   "success": true,
   "warnings": []

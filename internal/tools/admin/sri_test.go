@@ -29,13 +29,15 @@ type sriResult struct {
 }
 
 type sriOutput struct {
-	FilesScanned           int         `json:"files_scanned"`
-	FilesWithSRIAttributes int         `json:"files_with_sri_attributes"`
-	SRIEntriesLoaded       int         `json:"sri_entries_loaded"`
-	SRIChecked             int         `json:"sri_checked"`
-	Status                 string      `json:"status"`
-	Summary                string      `json:"summary"`
-	Findings               []sriResult `json:"findings"`
+	Data struct {
+		FilesScanned           int         `json:"files_scanned"`
+		FilesWithSRIAttributes int         `json:"files_with_sri_attributes"`
+		SRIEntriesLoaded       int         `json:"sri_entries_loaded"`
+		SRIChecked             int         `json:"sri_checked"`
+		Status                 string      `json:"status"`
+		Summary                string      `json:"summary"`
+		Findings               []sriResult `json:"findings"`
+	} `json:"data"`
 }
 
 func setupSRILayout(t *testing.T, url, hash string) string {
@@ -52,7 +54,11 @@ func setupSRILayout(t *testing.T, url, hash string) string {
 	return hugoRoot
 }
 
-func TestSRICheckVersionsHasEnvelopeMatchingRootFields(t *testing.T) {
+// TestCheckSRIVersionsNoRootFieldDuplication is a regression test for #1118:
+// finishes #520/#573's convergence for this tool — the payload must live
+// only under data.*, with no root-level compatibility aliases (which #552
+// originally added and #1060 deprecated).
+func TestCheckSRIVersionsNoRootFieldDuplication(t *testing.T) {
 	body := []byte("console.log('hello');")
 	correctHash := computeTestSHA384(body)
 
@@ -78,28 +84,21 @@ func TestSRICheckVersionsHasEnvelopeMatchingRootFields(t *testing.T) {
 
 	out := decodeStructuredResult(t, res)
 	if got := out["success"]; got != true {
-		t.Fatalf("success = %v, want true (#552)", got)
+		t.Fatalf("success = %v, want true (#1118)", got)
 	}
 	data, ok := out["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("data type = %T, want map[string]any (#552)", out["data"])
+		t.Fatalf("data type = %T, want map[string]any (#1118)", out["data"])
 	}
 	if _, ok := out["meta"].(map[string]any); !ok {
-		t.Fatalf("meta type = %T, want map[string]any (#552)", out["meta"])
+		t.Fatalf("meta type = %T, want map[string]any (#1118)", out["meta"])
 	}
-	warnings, _ := out["warnings"].([]any)
-	found := false
-	for _, w := range warnings {
-		if w == "root-level result fields are deprecated; use data.*. Root aliases will be removed in a future major version." {
-			found = true
+	for _, field := range []string{"files_scanned", "files_with_sri_attributes", "sri_entries_loaded", "sri_checked", "status", "summary", "findings"} {
+		if _, present := data[field]; !present {
+			t.Fatalf("data.%s missing (#1118)", field)
 		}
-	}
-	if !found {
-		t.Fatalf("warnings = %#v, want root-alias deprecation warning present (#1060)", out["warnings"])
-	}
-	for _, field := range []string{"files_scanned", "files_with_sri_attributes", "sri_entries_loaded", "sri_checked", "status", "summary"} {
-		if data[field] != out[field] {
-			t.Fatalf("data.%s = %v, root %s = %v — must match (#552)", field, data[field], field, out[field])
+		if _, present := out[field]; present {
+			t.Fatalf("root %s = %v, want absent — no more root/data duplication (#1118)", field, out[field])
 		}
 	}
 }
@@ -134,10 +133,10 @@ func TestSRIMatchingHash(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatalf("response not JSON: %v — got %q", err, text)
 	}
-	if out.SRIChecked < 1 {
+	if out.Data.SRIChecked < 1 {
 		t.Fatal("expected at least 1 SRI check")
 	}
-	r := out.Findings[0]
+	r := out.Data.Findings[0]
 	if r.Error != "" {
 		t.Fatalf("unexpected error in result: %s", r.Error)
 	}
@@ -176,10 +175,10 @@ func TestSRIMismatchHash(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &out); err != nil {
 		t.Fatalf("response not JSON: %v — got %q", err, text)
 	}
-	if out.SRIChecked < 1 {
+	if out.Data.SRIChecked < 1 {
 		t.Fatal("expected at least 1 SRI check")
 	}
-	r := out.Findings[0]
+	r := out.Data.Findings[0]
 	if r.Error != "" {
 		t.Fatalf("unexpected error in result: %s", r.Error)
 	}
@@ -219,29 +218,29 @@ func TestSRICheckSummaryFields(t *testing.T) {
 		t.Fatalf("response not JSON: %v — got %q", err, text)
 	}
 
-	if out.FilesScanned < 1 {
-		t.Errorf("expected files_scanned >= 1, got %d", out.FilesScanned)
+	if out.Data.FilesScanned < 1 {
+		t.Errorf("expected files_scanned >= 1, got %d", out.Data.FilesScanned)
 	}
-	if out.FilesWithSRIAttributes != 1 {
-		t.Errorf("expected files_with_sri_attributes == 1, got %d", out.FilesWithSRIAttributes)
+	if out.Data.FilesWithSRIAttributes != 1 {
+		t.Errorf("expected files_with_sri_attributes == 1, got %d", out.Data.FilesWithSRIAttributes)
 	}
-	if out.SRIChecked != 1 {
-		t.Errorf("expected sri_checked == 1, got %d", out.SRIChecked)
+	if out.Data.SRIChecked != 1 {
+		t.Errorf("expected sri_checked == 1, got %d", out.Data.SRIChecked)
 	}
-	if out.SRIEntriesLoaded != 0 {
-		t.Errorf("expected sri_entries_loaded == 0 for layouts-only fixture, got %d", out.SRIEntriesLoaded)
+	if out.Data.SRIEntriesLoaded != 0 {
+		t.Errorf("expected sri_entries_loaded == 0 for layouts-only fixture, got %d", out.Data.SRIEntriesLoaded)
 	}
-	if out.Status != "clean" {
-		t.Errorf("expected status clean, got %q", out.Status)
+	if out.Data.Status != "clean" {
+		t.Errorf("expected status clean, got %q", out.Data.Status)
 	}
-	if out.Summary == "" {
+	if out.Data.Summary == "" {
 		t.Error("expected non-empty summary")
 	}
-	if !strings.Contains(out.Summary, "passed") && !strings.Contains(out.Summary, "mismatch") {
-		t.Errorf("summary should contain 'passed' or 'mismatch', got %q", out.Summary)
+	if !strings.Contains(out.Data.Summary, "passed") && !strings.Contains(out.Data.Summary, "mismatch") {
+		t.Errorf("summary should contain 'passed' or 'mismatch', got %q", out.Data.Summary)
 	}
-	if out.Summary != "All 1 SRI integrity check(s) passed." {
-		t.Errorf("unexpected summary: %q", out.Summary)
+	if out.Data.Summary != "All 1 SRI integrity check(s) passed." {
+		t.Errorf("unexpected summary: %q", out.Data.Summary)
 	}
 }
 
@@ -290,20 +289,20 @@ assets:
 	if err := json.Unmarshal([]byte(resultText(res)), &out); err != nil {
 		t.Fatalf("response not JSON: %v — got %q", err, resultText(res))
 	}
-	if out.SRIEntriesLoaded != 2 {
-		t.Fatalf("sri_entries_loaded = %d want 2", out.SRIEntriesLoaded)
+	if out.Data.SRIEntriesLoaded != 2 {
+		t.Fatalf("sri_entries_loaded = %d want 2", out.Data.SRIEntriesLoaded)
 	}
-	if out.SRIChecked != 2 {
-		t.Fatalf("sri_checked = %d want 2 when layouts use site.Data.sri", out.SRIChecked)
+	if out.Data.SRIChecked != 2 {
+		t.Fatalf("sri_checked = %d want 2 when layouts use site.Data.sri", out.Data.SRIChecked)
 	}
-	if out.Status != "clean" {
-		t.Fatalf("status = %q want clean", out.Status)
+	if out.Data.Status != "clean" {
+		t.Fatalf("status = %q want clean", out.Data.Status)
 	}
-	if out.FilesWithSRIAttributes != 1 {
-		t.Fatalf("files_with_sri_attributes = %d want 1", out.FilesWithSRIAttributes)
+	if out.Data.FilesWithSRIAttributes != 1 {
+		t.Fatalf("files_with_sri_attributes = %d want 1", out.Data.FilesWithSRIAttributes)
 	}
-	if out.Summary == "" || !strings.Contains(out.Summary, "passed") {
-		t.Fatalf("summary = %q want passed summary", out.Summary)
+	if out.Data.Summary == "" || !strings.Contains(out.Data.Summary, "passed") {
+		t.Fatalf("summary = %q want passed summary", out.Data.Summary)
 	}
 }
 
@@ -334,7 +333,7 @@ func TestSRICheckMissingDataAndNoAttributesIsNotConfigured(t *testing.T) {
 	if err := json.Unmarshal([]byte(resultText(res)), &out); err != nil {
 		t.Fatalf("response not JSON: %v — got %q", err, resultText(res))
 	}
-	if out.Status != "not_configured" {
-		t.Fatalf("status = %q want not_configured", out.Status)
+	if out.Data.Status != "not_configured" {
+		t.Fatalf("status = %q want not_configured", out.Data.Status)
 	}
 }

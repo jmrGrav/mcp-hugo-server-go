@@ -7,7 +7,12 @@ import (
 
 // SchemaVersion tracks the response contract shape. Additive fields increment
 // the minor version; incompatible changes increment the major version.
-const SchemaVersion = "v1.1.0"
+//
+// v2.0.0 (#1118): check_sri_versions/run_post_build_hooks/preview_build's
+// root-level payload aliases (deprecated since #1060) are removed — data.*
+// is now the sole payload location for every structured tool, finishing the
+// convergence #520/#573 started for the other 7.
+const SchemaVersion = "v2.0.0"
 
 // Version is set at build time via -ldflags.
 var Version = "dev"

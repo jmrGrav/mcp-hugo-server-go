@@ -576,14 +576,6 @@
       "errors[].retryable:boolean:required",
       "errors[].stage:string",
       "errors[].suggestion:string",
-      "files_scanned:integer:required",
-      "files_with_sri_attributes:integer:required",
-      "findings:unspecified:required",
-      "findings[].current_hash:string",
-      "findings[].error:string",
-      "findings[].match:boolean:required",
-      "findings[].template_hash:string:required",
-      "findings[].url:string:required",
       "generated_at:string",
       "meta.build_channel:string",
       "meta.commit:string",
@@ -594,14 +586,10 @@
       "meta.request_id:string",
       "meta.schema_version:string:required",
       "meta:object:required",
-      "sri_checked:integer:required",
-      "sri_entries_loaded:integer:required",
-      "status:string:required",
       "success:boolean:required",
-      "summary:string:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "6b1186011b9452690fe4845375f2efb1dd3fcf1f6950ea3bcac2f64fad0433f1"
+    "output_schema_sha256": "e00eeb010ee957da42b237a1a33e21276f2b0466dbfb10ca7e35fb8d46e27a15"
   },
   {
     "name": "create_bundle",
@@ -4379,7 +4367,6 @@
       "data.duration_ms:integer:required",
       "data.status:string:required",
       "data:object:required",
-      "duration_ms:integer:required",
       "errors:unspecified:required",
       "errors[].build_id:string",
       "errors[].code:string:required",
@@ -4406,11 +4393,10 @@
       "meta.request_id:string",
       "meta.schema_version:string:required",
       "meta:object:required",
-      "status:string:required",
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "6f2d697c389235c5fd2fccd8d3be70c18ca8fb16d47092bde3896caefdfe04ef"
+    "output_schema_sha256": "21b06b6a00bac2f562d7d0cb1830d6a0c2988e5171e74e29ae5164859f34eb10"
   },
   {
     "name": "publish_changes",
@@ -4841,7 +4827,6 @@
       "type": "object"
     },
     "output_schema_fields": [
-      "configured_count:integer:required",
       "data.configured_count:integer:required",
       "data.dry_run:boolean",
       "data.results:unspecified:required",
@@ -4850,7 +4835,6 @@
       "data.results[].url:string:required",
       "data.status:string:required",
       "data:object:required",
-      "dry_run:boolean",
       "errors:unspecified:required",
       "errors[].build_id:string",
       "errors[].code:string:required",
@@ -4877,15 +4861,10 @@
       "meta.request_id:string",
       "meta.schema_version:string:required",
       "meta:object:required",
-      "results:unspecified:required",
-      "results[].error:string",
-      "results[].status:integer",
-      "results[].url:string:required",
-      "status:string:required",
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "abd33c17fd2fa8bffd50137291ef3abafee4190bd5f9e386d94126740d63ad3b"
+    "output_schema_sha256": "debaa5dc8e9928c4f53b831ab3d1f8803239aac3f07841c7a2510ee337090434"
   },
   {
     "name": "search_content",
