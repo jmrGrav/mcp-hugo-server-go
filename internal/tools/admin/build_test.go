@@ -537,6 +537,90 @@ func TestBuildSiteFailurePreservesPreviousOutput(t *testing.T) {
 	}
 }
 
+// TestBuildSiteOnBuildPreparedFailureNeverRunsHugoAndReleasesLock covers the
+// #1068 "cancellation before Hugo" scenario: OnBuildPrepared runs before the
+// Hugo subprocess is ever launched, so a failure there must (a) never spawn
+// Hugo at all — no partial/marker output written, no wasted subprocess,
+// (b) leave any previous public output completely untouched, and (c)
+// release the ContentMu build lock so a subsequent build_site call is not
+// permanently blocked by a build that never actually started.
+func TestBuildSiteOnBuildPreparedFailureNeverRunsHugoAndReleasesLock(t *testing.T) {
+	root := t.TempDir()
+	siteRoot := filepath.Join(root, "public")
+	if err := os.MkdirAll(siteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(siteRoot, "old.txt")
+	if err := os.WriteFile(oldPath, []byte("last-known-good"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "hugo-ran")
+	dir := writeMockHugo(t, "#!/bin/sh\ntouch \""+marker+"\"\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'built' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = t.TempDir()
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterBuild(s, cfg, nil, admin.PostBuildCallback{
+		Name: "recovery_journal",
+		OnBuildPrepared: func(admin.BuildProgress) ([]admin.BuildPageChange, error) {
+			return nil, errors.New("injected pre-hugo reconciliation failure")
+		},
+	})
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("build_site transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected build_reconciliation_failed error, got success")
+	}
+	if !strings.Contains(resultText(res), "build_reconciliation_failed") {
+		t.Fatalf("error = %q, want build_reconciliation_failed", resultText(res))
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Fatal("Hugo subprocess ran despite OnBuildPrepared failing before it — the build never should have started")
+	}
+	content, readErr := os.ReadFile(oldPath)
+	if readErr != nil || string(content) != "last-known-good" {
+		t.Fatalf("previous output changed after a build that never ran Hugo: %q, err=%v", content, readErr)
+	}
+
+	// The ContentMu lock must be released: a second, non-failing build_site
+	// call must succeed rather than hang or report build_in_progress.
+	s2 := mcp.NewServer(&mcp.Implementation{Name: "test2", Version: "0.1"}, nil)
+	admin.RegisterBuild(s2, cfg, nil)
+	t3, t4 := mcp.NewInMemoryTransports()
+	if _, err := s2.Connect(context.Background(), t3, nil); err != nil {
+		t.Fatal(err)
+	}
+	client2 := mcp.NewClient(&mcp.Implementation{Name: "test-client-2", Version: "0.1"}, nil)
+	session2, err := client2.Connect(context.Background(), t4, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session2.Close()
+	res2, err := callTool(t, session2, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("second build_site transport error: %v", err)
+	}
+	if res2.IsError {
+		t.Fatalf("second build_site failed — lock not released after OnBuildPrepared failure: %s", resultText(res2))
+	}
+}
+
 func TestBuildSiteConcurrentReject(t *testing.T) {
 	startedFile := filepath.Join(t.TempDir(), "hugo-started")
 	dir := writeMockHugo(t, "#!/bin/sh\ntouch \""+startedFile+"\"\nsleep 5\nexit 0\n")
