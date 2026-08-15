@@ -2,6 +2,7 @@ package write_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -4385,6 +4386,144 @@ func TestUpdatePageFailsClosedWhenRollbackSnapshotCannotPersist(t *testing.T) {
 	}
 	if got := readFileString(t, contentRoot, "posts/update-db-warning/index.md"); strings.Contains(got, "Updated") {
 		t.Fatalf("update_page modified source despite snapshot persistence error: %q", got)
+	}
+}
+
+// dropPagesTable breaks only the derived-index write path (SyncSourcePage /
+// DeletePage), leaving the recovery journal's own table intact, by opening a
+// second raw connection to the same SQLite file and dropping the pages
+// table. This lets tests exercise the "source write landed, but the derived
+// DB sync degraded" warning branches without also breaking recovery-journal
+// persistence (which db.Close() would, since the DB is a single connection).
+func dropPagesTable(t *testing.T, dbPath string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite connection: %v", err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec("DROP TABLE pages"); err != nil {
+		t.Fatalf("drop pages table: %v", err)
+	}
+}
+
+// TestCreatePageSurvivesDerivedDBSyncFailureWithWarning exercises the
+// soft-degrade branch at create_page's siteDB.SyncSourcePage call: the
+// source write and recovery journal already succeeded, so a subsequent
+// failure to sync the derived (query-side) DB must not fail the whole
+// operation -- it should downgrade status to partial_success and surface a
+// warning, not an error.
+func TestCreatePageSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	dropPagesTable(t, dbPath)
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/derived-db-sync-warning", "title": "Derived DB Sync",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page must survive a derived-DB sync failure, got error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "partial_success") || !strings.Contains(string(raw), "derived DB could not be updated") {
+		t.Fatalf("create_page = %s, want partial_success with a derived-DB warning", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "derived-db-sync-warning", "index.md")); err != nil {
+		t.Fatalf("source page did not land despite recovery journal succeeding: %v", err)
+	}
+}
+
+// TestUpdatePageSurvivesDerivedDBSyncFailureWithWarning is the update_page
+// analogue of TestCreatePageSurvivesDerivedDBSyncFailureWithWarning.
+func TestUpdatePageSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/update-derived-db-warning", "title": "Derived DB Sync",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "update-derived-db-warning", "index.md"))
+
+	dropPagesTable(t, dbPath)
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/update-derived-db-warning", "title": "Updated Title", "expected_revision": expected,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page must survive a derived-DB sync failure, got error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "partial_success") || !strings.Contains(string(raw), "derived DB could not be updated") {
+		t.Fatalf("update_page = %s, want partial_success with a derived-DB warning", raw)
+	}
+	if got := readFileString(t, contentRoot, "posts/update-derived-db-warning/index.md"); !strings.Contains(got, "Updated Title") {
+		t.Fatalf("update_page did not apply the source edit despite recovery journal succeeding: %q", got)
+	}
+}
+
+// TestDeletePageSurvivesDerivedDBDeleteFailureWithWarning is the delete_page
+// analogue: the source unlink and recovery journal already succeeded, so a
+// subsequent failure to remove the page from the derived DB must degrade
+// with a warning rather than fail the whole delete.
+func TestDeletePageSurvivesDerivedDBDeleteFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/delete-derived-db-warning", "title": "Derived DB Sync",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "delete-derived-db-warning", "index.md"))
+
+	dropPagesTable(t, dbPath)
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/delete-derived-db-warning", "expected_revision": expected,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page must survive a derived-DB delete failure, got error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "warning") || !strings.Contains(string(raw), "derived DB could not be updated") {
+		t.Fatalf("delete_page = %s, want a derived-DB warning", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "delete-derived-db-warning", "index.md")); !os.IsNotExist(err) {
+		t.Fatalf("source page still present despite recovery journal succeeding: %v", err)
 	}
 }
 
