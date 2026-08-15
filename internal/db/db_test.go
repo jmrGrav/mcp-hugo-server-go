@@ -146,6 +146,47 @@ func TestGetBrokenLinks(t *testing.T) {
 	}
 }
 
+// TestGetBrokenLinksIgnoresRawMarkdownSourceLinks is a regression test for a
+// real production false-positive: a theme's "view source" link (or similar)
+// pointing at a page's raw .md path was flagged as broken by this SQL-backed
+// link checker, even though internal/tools/read/extended.go's sibling
+// in-memory implementation (resolveInternalLink) already excludes the exact
+// same pattern. The two implementations had drifted; txSyncLinks must not
+// treat a .md target as a page the rendered public index should resolve.
+func TestGetBrokenLinksIgnoresRawMarkdownSourceLinks(t *testing.T) {
+	d := openTestDB(t)
+
+	p := site.Page{
+		Slug:    "/source/",
+		Title:   "Source Page",
+		URL:     "https://x.com/source/",
+		Lang:    "en",
+		RawHTML: `<a href="/source/index.md">View source</a> <a href="/missing/">Missing</a>`,
+	}
+	if err := d.SyncPublicPage(p, nil); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+
+	broken, err := d.GetBrokenLinks()
+	if err != nil {
+		t.Fatalf("GetBrokenLinks: %v", err)
+	}
+	for _, r := range broken {
+		if strings.HasSuffix(r.Target, ".md") {
+			t.Errorf("raw .md source link reported as broken: %+v", r)
+		}
+	}
+	var foundRealBroken bool
+	for _, r := range broken {
+		if strings.Contains(r.Target, "missing") {
+			foundRealBroken = true
+		}
+	}
+	if !foundRealBroken {
+		t.Errorf("a genuinely missing non-.md target must still be reported: %+v", broken)
+	}
+}
+
 func TestSyncSourcePage(t *testing.T) {
 	d := openTestDB(t)
 	sp := hugosite.SourcePage{
