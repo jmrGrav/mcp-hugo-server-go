@@ -181,6 +181,70 @@ func TestSnapshotHealth(t *testing.T) {
 	}
 }
 
+func TestRecoveryJournalListsOnlyUncommittedOperations(t *testing.T) {
+	d := openTestDB(t)
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "write-1", Kind: "content_write", State: "file_written", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "build-1", Kind: "build", State: "committed", Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := d.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].OperationID != "write-1" || pending[0].State != "file_written" {
+		t.Fatalf("PendingRecovery = %+v", pending)
+	}
+}
+
+func TestRecoveryJournalSurvivesReopenAndAdvancesStateInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recovery.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "in_progress", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(in_progress): %v", err)
+	}
+	// Advancing state for the same operation_id must update the existing
+	// row, not create a second pending entry — startup recovery needs one
+	// current fact per operation, not a full history.
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "file_written", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(file_written): %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: the crash-recovery scenario this table exists for is a process
+	// restart finding an operation that never reached "committed".
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	pending, err := d.PendingRecovery()
+	if err != nil {
+		t.Fatalf("PendingRecovery after reopen: %v", err)
+	}
+	if len(pending) != 1 || pending[0].OperationID != "op-1" || pending[0].State != "file_written" {
+		t.Fatalf("PendingRecovery after reopen = %+v, want one op-1 entry in state file_written", pending)
+	}
+
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "committed", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(committed): %v", err)
+	}
+	pending, err = d.PendingRecovery()
+	if err != nil {
+		t.Fatalf("PendingRecovery after commit: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("PendingRecovery after commit = %+v, want empty", pending)
+	}
+}
+
 func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.db")
 	d, err := db.Open(path)
@@ -223,6 +287,57 @@ func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
 	}
 	if got.BuildID != manifest.BuildID || got.SourceRevision != manifest.SourceRevision || got.OutputRevision != manifest.OutputRevision || got.HugoVersion != manifest.HugoVersion || got.Status != manifest.Status || !got.ObservedAt.Equal(observed) {
 		t.Fatalf("persisted manifest = %+v, want %+v", got, manifest)
+	}
+}
+
+func TestMutationJournalSurvivesReopenAndRespectsTTL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mutation.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	createdAt := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	entry := db.MutationJournalEntry{
+		CallerKey: "caller-a", Tool: "create_page", Key: "idem-1",
+		RequestHash: "sha256:abc", ResultJSON: []byte(`{"status":"created"}`), CreatedAt: createdAt,
+	}
+	if err := d.RememberMutation(entry); err != nil {
+		t.Fatalf("RememberMutation: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: the real restart this journal exists to survive.
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	got, err := d.LookupMutation("caller-a", "create_page", "idem-1", 0)
+	if err != nil {
+		t.Fatalf("LookupMutation after reopen: %v", err)
+	}
+	if got == nil || got.RequestHash != entry.RequestHash || string(got.ResultJSON) != string(entry.ResultJSON) {
+		t.Fatalf("LookupMutation after reopen = %+v, want a match for %+v", got, entry)
+	}
+
+	// A different caller_key or tool must not replay someone else's mutation.
+	if got, err := d.LookupMutation("caller-b", "create_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation(caller-b) = %+v err=%v, want nil, no error", got, err)
+	}
+	if got, err := d.LookupMutation("caller-a", "update_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation(different tool) = %+v err=%v, want nil, no error", got, err)
+	}
+
+	// A TTL in the past must expire the entry on read, mirroring the
+	// ephemeral-record store's TTL semantics.
+	if got, err := d.LookupMutation("caller-a", "create_page", "idem-1", time.Nanosecond); err != nil || got != nil {
+		t.Fatalf("LookupMutation with elapsed TTL = %+v err=%v, want nil, no error", got, err)
+	}
+	if got, err := d.LookupMutation("caller-a", "create_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation after TTL expiry deleted the row = %+v err=%v, want nil (TTL read also deletes)", got, err)
 	}
 }
 

@@ -441,7 +441,34 @@ func postBuildCallbacks(
 	srcIdx *hugosite.SourceIndex,
 	siteDB *db.DB,
 ) []admin.PostBuildCallback {
+	recordBuildRecovery := func(buildID, state string, observedAt time.Time) error {
+		if siteDB == nil {
+			return nil
+		}
+		payload, err := json.Marshal(map[string]string{"action": action})
+		if err != nil {
+			return err
+		}
+		return siteDB.RecordRecovery(db.RecoveryEntry{
+			OperationID: action + ":" + buildID,
+			Kind:        "build",
+			State:       state,
+			Payload:     payload,
+			UpdatedAt:   observedAt,
+		})
+	}
 	return []admin.PostBuildCallback{
+		{Name: "recovery_journal",
+			OnBuildStart: func(progress admin.BuildProgress) error {
+				return recordBuildRecovery(progress.BuildID, "in_progress", progress.ObservedAt)
+			},
+			OnOutputSwapped: func(progress admin.BuildProgress) error {
+				return recordBuildRecovery(progress.BuildID, "file_written", progress.ObservedAt)
+			},
+			OnBuildComplete: func(completion admin.BuildCompletion) error {
+				return recordBuildRecovery(completion.BuildID, "committed", completion.ObservedAt)
+			},
+		},
 		{Name: "index_reload", Fn: func() error {
 			if err := idx.Reload(cfg); err != nil {
 				return err

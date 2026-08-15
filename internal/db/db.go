@@ -74,6 +74,17 @@ type EphemeralRecord struct {
 	CreatedAt time.Time
 }
 
+// RecoveryEntry records a filesystem-affecting operation's durable progress.
+// It intentionally records facts around the filesystem transition rather than
+// claiming SQLite and rename(2) are one atomic transaction.
+type RecoveryEntry struct {
+	OperationID string
+	Kind        string
+	State       string
+	Payload     []byte
+	UpdatedAt   time.Time
+}
+
 // Open opens (or creates) the SQLite database at path and runs migrations.
 func Open(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
@@ -168,6 +179,11 @@ func (d *DB) createTables() error {
 			payload BLOB NOT NULL, created_at TEXT NOT NULL,
 			PRIMARY KEY(kind, record_id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS recovery_journal (
+			operation_id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+			payload BLOB NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_recovery_journal_state ON recovery_journal(state)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -265,6 +281,39 @@ func (d *DB) ListEphemeralRecords(kind, callerKey string, ttl time.Duration) ([]
 		}
 	}
 	return records, nil
+}
+
+func (d *DB) RecordRecovery(e RecoveryEntry) error {
+	if e.OperationID == "" || e.Kind == "" || e.State == "" {
+		return fmt.Errorf("recovery journal: operation_id, kind, and state are required")
+	}
+	if e.UpdatedAt.IsZero() {
+		e.UpdatedAt = time.Now().UTC()
+	}
+	_, err := d.db.Exec(`INSERT INTO recovery_journal(operation_id,kind,state,payload,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET state=excluded.state,payload=excluded.payload,updated_at=excluded.updated_at`, e.OperationID, e.Kind, e.State, e.Payload, e.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (d *DB) PendingRecovery() ([]RecoveryEntry, error) {
+	rows, err := d.db.Query(`SELECT operation_id,kind,state,payload,updated_at FROM recovery_journal WHERE state != 'committed' ORDER BY updated_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RecoveryEntry
+	for rows.Next() {
+		var e RecoveryEntry
+		var at string
+		if err := rows.Scan(&e.OperationID, &e.Kind, &e.State, &e.Payload, &at); err != nil {
+			return nil, err
+		}
+		e.UpdatedAt, err = time.Parse(time.RFC3339Nano, at)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // RecordPublicationManifest persists a completed build's observed source and

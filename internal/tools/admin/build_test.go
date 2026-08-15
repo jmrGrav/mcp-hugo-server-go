@@ -132,6 +132,61 @@ func TestBuildSiteCompletionCallbackReceivesDiskFingerprints(t *testing.T) {
 	}
 }
 
+func TestBuildSiteRecordsRecoveryLifecycleAroundOutputSwap(t *testing.T) {
+	hugoRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'built' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+	cfg.SiteRoot = t.TempDir()
+
+	var events []string
+	var buildID string
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterBuild(s, cfg, nil, admin.PostBuildCallback{
+		Name: "recovery_journal",
+		OnBuildStart: func(progress admin.BuildProgress) error {
+			buildID = progress.BuildID
+			events = append(events, "in_progress")
+			return nil
+		},
+		OnOutputSwapped: func(progress admin.BuildProgress) error {
+			if progress.BuildID != buildID {
+				t.Fatalf("output-swap build ID = %q, want %q", progress.BuildID, buildID)
+			}
+			if _, err := os.Stat(filepath.Join(cfg.SiteRoot, "index.html")); err != nil {
+				t.Fatalf("output was not installed before lifecycle callback: %v", err)
+			}
+			events = append(events, "file_written")
+			return nil
+		},
+		OnBuildComplete: func(completion admin.BuildCompletion) error {
+			if completion.BuildID != buildID {
+				t.Fatalf("completion build ID = %q, want %q", completion.BuildID, buildID)
+			}
+			events = append(events, "committed")
+			return nil
+		},
+	})
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer func() { _ = session.Close() }()
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("build_site error = %v, result = %s", err, resultText(res))
+	}
+	if got, want := strings.Join(events, ","), "in_progress,file_written,committed"; got != want {
+		t.Fatalf("recovery lifecycle = %q, want %q", got, want)
+	}
+}
+
 // TestBuildSiteHasEnvelopeMatchingRootFields is a regression test for #572:
 // build_site was the last tool with zero envelope (no data/errors/meta/
 // success at all). Root fields are kept as compatibility aliases, additive
