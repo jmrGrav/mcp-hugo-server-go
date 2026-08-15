@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 )
 
 func readFileString(t *testing.T, contentRoot, relPath string) string {
@@ -540,5 +542,95 @@ func TestPlanContentChangeRejectsDedraftingTestContent(t *testing.T) {
 	content := readFileString(t, contentRoot, "posts/audit-plan-guarded/index.md")
 	if !strings.Contains(content, "draft: true") {
 		t.Fatalf("plan_content_change must not change the file on disk, got: %s", content)
+	}
+}
+
+// TestApplyContentPlanUpdatesPublicIndexWhenPresent covers apply_content_plan's
+// public-index sync branch: when the page already exists in the built
+// (public) site.Index, applying a plan must also push the changed
+// title/tags/categories into that public entry.
+func TestApplyContentPlanUpdatesPublicIndexWhenPresent(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/public-plan")
+	cfg := config.Default()
+	siteIdx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex: %v", err)
+	}
+	siteIdx.UpsertPage(site.Page{
+		Slug:  "/posts/public-plan/",
+		Title: "Stale Public Title",
+		URL:   "https://example.test/posts/public-plan/",
+	})
+
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteIdx: siteIdx})
+	defer done()
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/public-plan",
+		"operations": []any{
+			map[string]any{"op": "set_title", "value": "New Public Title"},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_content_change failed: %s", marshalContent(t, planRes))
+	}
+	planID, _ := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan failed: %s", marshalContent(t, applyRes))
+	}
+
+	pub, ok := siteIdx.GetBySlug("posts/public-plan")
+	if !ok {
+		t.Fatal("public index entry missing after apply_content_plan")
+	}
+	if pub.Title != "New Public Title" {
+		t.Fatalf("public index Title = %q, want %q", pub.Title, "New Public Title")
+	}
+}
+
+// TestApplyContentPlanSurvivesDerivedDBSyncFailureWithWarning exercises
+// apply_content_plan's siteDB.SyncSourcePage soft-degrade branch: the source
+// write and recovery journal already succeeded, so a subsequent failure to
+// sync the derived DB must downgrade to partial_success with a warning
+// rather than fail the whole apply.
+func TestApplyContentPlanSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/plan-derived-db-warning")
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/plan-derived-db-warning",
+		"operations": []any{
+			map[string]any{"op": "set_title", "value": "Derived DB Warning Title"},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_content_change failed: %s", marshalContent(t, planRes))
+	}
+	planID, _ := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	dropPagesTable(t, dbPath)
+
+	applyRes := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_content_plan must survive a derived-DB sync failure, got error: %s", marshalContent(t, applyRes))
+	}
+	data := decodeWriteData(t, applyRes)
+	if data["status"] != "partial_success" {
+		t.Fatalf("apply_content_plan status = %v, want partial_success", data["status"])
+	}
+	warning, _ := data["warning"].(string)
+	if !strings.Contains(warning, "derived DB could not be updated") {
+		t.Fatalf("apply_content_plan warning = %q, want derived-DB warning", warning)
 	}
 }

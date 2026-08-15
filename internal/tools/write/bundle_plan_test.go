@@ -484,3 +484,48 @@ func TestPlanBundleChangeRejectsLeafPage(t *testing.T) {
 		t.Fatalf("expected not_a_bundle, got: %s", marshalContent(t, res))
 	}
 }
+
+// TestApplyBundlePlanSurvivesDerivedDBSyncFailureWithWarning exercises
+// indexBundleTranslation's siteDB.SyncSourcePage soft-degrade branch: the
+// bundle files and recovery journal already succeeded, so a subsequent
+// per-translation failure to sync the derived DB must downgrade the bundle
+// status to partial_success with a warning rather than fail the whole apply.
+func TestApplyBundlePlanSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/bundle-derived-db-warning")
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/bundle-derived-db-warning",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Nouveau corps FR.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("New body EN.")}},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_bundle_change failed: %s", marshalContent(t, planRes))
+	}
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	dropPagesTable(t, dbPath)
+
+	applyRes := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_bundle_plan must survive a derived-DB sync failure, got error: %s", marshalContent(t, applyRes))
+	}
+	data := decodeWriteData(t, applyRes)
+	if data["status"] != "partial_success" {
+		t.Fatalf("apply_bundle_plan status = %v, want partial_success", data["status"])
+	}
+	warning, _ := data["warning"].(string)
+	if !strings.Contains(warning, "derived DB could not be updated") {
+		t.Fatalf("apply_bundle_plan warning = %q, want derived-DB warning", warning)
+	}
+}

@@ -314,6 +314,13 @@ func buildCommandArgs(cacheDir string, preview bool) []string {
 // warning is non-fatal because the public tree is already the new build and
 // only cleanup of the backup failed (#965).
 func swapBuildOutput(tempDir, siteRoot string) (string, error) {
+	return swapBuildOutputWithOps(tempDir, siteRoot, os.Rename, os.RemoveAll)
+}
+
+// swapBuildOutputWithOps keeps the destructive boundaries injectable without
+// mutable package globals. Production supplies os.Rename/os.RemoveAll; tests
+// can deterministically interrupt the install and cleanup steps.
+func swapBuildOutputWithOps(tempDir, siteRoot string, rename func(string, string) error, removeAll func(string) error) (string, error) {
 	parent := filepath.Dir(siteRoot)
 	backup, err := os.MkdirTemp(parent, ".mcp-public-backup-")
 	if err != nil {
@@ -325,7 +332,7 @@ func swapBuildOutput(tempDir, siteRoot string) (string, error) {
 
 	hadOld := false
 	if _, err := os.Lstat(siteRoot); err == nil {
-		if err := os.Rename(siteRoot, backup); err != nil {
+		if err := rename(siteRoot, backup); err != nil {
 			return "", fmt.Errorf("output_swap: failed to stage existing public output")
 		}
 		hadOld = true
@@ -333,16 +340,16 @@ func swapBuildOutput(tempDir, siteRoot string) (string, error) {
 		return "", fmt.Errorf("output_swap: failed to inspect existing public output")
 	}
 
-	if err := os.Rename(tempDir, siteRoot); err != nil {
+	if err := rename(tempDir, siteRoot); err != nil {
 		if hadOld {
-			_ = os.Rename(backup, siteRoot)
+			_ = rename(backup, siteRoot)
 		}
 		return "", fmt.Errorf("output_swap: failed to install rendered output")
 	}
 	if !hadOld {
 		return "", nil
 	}
-	if err := os.RemoveAll(backup); err != nil {
+	if err := removeAll(backup); err != nil {
 		return fmt.Sprintf("output_swap: new output installed but previous output cleanup failed: %v", err), nil
 	}
 	return "", nil
