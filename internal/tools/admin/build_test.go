@@ -761,6 +761,85 @@ func TestBuildSiteTimeout(t *testing.T) {
 	}
 }
 
+// TestBuildSiteTimeoutMidExecutionPreservesPreviousOutputAndReleasesLock is
+// #1068's remaining "mid-Hugo cancellation" gap: TestBuildSiteTimeout and
+// TestBuildSiteProcessGroupKilled both cover a context-timeout killing Hugo
+// mid-execution, but neither checks the public tree afterward.
+// TestBuildSiteFailurePreservesPreviousOutput checks the public tree, but
+// only for a normal Hugo exit-1 failure, never for the timeout/cancellation
+// trigger path (cmd.Cancel / process-group kill). Nothing proves both at
+// once: that killing Hugo mid-write via the build timeout still leaves the
+// previous complete public tree untouched — not the partial output Hugo
+// had started writing to its temp destination — and that the ContentMu
+// build lock is released so a subsequent build_site call isn't permanently
+// blocked by one that was killed mid-flight.
+func TestBuildSiteTimeoutMidExecutionPreservesPreviousOutputAndReleasesLock(t *testing.T) {
+	siteRoot := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(siteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := filepath.Join(siteRoot, "old.txt")
+	if err := os.WriteFile(oldPath, []byte("last-known-good"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Writes partial output to the real Hugo destination (synchronously,
+	// well before the 1s timeout below can fire), then sleeps well past
+	// it — forcing a genuine context-cancellation kill mid-execution, not a
+	// fast exit-1 like TestBuildSiteFailurePreservesPreviousOutput.
+	dir := writeMockHugo(t, `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--destination" ]; then
+    shift
+    printf 'partial-build' > "$1/index.html"
+  fi
+  shift
+done
+sleep 30
+`)
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = t.TempDir()
+	cfg.BuildTimeoutSeconds = 1
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("build_site transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected timeout error, got success")
+	}
+	text := strings.ToLower(resultText(res))
+	if !strings.Contains(text, "timeout") && !strings.Contains(text, "deadline") && !strings.Contains(text, "killed") {
+		t.Fatalf("error %q does not indicate timeout", resultText(res))
+	}
+
+	content, readErr := os.ReadFile(oldPath)
+	if readErr != nil || string(content) != "last-known-good" {
+		t.Fatalf("previous output changed after mid-build timeout: %q, err=%v", content, readErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(siteRoot, "index.html")); !os.IsNotExist(statErr) {
+		t.Fatalf("Hugo's partial output leaked into the public tree after a mid-build kill: %v", statErr)
+	}
+
+	// The build lock must be released: a follow-up build_site call (this
+	// time with a Hugo that finishes normally) must succeed, not report
+	// build_in_progress.
+	quickDir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", quickDir+":"+os.Getenv("PATH"))
+	res2, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil {
+		t.Fatalf("follow-up build_site transport error: %v", err)
+	}
+	if res2.IsError {
+		t.Fatalf("follow-up build_site after a mid-build timeout unexpectedly failed (lock not released?): %s", resultText(res2))
+	}
+}
+
 func TestBuildSiteFailureStructuredError(t *testing.T) {
 	dir := writeMockHugo(t, "#!/bin/sh\necho 'Error: TOML parse error' >&2\nexit 1\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
