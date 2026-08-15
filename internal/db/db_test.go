@@ -290,6 +290,57 @@ func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
 	}
 }
 
+func TestMutationJournalSurvivesReopenAndRespectsTTL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mutation.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	createdAt := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	entry := db.MutationJournalEntry{
+		CallerKey: "caller-a", Tool: "create_page", Key: "idem-1",
+		RequestHash: "sha256:abc", ResultJSON: []byte(`{"status":"created"}`), CreatedAt: createdAt,
+	}
+	if err := d.RememberMutation(entry); err != nil {
+		t.Fatalf("RememberMutation: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: the real restart this journal exists to survive.
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	got, err := d.LookupMutation("caller-a", "create_page", "idem-1", 0)
+	if err != nil {
+		t.Fatalf("LookupMutation after reopen: %v", err)
+	}
+	if got == nil || got.RequestHash != entry.RequestHash || string(got.ResultJSON) != string(entry.ResultJSON) {
+		t.Fatalf("LookupMutation after reopen = %+v, want a match for %+v", got, entry)
+	}
+
+	// A different caller_key or tool must not replay someone else's mutation.
+	if got, err := d.LookupMutation("caller-b", "create_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation(caller-b) = %+v err=%v, want nil, no error", got, err)
+	}
+	if got, err := d.LookupMutation("caller-a", "update_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation(different tool) = %+v err=%v, want nil, no error", got, err)
+	}
+
+	// A TTL in the past must expire the entry on read, mirroring the
+	// ephemeral-record store's TTL semantics.
+	if got, err := d.LookupMutation("caller-a", "create_page", "idem-1", time.Nanosecond); err != nil || got != nil {
+		t.Fatalf("LookupMutation with elapsed TTL = %+v err=%v, want nil, no error", got, err)
+	}
+	if got, err := d.LookupMutation("caller-a", "create_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation after TTL expiry deleted the row = %+v err=%v, want nil (TTL read also deletes)", got, err)
+	}
+}
+
 func TestEphemeralRecordSurvivesReopenAndRespectsCallerAndTTL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ephemeral.db")
 	d, err := db.Open(path)
