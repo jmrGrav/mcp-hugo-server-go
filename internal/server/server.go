@@ -1120,6 +1120,7 @@ func applyOAuthCORS(w http.ResponseWriter, r *http.Request, allowedMethods strin
 
 func defaultServerCapabilities() *mcp.ServerCapabilities {
 	return &mcp.ServerCapabilities{
+		//lint:ignore SA1019 logging remains functional for at least 12 months per SEP-2577; revisit before the deprecation window closes.
 		Logging:   &mcp.LoggingCapabilities{},
 		Tools:     &mcp.ToolCapabilities{ListChanged: true},
 		Prompts:   &mcp.PromptCapabilities{ListChanged: true},

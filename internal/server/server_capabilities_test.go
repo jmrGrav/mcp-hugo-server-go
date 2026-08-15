@@ -7,6 +7,7 @@ func TestDefaultServerCapabilitiesDeclareSharedSurfaces(t *testing.T) {
 	if caps == nil {
 		t.Fatal("defaultServerCapabilities() returned nil")
 	}
+	//lint:ignore SA1019 logging remains functional for at least 12 months per SEP-2577; revisit before the deprecation window closes.
 	if caps.Logging == nil {
 		t.Fatal("logging capabilities must be declared explicitly")
 	}
