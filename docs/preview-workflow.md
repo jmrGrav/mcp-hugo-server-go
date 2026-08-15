@@ -77,16 +77,17 @@ location: missing preview routes must remain 404.
 - `create_preview` also sweeps every already-expired entry before
   registering a new one, so disk usage from abandoned previews doesn't grow
   unbounded even if nobody ever revisits an expired link.
-- The registry is in-memory only. A server restart drops all active
-  previews (and their temp directories become orphaned — an accepted
-  tradeoff for this MVP; operators relying on very long-lived previews
-  should not restart the server mid-TTL, or should treat this as a known
-  gap).
+- With `db_path` configured, owner/TTL/build metadata and the dedicated
+  `<db_path>.previews` directory survive restart. Startup reconciles missing,
+  expired, unsafe, and orphaned entries. Bearer URL tokens and session cookies
+  intentionally remain memory-only and are invalid after every restart.
+- Without `db_path`, the registry remains process-local and restart drops the
+  active leases, matching the previous fallback behaviour.
 
 ## Non-goals
 
-- Persisting previews across restarts (would need a database-backed store
-  and a directory-ownership recovery story — out of scope for the MVP).
+- Persisting bearer URL tokens or session cookies. Only non-secret lease
+  metadata is restart-safe.
 - A background sweeper goroutine — lazy sweep-on-create plus
   expire-on-access is sufficient for the expected preview volume and avoids
   adding a long-running goroutine to the server's lifecycle.

@@ -86,6 +86,18 @@ type RecoveryEntry struct {
 	UpdatedAt   time.Time
 }
 
+// PreviewLease is non-secret lifecycle metadata for one on-disk preview.
+// Entry/session bearer tokens are intentionally never persisted here.
+type PreviewLease struct {
+	ID          string
+	Owner       string
+	DirName     string
+	BuildStatus string
+	State       string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+}
+
 // Open opens (or creates) the SQLite database at path and runs migrations.
 func Open(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
@@ -185,6 +197,13 @@ func (d *DB) createTables() error {
 			payload BLOB NOT NULL, updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_recovery_journal_state ON recovery_journal(state)`,
+		`CREATE TABLE IF NOT EXISTS preview_leases (
+			preview_id TEXT PRIMARY KEY, owner TEXT NOT NULL, dir_name TEXT NOT NULL,
+			build_status TEXT NOT NULL, state TEXT NOT NULL,
+			created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_preview_leases_owner_expiry
+			ON preview_leases(owner, expires_at)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -192,6 +211,68 @@ func (d *DB) createTables() error {
 		}
 	}
 	return nil
+}
+
+// PutPreviewLease upserts metadata only. Callers must never include a bearer
+// or session token in the lease fields.
+func (d *DB) PutPreviewLease(lease PreviewLease) error {
+	if strings.TrimSpace(lease.ID) == "" || strings.TrimSpace(lease.DirName) == "" {
+		return fmt.Errorf("preview lease: preview_id and dir_name are required")
+	}
+	if lease.CreatedAt.IsZero() || lease.ExpiresAt.IsZero() {
+		return fmt.Errorf("preview lease: creation and expiry timestamps are required")
+	}
+	if lease.State == "" {
+		lease.State = "active"
+	}
+	_, err := d.db.Exec(`INSERT INTO preview_leases(preview_id,owner,dir_name,build_status,state,created_at,expires_at)
+		VALUES(?,?,?,?,?,?,?) ON CONFLICT(preview_id) DO UPDATE SET
+		owner=excluded.owner,dir_name=excluded.dir_name,build_status=excluded.build_status,
+		state=excluded.state,created_at=excluded.created_at,expires_at=excluded.expires_at`,
+		lease.ID, lease.Owner, lease.DirName, lease.BuildStatus, lease.State,
+		lease.CreatedAt.UTC().Format(time.RFC3339Nano), lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (d *DB) ListPreviewLeases() ([]PreviewLease, error) {
+	rows, err := d.db.Query(`SELECT preview_id,owner,dir_name,build_status,state,created_at,expires_at
+		FROM preview_leases ORDER BY created_at,preview_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PreviewLease
+	for rows.Next() {
+		var lease PreviewLease
+		var createdAt, expiresAt string
+		if err := rows.Scan(&lease.ID, &lease.Owner, &lease.DirName, &lease.BuildStatus, &lease.State, &createdAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		lease.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("preview lease %q created_at: %w", lease.ID, err)
+		}
+		lease.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("preview lease %q expires_at: %w", lease.ID, err)
+		}
+		out = append(out, lease)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) DeletePreviewLease(id string) error {
+	_, err := d.db.Exec(`DELETE FROM preview_leases WHERE preview_id=?`, id)
+	return err
+}
+
+func (d *DB) DeletePreviewLeasesByOwner(owner string) error {
+	if owner == "" {
+		_, err := d.db.Exec(`DELETE FROM preview_leases`)
+		return err
+	}
+	_, err := d.db.Exec(`DELETE FROM preview_leases WHERE owner=?`, owner)
+	return err
 }
 
 // PutEphemeralRecord stores server-owned TTL state such as plans/snapshots.

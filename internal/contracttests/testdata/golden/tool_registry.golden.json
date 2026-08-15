@@ -3900,7 +3900,7 @@
   {
     "name": "list_previews",
     "required_scope": "write",
-    "description": "List currently active preview sessions with owner and expiry metadata, plus current usage against the configured caps (caller_active_count/max_previews_per_caller and preview_disk_used_bytes/preview_disk_max_bytes) so an agent can self-regulate before create_preview refuses a new preview at a cap boundary (#871). Returns clean preview URLs without re-emitting the entry token; the entry token is single-use — once its session has fetched content it can no longer mint a new session, so a leaked entry URL that was already opened is inert, but use revoke_preview to cut off access to an active preview immediately. Requires write.",
+    "description": "List the current caller's preview leases with owner, expiry, build, and access status, plus usage against the configured caps. Returns clean URLs without re-emitting entry tokens. After a server restart, durable leases remain listable/revocable and inspect_preview remains available, but old browser credentials are invalid and access_status is restart_invalidated; create a new preview for browser access. Requires write.",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"
@@ -3912,6 +3912,7 @@
       "data.preview_disk_max_bytes:integer:required",
       "data.preview_disk_used_bytes:integer:required",
       "data.previews:unspecified:required",
+      "data.previews[].access_status:string:required",
       "data.previews[].build_status:string:required",
       "data.previews[].created_at:string:required",
       "data.previews[].expires_at:string:required",
@@ -3948,7 +3949,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "03af285c71a654499f800cea4f3c57cedd00c0a8222857d569738f726e6d4289"
+    "output_schema_sha256": "6d9540f3a50dc2e8c52574d06e91f52a03ae8ad57effbd30375576a041179808"
   },
   {
     "name": "list_tags",
@@ -4457,7 +4458,7 @@
   {
     "name": "revoke_all_previews",
     "required_scope": "write",
-    "description": "Revoke every active preview and delete all isolated preview directories. Requires write.",
+    "description": "Revoke every preview owned by the current caller and delete those isolated preview directories. Never revokes another caller's previews. Requires write.",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"

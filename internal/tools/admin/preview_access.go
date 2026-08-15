@@ -19,12 +19,13 @@ import (
 type listPreviewsInput struct{}
 
 type listPreviewItem struct {
-	PreviewID   string `json:"preview_id"`
-	URL         string `json:"url"`
-	Owner       string `json:"owner,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	ExpiresAt   string `json:"expires_at"`
-	BuildStatus string `json:"build_status"`
+	PreviewID    string `json:"preview_id"`
+	URL          string `json:"url"`
+	Owner        string `json:"owner,omitempty"`
+	CreatedAt    string `json:"created_at"`
+	ExpiresAt    string `json:"expires_at"`
+	BuildStatus  string `json:"build_status"`
+	AccessStatus string `json:"access_status"`
 }
 
 type listPreviewsData struct {
@@ -87,7 +88,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "list_previews",
 		Title:        "List previews",
-		Description:  "List currently active preview sessions with owner and expiry metadata, plus current usage against the configured caps (caller_active_count/max_previews_per_caller and preview_disk_used_bytes/preview_disk_max_bytes) so an agent can self-regulate before create_preview refuses a new preview at a cap boundary (#871). Returns clean preview URLs without re-emitting the entry token; the entry token is single-use — once its session has fetched content it can no longer mint a new session, so a leaked entry URL that was already opened is inert, but use revoke_preview to cut off access to an active preview immediately. Requires write.",
+		Description:  "List the current caller's preview leases with owner, expiry, build, and access status, plus usage against the configured caps. Returns clean URLs without re-emitting entry tokens. After a server restart, durable leases remain listable/revocable and inspect_preview remains available, but old browser credentials are invalid and access_status is restart_invalidated; create a new preview for browser access. Requires write.",
 		InputSchema:  tools.MustSchema[listPreviewsInput](),
 		OutputSchema: tools.MustSchema[listPreviewsOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -104,13 +105,18 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 		})
 		items := make([]listPreviewItem, 0, len(snaps))
 		for _, snap := range snaps {
+			url := strings.TrimRight(baseURL, "/") + previewstore.CleanPath(snap.ID, "")
+			if snap.AccessStatus == "restart_invalidated" {
+				url = ""
+			}
 			items = append(items, listPreviewItem{
-				PreviewID:   snap.ID,
-				URL:         strings.TrimRight(baseURL, "/") + previewstore.CleanPath(snap.ID, ""),
-				Owner:       snap.Owner,
-				CreatedAt:   snap.CreatedAt.UTC().Format(time.RFC3339),
-				ExpiresAt:   snap.ExpiresAt.UTC().Format(time.RFC3339),
-				BuildStatus: snap.BuildStatus,
+				PreviewID:    snap.ID,
+				URL:          url,
+				Owner:        snap.Owner,
+				CreatedAt:    snap.CreatedAt.UTC().Format(time.RFC3339),
+				ExpiresAt:    snap.ExpiresAt.UTC().Format(time.RFC3339),
+				BuildStatus:  snap.BuildStatus,
+				AccessStatus: snap.AccessStatus,
 			})
 		}
 		return nil, listPreviewsOutput{
@@ -142,7 +148,11 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 		if id == "" {
 			return nil, revokePreviewOutput{}, fmt.Errorf("invalid_params: preview_id must not be empty")
 		}
-		if !store.RevokeOwned(id, previewCallerKey(ctx)) {
+		revoked, err := store.RevokeOwnedPersistent(id, previewCallerKey(ctx))
+		if err != nil {
+			return nil, revokePreviewOutput{}, fmt.Errorf("persistence_error: failed to revoke preview lease")
+		}
+		if !revoked {
 			return nil, revokePreviewOutput{}, fmt.Errorf("preview_not_found: preview %q not found or already expired", id)
 		}
 		return nil, revokePreviewOutput{
@@ -156,7 +166,7 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "revoke_all_previews",
 		Title:        "Revoke all previews",
-		Description:  "Revoke every active preview and delete all isolated preview directories. Requires write.",
+		Description:  "Revoke every preview owned by the current caller and delete those isolated preview directories. Never revokes another caller's previews. Requires write.",
 		InputSchema:  tools.MustSchema[revokeAllPreviewsInput](),
 		OutputSchema: tools.MustSchema[revokeAllPreviewsOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -166,7 +176,10 @@ func RegisterPreviewAccessTools(s *mcp.Server, cfg config.Config, store *preview
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ revokeAllPreviewsInput) (*mcp.CallToolResult, revokeAllPreviewsOutput, error) {
-		count := store.RevokeAllOwned(previewCallerKey(ctx))
+		count, err := store.RevokeAllOwnedPersistent(previewCallerKey(ctx))
+		if err != nil {
+			return nil, revokeAllPreviewsOutput{}, fmt.Errorf("persistence_error: failed to revoke preview leases")
+		}
 		return nil, revokeAllPreviewsOutput{
 			ToolResponse: previewAccessSuccessEnvelope(revokeAllPreviewsData{
 				Status:       "revoked",

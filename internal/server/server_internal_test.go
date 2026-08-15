@@ -142,6 +142,33 @@ func TestOpenSiteDBBranches(t *testing.T) {
 	})
 }
 
+func TestBuildServerCoreAcceptsRelativeDBPathForPreviewRecovery(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	absPath := filepath.Join(t.TempDir(), "runtime.sqlite")
+	relPath, err := filepath.Rel(cwd, absPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.DBPath = relPath
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, err := buildServerCore(cfg, idx)
+	if err != nil {
+		t.Fatalf("buildServerCore(relative db_path): %v", err)
+	}
+	defer core.siteDB.Close()
+	wantRoot := absPath + ".previews"
+	if got := core.previews.ManagedRoot(); got != wantRoot {
+		t.Fatalf("preview root = %q, want %q", got, wantRoot)
+	}
+}
+
 func TestOpenSiteDBReconcilesOnlyInterruptedBuildsAfterFreshStartupSync(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html><head><title>x</title></head><body></body></html>"), 0o644); err != nil {

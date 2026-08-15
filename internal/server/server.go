@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -565,6 +567,7 @@ type serverCore struct {
 	srcIdx       *hugosite.SourceIndex
 	writeEnabled bool
 	siteDB       *db.DB
+	previews     *previewstore.Store
 }
 
 func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
@@ -598,6 +601,28 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 	if err != nil {
 		return nil, err
 	}
+	previewRoot := os.TempDir()
+	if cfg.DBPath != "" {
+		dbPath, absErr := filepath.Abs(cfg.DBPath)
+		if absErr != nil {
+			_ = siteDB.Close()
+			return nil, fmt.Errorf("server: resolve preview lease root: %w", absErr)
+		}
+		previewRoot = dbPath + ".previews"
+	}
+	previews, report, err := previewstore.NewPersistent(siteDB, previewRoot)
+	if err != nil {
+		if siteDB != nil {
+			_ = siteDB.Close()
+		}
+		return nil, fmt.Errorf("server: preview lease recovery: %w", err)
+	}
+	if report.Restored+report.Expired+report.Missing+report.Unsafe+report.OrphansRemoved > 0 {
+		slog.Info("server: preview leases reconciled",
+			"restored", report.Restored, "expired", report.Expired,
+			"missing", report.Missing, "unsafe", report.Unsafe,
+			"orphans_removed", report.OrphansRemoved)
+	}
 
 	// Build the known-tools set from the registry so the middleware can bucket
 	// any unrecognised client-supplied name as "unknown" (caps Prometheus cardinality).
@@ -613,6 +638,7 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 		srcIdx:       srcIdx,
 		writeEnabled: writeEnabled,
 		siteDB:       siteDB,
+		previews:     previews,
 	}, nil
 }
 
@@ -629,7 +655,7 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 // through the create_preview tool must be readable through that handler,
 // which only works if both sides share one previewstore.Store.
 func buildWriteScopedServer(core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension) (*mcp.Server, *previewstore.Store) {
-	previews := previewstore.New()
+	previews := core.previews
 	writeServer := buildPrivilegedScopedServer("write", core, cfg, idx, extensions, previews)
 	// Keep managed Hugo binary tools out of tools/list for ordinary write
 	// callers. Calls are also denied by ScopePolicy; this removes discovery
@@ -675,7 +701,7 @@ func NewStdio(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) 
 	}
 	// Stdio is a trusted local operator transport; expose the full privileged
 	// catalog, including admin-gated Hugo lifecycle tools.
-	return buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, previewstore.New()), nil
+	return buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, core.previews), nil
 }
 
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
