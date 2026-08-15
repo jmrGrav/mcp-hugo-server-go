@@ -793,6 +793,34 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 	}
 }
 
+// TestWriteTokenCannotInvokeAdminOnlyTools is #1069's remaining matrix gap:
+// existing coverage proves the four managed Hugo binary lifecycle tools
+// (stage_hugo_upgrade/activate_hugo/rollback_hugo/bootstrap_hugo) are
+// absent from a write-scope token's tools/list (TestSystemAdminClientSeesWriteAndAdminTools's
+// sibling test at the top of this file), and TestScopeDeniedToolCallEmitsStructuredAuditLog
+// proves a read token calling a write tool is rejected at call time — but
+// nothing ever actually calls one of these four admin-only tools with a
+// write-scope token. Listing exclusion and call-time enforcement are
+// different mechanisms; only this proves the real security boundary (a
+// caller could always attempt tools/call for a tool it can't see).
+func TestWriteTokenCannotInvokeAdminOnlyTools(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	srv := mustOAuthSQLiteServer(t, storePath)
+
+	const bearer = "write-scope-admin-boundary-token"
+	addBearerToken(t, storePath, bearer, "write")
+
+	for _, tool := range []string{"stage_hugo_upgrade", "activate_hugo", "rollback_hugo", "bootstrap_hugo"} {
+		t.Run(tool, func(t *testing.T) {
+			payload := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"%s","arguments":{}}}`, tool))
+			rec := doMCPCall(t, srv, bearer, payload)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("%s: status = %d body = %q, want 403", tool, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestToolsListAuthenticatedReturnsThirtyTwoTools(t *testing.T) {
 	// mustOAuthServer includes a read client for http://localhost:9999/cb,
 	// so obtainBearerToken (which DCR-registers with that redirect URI) gets a
