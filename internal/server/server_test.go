@@ -16,11 +16,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/server"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
@@ -2705,6 +2707,136 @@ func TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	}
 	if string(frAfterOwnerRollback) != string(frBeforePlan) {
 		t.Fatalf("owner bundle rollback did not restore FR file:\nbefore=%q\nafter=%q", string(frBeforePlan), string(frAfterOwnerRollback))
+	}
+}
+
+// TestConcurrentUpdatePageByDistinctPrincipalsIsolatesMutationStatus is the
+// #1067 multi-principal concurrency test: internal/tools/write's own
+// concurrent-mutation tests (mutation_coordination_test.go) prove the
+// content lock resolves deterministically, but they only ever drive a
+// single MCP session/caller through both goroutines — they cannot catch a
+// race in the per-caller ownership boundary itself (idempotency store,
+// mutation-status records), because there is only one caller's key space in
+// play. This test races two distinct OAuth principals — real bearer
+// tokens, real HTTP requests — against the same page at the same instant
+// under `go test -race`, then proves each principal's own
+// get_mutation_status call reflects only its own outcome with zero
+// cross-caller leakage even though the underlying writes were racing.
+func TestConcurrentUpdatePageByDistinctPrincipalsIsolatesMutationStatus(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const callerA = "race-principal-a-token"
+	const callerB = "race-principal-b-token"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	createRec := doMCPCall(t, srv, callerA, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/e2e-concurrent-race","title":"Title","body":"Body v0","tags":[],"categories":[]}}}`))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+	createData := toolCallResultData(t, createRec.Body.String())["data"].(map[string]any)
+	sharedRevision, _ := createData["new_revision"].(string)
+	if sharedRevision == "" {
+		t.Fatal("create_page returned empty new_revision")
+	}
+
+	const keyA = "race-principal-a-key"
+	const keyB = "race-principal-b-key"
+	payloadA := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"update_page","arguments":{"slug":"posts/e2e-concurrent-race","body":"Body from A","expected_revision":"%s","idempotency_key":"%s"}}}`, sharedRevision, keyA))
+	payloadB := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"update_page","arguments":{"slug":"posts/e2e-concurrent-race","body":"Body from B","expected_revision":"%s","idempotency_key":"%s"}}}`, sharedRevision, keyB))
+
+	// Pre-lock the content mutex so both goroutines queue up and are
+	// released together, forcing genuine overlap instead of a race that
+	// might happen to serialize by scheduling luck (same technique as
+	// internal/tools/write/mutation_coordination_test.go).
+	hugosite.ContentMu.Lock()
+	started := make(chan struct{}, 2)
+	recA := make(chan *httptest.ResponseRecorder, 1)
+	recB := make(chan *httptest.ResponseRecorder, 1)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		recA <- doMCPCall(t, srv, callerA, payloadA)
+	}()
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		recB <- doMCPCall(t, srv, callerB, payloadB)
+	}()
+	<-started
+	<-started
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+
+	aRec, bRec := <-recA, <-recB
+	if aRec.Code != http.StatusOK || bRec.Code != http.StatusOK {
+		t.Fatalf("update_page race transport failure: A status=%d body=%q; B status=%d body=%q", aRec.Code, aRec.Body.String(), bRec.Code, bRec.Body.String())
+	}
+
+	statusOf := func(rec *httptest.ResponseRecorder) (ok bool, conflict bool) {
+		if toolCallBodyHasError(rec, "revision_conflict") {
+			return false, true
+		}
+		data := toolCallResultData(t, rec.Body.String())["data"].(map[string]any)
+		return data["status"] == "updated", false
+	}
+	aOK, aConflict := statusOf(aRec)
+	bOK, bConflict := statusOf(bRec)
+	if !((aOK && bConflict) || (bOK && aConflict)) {
+		t.Fatalf("same-slug race across principals must resolve to exactly one success and one revision_conflict, got A(ok=%v,conflict=%v) B(ok=%v,conflict=%v): A=%q B=%q",
+			aOK, aConflict, bOK, bConflict, aRec.Body.String(), bRec.Body.String())
+	}
+
+	// The load-bearing multi-principal assertion: even though the writes
+	// raced, each principal's mutation-status lookup — scoped by its own
+	// bearer token — must reflect only its own outcome, never the other's.
+	statusPayloadA := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_mutation_status","arguments":{"tool":"update_page","idempotency_key":"%s"}}}`, keyA))
+	statusPayloadB := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_mutation_status","arguments":{"tool":"update_page","idempotency_key":"%s"}}}`, keyB))
+
+	// Only a successful mutation is ever recorded in the idempotency store
+	// (see update_page's rt.idem.remember call, reached solely on the
+	// success path past the revision check) — a revision_conflict never
+	// reaches it, so the losing principal's own key legitimately reports
+	// "unknown", not a distinct failure status.
+	aStatusRec := doMCPCall(t, srv, callerA, statusPayloadA)
+	aStatusData := toolCallResultData(t, aStatusRec.Body.String())["data"].(map[string]any)
+	wantAStatus := "succeeded"
+	if aConflict {
+		wantAStatus = "unknown"
+	}
+	if got, _ := aStatusData["status"].(string); got != wantAStatus {
+		t.Fatalf("get_mutation_status (caller A, own key) = %q, want %q: %#v", got, wantAStatus, aStatusData)
+	}
+
+	bStatusRec := doMCPCall(t, srv, callerB, statusPayloadB)
+	bStatusData := toolCallResultData(t, bStatusRec.Body.String())["data"].(map[string]any)
+	wantBStatus := "succeeded"
+	if bConflict {
+		wantBStatus = "unknown"
+	}
+	if got, _ := bStatusData["status"].(string); got != wantBStatus {
+		t.Fatalf("get_mutation_status (caller B, own key) = %q, want %q: %#v", got, wantBStatus, bStatusData)
+	}
+
+	// Cross-caller: B must never see A's record under A's key, and vice
+	// versa, even immediately after the race that just touched both.
+	bCrossRec := doMCPCall(t, srv, callerB, statusPayloadA)
+	bCrossData := toolCallResultData(t, bCrossRec.Body.String())["data"].(map[string]any)
+	if got, _ := bCrossData["status"].(string); got != "unknown" {
+		t.Fatalf("get_mutation_status (caller B, A's key) = %q, want unknown — leaked across the race", got)
+	}
+	aCrossRec := doMCPCall(t, srv, callerA, statusPayloadB)
+	aCrossData := toolCallResultData(t, aCrossRec.Body.String())["data"].(map[string]any)
+	if got, _ := aCrossData["status"].(string); got != "unknown" {
+		t.Fatalf("get_mutation_status (caller A, B's key) = %q, want unknown — leaked across the race", got)
 	}
 }
 
