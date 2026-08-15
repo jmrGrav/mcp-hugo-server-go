@@ -53,6 +53,38 @@ func TestRecordMutationWorksWithoutPersistence(t *testing.T) {
 	}
 }
 
+// TestResolveRehydratesOwnershipAfterRestart is the direct regression for
+// the asymmetry documented on changeSetRegistry: ownership (unlike the
+// mutation list) is expected to survive a process restart by rehydrating
+// from SQLite on a cache miss. A second, independently-constructed
+// registry over the same DB simulates the restart — a fresh process has
+// an empty in-memory owners map but the same persistent DB.
+func TestResolveRehydratesOwnershipAfterRestart(t *testing.T) {
+	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	before := newChangeSetRegistry(sqlDB)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	id, err := before.create(mutationCallerKey(ctx), now)
+	if err != nil {
+		t.Fatalf("create() error = %v", err)
+	}
+
+	after := newChangeSetRegistry(sqlDB)
+	got, err := after.resolve(ctx, id, now)
+	if err != nil {
+		t.Fatalf("resolve(%q) on a fresh registry over the same DB failed: %v", id, err)
+	}
+	if got != id {
+		t.Fatalf("resolve(%q) after simulated restart = %q, want %q", id, got, id)
+	}
+}
+
 // TestCreateReturnsIDEvenIfPersistenceFails is the direct regression for
 // the review finding that create() returned an error (losing the id) when
 // SQLite persistence failed, even though the in-memory registry already
