@@ -561,6 +561,71 @@ func TestOpenSiteDBRollsBackPartialMultilingualBundleIdempotently(t *testing.T) 
 	}
 }
 
+func TestOpenSiteDBPrunesExpiredMutationJournalOnStartup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.sqlite")
+	seed, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.RememberMutation(db.MutationJournalEntry{CallerKey: "caller", Tool: "create_page", Key: "expired", RequestHash: "hash", ResultJSON: []byte(`{}`), CreatedAt: time.Now().Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	idx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.DBPath, cfg.IdempotencyTTLSeconds = path, 60
+	opened, err := openSiteDB(cfg, idx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	stats, err := opened.MutationJournalStats()
+	if err != nil || stats.ActiveEntries != 0 || stats.LastPrunedEntries != 1 || stats.LastPrunedAt.IsZero() {
+		t.Fatalf("startup mutation journal stats = %+v, %v", stats, err)
+	}
+}
+
+func TestOpenSiteDBContinuesWhenRetentionMaintenanceFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "site.sqlite")
+	seed, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rawDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawDB.Exec(`CREATE TRIGGER reject_journal_maintenance BEFORE INSERT ON mutation_journal_maintenance BEGIN SELECT RAISE(ABORT, 'injected maintenance failure'); END`); err != nil {
+		rawDB.Close()
+		t.Fatal(err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	idx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.DBPath = path
+	opened, err := openSiteDB(cfg, idx, nil)
+	if err != nil {
+		t.Fatalf("maintenance-only failure denied service: %v", err)
+	}
+	defer opened.Close()
+	if stats, err := opened.MutationJournalStats(); err != nil || !stats.LastPrunedAt.IsZero() {
+		t.Fatalf("failed maintenance should leave observable timestamp stale: stats=%+v err=%v", stats, err)
+	}
+}
+
 func TestKnownToolsSet(t *testing.T) {
 	reg := buildRegistry()
 	known := knownToolsSet(reg)

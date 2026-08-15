@@ -153,6 +153,7 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 	}
 	commitRecoveryReconciliation(siteDB, resolvedMutations)
 	reconcileBuildRecoveryJournal(siteDB)
+	pruneMutationJournalRetention(cfg, siteDB)
 	return siteDB, nil
 }
 
@@ -401,6 +402,20 @@ func reconcileBuildRecoveryJournal(siteDB *db.DB) {
 		if err := siteDB.RecordRecovery(entry); err != nil {
 			slog.Warn("server: build recovery reconciliation failed", "operation_id", entry.OperationID, "error", err)
 		}
+	}
+}
+
+func pruneMutationJournalRetention(cfg config.Config, siteDB *db.DB) {
+	ttl := time.Duration(cfg.IdempotencyTTLSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Duration(config.DefaultIdempotencyTTLSeconds) * time.Second
+	}
+	if _, err := siteDB.PruneMutationJournal(ttl, time.Now().UTC()); err != nil {
+		// Retention is maintenance, not a prerequisite for serving content.
+		// Keep the previous durable last_pruned_at fact visible so operators
+		// can detect the stale sweep without a transient cleanup failure
+		// turning into a full reader/writer outage.
+		slog.Warn("server: mutation journal retention maintenance failed", "error", err)
 	}
 }
 

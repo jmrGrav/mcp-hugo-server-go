@@ -1,11 +1,13 @@
 package write
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 )
 
 // TestIdempotencyTTLFromConfig is a regression test for #616: the
@@ -32,6 +34,36 @@ func TestIdempotencyTTLFromConfig(t *testing.T) {
 				t.Fatalf("idempotencyTTLFromConfig(%d) = %v, want %v", tc.seconds, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPersistentIdempotencyOperationsStayOffGlobalPruneHotPath(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if err := d.RememberMutation(db.MutationJournalEntry{CallerKey: "caller", Tool: "create_page", Key: "expired", RequestHash: "old", ResultJSON: []byte(`{}`), CreatedAt: time.Now().Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	store := newIdempotencyStore(time.Hour, 8, d)
+	hash, err := requestHash(map[string]string{"title": "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.remember("caller", "create_page", "live", hash, map[string]string{"title": "new"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := store.lookup("caller", "create_page", "expired"); err != nil || found {
+		t.Fatalf("expired lookup = found %v, err %v", found, err)
+	}
+	var replay map[string]string
+	if hit, err := store.replay("caller", "create_page", "live", hash, &replay); err != nil || !hit || replay["title"] != "new" {
+		t.Fatalf("live replay = hit %v payload %#v err %v", hit, replay, err)
+	}
+	stats, err := d.MutationJournalStats()
+	if err != nil || stats.ActiveEntries != 1 || !stats.LastPrunedAt.IsZero() {
+		t.Fatalf("hot-path retention stats = %+v, %v; replay/remember/lookup must not run global maintenance", stats, err)
 	}
 }
 
