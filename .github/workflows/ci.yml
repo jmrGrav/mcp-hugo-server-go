@@ -73,32 +73,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  publish-coverage-badge:
-    name: Publish test coverage badge
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: test
-    runs-on: ubuntu-latest
-    concurrency:
-      group: badges-branch
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
-        with:
-          name: coverage-badge
-          path: /tmp/coverage-badge
-      - name: Publish payload to badges branch
-        run: |
-          set -euo pipefail
-          current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
-          if [[ "${current_main}" != "$GITHUB_SHA" ]]; then
-            echo "Skipping superseded badge payload for $GITHUB_SHA"
-            exit 0
-          fi
-          .github/scripts/publish-badge.sh coverage-badge.json /tmp/coverage-badge/coverage-badge.json
-
   source-loc:
     name: Production Go LOC
     runs-on: ubuntu-latest
@@ -119,40 +93,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  publish-source-loc:
-    name: Publish Production Go LOC badge
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: source-loc
-    runs-on: ubuntu-latest
-    concurrency:
-      group: badges-branch
-      cancel-in-progress: false
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v5
-        with:
-          name: source-loc-badge
-          path: /tmp/source-loc-badge
-      - name: Publish payload to badges branch
-        run: |
-          set -euo pipefail
-          current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
-          if [[ "${current_main}" != "$GITHUB_SHA" ]]; then
-            echo "Skipping superseded badge payload for $GITHUB_SHA"
-            exit 0
-          fi
-          .github/scripts/publish-badge.sh source-loc.json /tmp/source-loc-badge/source-loc.json
-
-  # Experimental: mirrors both badge payloads to a GitHub Pages deployment
-  # (Environment-based, no git branch) alongside the badges-branch publish
-  # above. Once a few pushes confirm this works end-to-end, the branch-based
-  # jobs above and the `badges` branch itself will be removed and the README
-  # badge URLs switched over — kept side by side for now rather than cutting
-  # over in one step.
   deploy-badges-pages:
-    name: Deploy badges to GitHub Pages (experimental)
+    name: Deploy badges to GitHub Pages
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [test, source-loc]
     runs-on: ubuntu-latest
