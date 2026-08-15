@@ -12,8 +12,125 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/previewstore"
 )
+
+func TestPersistentLeaseSurvivesRestartWithoutRestoringSecrets(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	stateDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, _, err := previewstore.NewPersistent(stateDB, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "mcp-preview-restart")
+	writePreviewFile(t, dir, "index.html", "restart content")
+	expires := time.Now().Add(time.Hour).UTC()
+	if err := store.Put("restart-id", &previewstore.Entry{
+		Dir: dir, Token: "old-entry-token", ExpiresAt: expires,
+		BuildStatus: "passed", CreatedAt: time.Now().UTC(), Owner: "owner-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, oldSession, ok := store.EstablishSession("restart-id", "old-entry-token")
+	if !ok {
+		t.Fatal("initial token exchange failed")
+	}
+	if err := stateDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stateDB, err = db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateDB.Close()
+	restarted, report, err := previewstore.NewPersistent(stateDB, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Restored != 1 {
+		t.Fatalf("report = %#v, want one restored lease", report)
+	}
+	if got := restarted.ListOwned("owner-a"); len(got) != 1 || got[0].ID != "restart-id" {
+		t.Fatalf("owner leases after restart = %#v", got)
+	}
+	if got := restarted.ListOwned("owner-b"); len(got) != 0 {
+		t.Fatalf("cross-principal lease leak = %#v", got)
+	}
+	if _, ok := restarted.GetByToken("restart-id", "old-entry-token"); ok {
+		t.Fatal("entry token must not survive restart")
+	}
+	if _, ok := restarted.GetBySession("restart-id", oldSession); ok {
+		t.Fatal("session cookie must not survive restart")
+	}
+	if revoked, err := restarted.RevokeOwnedPersistent("restart-id", "owner-b"); err != nil || revoked {
+		t.Fatalf("intruder revoke = %v, %v", revoked, err)
+	}
+	if revoked, err := restarted.RevokeOwnedPersistent("restart-id", "owner-a"); err != nil || !revoked {
+		t.Fatalf("owner revoke = %v, %v", revoked, err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("revoked preview directory still exists: %v", err)
+	}
+}
+
+func TestPersistentLeaseStartupReconcilesExpiredMissingUnsafeAndOrphanedState(t *testing.T) {
+	root := t.TempDir()
+	victim := filepath.Join(t.TempDir(), "victim")
+	writePreviewFile(t, victim, "keep.txt", "keep")
+	expiredDir := filepath.Join(root, "mcp-preview-expired")
+	validDir := filepath.Join(root, "mcp-preview-valid")
+	orphanDir := filepath.Join(root, "mcp-preview-orphan")
+	for _, dir := range []string{expiredDir, validDir, orphanDir} {
+		writePreviewFile(t, dir, "index.html", dir)
+	}
+	stateDB, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stateDB.Close()
+	now := time.Now().UTC()
+	for _, lease := range []db.PreviewLease{
+		{ID: "expired", Owner: "owner", DirName: filepath.Base(expiredDir), BuildStatus: "passed", State: "active", CreatedAt: now.Add(-time.Hour), ExpiresAt: now.Add(-time.Minute)},
+		{ID: "missing", Owner: "owner", DirName: "mcp-preview-missing", BuildStatus: "passed", State: "active", CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+		{ID: "unsafe", Owner: "owner", DirName: "../victim", BuildStatus: "passed", State: "active", CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+		{ID: "valid", Owner: "owner", DirName: filepath.Base(validDir), BuildStatus: "passed", State: "active", CreatedAt: now, ExpiresAt: now.Add(time.Hour)},
+	} {
+		if err := stateDB.PutPreviewLease(lease); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, report, err := previewstore.NewPersistent(stateDB, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Restored != 1 || report.Expired != 1 || report.Missing != 1 || report.Unsafe != 1 || report.OrphansRemoved != 1 {
+		t.Fatalf("unexpected reconciliation report: %#v", report)
+	}
+	if got := store.ListOwned("owner"); len(got) != 1 || got[0].ID != "valid" {
+		t.Fatalf("restored leases = %#v", got)
+	}
+	for _, removed := range []string{expiredDir, orphanDir} {
+		if _, err := os.Stat(removed); !os.IsNotExist(err) {
+			t.Fatalf("reconciled directory %q remains: %v", removed, err)
+		}
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("unsafe lease touched outside directory: %v", err)
+	}
+	leases, err := stateDB.ListPreviewLeases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leases) != 1 || leases[0].ID != "valid" {
+		t.Fatalf("durable leases after reconciliation = %#v", leases)
+	}
+}
 
 func writePreviewFile(t *testing.T, dir, rel, body string) {
 	t.Helper()

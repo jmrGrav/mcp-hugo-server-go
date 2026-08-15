@@ -311,8 +311,21 @@ func heroSlugHasOwner(knownSlugs map[string]struct{}, slug string) bool {
 // flags any not backed by a live preview entry. It reports only the opaque
 // basename and age, never the absolute temp path.
 func scanExpiredPreviewResidue(previews *previewstore.Store) []storageFinding {
-	matches, err := filepath.Glob(filepath.Join(os.TempDir(), "mcp-preview-*"))
-	if err != nil || len(matches) == 0 {
+	roots := []string{os.TempDir()}
+	if previews != nil {
+		if managed := previews.ManagedRoot(); managed != "" && managed != os.TempDir() {
+			roots = append(roots, managed)
+		}
+	}
+	var matches []string
+	for _, root := range roots {
+		found, err := filepath.Glob(filepath.Join(root, "mcp-preview-*"))
+		if err != nil {
+			continue
+		}
+		matches = append(matches, found...)
+	}
+	if len(matches) == 0 {
 		return nil
 	}
 	var active map[string]struct{}
