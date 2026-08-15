@@ -187,6 +187,128 @@ func TestGetBrokenLinksIgnoresRawMarkdownSourceLinks(t *testing.T) {
 	}
 }
 
+// TestGetBrokenLinksIgnoresPaginationTargets is the #1101 regression test:
+// Hugo's paginated listing pages (/en/page/2/, ...) legitimately canonicalize
+// back to page 1 for SEO, so internal/site's NewIndex collapses them out of
+// GetBySlug the same way it collapses genuine alias duplicates (#184's Grav
+// legacy-route fix relies on that same mechanism). Before this fix, that made
+// txSyncLinks report every link to a pagination page — including the
+// pagination widget's own rel=next/prev links — as broken, confirmed live on
+// arleo.eu. siteIdx is nil here so every internal link would be "broken" by
+// the base existence check alone; the pagination target must be excluded by
+// policy (site.ShouldIgnoreBrokenLinkTarget), not by being found.
+func TestGetBrokenLinksIgnoresPaginationTargets(t *testing.T) {
+	d := openTestDB(t)
+
+	p := site.Page{
+		Slug:    "/en/page/3/",
+		Title:   "Page 3",
+		URL:     "https://x.com/en/page/3/",
+		Lang:    "en",
+		RawHTML: `<a href="/en/page/2/">Prev</a> <a href="/en/page/4/">Next</a> <a href="/missing/">Missing</a>`,
+	}
+	if err := d.SyncPublicPage(p, nil); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+
+	broken, err := d.GetBrokenLinks()
+	if err != nil {
+		t.Fatalf("GetBrokenLinks: %v", err)
+	}
+	for _, r := range broken {
+		if strings.Contains(r.Target, "/page/") {
+			t.Errorf("pagination target reported as broken: %+v", r)
+		}
+	}
+	var foundRealBroken bool
+	for _, r := range broken {
+		if strings.Contains(r.Target, "missing") {
+			foundRealBroken = true
+		}
+	}
+	if !foundRealBroken {
+		t.Errorf("a genuinely missing non-pagination target must still be reported: %+v", broken)
+	}
+}
+
+// TestReconcileBrokenLinksAgainstIgnorePolicyFixesStaleRows is the #1101
+// deploy-correctness regression: txSyncLinks is hash-gated on page content
+// (SyncPublicPage: "if existing == hash { return nil }"), so a stable page
+// that never changes never re-runs txSyncLinks and would never pick up the
+// new pagination-ignore guard on its own — the fix above only changes how a
+// links row gets *written*, but arleo.eu's already-existing 84 broken rows
+// were written by the old logic before this fix ever ran. This proves the
+// one-time reconcileBrokenLinksAgainstIgnorePolicy migration catches up:
+// simulate a pre-fix DB (a 'broken' row for a pagination target, written as
+// if by an older server version, with the migration marker reset to
+// "not yet applied"), reopen it, and confirm the stale row is corrected
+// while a genuinely broken row is left alone.
+func TestReconcileBrokenLinksAgainstIgnorePolicyFixesStaleRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := d.SyncPublicPage(site.Page{
+		Slug: "/en/page/3/", Title: "Page 3", URL: "https://x.com/en/page/3/", Lang: "en",
+	}, nil); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Simulate rows written by a pre-#1101 server: one broken row for the
+	// pagination target the new policy should now excuse, and one broken
+	// row for a target that must remain reported. Also reset the migration
+	// marker so the next db.Open treats this as an un-migrated (pre-fix) DB.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	var pageID int64
+	if err := raw.QueryRow(`SELECT id FROM pages WHERE slug = '/en/page/3/'`).Scan(&pageID); err != nil {
+		t.Fatalf("lookup page id: %v", err)
+	}
+	if _, err := raw.Exec(
+		`INSERT INTO links(source_page_id, target, target_slug, anchor_text, status) VALUES (?, '/en/page/2/', '/en/page/2/', '', 'broken'), (?, '/missing/', '/missing/', '', 'broken')`,
+		pageID, pageID,
+	); err != nil {
+		t.Fatalf("insert stale rows: %v", err)
+	}
+	if _, err := raw.Exec(`DELETE FROM derived_schema_migrations WHERE name = 'links_ignore_policy'`); err != nil {
+		t.Fatalf("reset migration marker: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw handle: %v", err)
+	}
+
+	d2, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open (reopen): %v", err)
+	}
+	t.Cleanup(func() { _ = d2.Close() })
+
+	broken, err := d2.GetBrokenLinks()
+	if err != nil {
+		t.Fatalf("GetBrokenLinks: %v", err)
+	}
+	for _, r := range broken {
+		if strings.Contains(r.Target, "/page/") {
+			t.Errorf("stale pagination-target row not reconciled to ok on reopen: %+v", r)
+		}
+	}
+	var foundStillBroken bool
+	for _, r := range broken {
+		if strings.Contains(r.Target, "missing") {
+			foundStillBroken = true
+		}
+	}
+	if !foundStillBroken {
+		t.Errorf("a genuinely broken row must survive reconciliation: %+v", broken)
+	}
+}
+
 // TestSyncPublicPageRecordsExternalMarkdownLinkAsExternalNotDropped checks
 // the .md exclusion added for #1101 is ordered after the external-host
 // check, matching internal/tools/read/extended.go's resolveInternalLink: an

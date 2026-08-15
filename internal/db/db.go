@@ -128,7 +128,76 @@ func Open(path string) (*DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: migrate content representations: %w", err)
 	}
+	if err := d.reconcileBrokenLinksAgainstIgnorePolicy(); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("db: reconcile broken links: %w", err)
+	}
 	return d, nil
+}
+
+// linksIgnorePolicySchemaVersion identifies this reconciliation pass in
+// derived_schema_migrations. txSyncLinks is hash-gated on page content
+// (SyncPublicPage: "if existing == hash { return nil }"), so a stable page
+// like a pagination listing that never changes will never re-run txSyncLinks
+// and never pick up a new ignore-policy exclusion (#1101) on its own — the
+// deploy that ships the guard does not retroactively fix rows a previous
+// process already wrote as 'broken' for a target the new policy now
+// excludes. This migration is the one-time catch-up: it runs once per DB
+// file (guarded the same way migrateContentRepresentations is), applies the
+// current ShouldIgnoreBrokenLinkTarget policy to every existing 'broken'
+// row, and flips the ones the policy now excludes to 'ok'. Bump this
+// constant if the ignore policy changes again and existing rows need a
+// fresh pass.
+const linksIgnorePolicySchemaVersion = 1
+
+func (d *DB) reconcileBrokenLinksAgainstIgnorePolicy() error {
+	var applied int
+	_ = d.db.QueryRow(`SELECT version FROM derived_schema_migrations WHERE name = 'links_ignore_policy'`).Scan(&applied)
+	if applied >= linksIgnorePolicySchemaVersion {
+		return nil
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	rows, err := tx.Query(`SELECT id, target_slug FROM links WHERE status = 'broken'`)
+	if err != nil {
+		return err
+	}
+	type brokenRow struct {
+		id         int64
+		targetSlug string
+	}
+	var toFix []brokenRow
+	for rows.Next() {
+		var r brokenRow
+		if err := rows.Scan(&r.id, &r.targetSlug); err != nil {
+			rows.Close()
+			return err
+		}
+		if r.targetSlug != "" && site.ShouldIgnoreBrokenLinkTarget(r.targetSlug) {
+			toFix = append(toFix, r)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, r := range toFix {
+		if _, err := tx.Exec(`UPDATE links SET status = 'ok' WHERE id = ?`, r.id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO derived_schema_migrations(name,version,applied_at) VALUES('links_ignore_policy',?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,applied_at=excluded.applied_at`, linksIgnorePolicySchemaVersion, now()); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (d *DB) Close() error { return d.db.Close() }
@@ -1016,6 +1085,20 @@ func txSyncLinks(tx *sql.Tx, pageID int64, p site.Page, siteIdx *site.Index) err
 			if _, found := siteIdx.GetBySlug(targetSlug); found {
 				status = "ok"
 			}
+		}
+		// A link to a Hugo paginated-listing route (/en/page/2/, ...) must
+		// never be "broken": those pages legitimately canonicalize back to
+		// page 1 for SEO, so the indexer's own alias-collapse (NewIndex, the
+		// same mechanism #184's grav-csp-nonce alias fix relies on) drops
+		// them from GetBySlug even though they're real, servable URLs
+		// (#1101, confirmed live on arleo.eu — including the pagination
+		// widget's own rel=next/prev links flagging themselves as broken).
+		// The in-memory broken-link scan (internal/tools/read) already
+		// applies this exact policy via shouldIgnoreBrokenLinkTarget; this
+		// sibling SQL-backed implementation lacked it — the same class of
+		// drift #1104 fixed for the .md-source-link exclusion above.
+		if status == "broken" && site.ShouldIgnoreBrokenLinkTarget(targetSlug) {
+			status = "ok"
 		}
 		if _, err := tx.Exec(
 			"INSERT INTO links(source_page_id, target, target_slug, anchor_text, status) VALUES(?,?,?,?,?)",
