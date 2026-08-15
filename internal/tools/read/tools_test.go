@@ -4346,6 +4346,118 @@ func TestGetSiteHealthFrontmatterIssueReducesScore(t *testing.T) {
 	}
 }
 
+// TestGetSiteHealthURLShapedTitleNeverReportsHealthy is the #1105 regression
+// test for the incident that prompted it: during a live v1.8.6 verification
+// sweep, a page's title field was corrupted to its own raw canonical URL
+// (#1099), and get_site_health kept reporting status:"healthy", score:100
+// through it, because a non-empty title already satisfies the pre-existing
+// "missing title" frontmatter check — nothing else ever looked at what the
+// title's own text actually was. This pins that a URL-shaped title now
+// surfaces as its own score_breakdown category and forces status away from
+// "healthy"/"healthy_with_advisories" regardless of the numeric score,
+// exactly the case that reported clean before.
+func TestGetSiteHealthURLShapedTitleNeverReportsHealthy(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Every other signal is perfect: valid frontmatter, no taxonomy findings
+	// — the only defect is the corrupted title, exactly #1099's shape.
+	write("posts/a/index.md", "---\ntitle: \"https://www.arleo.eu/en/posts/a/\"\ndate: 2026-07-01\n---\n")
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithSourceIndex(t, idx, src)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+
+	// content_status (not the top-level status) isolates the source/content
+	// health signal from this fixture's unrelated public_output_incomplete
+	// baseline (mustTestIndex's public index doesn't contain this test's
+	// source page) — see contentEnvelopeData.ContentStatus's doc comment.
+	contentStatus, _ := data["content_status"].(string)
+	if contentStatus == "healthy" || contentStatus == "healthy_with_advisories" {
+		t.Fatalf("content_status = %q, want anything but healthy/healthy_with_advisories while a title is a raw URL (#1099's exact incident shape)", contentStatus)
+	}
+	// #719/#1066 established that a perfect 100 alongside a real content
+	// defect is misleading; a URL-shaped title is at least as severe as the
+	// cases those precedents cover, so it must cap score the same way.
+	if score, _ := data["score"].(float64); score >= 100 {
+		t.Fatalf("score = %v, want < 100 while a title is a raw URL", score)
+	}
+
+	badPages, _ := data["bad_title_shape_pages"].([]any)
+	if len(badPages) != 1 || badPages[0] != "posts/a" {
+		t.Fatalf("bad_title_shape_pages = %v, want [posts/a]", badPages)
+	}
+
+	breakdown := data["score_breakdown"].(map[string]any)
+	titleShape, ok := breakdown["title_shape"].(map[string]any)
+	if !ok {
+		t.Fatal("score_breakdown.title_shape missing")
+	}
+	if score, _ := titleShape["score"].(float64); score != 0 {
+		t.Fatalf("score_breakdown.title_shape.score = %v, want 0", score)
+	}
+	if issues, _ := titleShape["issues"].(float64); issues != 1 {
+		t.Fatalf("score_breakdown.title_shape.issues = %v, want 1", issues)
+	}
+}
+
+// TestGetSiteHealthOrdinaryTitleDoesNotTriggerTitleShapeFinding guards
+// against a too-broad detector: an ordinary title that merely contains a
+// URL-like substring, or mentions "http" in prose, must not be flagged —
+// only a title that IS a bare URL (the #1099 shape) should be.
+func TestGetSiteHealthOrdinaryTitleDoesNotTriggerTitleShapeFinding(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/a/index.md", "---\ntitle: \"How to self-host at https://example.com safely\"\ndate: 2026-07-01\n---\n")
+	src, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithSourceIndex(t, idx, src)
+	defer done()
+
+	res := callTool(t, session, "get_site_health", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_site_health returned error: %v", res.Content)
+	}
+	data := decodeContent(t, res)
+
+	if _, present := data["bad_title_shape_pages"]; present {
+		t.Fatalf("bad_title_shape_pages = %v, want omitted for a title that merely mentions a URL", data["bad_title_shape_pages"])
+	}
+	contentStatus, _ := data["content_status"].(string)
+	if contentStatus != "healthy" {
+		t.Fatalf("content_status = %q, want healthy — a title mentioning a URL is not the #1099 defect shape", contentStatus)
+	}
+}
+
 // TestCheckAIReadinessDescriptionScopeCaveat is the #865 contract test for
 // aligning check_ai_readiness's name with its actual (structural, not
 // editorial) scope: the description must state that a pass means the page is
