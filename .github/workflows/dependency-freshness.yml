@@ -1,0 +1,54 @@
+name: Go dependency freshness
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # weekly, Monday 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-deps-fresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Compare go.mod dependencies against their latest available versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          report="$(./scripts/check-deps-fresh.sh)"
+          count="$(./scripts/check-deps-fresh.sh --count)"
+
+          echo "$report"
+
+          title="Go dependencies are behind: $count module(s) have a newer version available"
+          existing="$(gh issue list --state open --search "in:title \"Go dependencies are behind\"" --json number,title \
+            --jq '.[] | select(.title | startswith("Go dependencies are behind")) | .number' | head -1)"
+
+          if [ "$count" -eq 0 ]; then
+            echo "All dependencies are current."
+            if [ -n "$existing" ]; then
+              echo "Closing existing tracking issue #$existing"
+              gh issue close "$existing" --comment "All Go module dependencies are now at their latest available version."
+            fi
+            exit 0
+          fi
+
+          body="$(printf '%s\n\nEvery Go build/test/release step runs on `ubuntu-latest` via `actions/setup-go` with `go-version-file: go.mod`, so bumping a dependency here carries no deploy-runner risk by itself — the self-hosted deploy runner only moves a prebuilt binary and never runs `go get`/`go mod` itself.\n\nTo resolve one: `go get -u <module>` then `go mod tidy`. To resolve all: `go get -u ./...` then `go mod tidy`. Either way, run `go build ./...`, `go vet ./...`, `go test ./...`, and `govulncheck ./...` under the updated dependency set before opening a PR — an upstream major version bump can be a breaking change, not just a patch.\n\nThis issue was filed automatically by the Go dependency freshness workflow. It stays open (and gets its content refreshed) until dependency count reaches 0, at which point the next scheduled run closes it automatically — closing it manually before then just means the next weekly run reopens an equivalent one.\n' "$report")"
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue edit "$existing" --title "$title" --body "$body"
+          else
+            echo "Filing new issue"
+            gh issue create --title "$title" --body "$body" --label "dependencies" || \
+              gh issue create --title "$title" --body "$body"
+          fi
