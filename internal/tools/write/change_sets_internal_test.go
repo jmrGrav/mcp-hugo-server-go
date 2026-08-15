@@ -18,14 +18,21 @@ import (
 func TestDefaultChangeSetIDIsUsedWhenOmitted(t *testing.T) {
 	r := newChangeSetRegistry(nil)
 	ctx := context.Background()
+	now := time.Now().UTC()
 
-	got, err := r.resolve(ctx, "", time.Now().UTC())
+	got, err := r.resolve(ctx, "", now)
 	if err != nil {
 		t.Fatalf("resolve(\"\") error = %v", err)
 	}
 	want := defaultChangeSetID(mutationCallerKey(ctx))
 	if got != want {
 		t.Fatalf("resolve(\"\") = %q, want %q", got, want)
+	}
+
+	r.recordMutation(got, mutationCallerKey(ctx), "create_page", "posts/legacy-caller", "create", now)
+	mutations := r.mutationsFor(got)
+	if len(mutations) != 1 || mutations[0].SourceKey != "posts/legacy-caller" {
+		t.Fatalf("mutationsFor(%q) = %#v, want exactly one create_page on posts/legacy-caller", got, mutations)
 	}
 }
 

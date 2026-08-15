@@ -61,14 +61,21 @@ type changeSetOwner struct {
 // and records per-mutation attribution. Mirrors idempotencyStore's
 // persistent-optional shape (#1086) deliberately: the in-memory maps are
 // always authoritative for the running process — both ownership AND the
-// per-mutation attribution list are recorded in memory unconditionally —
-// and SQLite persistence (only when db_path is configured) exists purely
-// so both survive a restart. The ownership-check and attribution-recording
-// security properties this backs (and that #1140/#1142 build on) never
-// depend on db_path being set, unlike some other db_path-gated features in
-// this codebase (e.g. #1105's broken-link scoring, which simply doesn't
-// compute without it) — a durability failure or an absent db_path degrades
-// restart-survival only, never the current process's own bookkeeping.
+// per-mutation attribution list are recorded in memory unconditionally, so
+// neither the ownership-check nor the attribution-recording property this
+// backs (and that #1140/#1142 build on) ever depends on db_path being set.
+//
+// SQLite persistence (only when db_path is configured) is best-effort and
+// asymmetric across the two maps: owners are lazily rehydrated from SQLite
+// in resolve() on a cache miss, so ownership survives a restart. Mutations
+// are NOT rehydrated — r.mutations and mutationsFor() are process-lifetime
+// only. After a restart, SQLite's change_set_mutations table (queried via
+// db.ListChangeSetMutations) is the durable record; any future feature
+// (#1140/#1142) that needs mutation history to survive a restart must read
+// that table directly rather than mutationsFor(). r.mutations is also
+// unbounded today — acceptable at current volume, but the first consumer
+// that makes it load-bearing should add pruning, matching idempotencyStore's
+// maxEntries/pruneLocked pattern.
 type changeSetRegistry struct {
 	mu         sync.Mutex
 	owners     map[string]changeSetOwner
