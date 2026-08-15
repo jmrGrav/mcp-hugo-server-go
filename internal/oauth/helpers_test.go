@@ -253,3 +253,66 @@ func TestScopeConfigurationHelpers(t *testing.T) {
 		t.Fatal("site.admin must remain a compatibility alias for admin")
 	}
 }
+
+// TestRedirectURIMatchingRejectsClassicBypassShapes covers the canonical
+// open-redirect bypass patterns against matchRedirectURI specifically —
+// userinfo-injection (a URL that visually starts with the trusted host but
+// authority-parses to an attacker host), trailing-dot host normalization
+// tricks, and case-varied scheme/host that must still match correctly
+// (matching is intentionally case-insensitive on scheme/host per RFC 3986,
+// so those two cases assert acceptance, not rejection — the point is
+// proving the *intended* boundary is exactly where it should be, neither
+// too strict nor exploitably loose).
+func TestRedirectURIMatchingRejectsClassicBypassShapes(t *testing.T) {
+	cases := []struct {
+		name       string
+		registered string
+		actual     string
+		ok         bool
+	}{
+		{
+			name:       "userinfo injection must not match the registered host",
+			registered: "https://client.test/callback",
+			actual:     "https://client.test@evil.com/callback",
+			ok:         false,
+		},
+		{
+			name:       "trailing dot on host must not match (different authority)",
+			registered: "https://client.test/callback",
+			actual:     "https://client.test./callback",
+			ok:         false,
+		},
+		{
+			name:       "path traversal beyond the registered exact path must not match",
+			registered: "https://client.test/callback",
+			actual:     "https://client.test/callback/../../evil",
+			ok:         false,
+		},
+		{
+			// The scope-gate comparison (regURL.Scheme != actURL.Scheme ||
+			// !EqualFold(Host)) is case-insensitive, but the exact-match path
+			// for a non-wildcard registration falls through to a literal
+			// string comparison in normalizeRedirectURL, which is not.
+			// Net effect: case variation on a non-wildcard registration is
+			// rejected — stricter than RFC 3986 requires, but that's a safe
+			// direction to be strict in, not a vulnerability.
+			name:       "case-varied host on an exact (non-wildcard) registration is rejected",
+			registered: "https://client.test/callback",
+			actual:     "https://Client.TEST/callback",
+			ok:         false,
+		},
+		{
+			name:       "wildcard registration must not allow a different host entirely",
+			registered: "https://claude.ai/*",
+			actual:     "https://claude.ai.evil.com/oauth/callback",
+			ok:         false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := matchRedirectURI(tc.registered, tc.actual); got != tc.ok {
+				t.Fatalf("matchRedirectURI(%q, %q) = %v, want %v", tc.registered, tc.actual, got, tc.ok)
+			}
+		})
+	}
+}

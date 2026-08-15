@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -283,5 +284,72 @@ func TestRateLimiterGC(t *testing.T) {
 	}
 	if !freshExists {
 		t.Fatal("fresh entry should not have been evicted by gc()")
+	}
+}
+
+// TestRateLimiterConcurrentAccessIsRaceFreeAndBucketAccurate closes a real
+// gap: RateLimiter.Middleware sits in front of every single MCP request on
+// every OAuth-enabled deployment, but nothing had ever exercised it under
+// genuine concurrent load. limiterFor's map access is mutex-guarded, so this
+// should already be race-safe — the point of this test is to actually prove
+// that under `go test -race` instead of assuming it from code review, and to
+// prove the concurrency-sensitive part of the design: two goroutines racing
+// to create the *rate.Limiter for a brand-new key at the same instant must
+// never end up with two separate limiter instances for one logical bucket
+// (which would silently double a caller's effective quota).
+//
+// Same IP+scope, raced: exactly burst (5) requests must see zero delay
+// (allowed) and the rest must be delayed, even though all of them arrive
+// while the bucket is being created for the first time. A different IP
+// racing at the same instant must get its own independent full bucket.
+func TestRateLimiterConcurrentAccessIsRaceFreeAndBucketAccurate(t *testing.T) {
+	rl := NewRateLimiter(smallCfg()) // burst/quota = 5 per scope
+
+	const perIPRequests = 20
+	ips := []string{"203.0.113.1:1", "203.0.113.2:1", "203.0.113.3:1"}
+
+	var wg sync.WaitGroup
+	started := make(chan struct{}, len(ips)*perIPRequests)
+	allowedCounts := make([]int32, len(ips))
+	var allowedMu sync.Mutex
+	release := make(chan struct{})
+
+	for ipIdx, ip := range ips {
+		for i := 0; i < perIPRequests; i++ {
+			wg.Add(1)
+			go func(ipIdx int, ip string) {
+				defer wg.Done()
+				started <- struct{}{}
+				<-release
+				res := rl.limiterFor(callerKey(ip, "content.read"), "content.read").Reserve()
+				allowed := res.Delay() == 0
+				if !allowed {
+					res.Cancel()
+				}
+				if allowed {
+					allowedMu.Lock()
+					allowedCounts[ipIdx]++
+					allowedMu.Unlock()
+				}
+			}(ipIdx, ip)
+		}
+	}
+	for i := 0; i < len(ips)*perIPRequests; i++ {
+		<-started
+	}
+	close(release) // release every goroutine at once, forcing genuine overlap
+	wg.Wait()
+
+	for i, ip := range ips {
+		if allowedCounts[i] != 5 {
+			t.Errorf("IP %s: %d requests allowed under concurrent racing, want exactly 5 (the burst) — a mismatch means the bucket was double-created or leaked across IPs under the race", ip, allowedCounts[i])
+		}
+	}
+
+	rl.mu.Lock()
+	bucketCount := len(rl.limiters)
+	rl.mu.Unlock()
+	if bucketCount != len(ips) {
+		t.Errorf("bucket count = %d, want %d (exactly one bucket per IP, even though all were first-created under concurrent load)", bucketCount, len(ips))
 	}
 }

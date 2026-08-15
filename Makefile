@@ -1,4 +1,4 @@
-.PHONY: build test test-contracts lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core gosec source-loc source-loc-badge check-loc-badge install-scc
+.PHONY: build test test-contracts lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core gosec source-loc source-loc-badge check-loc-badge install-scc check-deps-fresh
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
@@ -36,6 +36,9 @@ fmt:
 
 vuln:
 	govulncheck ./...
+
+check-deps-fresh:
+	@./scripts/check-deps-fresh.sh
 
 gosec:
 	go install github.com/securego/gosec/v2/cmd/gosec@v2.22.9

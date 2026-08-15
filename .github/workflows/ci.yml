@@ -37,6 +37,9 @@ jobs:
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@v2.22.9
           "$(go env GOPATH)/bin/gosec" -tests=false ./cmd/... ./internal/...
+      - name: dependency freshness (advisory)
+        continue-on-error: true
+        run: ./scripts/check-deps-fresh.sh
       - name: build
         run: go build -ldflags "-X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=${GITHUB_REF_NAME:-dev} -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Commit=${GITHUB_SHA::12} -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.BuildChannel=${GITHUB_REF_NAME:-dev}" ./...
       - name: README release policy gate
