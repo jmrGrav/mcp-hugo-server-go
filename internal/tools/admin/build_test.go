@@ -285,6 +285,60 @@ func TestBuildSiteMarksPartialSuccessWhenOnBuildCompleteCallbackFails(t *testing
 	}
 }
 
+// TestBuildSiteMarksPartialSuccessWhenOnOutputSwappedCallbackFails covers
+// #1068's "after swap before index reload" scenario: OnOutputSwapped runs
+// after the new tree is already installed, so its failure must never be
+// treated as a build failure — the new output stays live and the build is
+// reported partial_success with the callback's error surfaced as a warning,
+// not rolled back or hidden.
+func TestBuildSiteMarksPartialSuccessWhenOnOutputSwappedCallbackFails(t *testing.T) {
+	hugoRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\nwhile [ \"$#\" -gt 0 ]; do\n  if [ \"$1\" = \"--destination\" ]; then\n    shift\n    printf 'new-complete-tree' > \"$1/index.html\"\n  fi\n  shift\ndone\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	cfg := config.Default()
+	cfg.HugoRoot = hugoRoot
+	cfg.SiteRoot = filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(cfg.SiteRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.SiteRoot, "index.html"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterBuild(s, cfg, nil,
+		admin.PostBuildCallback{
+			Name:            "flaky_reload",
+			OnOutputSwapped: func(admin.BuildProgress) error { return errors.New("injected post-swap failure") },
+		},
+	)
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	res, err := callTool(t, session, "build_site", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("build_site = %v, %s", err, resultText(res))
+	}
+	text := resultText(res)
+	if !strings.Contains(text, "injected post-swap failure") {
+		t.Fatalf("build_site result = %s, want callback failure surfaced in warnings", text)
+	}
+	if !strings.Contains(text, "partial_success") {
+		t.Fatalf("build_site result = %s, want status partial_success", text)
+	}
+	raw, readErr := os.ReadFile(filepath.Join(cfg.SiteRoot, "index.html"))
+	if readErr != nil || string(raw) != "new-complete-tree" {
+		t.Fatalf("public output = %q, %v, want new tree to stay installed despite post-swap callback failure", raw, readErr)
+	}
+}
+
 // TestBuildSiteHasEnvelopeMatchingRootFields is a regression test for #572:
 // build_site was the last tool with zero envelope (no data/errors/meta/
 // success at all). Root fields are kept as compatibility aliases, additive
