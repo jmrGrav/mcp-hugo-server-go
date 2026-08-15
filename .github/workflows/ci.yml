@@ -88,7 +88,9 @@ jobs:
         with:
           name: source-loc-badge
           path: /tmp/source-loc-badge
-      - name: Publish payload to badges branch
+      - name: Publish payload to badges-data release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
@@ -96,24 +98,12 @@ jobs:
             echo "Skipping superseded badge payload for $GITHUB_SHA"
             exit 0
           fi
-          parent=()
-          if git ls-remote --exit-code --heads origin badges >/dev/null 2>&1; then
-            git fetch --depth=1 origin badges
-            if git cat-file -e FETCH_HEAD:source-loc.json 2>/dev/null && \
-               cmp -s /tmp/source-loc-badge/source-loc.json <(git show FETCH_HEAD:source-loc.json); then
-              echo "Badge payload is unchanged"
-              exit 0
-            fi
-            parent=(-p FETCH_HEAD)
+          if gh release download badges-data --repo "$GITHUB_REPOSITORY" --pattern source-loc.json --output /tmp/current-source-loc.json --clobber 2>/dev/null && \
+             cmp -s /tmp/source-loc-badge/source-loc.json /tmp/current-source-loc.json; then
+            echo "Badge payload is unchanged"
+            exit 0
           fi
-          blob=$(git hash-object -w /tmp/source-loc-badge/source-loc.json)
-          tree=$(printf '100644 blob %s\tsource-loc.json\n' "$blob" | git mktree)
-          export GIT_AUTHOR_NAME="github-actions[bot]"
-          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
-          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
-          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
-          commit=$(printf 'chore: update production Go LOC badge\n' | git commit-tree "$tree" "${parent[@]}")
-          git push origin "$commit:refs/heads/badges"
+          gh release upload badges-data /tmp/source-loc-badge/source-loc.json --repo "$GITHUB_REPOSITORY" --clobber
 
   # Boot the real binary with a synthetic config and assert all 7 IsItAgentReady
   # discovery endpoints respond correctly, and that scopes_supported contains

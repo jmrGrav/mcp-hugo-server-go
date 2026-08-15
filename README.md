@@ -3,7 +3,7 @@
 [![Go Version](https://img.shields.io/badge/go-1.25.11-00ADD8?logo=go&logoColor=white)](go.mod)
 [![Latest Release](https://img.shields.io/github/v/release/jmrGrav/mcp-hugo-server-go)](https://github.com/jmrGrav/mcp-hugo-server-go/releases/latest)
 [![CI](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/ci.yml/badge.svg)](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/ci.yml)
-[![Production Go LOC](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FjmrGrav%2Fmcp-hugo-server-go%2Fbadges%2Fsource-loc.json&logo=go&logoColor=white)](#production-go-loc)
+[![Production Go LOC](https://img.shields.io/endpoint?url=https%3A%2F%2Fgithub.com%2FjmrGrav%2Fmcp-hugo-server-go%2Freleases%2Fdownload%2Fbadges-data%2Fsource-loc.json&logo=go&logoColor=white)](#production-go-loc)
 [![Deploy to Production](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/deploy.yml/badge.svg)](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/security-policy-green.svg)](SECURITY.md)
