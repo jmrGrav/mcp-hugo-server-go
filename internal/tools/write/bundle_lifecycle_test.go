@@ -1,15 +1,18 @@
 package write_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 )
 
 func TestCreateBundleTestContentForcesDraftForEveryTranslation(t *testing.T) {
@@ -407,5 +410,62 @@ func TestBundleIdempotencyKeyConflictOnDifferentPayload(t *testing.T) {
 	})
 	if !second.IsError {
 		t.Fatal("reusing idempotency_key for a different create_bundle payload must fail")
+	}
+}
+
+func TestInterruptedDeleteBundleResumesSharedAssetCleanupAfterRestart(t *testing.T) {
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.DBPath = filepath.Join(t.TempDir(), "runtime.sqlite")
+	firstSession, firstDone := newStdioServerSession(t, cfg)
+	created := callTool(t, firstSession, "create_bundle", map[string]any{
+		"slug": "posts/interrupted-bundle-delete",
+		"pages": []any{
+			map[string]any{"lang": "fr", "title": "FR", "body": "FR", "tags": []any{}, "categories": []any{}},
+			map[string]any{"lang": "en", "title": "EN", "body": "EN", "tags": []any{}, "categories": []any{}},
+		},
+	})
+	if created.IsError {
+		t.Fatalf("create_bundle setup failed: %s", marshalContent(t, created))
+	}
+	bundleDir := filepath.Join(contentRoot, "posts", "interrupted-bundle-delete")
+	if err := os.WriteFile(filepath.Join(bundleDir, "shared.png"), []byte("asset"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{
+		"slug": "posts/interrupted-bundle-delete", "languages": []any{"fr", "en"},
+		"expected_revisions": map[string]any{
+			"fr": currentRevision(t, filepath.Join(bundleDir, "index.fr.md")),
+			"en": currentRevision(t, filepath.Join(bundleDir, "index.en.md")),
+		},
+		"idempotency_key": "interrupted-delete-bundle-key",
+	}
+	restoreHook := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "delete_bundle" && stage == "after_bundle_write" {
+			return fmt.Errorf("injected process loss before shared asset cleanup")
+		}
+		return nil
+	})
+	interrupted := callTool(t, firstSession, "delete_bundle", args)
+	if !interrupted.IsError || !strings.Contains(marshalContent(t, interrupted), "persistence_error") {
+		t.Fatalf("interrupted delete_bundle = %s", marshalContent(t, interrupted))
+	}
+	firstDone()
+	restoreHook()
+	if _, err := os.Stat(filepath.Join(bundleDir, "shared.png")); err != nil {
+		t.Fatalf("shared asset fixture not left at crash boundary: %v", err)
+	}
+
+	secondSession, secondDone := newStdioServerSession(t, cfg)
+	defer secondDone()
+	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
+		t.Fatalf("startup did not finish delete_bundle cleanup: %v", err)
+	}
+	replayed := callTool(t, secondSession, "delete_bundle", args)
+	if replayed.IsError || decodeWriteData(t, replayed)["status"] != "deleted" {
+		t.Fatalf("restart delete_bundle replay = %s", marshalContent(t, replayed))
 	}
 }

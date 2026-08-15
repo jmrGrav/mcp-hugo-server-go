@@ -1,6 +1,7 @@
 package db_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -607,5 +608,61 @@ func TestPostBuildSyncPrunesStalePublishedPages(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("expected stale page pruned after next PostBuildSync, still got %d hits: %#v", len(results), results)
+	}
+}
+
+func TestPruneMutationJournalIsTransactionalAndObservable(t *testing.T) {
+	d := openTestDB(t)
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for _, entry := range []db.MutationJournalEntry{
+		{CallerKey: "caller", Tool: "create_page", Key: "expired", RequestHash: "a", ResultJSON: []byte(`{}`), CreatedAt: now.Add(-2 * time.Hour)},
+		{CallerKey: "caller", Tool: "create_page", Key: "live", RequestHash: "b", ResultJSON: []byte(`{}`), CreatedAt: now.Add(-10 * time.Minute)},
+	} {
+		if err := d.RememberMutation(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := d.PruneMutationJournal(time.Hour, now)
+	if err != nil {
+		t.Fatalf("PruneMutationJournal: %v", err)
+	}
+	if stats.ActiveEntries != 1 || stats.LastPrunedEntries != 1 || !stats.LastPrunedAt.Equal(now) {
+		t.Fatalf("prune stats = %+v", stats)
+	}
+	if got, err := d.MutationJournalStats(); err != nil || got.ActiveEntries != 1 || got.LastPrunedEntries != 1 || !got.LastPrunedAt.Equal(now) {
+		t.Fatalf("MutationJournalStats = %+v, %v", got, err)
+	}
+	if _, err := d.LookupMutation("caller", "create_page", "expired", 0); err != nil {
+		t.Fatal(err)
+	} else if entry, _ := d.LookupMutation("caller", "create_page", "live", 0); entry == nil {
+		t.Fatal("live mutation was removed by prune")
+	}
+}
+
+func TestPruneMutationJournalRollsBackWhenMaintenanceWriteFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	if err := d.RememberMutation(db.MutationJournalEntry{CallerKey: "caller", Tool: "create_page", Key: "expired", RequestHash: "a", ResultJSON: []byte(`{}`), CreatedAt: now.Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`CREATE TRIGGER reject_journal_maintenance BEFORE INSERT ON mutation_journal_maintenance BEGIN SELECT RAISE(ABORT, 'injected maintenance failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PruneMutationJournal(time.Hour, now); err == nil {
+		t.Fatal("PruneMutationJournal succeeded despite injected maintenance failure")
+	}
+	entry, err := d.LookupMutation("caller", "create_page", "expired", 0)
+	if err != nil || entry == nil {
+		t.Fatalf("expired row was not rolled back after failed prune: entry=%+v err=%v", entry, err)
 	}
 }

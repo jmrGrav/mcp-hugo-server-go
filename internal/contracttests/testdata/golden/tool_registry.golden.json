@@ -2878,7 +2878,7 @@
   {
     "name": "get_runtime_status",
     "required_scope": "write",
-    "description": "Report the actual runtime/build/git/site status of this server in one compact structured surface: server version and build commit, whether the hugo and git binaries are usable, the outcome of the most recent build_site attempt (`last_build`: persisted across restart when `db_path` is configured, otherwise process-memory only), and (opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) so cleanup does not depend on remembering to run a build first. When the git baseline is dirty, `data.git.dirty_classes` (#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, `preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` is the honest default for anything not confidently recognized). `source_ahead_of_public` and `unpublished_changes_count` report server-known source changes awaiting publication. `source_ahead_reason` distinguishes `pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only language/representation counts, counterpart gaps, and legacy mismatch facts; no page identity or body is exposed. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
+    "description": "Report the actual runtime/build/git/site status of this server in one compact structured surface: server version and build commit, whether the hugo and git binaries are usable, the outcome of the most recent build_site attempt (`last_build`: persisted across restart when `db_path` is configured, otherwise process-memory only), and (opt-in via include_revisions, since hashing the full content/public trees is not cheap) source/public revision hashes. When disposable `test_content` pages are overdue, `data.site.overdue_test_content[]` surfaces a deterministic machine-readable list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) so cleanup does not depend on remembering to run a build first. When the git baseline is dirty, `data.git.dirty_classes` (#864) classifies WHAT KIND of resource changed — a safe, coarse set drawn from `content_source`, `generated_asset`, `preview_residue`, `external_unknown` — so an operator can tell expected residue apart from unexpected drift without the tool ever exposing file paths or contents (it deliberately does not attribute changes to mcp-vs-external, and `external_unknown` is the honest default for anything not confidently recognized). `source_ahead_of_public` and `unpublished_changes_count` report server-known source changes awaiting publication. `source_ahead_reason` distinguishes `pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only language/representation counts, counterpart gaps, and legacy mismatch facts; no page identity or body is exposed. When SQLite is configured, `mutation_journal` reports only aggregate retention facts; `last_pruned_entries` is the number removed by the most recent successful maintenance transaction. Read-only; does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -2925,6 +2925,10 @@
       "data.last_build.status:string:required",
       "data.last_build:unspecified",
       "data.last_build_persistence:string:required",
+      "data.mutation_journal.active_entries:integer:required",
+      "data.mutation_journal.last_pruned_at:string",
+      "data.mutation_journal.last_pruned_entries:integer:required",
+      "data.mutation_journal:unspecified",
       "data.process_started_at:string:required",
       "data.publication_state:string:required",
       "data.release_version:string:required",
@@ -2974,7 +2978,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "5eaeab531c442d53b28e9b0ee2cf8f27096260eed090f9c22a498f83d6d24ce3"
+    "output_schema_sha256": "84ef631d273d7cd9254ce7fba511d701ae6b1bc064afe8dc4301a5a72df7cb4e"
   },
   {
     "name": "get_site_health",
