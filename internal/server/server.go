@@ -312,7 +312,6 @@ func prepareMutationRecovery(cfg config.Config, siteDB *db.DB) ([]preparedMutati
 		path := payload.Path
 		bundle := entry.Kind == "bundle_write"
 		if bundle {
-			path = payload.BundleDir
 			resolved, changed, landed, reconcileErr := reconcileBundleFiles(cfg, payload)
 			if reconcileErr != nil {
 				slog.Warn("server: bundle mutation recovery failed", "operation_id", entry.OperationID, "error", reconcileErr)
