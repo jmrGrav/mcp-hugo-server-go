@@ -53,38 +53,20 @@ type sriCheckData struct {
 	Findings               []sriCheckEntry `json:"findings"`
 }
 
-// sriCheckOutput carries legacy root aliases for compatibility with clients
-// predating the structured envelope (#552). `data.*` is canonical; the root
-// aliases are deprecated and kept only through the v1 compatibility window.
+// sriCheckOutput's payload lives only under data.* (#1118 finishes #520/#573's
+// root/data convergence for this tool — the root aliases #552 originally
+// added, and #1060 deprecated, are removed).
 type sriCheckOutput struct {
 	toolcontract.ToolResponse[sriCheckData]
-	FilesScanned           int             `json:"files_scanned"`
-	FilesWithSRIAttributes int             `json:"files_with_sri_attributes"`
-	SRIEntriesLoaded       int             `json:"sri_entries_loaded"`
-	SRIChecked             int             `json:"sri_checked"`
-	Status                 string          `json:"status"`
-	Summary                string          `json:"summary"`
-	Findings               []sriCheckEntry `json:"findings"`
 }
 
-const rootLevelFieldsDeprecationWarning = "root-level result fields are deprecated; use data.*. Root aliases will be removed in a future major version."
-
 func sriSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
-	out := toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
-	out.Warnings = append(out.Warnings, rootLevelFieldsDeprecationWarning)
-	return out
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
 func newSRICheckOutput(data sriCheckData) sriCheckOutput {
 	return sriCheckOutput{
-		ToolResponse:           sriSuccessEnvelope(data),
-		FilesScanned:           data.FilesScanned,
-		FilesWithSRIAttributes: data.FilesWithSRIAttributes,
-		SRIEntriesLoaded:       data.SRIEntriesLoaded,
-		SRIChecked:             data.SRIChecked,
-		Status:                 data.Status,
-		Summary:                data.Summary,
-		Findings:               data.Findings,
+		ToolResponse: sriSuccessEnvelope(data),
 	}
 }
 

@@ -14,6 +14,12 @@ breaking patch release instead of waiting for a major version.
 (#466/#510/#522) remain as deliberately kept root fields — see
 [§1.1](#11-flat-envelope) for why those two survive the convergence.
 
+**#1118** (shipped alongside this schema major bump to `v2.0.0`) finishes this
+convergence for the three tools #520/#573 left out because they gained their
+envelope later, via #552: `check_sri_versions`, `run_post_build_hooks`, and
+`preview_build` no longer mirror their payload at the root either — `data.*`
+is now the sole payload location for every structured tool in this server.
+
 This document specifies the observable contract for all tools exposed by the
 server: response envelopes, error model, pagination, naming conventions, and
 versioning. Agents may use this as a stable reference; deviations are bugs.
@@ -44,7 +50,7 @@ that tool:
   "data": { "pages": [ ... ], "total": 42 },
   "errors": [],
   "warnings": [],
-  "meta": { "generated_at": "...", "release_version": "...", "commit": "...", "build_channel": "...", "schema_version": "v1.1.0" }
+  "meta": { "generated_at": "...", "release_version": "...", "commit": "...", "build_channel": "...", "schema_version": "v2.0.0" }
 }
 ```
 
@@ -96,7 +102,7 @@ partial-success signalling, or forward-compatible extension.
     "release_version": "v1.5.1",
     "commit": "50cbc9fe4217",
     "build_channel": "release",
-    "schema_version": "v1.1.0"
+    "schema_version": "v2.0.0"
   }
 }
 ```
@@ -110,7 +116,7 @@ Fields:
 | `data`         | object   | yes           | Tool-specific payload — the sole location for a tool's fields; no top-level duplicates (#433) |
 | `warnings`     | string[] | yes           | Non-fatal observations (empty array when none)     |
 | `errors`       | string[] | yes           | Problems that degraded the result (empty array when none) |
-| `meta`         | object   | yes           | `generated_at`, `release_version` (deployed build identifier — is the release tag itself on a release build, `main-<sha>` otherwise), `commit`, `build_channel`, `schema_version` (this envelope's shape version, currently `"v1.1.0"`); plus `request_id` and `duration_ms` (#860) — a per-call correlation id (`req-<hex>`) and the envelope-level wall-clock latency in ms, injected by the served tool-call middleware onto every success and error response (omitted only on responses built outside the served path, e.g. in-process unit tests); and optional `content_provenance` with `site_source_untrusted` for raw source reads, `site_rendered_public_untrusted` for rendered public HTML, or `server_generated_trusted` for payloads computed solely from server/runtime metadata (#1006, #1021) — see [§5](#5-versioning) |
+| `meta`         | object   | yes           | `generated_at`, `release_version` (deployed build identifier — is the release tag itself on a release build, `main-<sha>` otherwise), `commit`, `build_channel`, `schema_version` (this envelope's shape version, currently `"v2.0.0"`); plus `request_id` and `duration_ms` (#860) — a per-call correlation id (`req-<hex>`) and the envelope-level wall-clock latency in ms, injected by the served tool-call middleware onto every success and error response (omitted only on responses built outside the served path, e.g. in-process unit tests); and optional `content_provenance` with `site_source_untrusted` for raw source reads, `site_rendered_public_untrusted` for rendered public HTML, or `server_generated_trusted` for payloads computed solely from server/runtime metadata (#1006, #1021) — see [§5](#5-versioning) |
 
 A root-level `version` field existed through v1.4.x but was removed (#454):
 its name was ambiguous (it actually meant the schema version, not the server
@@ -228,7 +234,12 @@ Full timestamps use `YYYY-MM-DDTHH:MM:SSZ` (UTC).
 
 ## 5. Versioning
 
-- `meta.schema_version: "v1.1.0"` refers to the **response schema version**,
+- **Version history**: `v1.0.0` (initial), `v1.1.0` (#1042/#1043 — schema
+  versioning itself introduced, under the additive→minor/breaking→major
+  policy this history follows), `v2.0.0` (#1118 — `check_sri_versions`/
+  `run_post_build_hooks`/`preview_build` root-level payload aliases removed;
+  breaking per that same policy).
+- `meta.schema_version: "v2.0.0"` refers to the **response schema version**,
   not the server version. Through v1.4.x this lived at a root-level
   `version` field instead; it moved under `meta` (#454) because the old
   name was ambiguous — it read like it could mean either the schema or the
@@ -299,7 +310,7 @@ This is a known, accepted tradeoff, not a bug to silently fix:
 **Decision**: do not flatten the structured envelope in v1.x. If a flattened
 top-level payload is ever wanted, it ships as an explicit new contract
 version (a hypothetical `v2` response shape, versioned the same way
-`version: "v1.1.0"` is today), never as a stealth v1.x patch that changes
+`version: "v2.0.0"` is today), never as a stealth v1.x patch that changes
 what existing callers already parse. This mirrors the flat-envelope freeze
 already documented in [Section 1](#1-response-envelopes) (`#210`) — both are
 the same category of decision: a v1.x compatibility guarantee outranks a
@@ -440,10 +451,10 @@ structured too, with the same root/data convergence.
 | `apply_content_plan` | structured | `data.status`, `data.plan_id`, `data.slug`, `data.dry_run?`, `data.before_revision`, `data.after_revision?`, `data.validation`, `data.warning?`, `data.state?`; root `rate_limit_remaining` on the shared create/update/upload quota, on both success and error (#466, #510). Takes only `plan_id` (+ `idempotency_key`/`dry_run`) — no body/title/tags resent, apply writes exactly what the plan already computed. Fails `plan_not_found` if `plan_id` is unknown, already applied, or its TTL expired; fails `revision_conflict` if the page changed since the plan was created. Content that still carries `test_content: true` is revalidated here as well and cannot be applied in a `draft:false` state, even if a stale or externally-crafted plan attempts it (#728). **A plan is single-use after a terminal apply attempt**; retryable revision conflicts and transient content-lock/build failures preserve it for retry or re-planning. `dry_run` re-verifies without consuming it. On a successful write, the pre-write content is snapshotted (24h TTL) keyed by the revision it replaced, for `rollback_change` to consume. Deliberately writes source only — no build/publish fields; that is `publish_changes`'s layer (#340), a separate, later, explicitly-confirmed step (#438) |
 | `rollback_change` | structured | `data.status`, `data.slug`, `data.dry_run?`, `data.diff?`, `data.before_revision`, `data.after_revision?`, `data.warning?`, `data.state?`; root `rate_limit_remaining` on the shared create/update/upload quota, on both success and error (#466, #510). Restores a page's source to a prior revision `apply_content_plan` *or* `update_page` itself snapshotted (**amended #379**, 2026-07-24: not a git-commit target — this deployment has no controlled git-commit capability, so the rollback target is a server-held snapshot keyed by `(resolved file, revision)`, scoped to revisions produced by one of these two write tools, not arbitrary git history; extended from `apply_content_plan`-only to also cover `update_page` in #629, since `update_page` remains the primary write tool most edits actually use). `create_page` is not snapshotted — there is no meaningful pre-create state to roll back to. Takes `slug`/`lang`, `to_revision` (the target snapshot's revision), and (non-`dry_run`) `expected_revision` — a stale value fails `revision_conflict`, the same optimistic-concurrency guard every other write tool uses, so this can never silently undo a newer, unrelated change. Fails `snapshot_not_found` if no snapshot exists for that revision of this page. Re-validates the snapshot content against the same blocked-shortcode denylist `create_page`/`update_page` enforce (#590) before restoring it — a snapshot may predate that denylist, so restoring one without re-checking would be a way around a policy direct writes now enforce; fails `invalid_params` if the snapshot itself invokes a blocked shortcode. Unlike a plan, a snapshot is **not** consumed on use — `IdempotentHint: true`, rolling back to the same revision twice is safe. `dry_run` previews the diff without writing. Design anchor: `docs/transactional-edit-design.md` (#340) (#438, #629) |
 | `build_site`              | flat     | `status`, `duration_ms`, `build_id`, `output_revision`, `publish_ready`; `data.X` mirrors all five additively (#572) — this was the last tool with zero envelope at all (not even root-level duplication) before this change |
-| `preview_build`           | flat     | `status`, `duration_ms`; `data.X` mirrors both additively (#552); `data.warnings` includes a machine-readable root-alias deprecation notice on every success response, alongside the doc-level deprecation already noted here (#1060) |
-| `run_post_build_hooks`    | flat     | `results`; `data.results` mirrors it additively (#552) — **the root `results` field is a deprecated v1.x compatibility alias**, kept only for clients predating the structured envelope; `data.results` is canonical and new callers should read it exclusively (#1043). `dry_run:true` returns the configured hook targets without contacting them, alongside `configured_count`, so callers can distinguish `no hooks configured` from `hooks configured but intentionally not executed` (#760); `data.warnings` includes a machine-readable root-alias deprecation notice on every success response (#1060) |
+| `preview_build`           | structured | `data.status`, `data.duration_ms`; no root-level duplication as of #1118 (root aliases #552 originally added and #1060 deprecated are removed) |
+| `run_post_build_hooks`    | structured | `data.results`, `data.status`, `data.configured_count`; no root-level duplication as of #1118 (root aliases #552 originally added and #1060 deprecated are removed). `dry_run:true` returns the configured hook targets without contacting them, alongside `configured_count`, so callers can distinguish `no hooks configured` from `hooks configured but intentionally not executed` (#760) |
 | `generate_hero_image` | structured | `data.path`; `slug` accepts either the canonical public form (`/posts/example/`) or the source-key form (`posts/example`) and normalizes any language-prefixed public slug to the same source key before writing, so generated-asset lifecycle tools keep one stable identity; `style` accepts `""`/`tech`/`geo`, validated in the handler with a structured `invalid_params` error (`code`/`resolution`, #892). As of #1056, `tools/list` also advertises `style` as a JSON-Schema `enum: ["tech", "geo"]` via a reusable `AdvertiseInputEnum` decorator (`internal/tools/advertised_schema.go`) that clones only the outgoing `tools/list` copy of the tool — the SDK-held validation schema used by `tools/call` stays permissive, so an out-of-enum value still reaches the handler and returns the same structured `invalid_params` envelope #892 established, never the SDK's bare-text pre-handler validation error. The named styles control fallback gradient/accent treatment; when bundled Unsplash backgrounds are available, one of six backgrounds is selected deterministically from the title and is not a separate style value. `path` is hugo_root-relative, never the host's absolute filesystem path (#551); no root-level duplication as of v1.5.9 (#573) |
-| `check_sri_versions`      | flat     | `files_scanned`, `files_with_sri_attributes`, `sri_entries_loaded`, `sri_checked`, `status`, `summary`, `findings`; `data.X` mirrors all of the above additively (#552) — **the root fields are deprecated v1.x compatibility aliases**, kept only for clients predating the structured envelope; the `data.*` fields are canonical and new callers should read them exclusively (#1043); `data.warnings` includes a machine-readable root-alias deprecation notice on every success response (#1060) |
+| `check_sri_versions`      | structured | `data.files_scanned`, `data.files_with_sri_attributes`, `data.sri_entries_loaded`, `data.sri_checked`, `data.status`, `data.summary`, `data.findings`; no root-level duplication as of #1118 (root aliases #552 originally added and #1060 deprecated are removed) |
 | `get_runtime_status`      | structured | `data.release_version`, `data.commit`, `data.hugo`, `data.git` (includes `changed_files_count` when `dirty: true`, a count of `git status --porcelain` lines; a safe aggregate never exposing paths; a `dirty_reason` mcp-vs-external classifier was considered per #775, but the only comparable existing signal — `index_staleness.likely_source`'s `mcp_pending_build`/`external_or_unknown` on the read tools, #583/#617 — documents itself as a coarse, best-effort hint, not per-caller attribution; reusing that same best-effort standard for git-dirty provenance risked exactly the "looks precise but isn't trustworthy" outcome the issue warns against, so `dirty_reason` was deliberately deferred rather than shipped on a shakier guarantee), `data.site`, `data.degraded`; `data.source_ahead_reason` explains whether the source is ahead because of `pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, or `none`; `data.publication_state` is the corresponding machine-readable state (`pending`, `source_drift_only`, `generated_asset_drift`, `clean`), making `source_ahead_of_public:true` with zero server-known pending pages explicit; when disposable `test_content` has expired, `data.site.overdue_test_content[]` exposes a machine-readable cleanup/advisory list (`slug`, `owner?`, `expires_at`, `overdue_seconds`, `reason`) without requiring a build/publish call first (#757) |
 | `get_theme_status`        | structured | `data.themes[*]`, `data.hugo`         |
 | `get_hugo_update`         | structured | `data.installed`, `data.latest?`, `data.network_checked`, managed-upgrade capability and platform |

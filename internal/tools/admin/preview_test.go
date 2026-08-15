@@ -29,17 +29,21 @@ func TestPreviewBuildSucceeds(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("preview_build returned error: %s", resultText(res))
 	}
-	text := resultText(res)
-	var out map[string]any
-	if err := json.Unmarshal([]byte(text), &out); err != nil {
-		t.Fatalf("response not JSON: %v — got %q", err, text)
+	out := decodeStructuredResult(t, res)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("data type = %T, want map[string]any", out["data"])
 	}
-	if out["status"] != "ok" {
-		t.Fatalf("expected status ok, got %v", out["status"])
+	if data["status"] != "ok" {
+		t.Fatalf("expected data.status ok, got %v", data["status"])
 	}
 }
 
-func TestPreviewBuildHasEnvelopeMatchingRootFields(t *testing.T) {
+// TestPreviewBuildNoRootFieldDuplication is a regression test for #1118:
+// finishes #520/#573's convergence for this tool — the payload must live
+// only under data.*, with no root-level compatibility aliases (which #552
+// originally added and #1060 deprecated).
+func TestPreviewBuildNoRootFieldDuplication(t *testing.T) {
 	wantRoot := t.TempDir()
 	dir := writeMockHugo(t, "#!/bin/sh\n[ \"$(pwd)\" = \""+wantRoot+"\" ] || exit 42\nexit 0\n")
 	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
@@ -61,28 +65,21 @@ func TestPreviewBuildHasEnvelopeMatchingRootFields(t *testing.T) {
 
 	out := decodeStructuredResult(t, res)
 	if got := out["success"]; got != true {
-		t.Fatalf("success = %v, want true (#552)", got)
+		t.Fatalf("success = %v, want true (#1118)", got)
 	}
 	data, ok := out["data"].(map[string]any)
 	if !ok {
-		t.Fatalf("data type = %T, want map[string]any (#552)", out["data"])
+		t.Fatalf("data type = %T, want map[string]any (#1118)", out["data"])
 	}
 	if _, ok := out["meta"].(map[string]any); !ok {
-		t.Fatalf("meta type = %T, want map[string]any (#552)", out["meta"])
-	}
-	warnings, _ := out["warnings"].([]any)
-	found := false
-	for _, w := range warnings {
-		if w == "root-level result fields are deprecated; use data.*. Root aliases will be removed in a future major version." {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("warnings = %#v, want root-alias deprecation warning present (#1060)", out["warnings"])
+		t.Fatalf("meta type = %T, want map[string]any (#1118)", out["meta"])
 	}
 	for _, field := range []string{"status", "duration_ms"} {
-		if data[field] != out[field] {
-			t.Fatalf("data.%s = %v, root %s = %v — must match (#552)", field, data[field], field, out[field])
+		if _, present := data[field]; !present {
+			t.Fatalf("data.%s missing (#1118)", field)
+		}
+		if _, present := out[field]; present {
+			t.Fatalf("root %s = %v, want absent — no more root/data duplication (#1118)", field, out[field])
 		}
 	}
 }

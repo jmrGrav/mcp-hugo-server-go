@@ -28,26 +28,20 @@ type previewBuildData struct {
 	DurationMs int64  `json:"duration_ms"`
 }
 
-// previewBuildOutput carries the same fields at the root as compatibility
-// aliases alongside the structured envelope (#552) — this tool previously
-// had no envelope at all, so this is purely additive, not a breaking change.
+// previewBuildOutput's payload lives only under data.* (#1118 finishes
+// #520/#573's root/data convergence for this tool — the root aliases #552
+// originally added, and #1060 deprecated, are removed).
 type previewBuildOutput struct {
 	toolcontract.ToolResponse[previewBuildData]
-	Status     string `json:"status"`
-	DurationMs int64  `json:"duration_ms"`
 }
 
 func previewSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
-	out := toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
-	out.Warnings = append(out.Warnings, rootLevelFieldsDeprecationWarning)
-	return out
+	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
 }
 
 func newPreviewBuildOutput(data previewBuildData) previewBuildOutput {
 	return previewBuildOutput{
 		ToolResponse: previewSuccessEnvelope(data),
-		Status:       data.Status,
-		DurationMs:   data.DurationMs,
 	}
 }
 
