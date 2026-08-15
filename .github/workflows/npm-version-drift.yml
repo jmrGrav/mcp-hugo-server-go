@@ -1,0 +1,66 @@
+name: npm version drift check
+
+# Catches a missed or failed npm publish before a user discovers it.
+# v1.8.5-v1.8.8 went unpublished to npm for 4 releases in a row because
+# publish-npm.yml used to be a workflow_dispatch-only step nobody
+# remembered to re-trigger after each release; #1133 made publish
+# automatic as part of deploy.yml's release job, but this check exists as
+# a backstop in case that automatic publish silently fails or a future
+# change reintroduces a manual step.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1' # weekly, Monday 07:00 UTC (an hour after the Go dependency-freshness check)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-npm-version-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Compare manifest.json's version against the published npm version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ./scripts/check-npm-version-sync.sh > /tmp/report.txt 2>&1; then
+            in_sync=1
+          else
+            in_sync=0
+          fi
+          report="$(cat /tmp/report.txt)"
+          echo "$report"
+
+          title="npm package is behind: manifest.json's version is not published"
+          existing="$(gh issue list --state open --search "in:title \"npm package is behind\"" --json number,title \
+            --jq '.[] | select(.title | startswith("npm package is behind")) | .number' | head -1)"
+
+          if [ "$in_sync" -eq 1 ]; then
+            echo "npm is in sync."
+            if [ -n "$existing" ]; then
+              echo "Closing existing tracking issue #$existing"
+              gh issue close "$existing" --comment "npm now matches manifest.json's version. $report"
+            fi
+            exit 0
+          fi
+
+          body="$(printf '%s\n\nThis issue was filed automatically by the npm version drift workflow. It stays open (and gets its content refreshed) until the versions match, at which point the next scheduled run closes it automatically — closing it manually before then just means the next weekly run reopens an equivalent one.\n' "$report")"
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue edit "$existing" --title "$title" --body "$body"
+          else
+            echo "Filing new issue"
+            gh issue create --title "$title" --body "$body" --label "dependencies" || \
+              gh issue create --title "$title" --body "$body"
+          fi
