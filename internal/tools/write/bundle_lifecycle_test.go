@@ -9,6 +9,9 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 )
 
@@ -166,6 +169,53 @@ func TestDeleteBundleChecksEveryRevisionBeforeUnlinking(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(root, "posts/delete-atomic", "index."+lang+".md")); err != nil {
 			t.Fatalf("preflight failure removed %s: %v", lang, err)
 		}
+	}
+}
+
+func TestDeleteBundlePreservesPublicShadowUntilARealPublicReconciliation(t *testing.T) {
+	root := t.TempDir()
+	writeBilingualBundle(t, root, "posts/delete-shadow")
+	siteDB, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer siteDB.Close()
+	srcIdx, err := hugosite.NewSourceIndex(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range srcIdx.ListPages(0, 0) {
+		if err := siteDB.SyncSourcePage(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, p := range []site.Page{
+		{Slug: "/posts/delete-shadow/", Lang: "en", Title: "English", RawHTML: "<p>EN</p>"},
+		{Slug: "/fr/posts/delete-shadow/", Lang: "fr", Title: "French", RawHTML: "<p>FR</p>"},
+	} {
+		if err := siteDB.SyncPublicPage(p, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	session, _, done := newTestServer(t, root, testServerOpts{SiteDB: siteDB})
+	defer done()
+	dir := filepath.Join(root, "posts/delete-shadow")
+	res := callTool(t, session, "delete_bundle", map[string]any{
+		"slug": "posts/delete-shadow", "languages": []any{"fr", "en"},
+		"expected_revisions": map[string]any{
+			"fr": currentRevision(t, filepath.Join(dir, "index.fr.md")),
+			"en": currentRevision(t, filepath.Join(dir, "index.en.md")),
+		},
+	})
+	if res.IsError {
+		t.Fatalf("delete_bundle failed: %s", marshalContent(t, res))
+	}
+	stats, err := siteDB.RefreshContentShadowStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.SourceRows != 0 || stats.PublicRows != 2 {
+		t.Fatalf("shadow rows after source-only bundle delete = source %d public %d, want 0/2", stats.SourceRows, stats.PublicRows)
 	}
 }
 
