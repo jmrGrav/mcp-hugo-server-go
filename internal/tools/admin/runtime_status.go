@@ -300,7 +300,7 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			manifest, err := siteDB.LatestPublicationManifest()
 			if err != nil {
 				data.Degraded = append(data.Degraded, "publication manifest unavailable: "+err.Error())
-			} else if manifest != nil {
+			} else if manifest != nil && (!snap.Attempted || !manifest.ObservedAt.Before(snap.At)) {
 				data.LastBuildPersistence = "sqlite_manifest"
 				if !snap.Attempted {
 					data.LastBuild = &lastBuildRuntimeStatus{

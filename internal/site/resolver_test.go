@@ -430,6 +430,52 @@ func TestPageResolverImplicitDefaultLangBorrowsUnlabelledSource(t *testing.T) {
 	}
 }
 
+// TestPageResolverPairsDefaultLanguageAcrossRegionQualifiedHTMLLang is a
+// regression test for a real bug found live on production: a theme rendering
+// the SEO-preferred BCP-47 region-qualified form (<html lang="fr-FR">) for
+// the default language, while frontmatter (and Hugo's own language key)
+// stays the short primary subtag ("fr"), permanently orphaned every
+// default-language page from its source counterpart (#1099).
+func TestPageResolverPairsDefaultLanguageAcrossRegionQualifiedHTMLLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSourcePage(t, contentRoot, "posts/hello/index.md", "---\ntitle: Bonjour\nlang: fr\n---\n# Bonjour\n\nSource body\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	publicRoot := t.TempDir()
+	writeSourcePage(t, publicRoot, "posts/hello/index.html", `<!doctype html>
+<html lang="fr-FR">
+<head><title>Bonjour</title><link rel="canonical" href="https://example.test/posts/hello/"></head>
+<body><article><p>Rendered body</p></article></body>
+</html>`)
+	cfg := config.Default()
+	cfg.SiteRoot = publicRoot
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "fr"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+
+	resolver := NewPageResolver(idx, srcIdx, config.Config{ContentRoot: contentRoot, DefaultLanguage: "fr"})
+	got, ok := resolver.ResolveWithLang("posts/hello", "fr")
+	if !ok {
+		t.Fatal("ResolveWithLang(\"posts/hello\", \"fr\") not found")
+	}
+	if got.Public == nil {
+		t.Fatalf("ResolveWithLang(...).Public = nil, want the region-qualified public page paired to the fr source")
+	}
+	if got.Source == nil || got.Source.Body != "# Bonjour\n\nSource body" {
+		t.Fatalf("ResolveWithLang(...).Source = %#v", got.Source)
+	}
+}
+
 func writeSourcePage(t *testing.T, root, rel, raw string) {
 	t.Helper()
 	full := filepath.Join(root, rel)
