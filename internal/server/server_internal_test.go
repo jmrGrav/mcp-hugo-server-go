@@ -356,6 +356,131 @@ func TestOpenSiteDBLeavesAmbiguousOrUnsafeMutationPending(t *testing.T) {
 	}
 }
 
+// TestOpenSiteDBReconcilesLandedDeleteAndRunsCleanup covers the recovery
+// path for a delete_page whose source unlink completed but the process died
+// before the recovery journal reached "committed": observedRecoveryRevision
+// must recognize the missing file as the landed after-state (AfterRevision
+// is empty for a delete) and run the queued bundle-directory cleanup.
+func TestOpenSiteDBReconcilesLandedDeleteAndRunsCleanup(t *testing.T) {
+	contentRoot := t.TempDir()
+	bundleDir := filepath.Join(contentRoot, "posts", "deleted")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate death after the source unlink but before the bundle
+	// directory cleanup: the source file is already gone, the (now empty)
+	// directory is still there, awaiting the queued cleanup path.
+	before := []byte("---\ntitle: Deleted\n---\nbody\n")
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	journal, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"path": filepath.Join(bundleDir, "index.md"), "before_revision": contentmodel.SourceRevisionBytes(before),
+		"after_revision": "", "cleanup_paths": []string{bundleDir},
+		"idempotency": map[string]any{
+			"caller_key": "local", "tool": "delete_page", "key": "delete-landed-key", "request_hash": "hash",
+			"result_json": json.RawMessage(`{"success":true,"data":{"status":"deleted"},"errors":[],"warnings":[],"meta":{"schema_version":"v1.1.0"}}`),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordRecovery(db.RecoveryEntry{OperationID: "delete-landed", Kind: "content_write", State: "file_written", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	siteDB, err := openSiteDB(config.Config{DBPath: dbPath, ContentRoot: contentRoot}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer siteDB.Close()
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after landed-delete reconciliation = %+v, want reconciled", pending)
+	}
+	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
+		t.Fatalf("bundle dir stat after cleanup = %v, want removed", err)
+	}
+	entry, err := siteDB.LookupMutation("local", "delete_page", "delete-landed-key", 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry == nil {
+		t.Fatal("landed-delete reconciliation did not persist an idempotency replay receipt")
+	}
+}
+
+// TestOpenSiteDBRollsBackInterruptedBundleCreate covers create_bundle's
+// distinct recovery shape: unlike an update, a newly created bundle's files
+// have no pre-existing "before" content (recoveryFile records Before=nil),
+// so an interrupted create that landed one translation but not the other
+// takes reconcileBundleFiles' file.Before==nil removal branch rather than
+// the AtomicWriteChecked restore branch a partial update exercises.
+func TestOpenSiteDBRollsBackInterruptedBundleCreate(t *testing.T) {
+	contentRoot := t.TempDir()
+	bundleDir := filepath.Join(contentRoot, "posts", "new-bundle")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	frPath := filepath.Join(bundleDir, "index.fr.md")
+	enPath := filepath.Join(bundleDir, "index.en.md")
+	frAfter := "---\ntitle: NewFrench\n---\nfr-body\n"
+	enAfter := "---\ntitle: NewEnglish\n---\nen-body\n"
+	// Simulate death after the first of two file creations: fr landed, en
+	// never got written at all.
+	if err := os.WriteFile(frPath, []byte(frAfter), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"bundle_dir": bundleDir,
+		"files": []map[string]any{
+			{"path": frPath, "before": nil, "after": frAfter},
+			{"path": enPath, "before": nil, "after": enAfter},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	journal, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordRecovery(db.RecoveryEntry{OperationID: "bundle-create-partial", Kind: "bundle_write", State: "in_progress", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	siteDB, err := openSiteDB(config.Config{DBPath: dbPath, ContentRoot: contentRoot, RejectSymlinks: true}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer siteDB.Close()
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after interrupted create rollback = %+v, want reconciled", pending)
+	}
+	if _, err := os.Stat(frPath); !os.IsNotExist(err) {
+		t.Fatalf("fr file after rollback = %v, want removed (never-created state restored)", err)
+	}
+	if _, err := os.Stat(enPath); !os.IsNotExist(err) {
+		t.Fatalf("en file after rollback = %v, want still absent", err)
+	}
+}
+
 func TestOpenSiteDBRollsBackPartialMultilingualBundleIdempotently(t *testing.T) {
 	contentRoot := t.TempDir()
 	bundleDir := filepath.Join(contentRoot, "posts", "bundle")

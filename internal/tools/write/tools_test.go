@@ -3,6 +3,7 @@ package write_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -4384,6 +4385,167 @@ func TestUpdatePageFailsClosedWhenRollbackSnapshotCannotPersist(t *testing.T) {
 	}
 	if got := readFileString(t, contentRoot, "posts/update-db-warning/index.md"); strings.Contains(got, "Updated") {
 		t.Fatalf("update_page modified source despite snapshot persistence error: %q", got)
+	}
+}
+
+// TestCreatePageInterruptedAfterSourceWriteLeavesRecoveryJournalInProgress
+// exercises the #1079 failure-injection seam this PR added and exports
+// specifically for testing (SetAfterFilesystemWriteHook) but that no
+// existing test previously used: a process loss immediately after the
+// atomic source write, before the recovery journal advances to
+// "file_written". The write itself must have landed (it's already durable
+// on disk), the caller must see a clear persistence_error rather than a
+// silently swallowed warning, and the recovery record must stay at
+// "in_progress" — proving a restart's reconciliation pass (which only acts
+// on in_progress/file_written) will still pick this operation up.
+func TestCreatePageInterruptedAfterSourceWriteLeavesRecoveryJournalInProgress(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	restore := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "create_page" && stage == "after_source_write" {
+			return errors.New("injected process loss after source write")
+		}
+		return nil
+	})
+	defer restore()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/interrupted-create", "title": "Interrupted",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if !res.IsError {
+		t.Fatal("create_page succeeded despite injected post-write interruption")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error for injected post-write interruption, got: %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "interrupted-create", "index.md")); err != nil {
+		t.Fatalf("source file after interrupted create = %v, want the atomic write to have landed", err)
+	}
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].State != "in_progress" || pending[0].Kind != "content_write" {
+		t.Fatalf("recovery journal after interruption = %+v, want a single in_progress content_write record", pending)
+	}
+}
+
+// TestUpdatePageInterruptedAfterSourceWriteLeavesRecoveryJournalInProgress is
+// update_page's counterpart to the create_page failure-injection test above,
+// exercising the same previously-untested seam for an existing page's write.
+func TestUpdatePageInterruptedAfterSourceWriteLeavesRecoveryJournalInProgress(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	created := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/interrupted-update", "title": "Before",
+		"body": "before-body", "tags": []any{}, "categories": []any{},
+	})
+	if created.IsError {
+		raw, _ := json.Marshal(created.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "interrupted-update", "index.md"))
+
+	restore := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "update_page" && stage == "after_source_write" {
+			return errors.New("injected process loss after source write")
+		}
+		return nil
+	})
+	defer restore()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/interrupted-update", "title": "After", "expected_revision": expected,
+	})
+	if !res.IsError {
+		t.Fatal("update_page succeeded despite injected post-write interruption")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error for injected post-write interruption, got: %s", raw)
+	}
+	if got := readFileString(t, contentRoot, "posts/interrupted-update/index.md"); !strings.Contains(got, "After") {
+		t.Fatalf("source file after interrupted update = %q, want the atomic write to have landed", got)
+	}
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].State != "in_progress" || pending[0].Kind != "content_write" {
+		t.Fatalf("recovery journal after interruption = %+v, want a single in_progress content_write record", pending)
+	}
+}
+
+// TestDeletePageInterruptedAfterSourceUnlinkLeavesRecoveryJournalInProgress
+// covers delete_page's distinct "after_source_unlink" boundary — the source
+// file has already been removed, but the recovery journal advance is
+// interrupted before it reaches "file_written".
+func TestDeletePageInterruptedAfterSourceUnlinkLeavesRecoveryJournalInProgress(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	created := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/interrupted-delete", "title": "ToDelete",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if created.IsError {
+		raw, _ := json.Marshal(created.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "interrupted-delete", "index.md"))
+
+	restore := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "delete_page" && stage == "after_source_unlink" {
+			return errors.New("injected process loss after source unlink")
+		}
+		return nil
+	})
+	defer restore()
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/interrupted-delete", "expected_revision": expected,
+	})
+	if !res.IsError {
+		t.Fatal("delete_page succeeded despite injected post-unlink interruption")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error for injected post-unlink interruption, got: %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "interrupted-delete", "index.md")); !os.IsNotExist(err) {
+		t.Fatalf("source file after interrupted delete = %v, want the unlink to have landed", err)
+	}
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].State != "in_progress" || pending[0].Kind != "content_write" {
+		t.Fatalf("recovery journal after interruption = %+v, want a single in_progress content_write record", pending)
 	}
 }
 
