@@ -858,21 +858,32 @@ func registerContentPlanTools(
 		if err := snapshots.put(entry.FilePath, entry.Revision, isolationCallerKey(ctx), string(raw)); err != nil {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to retain rollback snapshot: %w", err))
 		}
-		// Keep a plan retryable until all validation and snapshot persistence
-		// have succeeded; consume it only at the durable write boundary.
-		if _, ok, err := plans.consume(in.PlanID, isolationCallerKey(ctx)); err != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to consume plan: %w", err))
-		} else if !ok {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_content_change again"))
-		}
-
 		if err := pg.RevalidateForWrite(entry.FilePath); err != nil {
 			slog.Warn("apply_content_plan: symlink-swap detected before write", "plan_id", in.PlanID, "error", err)
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
 		}
+		afterRevision := contentmodel.SourceRevisionBytes([]byte(entry.Content))
+		recoveryOp, err := beginSourceWriteRecovery(siteDB, entry.FilePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "apply_content_plan", in.IdempotencyKey, idemHash, map[string]any{
+			"plan_id": in.PlanID, "slug": canonicalPublicSlug(entry.Slug),
+			"before_revision": currentRevision, "after_revision": afterRevision, "revision_kind": "content_snapshot",
+		}))
+		if err != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source write intent"))
+		}
 		if err := fileutil.AtomicWriteChecked(entry.FilePath, entry.Content, pg); err != nil {
 			slog.Error("apply_content_plan: write failed", "plan_id", in.PlanID, "error", err)
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
+		}
+		if err := recoveryFilesystemBoundary("apply_content_plan", "after_source_write"); err != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("apply_content_plan: could not advance recovery journal", "plan_id", in.PlanID, "error", err)
+		}
+		if _, ok, err := plans.consume(in.PlanID, isolationCallerKey(ctx)); err != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: source changed but plan consumption could not be persisted; retry with the same idempotency_key: %w", err))
+		} else if !ok {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: source changed but plan consumption could not be persisted; retry with the same idempotency_key"))
 		}
 		var updated hugosite.SourcePage
 		if existing, hasExisting := idx.GetBySlug(entry.Slug); hasExisting {
@@ -943,10 +954,16 @@ func registerContentPlanTools(
 			State:          &state,
 			RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "apply_content_plan", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("apply_content_plan: could not persist idempotency result", "plan_id", in.PlanID, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("apply_content_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
 		}
 		return nil, out, nil
 	}))

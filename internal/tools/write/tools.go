@@ -516,12 +516,16 @@ func isolationCallerKey(ctx context.Context) string {
 // distinct sessions of the same client), so keying on the token hash already
 // carried in context (oauth.CtxTokenID) closes the cross-client leak where
 // any caller could look up or replay another caller's idempotency-key
-// result via the same tool+key. Falls back to a shared "" bucket when OAuth
-// is disabled entirely (no bearer, no isolation boundary to enforce) or in
-// tests that don't populate the context value.
+// result via the same tool+key. Falls back to the stable "local" principal
+// when OAuth is disabled (stdio/single-user mode). The durable SQLite journal
+// rejects an empty caller, and a stable local identity is what makes replay
+// survive a process restart in that deployment mode.
 func idempotencyCallerKey(ctx context.Context) string {
 	id, _ := ctx.Value(oauth.CtxTokenID).(string)
-	return id
+	if id != "" {
+		return id
+	}
+	return "local"
 }
 
 // callerLimiter returns (or creates) a per-caller rate.Limiter allowing
@@ -960,12 +964,28 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			slog.Warn("create_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
 		}
+		createdRevision := contentmodel.SourceRevisionBytes([]byte(content))
+		logicalRecoveryPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+		recoveryOp, err := beginSourceWriteRecovery(siteDB, filePath, "", createdRevision, recoveryIdempotencyFor(ctx, "create_page", in.IdempotencyKey, idemHash, map[string]any{
+			"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug, "path": logicalRecoveryPath,
+			"resolved_lang": resolvedLang, "resolved_source_path": logicalRecoveryPath,
+			"new_revision": createdRevision, "revision_kind": "content_snapshot",
+		}))
+		if err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source create intent"))
+		}
 		if err := fileutil.AtomicCreateChecked(filePath, content, pg); err != nil {
 			if errors.Is(err, fs.ErrExist) {
 				return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: page already exists at slug %q", in.Slug))
 			}
 			slog.Error("create_page: write failed", "slug", in.Slug, "error", err)
 			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
+		}
+		if err := recoveryFilesystemBoundary("create_page", "after_source_write"); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("create_page: could not advance recovery journal", "slug", in.Slug, "error", err)
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
 		frontmatterRaw := map[string]any{"title": in.Title, "date": now, "draft": in.TestContent != nil}
@@ -1031,10 +1051,16 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 			TestContentExpiresAt:     testContentExpiresAt,
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := rt.idem.remember(idempotencyCallerKey(ctx), "create_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("create_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("create_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
 		return nil, out, nil
 	}))
@@ -1351,11 +1377,27 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			slog.Error("update_page: rollback snapshot persistence failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to retain rollback snapshot"))
 		}
+		afterRevision := contentmodel.SourceRevisionBytes([]byte(content))
+		logicalRecoveryPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+		recoveryOp, err := beginSourceWriteRecovery(siteDB, filePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "update_page", in.IdempotencyKey, idemHash, map[string]any{
+			"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug,
+			"resolved_lang": resolvedSource.Lang, "resolved_source_path": logicalRecoveryPath,
+			"changed": true, "new_revision": afterRevision, "revision_kind": "content_snapshot",
+		}))
+		if err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source write intent"))
+		}
 		if err := fileutil.AtomicWriteChecked(filePath, content, pg); err != nil {
 			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
 			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
 		}
 		snapshotWarning := ""
+		if err := recoveryFilesystemBoundary("update_page", "after_source_write"); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("update_page: could not advance recovery journal after source write", "slug", in.Slug, "error", err)
+		}
 		updated := *currentSource
 		updated.FilePath = filePath
 		updated.Lang = resolvedSource.Lang
@@ -1462,10 +1504,16 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			TagsDelta:                tagsDelta,
 			CategoriesDelta:          categoriesDelta,
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := rt.idem.remember(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("update_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("update_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
 		return nil, out, nil
 	}))
@@ -1726,6 +1774,21 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// begin with (public-only content, matching the pre-#682 behavior
 		// for that case).
 		bundleFullyRemoved := true
+		recoveryPath := resolvedSource.SourcePath
+		var recoveryCleanup []string
+		if recoveryPath == "" {
+			recoveryPath = dir
+		} else if !bundleHasOtherLangFiles(dir, resolvedSource.SourcePath) {
+			recoveryCleanup = append(recoveryCleanup, dir)
+		}
+		recoveryOp, err := beginSourceWriteRecovery(siteDB, recoveryPath, currentRevision, "", recoveryIdempotencyFor(ctx, "delete_page", in.IdempotencyKey, idemHash, map[string]any{
+			"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug,
+			"resolved_lang": resolvedSource.Lang, "resolved_source_path": fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath),
+			"bundle_fully_removed": len(recoveryCleanup) > 0,
+		}), recoveryCleanup...)
+		if err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source delete intent"))
+		}
 		if resolvedSource.SourcePath != "" {
 			// Revalidate immediately before the single-file unlink, closing
 			// the TOCTOU window between the earlier SafeJoin/resolve and
@@ -1743,15 +1806,26 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
 			}
 			bundleFullyRemoved = !bundleHasRemainingLangFiles(dir)
+			if err := recoveryFilesystemBoundary("delete_page", "after_source_unlink"); err != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source unlink"))
+			}
 			if bundleFullyRemoved {
 				if err := os.RemoveAll(dir); err != nil {
 					slog.Error("delete_page: remove bundle dir failed", "slug", in.Slug, "error", err)
 					return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
 				}
 			}
-		} else if err := os.RemoveAll(dir); err != nil {
-			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
+		} else {
+			if err := os.RemoveAll(dir); err != nil {
+				slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
+			}
+			if err := recoveryFilesystemBoundary("delete_page", "after_source_cleanup"); err != nil {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source cleanup"))
+			}
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("delete_page: could not advance recovery journal", "slug", in.Slug, "error", err)
 		}
 
 		if bundleFullyRemoved {
@@ -1877,10 +1951,16 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			BundleFullyRemoved: fileutil.BoolPtr(bundleFullyRemoved),
 			RateLimit:          ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := rt.idem.remember(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("delete_page: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("delete_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
 		return nil, out, nil
 	}))
@@ -2300,6 +2380,43 @@ func bundleHasRemainingLangFiles(dir string) bool {
 		}
 		name := e.Name()
 		if name == "index.md" || (strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md")) {
+			return true
+		}
+	}
+	return false
+}
+
+func bundleHasOtherLangFiles(dir, excludedPath string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if e.IsDir() || filepath.Join(dir, e.Name()) == excludedPath {
+			continue
+		}
+		name := e.Name()
+		if name == "index.md" || (strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md")) {
+			return true
+		}
+	}
+	return false
+}
+
+func bundleHasUnselectedLangFiles(dir string, selected map[string]bool) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if name != "index.md" && !(strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md")) {
+			continue
+		}
+		if !selected[filepath.Join(dir, name)] {
 			return true
 		}
 	}

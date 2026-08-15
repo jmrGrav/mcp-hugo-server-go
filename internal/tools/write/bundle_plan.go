@@ -847,17 +847,41 @@ func registerApplyBundlePlan(
 		if err := snapshots.put(entry.BundleDir, entry.BundleRevision, isolationCallerKey(ctx), priorContent); err != nil {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to persist bundle rollback snapshot: %w", err))
 		}
-		// Consume only once all retryable/pre-write work has succeeded. A
-		// persistence or validation failure must leave the caller's plan
-		// available for a safe retry after the underlying service recovers.
-		if _, ok, err := plans.consume(in.PlanID, isolationCallerKey(ctx)); err != nil {
-			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to consume bundle plan: %w", err))
-		} else if !ok {
-			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_bundle_change again"))
+		recoveryFiles := make([]bundleRecoveryFile, 0, len(files))
+		recoveryTranslations := make([]map[string]any, 0, len(files))
+		for _, f := range files {
+			after := f.Content
+			transition, captureErr := captureBundleRecoveryFile(f.Path, &after)
+			if captureErr != nil {
+				return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to capture bundle recovery state"))
+			}
+			recoveryFiles = append(recoveryFiles, transition)
+			recoveryTranslations = append(recoveryTranslations, map[string]any{
+				"lang": inferLangFromIndexFile(f.Path), "source_path": fileutil.LogicalContentPath(cfg.ContentRoot, f.Path),
+				"status": "applied", "after_revision": contentmodel.SourceRevisionBytes([]byte(f.Content)),
+			})
+		}
+		recoveryOp, err := beginBundleWriteRecovery(siteDB, entry.BundleDir, recoveryFiles, recoveryIdempotencyFor(ctx, "apply_bundle_plan", in.IdempotencyKey, idemHash, map[string]any{
+			"plan_id": in.PlanID, "slug": canonicalPublicSlug(entry.Slug), "before_revision": currentRev,
+			"translations": recoveryTranslations,
+		}))
+		if err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record bundle write intent"))
 		}
 		_, writeErr := writeBundleTranslations(pg, files)
 		if writeErr != nil {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(writeErr)
+		}
+		if err := recoveryFilesystemBoundary("apply_bundle_plan", "after_bundle_write"); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after bundle write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("apply_bundle_plan: could not advance recovery journal", "plan_id", in.PlanID, "error", err)
+		}
+		if _, ok, err := plans.consume(in.PlanID, isolationCallerKey(ctx)); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: bundle changed but plan consumption could not be persisted; retry with the same idempotency_key: %w", err))
+		} else if !ok {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: bundle changed but plan consumption could not be persisted; retry with the same idempotency_key"))
 		}
 
 		var warnings []string
@@ -888,10 +912,16 @@ func registerApplyBundlePlan(
 			Translations: outcomes, Warning: appendLastBuildWarning(warning), State: &state,
 			RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "apply_bundle_plan", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("apply_bundle_plan: could not persist idempotency result", "plan_id", in.PlanID, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("apply_bundle_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
 		}
 		return nil, out, nil
 	}))
@@ -1056,8 +1086,34 @@ func registerRollbackBundle(
 		if err := snapshots.put(dir, currentRev, isolationCallerKey(ctx), priorContent); err != nil {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to persist pre-rollback bundle snapshot: %w", err))
 		}
+		recoveryFiles := make([]bundleRecoveryFile, 0, len(files))
+		recoveryTranslations := make([]map[string]any, 0, len(files))
+		for _, f := range files {
+			after := f.Content
+			transition, captureErr := captureBundleRecoveryFile(f.Path, &after)
+			if captureErr != nil {
+				return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to capture bundle recovery state"))
+			}
+			recoveryFiles = append(recoveryFiles, transition)
+			recoveryTranslations = append(recoveryTranslations, map[string]any{
+				"lang": inferLangFromIndexFile(f.Path), "source_path": fileutil.LogicalContentPath(cfg.ContentRoot, f.Path),
+				"status": "restored", "after_revision": contentmodel.SourceRevisionBytes([]byte(f.Content)),
+			})
+		}
+		recoveryOp, err := beginBundleWriteRecovery(siteDB, dir, recoveryFiles, recoveryIdempotencyFor(ctx, "rollback_bundle", in.IdempotencyKey, idemHash, map[string]any{
+			"slug": canonicalPublicSlug(in.Slug), "before_revision": currentRev, "translations": recoveryTranslations,
+		}))
+		if err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record bundle write intent"))
+		}
 		if _, writeErr := writeBundleTranslations(pg, files); writeErr != nil {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(writeErr)
+		}
+		if err := recoveryFilesystemBoundary("rollback_bundle", "after_bundle_write"); err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after bundle write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("rollback_bundle: could not advance recovery journal", "slug", in.Slug, "error", err)
 		}
 
 		var warnings []string
@@ -1085,10 +1141,16 @@ func registerRollbackBundle(
 			Warning: appendLastBuildWarning(warning), State: &state,
 			RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "rollback_bundle", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("rollback_bundle: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("rollback_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
 		return nil, out, nil
 	}))

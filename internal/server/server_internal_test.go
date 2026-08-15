@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +17,9 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
@@ -231,6 +235,204 @@ func TestOpenSiteDBLeavesInterruptedBuildPendingWhenStartupSyncFails(t *testing.
 	}
 	if len(pending) != 1 || pending[0].OperationID != "build-pending" || pending[0].State != "file_written" {
 		t.Fatalf("pending after failed startup sync = %+v, want untouched build", pending)
+	}
+}
+
+func TestOpenSiteDBReconcilesMutationFromFilesystemIdempotently(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "recovery", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	after := []byte("---\ntitle: After\n---\nafter\n")
+	if err := os.WriteFile(pagePath, after, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	journal, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, _ := json.Marshal(map[string]string{
+		"path": pagePath, "before_revision": "sha256:before", "after_revision": contentmodel.SourceRevisionBytes(after),
+	})
+	if err := journal.RecordRecovery(db.RecoveryEntry{OperationID: "write-after", Kind: "content_write", State: "file_written", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	for pass := 0; pass < 2; pass++ {
+		siteDB, err := openSiteDB(config.Config{DBPath: dbPath, ContentRoot: contentRoot}, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending, err := siteDB.PendingRecovery()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pending) != 0 {
+			t.Fatalf("restart pass %d pending = %+v, want reconciled", pass, pending)
+		}
+		siteDB.Close()
+	}
+}
+
+func TestOpenSiteDBDoesNotReplayMutationThatNeverReachedFilesystem(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "index.md")
+	before := []byte("---\ntitle: Before\n---\nbefore\n")
+	if err := os.WriteFile(pagePath, before, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"path":            pagePath,
+		"before_revision": contentmodel.SourceRevisionBytes(before),
+		"after_revision":  contentmodel.SourceRevisionBytes([]byte("after")),
+		"idempotency": map[string]any{
+			"caller_key": "local", "tool": "update_page", "key": "never-landed", "request_hash": "hash",
+			"result_json": json.RawMessage(`{"success":true,"data":{"status":"updated"},"errors":[],"warnings":[],"meta":{"schema_version":"v1.1.0"}}`),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	journal, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordRecovery(db.RecoveryEntry{OperationID: "never-landed", Kind: "content_write", State: "in_progress", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	_ = journal.Close()
+	siteDB, err := openSiteDB(config.Config{DBPath: dbPath, ContentRoot: contentRoot}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer siteDB.Close()
+	entry, err := siteDB.LookupMutation("local", "update_page", "never-landed", 15*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != nil {
+		t.Fatalf("pre-write recovery created a false success receipt: %+v", entry)
+	}
+}
+
+func TestOpenSiteDBLeavesAmbiguousOrUnsafeMutationPending(t *testing.T) {
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "index.md")
+	if err := os.WriteFile(pagePath, []byte("foreign bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	journal, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := []db.RecoveryEntry{
+		{OperationID: "ambiguous", Kind: "content_write", State: "file_written", Payload: []byte(fmt.Sprintf(`{"path":%q,"before_revision":"sha256:before","after_revision":"sha256:after"}`, pagePath))},
+		{OperationID: "unsafe", Kind: "content_write", State: "in_progress", Payload: []byte(`{"path":"/tmp/outside","before_revision":"","after_revision":"sha256:after"}`)},
+	}
+	for _, entry := range entries {
+		if err := journal.RecordRecovery(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal.Close()
+	siteDB, err := openSiteDB(config.Config{DBPath: dbPath, ContentRoot: contentRoot}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer siteDB.Close()
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 {
+		t.Fatalf("pending = %+v, want both ambiguous and unsafe records", pending)
+	}
+}
+
+func TestOpenSiteDBRollsBackPartialMultilingualBundleIdempotently(t *testing.T) {
+	contentRoot := t.TempDir()
+	bundleDir := filepath.Join(contentRoot, "posts", "bundle")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	frPath := filepath.Join(bundleDir, "index.fr.md")
+	enPath := filepath.Join(bundleDir, "index.en.md")
+	frBefore := "---\ntitle: RecoveryFrenchBefore\n---\nfr-before\n"
+	enBefore := "---\ntitle: RecoveryEnglishBefore\n---\nen-before\n"
+	frAfter := "---\ntitle: RecoveryFrenchAfter\n---\nfr-after\n"
+	enAfter := "---\ntitle: RecoveryEnglishAfter\n---\nen-after\n"
+	// Simulate death after the first of two atomic translation writes.
+	if err := os.WriteFile(frPath, []byte(frAfter), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(enPath, []byte(enBefore), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"bundle_dir": bundleDir,
+		"files": []map[string]any{
+			{"path": frPath, "before": frBefore, "after": frAfter},
+			{"path": enPath, "before": enBefore, "after": enAfter},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "state.sqlite")
+	journal, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordRecovery(db.RecoveryEntry{OperationID: "bundle-partial", Kind: "bundle_write", State: "in_progress", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page, ok := srcIdx.GetBySlugLang("posts/bundle", "fr"); !ok || page.Title != "RecoveryFrenchAfter" {
+		t.Fatalf("pre-restart mixed source index = %+v, %v", page, ok)
+	}
+
+	for pass := 0; pass < 2; pass++ {
+		siteDB, err := openSiteDB(config.Config{DBPath: dbPath, ContentRoot: contentRoot, RejectSymlinks: true}, nil, srcIdx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending, err := siteDB.PendingRecovery()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(pending) != 0 {
+			t.Fatalf("restart pass %d pending = %+v, want reconciled", pass, pending)
+		}
+		for path, want := range map[string]string{frPath: frBefore, enPath: enBefore} {
+			raw, err := os.ReadFile(path)
+			if err != nil || string(raw) != want {
+				t.Fatalf("restart pass %d %s = %q, %v, want %q", pass, filepath.Base(path), raw, err, want)
+			}
+		}
+		for lang, wantTitle := range map[string]string{"fr": "RecoveryFrenchBefore", "en": "RecoveryEnglishBefore"} {
+			page, ok := srcIdx.GetBySlugLang("posts/bundle", lang)
+			if !ok || page.Title != wantTitle {
+				t.Fatalf("restart pass %d source index %s = %+v, %v, want %s", pass, lang, page, ok, wantTitle)
+			}
+		}
+		stale, err := siteDB.Search("RecoveryFrenchAfter", 10)
+		if err != nil || len(stale) != 0 {
+			t.Fatalf("restart pass %d DB retained partial after-state: %+v, %v", pass, stale, err)
+		}
+		_ = siteDB.Close()
 	}
 }
 
