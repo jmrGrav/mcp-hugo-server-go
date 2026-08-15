@@ -11,8 +11,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    outputs:
-      coverage: ${{ steps.coverage-gate.outputs.coverage }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -53,8 +51,27 @@ jobs:
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
           echo "Coverage: ${COVERAGE}%"
-          echo "coverage=${COVERAGE}" >> "$GITHUB_OUTPUT"
           awk -v cov="$COVERAGE" 'BEGIN { if (cov + 0 < 85) { print "Coverage " cov "% is below 85%"; exit 1 } }'
+      - name: Generate coverage badge payload
+        run: |
+          set -euo pipefail
+          COVERAGE="$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')"
+          color="red"
+          awk -v cov="$COVERAGE" 'BEGIN { exit !(cov + 0 >= 85) }' && color="brightgreen"
+          if [[ "$color" == "red" ]]; then
+            awk -v cov="$COVERAGE" 'BEGIN { exit !(cov + 0 >= 70) }' && color="yellow"
+          fi
+          python3 -c "
+          import json
+          json.dump({'schemaVersion': 1, 'label': 'test coverage', 'message': '${COVERAGE}%', 'color': '${color}', 'cacheSeconds': 300}, open('coverage-badge.json', 'w'), separators=(',', ':'))
+          "
+      - name: Upload coverage badge payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-badge
+          path: coverage-badge.json
+          if-no-files-found: error
+          retention-days: 1
 
   publish-coverage-badge:
     name: Publish test coverage badge
@@ -68,9 +85,11 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: coverage-badge
+          path: /tmp/coverage-badge
       - name: Publish payload to badges branch
-        env:
-          COVERAGE: ${{ needs.test.outputs.coverage }}
         run: |
           set -euo pipefail
           current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
@@ -78,16 +97,7 @@ jobs:
             echo "Skipping superseded badge payload for $GITHUB_SHA"
             exit 0
           fi
-          color="red"
-          awk -v cov="$COVERAGE" 'BEGIN { exit !(cov + 0 >= 85) }' && color="brightgreen"
-          if [[ "$color" == "red" ]]; then
-            awk -v cov="$COVERAGE" 'BEGIN { exit !(cov + 0 >= 70) }' && color="yellow"
-          fi
-          python3 -c "
-          import json
-          json.dump({'schemaVersion': 1, 'label': 'test coverage', 'message': '${COVERAGE}%', 'color': '${color}', 'cacheSeconds': 300}, open('/tmp/coverage-badge.json', 'w'), separators=(',', ':'))
-          "
-          .github/scripts/publish-badge.sh coverage-badge.json /tmp/coverage-badge.json
+          .github/scripts/publish-badge.sh coverage-badge.json /tmp/coverage-badge/coverage-badge.json
 
   source-loc:
     name: Production Go LOC
@@ -134,6 +144,38 @@ jobs:
             exit 0
           fi
           .github/scripts/publish-badge.sh source-loc.json /tmp/source-loc-badge/source-loc.json
+
+  # Experimental: mirrors both badge payloads to a GitHub Pages deployment
+  # (Environment-based, no git branch) alongside the badges-branch publish
+  # above. Once a few pushes confirm this works end-to-end, the branch-based
+  # jobs above and the `badges` branch itself will be removed and the README
+  # badge URLs switched over — kept side by side for now rather than cutting
+  # over in one step.
+  deploy-badges-pages:
+    name: Deploy badges to GitHub Pages (experimental)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [test, source-loc]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: coverage-badge
+          path: /tmp/badges-site
+      - uses: actions/download-artifact@v5
+        with:
+          name: source-loc-badge
+          path: /tmp/badges-site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/badges-site
+      - uses: actions/deploy-pages@v4
+        id: deployment
 
   # Boot the real binary with a synthetic config and assert all 7 IsItAgentReady
   # discovery endpoints respond correctly, and that scopes_supported contains
