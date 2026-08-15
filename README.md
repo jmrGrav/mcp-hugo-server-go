@@ -3,7 +3,8 @@
 [![Go Version](https://img.shields.io/github/go-mod/go-version/jmrGrav/mcp-hugo-server-go?logo=go&logoColor=white)](go.mod)
 [![Latest Release](https://img.shields.io/github/v/release/jmrGrav/mcp-hugo-server-go)](https://github.com/jmrGrav/mcp-hugo-server-go/releases/latest)
 [![CI](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/ci.yml/badge.svg)](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/ci.yml)
-[![Production Go LOC](https://img.shields.io/endpoint?url=https%3A%2F%2Fgithub.com%2FjmrGrav%2Fmcp-hugo-server-go%2Freleases%2Fdownload%2Fbadges-data%2Fsource-loc.json&logo=go&logoColor=white)](#production-go-loc)
+[![Production Go LOC](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FjmrGrav%2Fmcp-hugo-server-go%2Fbadges%2Fsource-loc.json&logo=go&logoColor=white)](#production-go-loc)
+[![Test Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FjmrGrav%2Fmcp-hugo-server-go%2Fbadges%2Fcoverage-badge.json&logo=go&logoColor=white)](.github/workflows/ci.yml)
 [![Deploy to Production](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/deploy.yml/badge.svg)](https://github.com/jmrGrav/mcp-hugo-server-go/actions/workflows/deploy.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Security Policy](https://img.shields.io/badge/security-policy-green.svg)](SECURITY.md)
@@ -29,6 +30,10 @@ Content mostly written with Claude Code and Codex. / Contenu majoritairement cod
 ### Production Go LOC
 
 The badge counts `scc` code lines from Git-tracked production `.go` files. It excludes comments, blank lines, untracked files, and every `*_test.go` file. CI recalculates and publishes the badge payload automatically after every push to `main`; contributors never edit the count in this README.
+
+### Test Coverage
+
+The badge reports the same `go test -cover ./internal/...` total the CI coverage gate enforces (currently a minimum of 85%; a run failing that gate never reaches the badge-publish step, so the badge can't advertise a number CI itself rejected). Published automatically after every push to `main`, same mechanism as the LOC badge above.
 
 ## What it does
 
