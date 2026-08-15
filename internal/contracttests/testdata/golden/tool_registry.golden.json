@@ -68,6 +68,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "dry_run": {
           "type": "boolean"
         },
@@ -162,6 +165,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "dry_run": {
           "type": "boolean"
         },
@@ -598,6 +604,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "dry_run": {
           "type": "boolean"
         },
@@ -738,6 +747,48 @@
     "output_schema_sha256": "ece06183f4aaebadf6a299cfeac4b793ee1fb36fdf21d487d8bb2fcd9803aed7"
   },
   {
+    "name": "create_change_set",
+    "required_scope": "write",
+    "description": "Mint a new opaque change_set_id, owned by the calling principal, to pass as the optional change_set_id parameter on create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change/apply_bundle_plan/rollback_bundle/create_bundle/delete_bundle. Use this when two or more clients might share the same OAuth token/principal (a realistic single-operator deployment shape) and each needs its own mutations tracked and, once #1140 lands, published separately — call this once per logical unit of work and reuse the returned id across every mutation in that unit; omitting change_set_id on a mutation call falls back to a stable implicit per-principal default, matching this server's behavior before this tool existed. The id is opaque and durable (usable again after a reconnect) but is not itself a secret; it is validated to belong to the calling principal on every use, never accepted from another principal.",
+    "input_schema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "output_schema_fields": [
+      "data.change_set_id:string:required",
+      "data:object:required",
+      "errors:unspecified:required",
+      "errors[].build_id:string",
+      "errors[].code:string:required",
+      "errors[].error_class:string",
+      "errors[].field:string",
+      "errors[].log_hint:string",
+      "errors[].message:string:required",
+      "errors[].resolution.action:string:required",
+      "errors[].resolution.allowed_values:unspecified",
+      "errors[].resolution.parameter:string",
+      "errors[].resolution.recommended_tool:string",
+      "errors[].resolution.retry_after_seconds:unspecified",
+      "errors[].resolution:unspecified",
+      "errors[].retryable:boolean:required",
+      "errors[].stage:string",
+      "errors[].suggestion:string",
+      "generated_at:string",
+      "meta.build_channel:string",
+      "meta.commit:string",
+      "meta.content_provenance:string",
+      "meta.duration_ms:unspecified",
+      "meta.generated_at:string",
+      "meta.release_version:string",
+      "meta.request_id:string",
+      "meta.schema_version:string:required",
+      "meta:object:required",
+      "success:boolean:required",
+      "warnings:unspecified:required"
+    ],
+    "output_schema_sha256": "00e102dbb3870fdb9f08582059b75655ca76104e070212b56d1461308b159ca1"
+  },
+  {
     "name": "create_page",
     "required_scope": "write",
     "description": "Create a new Hugo content page at {slug}/index.md with front matter and body content. Fails with `already_exists` if the destination already exists; use update_page for edits. Repeating the same non-dry-run request normally fails once the page exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the page only exists in source so far or is already publicly available. Before writing, consider calling suggest_links(tags, categories, body) on your draft to surface internal-linking candidates while the content is still easy to adjust (#623). For disposable test/audit content (e.g. a live audit exercising the write cycle), set `test_content: {ttl_hours?, owner?}` — a deliberate, explicit opt-in, never inferred from `slug`/`title` (so a real published page that happens to start with e.g. `codex-` is never wrongly constrained). Omitting `ttl_hours` uses the 24h default; explicit values must be between 1 and 168 hours. This forces `draft: true` regardless of any other setting and writes `test_content`/`test_content_owner`/`test_content_expires_at` into the page's own frontmatter; the effective expiry is echoed back in `data.test_content_expires_at`. `build_site`/`publish_changes`'s post-build advisory (#608) honors `test_content_expires_at` unconditionally, independent of the server-wide `stale_test_content_threshold_hours` setting, so cleanup is nagged for even when that server-wide sweep is disabled — it never auto-deletes, only surfaces a warning recommending `delete_page` (#661). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. `lang` for a language the site does not recognize: if the operator has set `configured_languages`, an unrecognized `lang` is rejected with `invalid_params` and nothing is written (#899); otherwise (the default) it is only a warning — the page is still written, since the server can't tell a typo from a deliberately new language without that operator-declared set. Either way, call get_capabilities first to see the authoritative/known language list.",
@@ -755,6 +806,9 @@
             "null",
             "array"
           ]
+        },
+        "change_set_id": {
+          "type": "string"
         },
         "dry_run": {
           "type": "boolean"
@@ -947,6 +1001,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "dry_run": {
           "type": "boolean"
         },
@@ -1029,6 +1086,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "dry_run": {
           "type": "boolean"
         },
@@ -1138,6 +1198,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "dry_run": {
           "type": "boolean"
         },
@@ -4586,6 +4649,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "dry_run": {
           "type": "boolean"
         },
@@ -4686,6 +4752,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "dry_run": {
           "type": "boolean"
         },
@@ -5264,6 +5333,9 @@
             "array"
           ]
         },
+        "change_set_id": {
+          "type": "string"
+        },
         "description": {
           "type": [
             "null",
@@ -5408,6 +5480,9 @@
     "input_schema": {
       "additionalProperties": false,
       "properties": {
+        "change_set_id": {
+          "type": "string"
+        },
         "content_base64": {
           "type": "string"
         },

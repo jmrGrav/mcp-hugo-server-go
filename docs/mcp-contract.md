@@ -1056,6 +1056,54 @@ succeeded but may not go live until build_site is retried"
 If a write's own DB-sync warning is also present, both are combined into one
 `warning` string rather than one silently overwriting the other.
 
+## 6.15. Change-Set Attribution for Mutation Ownership (#1135)
+
+`principal_id` (the OAuth identity `mutationCallerKey`/rate limits/idempotency
+already scope everything to) is not fine-grained enough to answer "did *I*
+write this, or did someone else sharing my credentials?" — a realistic shape
+on a single-operator deployment where two distinct clients (e.g. two
+different agents) are configured with the same OAuth token. This is the
+scenario behind the 2026-08-14 incident that motivated this feature: a
+second agent editing concurrently with no way to distinguish its changes
+from the first's.
+
+**`create_change_set`** mints a new opaque `change_set_id` (format `cs_<32
+hex chars>`), owned by the calling principal. Requires no input. Both
+ownership and every mutation's attribution record are tracked in-memory
+unconditionally — neither the ownership-check nor the attribution-recording
+property depends on `db_path` being set. SQLite persistence (best-effort,
+only when `db_path` is configured) is asymmetric: ownership is lazily
+rehydrated from SQLite after a restart, so it survives one. The per-mutation
+attribution list does not — it is process-lifetime only in memory; the
+durable record after a restart is SQLite's `change_set_mutations` table
+directly (queried via `ListChangeSetMutations`), not an in-memory replay.
+Any future feature that needs mutation history to survive a restart must
+read that table rather than assume the in-memory list rehydrates.
+
+Every mutation tool — `create_page`, `update_page`, `delete_page`,
+`create_bundle`, `delete_bundle`, `upload_page_asset`, `delete_page_asset`,
+`apply_content_plan`, `rollback_change`, `apply_bundle_plan`,
+`rollback_bundle` — accepts an optional `change_set_id`:
+
+- **Omitted** (every caller before this feature, and any caller that never
+  adopts it): the mutation is attributed to a stable implicit
+  per-principal default (`default:<principal_id>`) — a pure additive
+  change, zero behavior difference for existing clients.
+- **A valid id this principal created**: the mutation is attributed to that
+  change-set instead.
+- **Unknown, or belonging to a different principal**: rejected with
+  `invalid_params` before any write — the same error either way, so a
+  caller can never learn whether a given id belongs to someone else, only
+  that it isn't usable by them.
+
+This issue establishes the ownership primitive and per-mutation attribution
+record (`change_set_mutations` table) only. It does **not** yet change what
+`build_site`/`publish_changes` are allowed to publish — a foreign
+change-set's unpublished work is not blocked from being swept into a build
+by this issue alone; that guard is #1140, which depends on this primitive.
+`get_runtime_status`/`get_mutation_status` do not yet surface change-set
+state either — that's #1142.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.

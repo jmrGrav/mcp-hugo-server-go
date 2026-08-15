@@ -376,7 +376,9 @@ func newPlanBundleChangeOutput(data planBundleChangeData) planBundleChangeOutput
 type applyBundlePlanInput struct {
 	PlanID         string `json:"plan_id"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
-	DryRun         bool   `json:"dry_run,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 }
 
 type applyBundlePlanData struct {
@@ -409,7 +411,9 @@ type rollbackBundleInput struct {
 	ToBundleRevision string `json:"to_bundle_revision"`
 	ExpectedRevision string `json:"expected_bundle_revision,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
-	DryRun           bool   `json:"dry_run,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 }
 
 type rollbackBundleData struct {
@@ -579,10 +583,11 @@ func registerBundleTools(
 	idem *idempotencyStore,
 	plans *bundlePlanStore,
 	snapshots *bundleSnapshotStore,
+	changeSets *changeSetRegistry,
 ) {
 	registerPlanBundleChange(s, pg, idx, cfg, siteIdx, plans)
-	registerApplyBundlePlan(s, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, plans, snapshots)
-	registerRollbackBundle(s, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, snapshots)
+	registerApplyBundlePlan(s, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, plans, snapshots, changeSets)
+	registerRollbackBundle(s, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, snapshots, changeSets)
 }
 
 func registerPlanBundleChange(
@@ -716,6 +721,7 @@ func registerApplyBundlePlan(
 	idem *idempotencyStore,
 	plans *bundlePlanStore,
 	snapshots *bundleSnapshotStore,
+	changeSets *changeSetRegistry,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "apply_bundle_plan",
@@ -750,6 +756,10 @@ func registerApplyBundlePlan(
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: plan_id must not be empty"))
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(err)
+		}
+		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(err)
 		}
 		if !in.DryRun && !limiter.Allow() {
@@ -928,6 +938,7 @@ func registerApplyBundlePlan(
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("apply_bundle_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
 		}
+		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "apply_bundle_plan", entry.Slug, "update", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -943,6 +954,7 @@ func registerRollbackBundle(
 	mutationLimiters map[string]*rate.Limiter,
 	idem *idempotencyStore,
 	snapshots *bundleSnapshotStore,
+	changeSets *changeSetRegistry,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "rollback_bundle",
@@ -983,6 +995,10 @@ func registerRollbackBundle(
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(err)
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(err)
+		}
+		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(err)
 		}
 		if strings.TrimSpace(in.ToBundleRevision) == "" {
@@ -1157,6 +1173,7 @@ func registerRollbackBundle(
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("rollback_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
+		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "rollback_bundle", in.Slug, "rollback", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
