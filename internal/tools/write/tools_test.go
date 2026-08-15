@@ -2,7 +2,9 @@ package write_test
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,6 +20,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
+	appserver "github.com/jmrGrav/mcp-hugo-server-go/internal/server"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -87,6 +90,28 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 		t.Fatalf("client connect: %v", err)
 	}
 	return session, idx, func() { _ = session.Close() }
+}
+
+func newStdioServerSession(t *testing.T, cfg config.Config) (*mcp.ClientSession, func()) {
+	t.Helper()
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := appserver.NewStdio(cfg, idx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return session, func() { _ = session.Close() }
 }
 
 func waitForStartSignals(t *testing.T, started <-chan struct{}, want int) {
@@ -1149,6 +1174,145 @@ func TestCreatePageIdempotencyKeyRaceOnConcurrentRetries(t *testing.T) {
 		if res.IsError {
 			t.Fatalf("concurrent create_page retry with same idempotency_key should not fail: %s", marshalContent(t, res))
 		}
+	}
+}
+
+func TestCreatePageIdempotentReplaySurvivesRuntimeRestart(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "runtime.sqlite")
+	args := map[string]any{
+		"slug": "posts/restart-replay", "title": "Restart replay", "body": "Body",
+		"tags": []any{}, "categories": []any{}, "idempotency_key": "restart-replay-key",
+	}
+
+	firstDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSession, _, firstDone := newTestServer(t, contentRoot, testServerOpts{SiteDB: firstDB})
+	first := callTool(t, firstSession, "create_page", args)
+	if first.IsError {
+		t.Fatalf("first create failed: %s", marshalContent(t, first))
+	}
+	firstOut := decodeWriteContent(t, first)
+	firstDone()
+	if err := firstDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	secondDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer secondDB.Close()
+	secondSession, _, secondDone := newTestServer(t, contentRoot, testServerOpts{SiteDB: secondDB})
+	defer secondDone()
+	second := callTool(t, secondSession, "create_page", args)
+	if second.IsError {
+		t.Fatalf("restart replay failed: %s", marshalContent(t, second))
+	}
+	secondOut := decodeWriteContent(t, second)
+	if !reflect.DeepEqual(firstOut, secondOut) {
+		t.Fatalf("restart replay envelope drifted:\nfirst=%#v\nsecond=%#v", firstOut, secondOut)
+	}
+	if got := readFileString(t, contentRoot, "posts/restart-replay/index.md"); strings.Count(got, "Restart replay") != 1 {
+		t.Fatalf("restart replay rewrote or corrupted source: %q", got)
+	}
+}
+
+func TestInterruptedCreateReplaysStagedResultAfterServerRestart(t *testing.T) {
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.DBPath = filepath.Join(t.TempDir(), "runtime.sqlite")
+	args := map[string]any{
+		"slug": "posts/interrupted-replay", "title": "Interrupted replay", "body": "Body",
+		"tags": []any{}, "categories": []any{}, "idempotency_key": "interrupted-replay-key",
+	}
+
+	restoreHook := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "create_page" && stage == "after_source_write" {
+			return fmt.Errorf("injected process loss before file_written/result journal")
+		}
+		return nil
+	})
+	firstSession, firstDone := newStdioServerSession(t, cfg)
+	first := callTool(t, firstSession, "create_page", args)
+	if !first.IsError || !strings.Contains(marshalContent(t, first), "persistence_error") {
+		t.Fatalf("interrupted create = %s, want staged-result interruption", marshalContent(t, first))
+	}
+	firstDone()
+	restoreHook()
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "interrupted-replay", "index.md")); err != nil {
+		t.Fatalf("source did not reach disk before interruption: %v", err)
+	}
+
+	secondSession, secondDone := newStdioServerSession(t, cfg)
+	defer secondDone()
+	second := callTool(t, secondSession, "create_page", args)
+	if second.IsError {
+		t.Fatalf("restart retry did not replay recovered result: %s", marshalContent(t, second))
+	}
+	if got := decodeWriteData(t, second)["status"]; got != "created" {
+		t.Fatalf("recovered replay status = %v, want original created result", got)
+	}
+}
+
+func TestInterruptedDeleteResumesBundleCleanupAndReplaysAfterRestart(t *testing.T) {
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.ContentRoot = contentRoot
+	cfg.SiteRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	cfg.DBPath = filepath.Join(t.TempDir(), "runtime.sqlite")
+	firstSession, firstDone := newStdioServerSession(t, cfg)
+	created := callTool(t, firstSession, "create_page", map[string]any{
+		"slug": "posts/interrupted-delete", "title": "Delete me", "body": "Body", "tags": []any{}, "categories": []any{},
+	})
+	if created.IsError {
+		t.Fatalf("setup create failed: %s", marshalContent(t, created))
+	}
+	bundleDir := filepath.Join(contentRoot, "posts", "interrupted-delete")
+	pagePath := filepath.Join(bundleDir, "index.md")
+	if err := os.WriteFile(filepath.Join(bundleDir, "shared.png"), []byte("asset"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{
+		"slug": "posts/interrupted-delete", "expected_revision": currentRevision(t, pagePath),
+		"idempotency_key": "interrupted-delete-key",
+	}
+	restoreHook := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "delete_page" && stage == "after_source_unlink" {
+			return fmt.Errorf("injected process loss before bundle cleanup")
+		}
+		return nil
+	})
+	interrupted := callTool(t, firstSession, "delete_page", args)
+	if !interrupted.IsError || !strings.Contains(marshalContent(t, interrupted), "persistence_error") {
+		t.Fatalf("interrupted delete = %s, want persistence_error", marshalContent(t, interrupted))
+	}
+	firstDone()
+	restoreHook()
+	if _, err := os.Stat(pagePath); !os.IsNotExist(err) {
+		t.Fatalf("source file survived injected unlink boundary: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bundleDir, "shared.png")); err != nil {
+		t.Fatalf("fixture did not leave cleanup residue: %v", err)
+	}
+
+	secondSession, secondDone := newStdioServerSession(t, cfg)
+	defer secondDone()
+	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
+		t.Fatalf("startup did not resume last-bundle cleanup: %v", err)
+	}
+	replayed := callTool(t, secondSession, "delete_page", args)
+	if replayed.IsError {
+		t.Fatalf("restart delete retry did not replay recovered result: %s", marshalContent(t, replayed))
+	}
+	if got := decodeWriteData(t, replayed)["status"]; got != "deleted" {
+		t.Fatalf("recovered delete status = %v, want deleted", got)
 	}
 }
 
@@ -4125,19 +4289,13 @@ func TestDeletePagePublicCleanupWarning(t *testing.T) {
 	}
 }
 
-// TestDeletePageDBWarning verifies that when the derived DB cannot be updated
-// (e.g. the connection is closed), delete_page still removes the source file
-// and surfaces a warning rather than failing hard (#242).
-func TestDeletePageDBWarning(t *testing.T) {
+func TestDeletePageFailsClosedWhenRecoveryJournalUnavailable(t *testing.T) {
 	contentRoot := t.TempDir()
 
 	siteDB, err := db.Open(filepath.Join(t.TempDir(), "test.sqlite"))
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	// Close the DB so any operation on it returns "sql: database is closed".
-	siteDB.Close()
-
 	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
 	defer done()
 
@@ -4149,31 +4307,25 @@ func TestDeletePageDBWarning(t *testing.T) {
 		raw, _ := json.Marshal(res.Content)
 		t.Fatalf("create_page failed: %s", raw)
 	}
+	siteDB.Close()
 
 	res = callTool(t, session, "delete_page", map[string]any{
 		"slug":              "posts/db-warning-test",
 		"expected_revision": currentRevision(t, filepath.Join(contentRoot, "posts", "db-warning-test", "index.md")),
 	})
-	if res.IsError {
-		raw, _ := json.Marshal(res.Content)
-		t.Fatalf("delete_page must not hard-fail on DB error: %s", raw)
+	if !res.IsError {
+		t.Fatal("delete_page succeeded without durable recovery intent")
 	}
-
-	// Source must be gone.
-	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "db-warning-test")); !os.IsNotExist(err) {
-		t.Error("source directory must be removed even when DB update fails")
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "db-warning-test", "index.md")); err != nil {
+		t.Fatalf("source changed despite recovery journal failure: %v", err)
 	}
-
 	raw, _ := json.Marshal(res.Content)
-	if !strings.Contains(string(raw), "warning") {
-		t.Errorf("expected a warning in response when DB delete fails, got: %s", raw)
-	}
-	if got := decodeWriteData(t, res)["status"]; got != "partial_success" {
-		t.Errorf("expected partial_success status when DB delete fails, got: %v", got)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error, got: %s", raw)
 	}
 }
 
-func TestCreatePageDBWarning(t *testing.T) {
+func TestCreatePageFailsClosedWhenRecoveryJournalUnavailable(t *testing.T) {
 	contentRoot := t.TempDir()
 
 	siteDB, err := db.Open(filepath.Join(t.TempDir(), "test.sqlite"))
@@ -4189,20 +4341,19 @@ func TestCreatePageDBWarning(t *testing.T) {
 		"slug": "posts/create-db-warning", "title": "DB Warning",
 		"body": "body", "tags": []any{}, "categories": []any{},
 	})
-	if res.IsError {
-		raw, _ := json.Marshal(res.Content)
-		t.Fatalf("create_page must not hard-fail on DB sync error: %s", raw)
+	if !res.IsError {
+		t.Fatal("create_page succeeded without durable recovery intent")
 	}
 	raw, _ := json.Marshal(res.Content)
-	if !strings.Contains(string(raw), "warning") {
-		t.Fatalf("expected warning when create DB sync fails, got: %s", raw)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error, got: %s", raw)
 	}
-	if got := decodeWriteData(t, res)["status"]; got != "partial_success" {
-		t.Fatalf("expected partial_success status when create DB sync fails, got: %v", got)
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "create-db-warning", "index.md")); !os.IsNotExist(err) {
+		t.Fatalf("create_page wrote despite recovery journal failure: %v", err)
 	}
 }
 
-func TestUpdatePageDBWarning(t *testing.T) {
+func TestUpdatePageFailsClosedWhenRollbackSnapshotCannotPersist(t *testing.T) {
 	contentRoot := t.TempDir()
 
 	siteDB, err := db.Open(filepath.Join(t.TempDir(), "test.sqlite"))
@@ -4226,16 +4377,314 @@ func TestUpdatePageDBWarning(t *testing.T) {
 	res = callTool(t, session, "update_page", map[string]any{
 		"slug": "posts/update-db-warning", "title": "Updated", "expected_revision": expected,
 	})
-	if res.IsError {
-		raw, _ := json.Marshal(res.Content)
-		t.Fatalf("update_page must not hard-fail on DB sync error: %s", raw)
+	if !res.IsError {
+		t.Fatal("update_page succeeded without a durable rollback snapshot")
 	}
 	raw, _ := json.Marshal(res.Content)
-	if !strings.Contains(string(raw), "warning") {
-		t.Fatalf("expected warning when update DB sync fails, got: %s", raw)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error when snapshot journal is unavailable, got: %s", raw)
 	}
-	if got := decodeWriteData(t, res)["status"]; got != "partial_success" {
-		t.Fatalf("expected partial_success status when update DB sync fails, got: %v", got)
+	if got := readFileString(t, contentRoot, "posts/update-db-warning/index.md"); strings.Contains(got, "Updated") {
+		t.Fatalf("update_page modified source despite snapshot persistence error: %q", got)
+	}
+}
+
+// dropPagesTable breaks only the derived-index write path (SyncSourcePage /
+// DeletePage), leaving the recovery journal's own table intact, by opening a
+// second raw connection to the same SQLite file and dropping the pages
+// table. This lets tests exercise the "source write landed, but the derived
+// DB sync degraded" warning branches without also breaking recovery-journal
+// persistence (which db.Close() would, since the DB is a single connection).
+func dropPagesTable(t *testing.T, dbPath string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open raw sqlite connection: %v", err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec("DROP TABLE pages"); err != nil {
+		t.Fatalf("drop pages table: %v", err)
+	}
+}
+
+// TestCreatePageSurvivesDerivedDBSyncFailureWithWarning exercises the
+// soft-degrade branch at create_page's siteDB.SyncSourcePage call: the
+// source write and recovery journal already succeeded, so a subsequent
+// failure to sync the derived (query-side) DB must not fail the whole
+// operation -- it should downgrade status to partial_success and surface a
+// warning, not an error.
+func TestCreatePageSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	dropPagesTable(t, dbPath)
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/derived-db-sync-warning", "title": "Derived DB Sync",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page must survive a derived-DB sync failure, got error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "partial_success") || !strings.Contains(string(raw), "derived DB could not be updated") {
+		t.Fatalf("create_page = %s, want partial_success with a derived-DB warning", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "derived-db-sync-warning", "index.md")); err != nil {
+		t.Fatalf("source page did not land despite recovery journal succeeding: %v", err)
+	}
+}
+
+// TestUpdatePageSurvivesDerivedDBSyncFailureWithWarning is the update_page
+// analogue of TestCreatePageSurvivesDerivedDBSyncFailureWithWarning.
+func TestUpdatePageSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/update-derived-db-warning", "title": "Derived DB Sync",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "update-derived-db-warning", "index.md"))
+
+	dropPagesTable(t, dbPath)
+
+	res = callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/update-derived-db-warning", "title": "Updated Title", "expected_revision": expected,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("update_page must survive a derived-DB sync failure, got error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "partial_success") || !strings.Contains(string(raw), "derived DB could not be updated") {
+		t.Fatalf("update_page = %s, want partial_success with a derived-DB warning", raw)
+	}
+	if got := readFileString(t, contentRoot, "posts/update-derived-db-warning/index.md"); !strings.Contains(got, "Updated Title") {
+		t.Fatalf("update_page did not apply the source edit despite recovery journal succeeding: %q", got)
+	}
+}
+
+// TestDeletePageSurvivesDerivedDBDeleteFailureWithWarning is the delete_page
+// analogue: the source unlink and recovery journal already succeeded, so a
+// subsequent failure to remove the page from the derived DB must degrade
+// with a warning rather than fail the whole delete.
+func TestDeletePageSurvivesDerivedDBDeleteFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/delete-derived-db-warning", "title": "Derived DB Sync",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "delete-derived-db-warning", "index.md"))
+
+	dropPagesTable(t, dbPath)
+
+	res = callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/delete-derived-db-warning", "expected_revision": expected,
+	})
+	if res.IsError {
+		raw, _ := json.Marshal(res.Content)
+		t.Fatalf("delete_page must survive a derived-DB delete failure, got error: %s", raw)
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "warning") || !strings.Contains(string(raw), "derived DB could not be updated") {
+		t.Fatalf("delete_page = %s, want a derived-DB warning", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "delete-derived-db-warning", "index.md")); !os.IsNotExist(err) {
+		t.Fatalf("source page still present despite recovery journal succeeding: %v", err)
+	}
+}
+
+// TestCreatePageInterruptedAfterSourceWriteLeavesRecoveryJournalInProgress
+// exercises the #1079 failure-injection seam this PR added and exports
+// specifically for testing (SetAfterFilesystemWriteHook) but that no
+// existing test previously used: a process loss immediately after the
+// atomic source write, before the recovery journal advances to
+// "file_written". The write itself must have landed (it's already durable
+// on disk), the caller must see a clear persistence_error rather than a
+// silently swallowed warning, and the recovery record must stay at
+// "in_progress" — proving a restart's reconciliation pass (which only acts
+// on in_progress/file_written) will still pick this operation up.
+func TestCreatePageInterruptedAfterSourceWriteLeavesRecoveryJournalInProgress(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	restore := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "create_page" && stage == "after_source_write" {
+			return errors.New("injected process loss after source write")
+		}
+		return nil
+	})
+	defer restore()
+
+	res := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/interrupted-create", "title": "Interrupted",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if !res.IsError {
+		t.Fatal("create_page succeeded despite injected post-write interruption")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error for injected post-write interruption, got: %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "interrupted-create", "index.md")); err != nil {
+		t.Fatalf("source file after interrupted create = %v, want the atomic write to have landed", err)
+	}
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].State != "in_progress" || pending[0].Kind != "content_write" {
+		t.Fatalf("recovery journal after interruption = %+v, want a single in_progress content_write record", pending)
+	}
+}
+
+// TestUpdatePageInterruptedAfterSourceWriteLeavesRecoveryJournalInProgress is
+// update_page's counterpart to the create_page failure-injection test above,
+// exercising the same previously-untested seam for an existing page's write.
+func TestUpdatePageInterruptedAfterSourceWriteLeavesRecoveryJournalInProgress(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	created := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/interrupted-update", "title": "Before",
+		"body": "before-body", "tags": []any{}, "categories": []any{},
+	})
+	if created.IsError {
+		raw, _ := json.Marshal(created.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "interrupted-update", "index.md"))
+
+	restore := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "update_page" && stage == "after_source_write" {
+			return errors.New("injected process loss after source write")
+		}
+		return nil
+	})
+	defer restore()
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/interrupted-update", "title": "After", "expected_revision": expected,
+	})
+	if !res.IsError {
+		t.Fatal("update_page succeeded despite injected post-write interruption")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error for injected post-write interruption, got: %s", raw)
+	}
+	if got := readFileString(t, contentRoot, "posts/interrupted-update/index.md"); !strings.Contains(got, "After") {
+		t.Fatalf("source file after interrupted update = %q, want the atomic write to have landed", got)
+	}
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].State != "in_progress" || pending[0].Kind != "content_write" {
+		t.Fatalf("recovery journal after interruption = %+v, want a single in_progress content_write record", pending)
+	}
+}
+
+// TestDeletePageInterruptedAfterSourceUnlinkLeavesRecoveryJournalInProgress
+// covers delete_page's distinct "after_source_unlink" boundary — the source
+// file has already been removed, but the recovery journal advance is
+// interrupted before it reaches "file_written".
+func TestDeletePageInterruptedAfterSourceUnlinkLeavesRecoveryJournalInProgress(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	created := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/interrupted-delete", "title": "ToDelete",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if created.IsError {
+		raw, _ := json.Marshal(created.Content)
+		t.Fatalf("create_page setup failed: %s", raw)
+	}
+	expected := currentRevision(t, filepath.Join(contentRoot, "posts", "interrupted-delete", "index.md"))
+
+	restore := write.SetAfterFilesystemWriteHook(func(tool, stage string) error {
+		if tool == "delete_page" && stage == "after_source_unlink" {
+			return errors.New("injected process loss after source unlink")
+		}
+		return nil
+	})
+	defer restore()
+
+	res := callTool(t, session, "delete_page", map[string]any{
+		"slug": "posts/interrupted-delete", "expected_revision": expected,
+	})
+	if !res.IsError {
+		t.Fatal("delete_page succeeded despite injected post-unlink interruption")
+	}
+	raw, _ := json.Marshal(res.Content)
+	if !strings.Contains(string(raw), "persistence_error") {
+		t.Fatalf("expected persistence_error for injected post-unlink interruption, got: %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "interrupted-delete", "index.md")); !os.IsNotExist(err) {
+		t.Fatalf("source file after interrupted delete = %v, want the unlink to have landed", err)
+	}
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].State != "in_progress" || pending[0].Kind != "content_write" {
+		t.Fatalf("recovery journal after interruption = %+v, want a single in_progress content_write record", pending)
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -18,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 )
 
 // Entry is one active preview build.
@@ -29,6 +33,9 @@ type Entry struct {
 	BuildStatus  string
 	CreatedAt    time.Time
 	Owner        string
+	// Recovered marks metadata restored after restart. No bearer/session secret
+	// was restored, so browser access requires creating a new preview.
+	Recovered bool
 	// sessionActivated records that the session cookie minted from this
 	// entry's single-use Token has since been used to fetch actual preview
 	// content (a successful GetBySession), not merely exchanged on the
@@ -40,19 +47,29 @@ type Entry struct {
 }
 
 type Snapshot struct {
-	ID          string
-	ExpiresAt   time.Time
-	BuildStatus string
-	CreatedAt   time.Time
-	Owner       string
+	ID           string
+	ExpiresAt    time.Time
+	BuildStatus  string
+	CreatedAt    time.Time
+	Owner        string
+	AccessStatus string
 }
 
-// Store is an in-memory registry of active previews. It does not persist
-// across process restarts — a restarted server simply has no previews,
-// which is an acceptable MVP tradeoff for a short-TTL, disposable surface.
+// Store keeps active preview secrets in memory and may persist only non-secret
+// lease metadata. Entry and session tokens are deliberately restart-volatile.
 type Store struct {
 	mu      sync.Mutex
 	entries map[string]*Entry
+	stateDB *db.DB
+	root    string
+}
+
+type ReconcileReport struct {
+	Restored       int
+	Expired        int
+	Missing        int
+	Unsafe         int
+	OrphansRemoved int
 }
 
 type LookupStatus string
@@ -65,6 +82,134 @@ const (
 
 func New() *Store {
 	return &Store{entries: make(map[string]*Entry)}
+}
+
+// NewDir allocates an isolated preview directory under the store's managed
+// root. Persistent stores use a dedicated root so restart reconciliation can
+// never sweep another process's unrelated os.TempDir entries.
+func (s *Store) NewDir() (string, error) {
+	root := s.root
+	if root == "" {
+		root = os.TempDir()
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(root, "mcp-preview-*")
+}
+
+func (s *Store) ManagedRoot() string {
+	if s.root != "" {
+		return s.root
+	}
+	return os.TempDir()
+}
+
+// NewPersistent restores non-secret lease metadata from SQLite and reconciles
+// it with the preview root. Existing bearer/cookie credentials are never
+// restored, so old preview URLs are invalid after a restart even while their
+// owner can still list and revoke the lease.
+func NewPersistent(stateDB *db.DB, root string) (*Store, ReconcileReport, error) {
+	s := New()
+	if stateDB == nil {
+		return s, ReconcileReport{}, nil
+	}
+	root = filepath.Clean(root)
+	if root == "" || !filepath.IsAbs(root) {
+		return nil, ReconcileReport{}, fmt.Errorf("preview store: root must be absolute")
+	}
+	s.stateDB = stateDB
+	s.root = root
+	report, err := s.reconcile()
+	if err != nil {
+		return nil, report, err
+	}
+	return s, report, nil
+}
+
+func safeDirName(name string) bool {
+	return name == filepath.Base(name) && strings.HasPrefix(name, "mcp-preview-") && name != "mcp-preview-"
+}
+
+func (s *Store) persistedLease(id string, entry *Entry) (db.PreviewLease, error) {
+	if s.stateDB == nil {
+		return db.PreviewLease{}, nil
+	}
+	if entry == nil || strings.TrimSpace(id) == "" {
+		return db.PreviewLease{}, fmt.Errorf("preview store: nil entry or empty id")
+	}
+	dir, err := filepath.Abs(entry.Dir)
+	if err != nil {
+		return db.PreviewLease{}, err
+	}
+	root := filepath.Clean(s.root)
+	if filepath.Dir(dir) != root || !safeDirName(filepath.Base(dir)) {
+		return db.PreviewLease{}, fmt.Errorf("preview store: directory is outside the managed preview root")
+	}
+	return db.PreviewLease{
+		ID: id, Owner: entry.Owner, DirName: filepath.Base(dir),
+		BuildStatus: entry.BuildStatus, State: "active",
+		CreatedAt: entry.CreatedAt, ExpiresAt: entry.ExpiresAt,
+	}, nil
+}
+
+func (s *Store) reconcile() (ReconcileReport, error) {
+	var report ReconcileReport
+	leases, err := s.stateDB.ListPreviewLeases()
+	if err != nil {
+		return report, fmt.Errorf("preview store: list leases: %w", err)
+	}
+	now := time.Now()
+	active := make(map[string]struct{})
+	for _, lease := range leases {
+		if !safeDirName(lease.DirName) || strings.TrimSpace(lease.ID) == "" {
+			report.Unsafe++
+			if err := s.stateDB.DeletePreviewLease(lease.ID); err != nil {
+				return report, err
+			}
+			continue
+		}
+		dir := filepath.Join(s.root, lease.DirName)
+		if !lease.ExpiresAt.After(now) {
+			report.Expired++
+			if err := s.stateDB.DeletePreviewLease(lease.ID); err != nil {
+				return report, err
+			}
+			_ = os.RemoveAll(dir)
+			continue
+		}
+		info, statErr := os.Lstat(dir)
+		if statErr != nil || !info.IsDir() {
+			report.Missing++
+			if err := s.stateDB.DeletePreviewLease(lease.ID); err != nil {
+				return report, err
+			}
+			continue
+		}
+		s.entries[lease.ID] = &Entry{
+			Dir: dir, ExpiresAt: lease.ExpiresAt, BuildStatus: lease.BuildStatus,
+			CreatedAt: lease.CreatedAt, Owner: lease.Owner, Recovered: true,
+		}
+		active[lease.DirName] = struct{}{}
+		report.Restored++
+	}
+	entries, err := os.ReadDir(s.root)
+	if err != nil && !os.IsNotExist(err) {
+		return report, fmt.Errorf("preview store: scan root: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !safeDirName(entry.Name()) {
+			continue
+		}
+		if _, ok := active[entry.Name()]; ok {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(s.root, entry.Name())); err != nil {
+			return report, fmt.Errorf("preview store: remove orphan %q: %w", entry.Name(), err)
+		}
+		report.OrphansRemoved++
+	}
+	return report, nil
 }
 
 // NewID returns a random, opaque, URL-safe identifier suitable for either a
@@ -80,13 +225,39 @@ func NewID(byteLen int) (string, error) {
 }
 
 // Put registers a new preview. Callers should generate id/token via NewID.
-func (s *Store) Put(id string, entry *Entry) {
+func (s *Store) Put(id string, entry *Entry) error {
 	if entry != nil && entry.CreatedAt.IsZero() {
 		entry.CreatedAt = time.Now().UTC()
+	}
+	if s.stateDB != nil {
+		lease, err := s.persistedLease(id, entry)
+		if err != nil {
+			return err
+		}
+		if err := s.stateDB.PutPreviewLease(lease); err != nil {
+			return fmt.Errorf("preview store: persist lease: %w", err)
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.entries[id] = entry
+	return nil
+}
+
+func (s *Store) deleteLease(id string) error {
+	if s.stateDB == nil {
+		return nil
+	}
+	return s.stateDB.DeletePreviewLease(id)
+}
+
+func (s *Store) removeExpiredLocked(id string, entry *Entry) bool {
+	if err := s.deleteLease(id); err != nil {
+		slog.Error("preview lease expiry persistence failed", "preview_id", id, "error", err)
+		return false
+	}
+	delete(s.entries, id)
+	return true
 }
 
 // Get returns the entry for id if it exists, is not expired, and token
@@ -109,9 +280,11 @@ func (s *Store) Lookup(id string) (*Entry, LookupStatus) {
 		return nil, LookupMissing
 	}
 	if time.Now().After(entry.ExpiresAt) {
-		delete(s.entries, id)
+		removed := s.removeExpiredLocked(id, entry)
 		s.mu.Unlock()
-		_ = os.RemoveAll(entry.Dir)
+		if removed {
+			_ = os.RemoveAll(entry.Dir)
+		}
 		return nil, LookupExpired
 	}
 	s.mu.Unlock()
@@ -128,9 +301,11 @@ func (s *Store) GetByToken(id, token string) (*Entry, bool) {
 		return nil, false
 	}
 	if time.Now().After(entry.ExpiresAt) {
-		delete(s.entries, id)
+		removed := s.removeExpiredLocked(id, entry)
 		s.mu.Unlock()
-		_ = os.RemoveAll(entry.Dir)
+		if removed {
+			_ = os.RemoveAll(entry.Dir)
+		}
 		return nil, false
 	}
 	s.mu.Unlock()
@@ -149,9 +324,11 @@ func (s *Store) GetBySession(id, sessionToken string) (*Entry, bool) {
 		return nil, false
 	}
 	if time.Now().After(entry.ExpiresAt) {
-		delete(s.entries, id)
+		removed := s.removeExpiredLocked(id, entry)
 		s.mu.Unlock()
-		_ = os.RemoveAll(entry.Dir)
+		if removed {
+			_ = os.RemoveAll(entry.Dir)
+		}
 		return nil, false
 	}
 	// SessionToken is mutated by EstablishSession under the lock (unlike
@@ -204,9 +381,11 @@ func (s *Store) EstablishSession(id, token string) (*Entry, string, bool) {
 		return nil, "", false
 	}
 	if time.Now().After(entry.ExpiresAt) {
-		delete(s.entries, id)
+		removed := s.removeExpiredLocked(id, entry)
 		s.mu.Unlock()
-		_ = os.RemoveAll(entry.Dir)
+		if removed {
+			_ = os.RemoveAll(entry.Dir)
+		}
 		return nil, "", false
 	}
 	if subtle.ConstantTimeCompare([]byte(entry.Token), []byte(token)) != 1 {
@@ -254,11 +433,21 @@ func (s *Store) ResetSessionForProbe(id string) bool {
 // storage doesn't accumulate indefinitely even if nobody ever re-visits an
 // expired preview URL (which is what triggers cleanup in Get).
 func (s *Store) Sweep() {
+	if err := s.SweepPersistent(); err != nil {
+		slog.Error("preview lease sweep failed", "error", err)
+	}
+}
+
+func (s *Store) SweepPersistent() error {
 	now := time.Now()
 	var expiredDirs []string
 	s.mu.Lock()
 	for id, entry := range s.entries {
 		if now.After(entry.ExpiresAt) {
+			if err := s.deleteLease(id); err != nil {
+				s.mu.Unlock()
+				return fmt.Errorf("preview store: expire %q: %w", id, err)
+			}
 			expiredDirs = append(expiredDirs, entry.Dir)
 			delete(s.entries, id)
 		}
@@ -267,6 +456,7 @@ func (s *Store) Sweep() {
 	for _, dir := range expiredDirs {
 		_ = os.RemoveAll(dir)
 	}
+	return nil
 }
 
 func (s *Store) List() []Snapshot {
@@ -276,16 +466,21 @@ func (s *Store) List() []Snapshot {
 	var out []Snapshot
 	for id, entry := range s.entries {
 		if now.After(entry.ExpiresAt) {
-			expiredDirs = append(expiredDirs, entry.Dir)
-			delete(s.entries, id)
+			if err := s.deleteLease(id); err == nil {
+				expiredDirs = append(expiredDirs, entry.Dir)
+				delete(s.entries, id)
+			} else {
+				slog.Error("preview lease list expiry failed", "preview_id", id, "error", err)
+			}
 			continue
 		}
 		out = append(out, Snapshot{
-			ID:          id,
-			ExpiresAt:   entry.ExpiresAt,
-			BuildStatus: entry.BuildStatus,
-			CreatedAt:   entry.CreatedAt,
-			Owner:       entry.Owner,
+			ID:           id,
+			ExpiresAt:    entry.ExpiresAt,
+			BuildStatus:  entry.BuildStatus,
+			CreatedAt:    entry.CreatedAt,
+			Owner:        entry.Owner,
+			AccessStatus: previewAccessStatus(entry),
 		})
 	}
 	s.mu.Unlock()
@@ -305,19 +500,24 @@ func (s *Store) ListOwned(owner string) []Snapshot {
 	var out []Snapshot
 	for id, entry := range s.entries {
 		if now.After(entry.ExpiresAt) {
-			expiredDirs = append(expiredDirs, entry.Dir)
-			delete(s.entries, id)
+			if err := s.deleteLease(id); err == nil {
+				expiredDirs = append(expiredDirs, entry.Dir)
+				delete(s.entries, id)
+			} else {
+				slog.Error("preview lease list expiry failed", "preview_id", id, "error", err)
+			}
 			continue
 		}
 		if entry.Owner != owner {
 			continue
 		}
 		out = append(out, Snapshot{
-			ID:          id,
-			ExpiresAt:   entry.ExpiresAt,
-			BuildStatus: entry.BuildStatus,
-			CreatedAt:   entry.CreatedAt,
-			Owner:       entry.Owner,
+			ID:           id,
+			ExpiresAt:    entry.ExpiresAt,
+			BuildStatus:  entry.BuildStatus,
+			CreatedAt:    entry.CreatedAt,
+			Owner:        entry.Owner,
+			AccessStatus: previewAccessStatus(entry),
 		})
 	}
 	s.mu.Unlock()
@@ -325,6 +525,13 @@ func (s *Store) ListOwned(owner string) []Snapshot {
 		_ = os.RemoveAll(dir)
 	}
 	return out
+}
+
+func previewAccessStatus(entry *Entry) string {
+	if entry != nil && entry.Recovered {
+		return "restart_invalidated"
+	}
+	return "active"
 }
 
 // CountByOwner returns how many non-expired previews are attributed to owner.
@@ -385,8 +592,8 @@ func (s *Store) DiskUsageBytes() int64 {
 // ActiveDirs returns the on-disk directories of every currently-tracked,
 // non-expired preview, as a set. It is used by get_storage_health (#861) to
 // distinguish a live preview's directory from expired/orphaned mcp-preview-*
-// residue left on disk (e.g. after a process restart, since the store is
-// in-memory and does not survive restarts). Unlike List/Sweep this is a pure
+// residue left on disk (including directories without durable lease metadata).
+// Unlike List/Sweep this is a pure
 // read: it never deletes an expired entry or its directory, so an advisory
 // health check can't itself mutate the state it is reporting on.
 func (s *Store) ActiveDirs() map[string]struct{} {
@@ -407,66 +614,88 @@ func (s *Store) ActiveDirs() map[string]struct{} {
 }
 
 func (s *Store) Revoke(id string) bool {
-	s.mu.Lock()
-	entry, ok := s.entries[id]
-	if ok {
-		delete(s.entries, id)
-	}
-	s.mu.Unlock()
-	if !ok {
+	ok, err := s.RevokeOwnedPersistent(id, "")
+	if err != nil {
+		slog.Error("preview lease revoke failed", "preview_id", id, "error", err)
 		return false
 	}
-	_ = os.RemoveAll(entry.Dir)
-	return true
+	return ok
 }
 
-func (s *Store) RevokeOwned(id, owner string) bool {
+func (s *Store) RevokeOwnedPersistent(id, owner string) (bool, error) {
 	s.mu.Lock()
 	entry, ok := s.entries[id]
 	if ok && owner != "" && entry.Owner != owner {
 		ok = false
 	}
 	if ok {
+		if err := s.deleteLease(id); err != nil {
+			s.mu.Unlock()
+			return false, fmt.Errorf("preview store: revoke lease: %w", err)
+		}
 		delete(s.entries, id)
 	}
 	s.mu.Unlock()
 	if !ok {
-		return false
+		return false, nil
 	}
 	_ = os.RemoveAll(entry.Dir)
-	return true
+	return true, nil
+}
+
+func (s *Store) RevokeOwned(id, owner string) bool {
+	ok, err := s.RevokeOwnedPersistent(id, owner)
+	if err != nil {
+		slog.Error("preview lease revoke failed", "preview_id", id, "error", err)
+		return false
+	}
+	return ok
 }
 
 func (s *Store) RevokeAll() int {
+	count, err := s.RevokeAllOwnedPersistent("")
+	if err != nil {
+		slog.Error("preview lease bulk revoke failed", "error", err)
+		return 0
+	}
+	return count
+}
+
+func (s *Store) RevokeAllOwnedPersistent(owner string) (int, error) {
 	s.mu.Lock()
-	entries := s.entries
-	s.entries = make(map[string]*Entry)
+	entries := make(map[string]*Entry)
+	for id, entry := range s.entries {
+		if owner != "" && (entry == nil || entry.Owner != owner) {
+			continue
+		}
+		entries[id] = entry
+	}
+	if err := func() error {
+		if s.stateDB == nil {
+			return nil
+		}
+		return s.stateDB.DeletePreviewLeasesByOwner(owner)
+	}(); err != nil {
+		s.mu.Unlock()
+		return 0, fmt.Errorf("preview store: bulk revoke leases: %w", err)
+	}
+	for id := range entries {
+		delete(s.entries, id)
+	}
 	s.mu.Unlock()
 	count := 0
 	for _, entry := range entries {
 		count++
 		_ = os.RemoveAll(entry.Dir)
 	}
-	return count
+	return count, nil
 }
 
 func (s *Store) RevokeAllOwned(owner string) int {
-	if owner == "" {
-		return s.RevokeAll()
-	}
-	s.mu.Lock()
-	owned := make(map[string]*Entry)
-	for id, entry := range s.entries {
-		if entry != nil && entry.Owner == owner {
-			owned[id] = entry
-			delete(s.entries, id)
-		}
-	}
-	s.mu.Unlock()
-	count := 0
-	for _, entry := range owned {
-		count++
-		_ = os.RemoveAll(entry.Dir)
+	count, err := s.RevokeAllOwnedPersistent(owner)
+	if err != nil {
+		slog.Error("preview lease bulk revoke failed", "owner", owner, "error", err)
+		return 0
 	}
 	return count
 }

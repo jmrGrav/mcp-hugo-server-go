@@ -12,3 +12,21 @@ func SetApplyBundleWriteHook(fn func(index int) error) func() {
 	applyBundleWriteHook = fn
 	return func() { applyBundleWriteHook = prev }
 }
+
+func SetAfterRecoveryResultHook(fn func(tool string) error) func() {
+	prev := afterRecoveryResultHook
+	afterRecoveryResultHook = fn
+	return func() { afterRecoveryResultHook = prev }
+}
+
+func SetAfterFilesystemWriteHook(fn func(tool, stage string) error) func() {
+	prev := afterFilesystemWriteHook
+	afterFilesystemWriteHook = fn
+	return func() { afterFilesystemWriteHook = prev }
+}
+
+func SetPlanConsumeFailureHook(fn func(tool string) error) func() {
+	prev := planConsumeFailureHook
+	planConsumeFailureHook = fn
+	return func() { planConsumeFailureHook = prev }
+}

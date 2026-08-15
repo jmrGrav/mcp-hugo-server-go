@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -65,6 +66,46 @@ type MutationJournalEntry struct {
 	CreatedAt   time.Time
 }
 
+// EphemeralRecord is caller-owned TTL state returned for one record kind.
+// Domain payloads remain in the write package; SQLite only enforces lifetime
+// and ownership across a process restart.
+type EphemeralRecord struct {
+	ID        string
+	Payload   []byte
+	CreatedAt time.Time
+}
+
+// RecoveryEntry records a filesystem-affecting operation's durable progress.
+// It intentionally records facts around the filesystem transition rather than
+// claiming SQLite and rename(2) are one atomic transaction.
+type RecoveryEntry struct {
+	OperationID string
+	Kind        string
+	State       string
+	Payload     []byte
+	UpdatedAt   time.Time
+}
+
+// PreviewLease is non-secret lifecycle metadata for one on-disk preview.
+// Entry/session bearer tokens are intentionally never persisted here.
+type PreviewLease struct {
+	ID          string
+	Owner       string
+	DirName     string
+	BuildStatus string
+	State       string
+	CreatedAt   time.Time
+	ExpiresAt   time.Time
+}
+
+// MutationJournalStats exposes retention maintenance without exposing caller,
+// tool, key, or result data.
+type MutationJournalStats struct {
+	ActiveEntries     int
+	LastPrunedAt      time.Time
+	LastPrunedEntries int
+}
+
 // Open opens (or creates) the SQLite database at path and runs migrations.
 func Open(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
@@ -82,6 +123,10 @@ func Open(path string) (*DB, error) {
 	if err := d.createTables(); err != nil {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: create tables: %w", err)
+	}
+	if err := d.migrateContentRepresentations(); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("db: migrate content representations: %w", err)
 	}
 	return d, nil
 }
@@ -148,12 +193,51 @@ func (d *DB) createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_publication_manifests_observed_at
 			ON publication_manifests(observed_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS build_runs (
+			build_id TEXT PRIMARY KEY, source_revision TEXT NOT NULL DEFAULT '',
+			output_revision TEXT NOT NULL DEFAULT '', hugo_version TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL, source_drift_count INTEGER NOT NULL DEFAULT 0,
+			public_drift_count INTEGER NOT NULL DEFAULT 0,
+			observed_at TEXT NOT NULL, reconciled_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_build_runs_observed_at ON build_runs(observed_at DESC)`,
+		`CREATE TABLE IF NOT EXISTS build_pages (
+			build_id TEXT NOT NULL REFERENCES build_runs(build_id) ON DELETE CASCADE,
+			source_key TEXT NOT NULL, lang TEXT NOT NULL,
+			source_revision TEXT NOT NULL DEFAULT '',
+			last_built_source_revision TEXT NOT NULL DEFAULT '',
+			public_revision TEXT NOT NULL DEFAULT '', publication_state TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			PRIMARY KEY(build_id,source_key,lang)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_build_pages_identity ON build_pages(source_key,lang)`,
 		`CREATE TABLE IF NOT EXISTS mutation_journal (
 			caller_key TEXT NOT NULL, tool TEXT NOT NULL, idempotency_key TEXT NOT NULL,
 			request_hash TEXT NOT NULL, result_json BLOB NOT NULL, created_at TEXT NOT NULL,
 			PRIMARY KEY(caller_key, tool, idempotency_key)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_mutation_journal_created_at ON mutation_journal(created_at)`,
+		`CREATE TABLE IF NOT EXISTS ephemeral_records (
+			kind TEXT NOT NULL, record_id TEXT NOT NULL, caller_key TEXT NOT NULL,
+			payload BLOB NOT NULL, created_at TEXT NOT NULL,
+			PRIMARY KEY(kind, record_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS recovery_journal (
+			operation_id TEXT PRIMARY KEY, kind TEXT NOT NULL, state TEXT NOT NULL,
+			payload BLOB NOT NULL, updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_recovery_journal_state ON recovery_journal(state)`,
+		`CREATE TABLE IF NOT EXISTS preview_leases (
+			preview_id TEXT PRIMARY KEY, owner TEXT NOT NULL, dir_name TEXT NOT NULL,
+			build_status TEXT NOT NULL, state TEXT NOT NULL,
+			created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_preview_leases_owner_expiry
+			ON preview_leases(owner, expires_at)`,
+		`CREATE TABLE IF NOT EXISTS mutation_journal_maintenance (
+			id INTEGER PRIMARY KEY CHECK (id = 1), last_pruned_at TEXT NOT NULL,
+			last_pruned_entries INTEGER NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -161,6 +245,191 @@ func (d *DB) createTables() error {
 		}
 	}
 	return nil
+}
+
+// PutPreviewLease upserts metadata only. Callers must never include a bearer
+// or session token in the lease fields.
+func (d *DB) PutPreviewLease(lease PreviewLease) error {
+	if strings.TrimSpace(lease.ID) == "" || strings.TrimSpace(lease.DirName) == "" {
+		return fmt.Errorf("preview lease: preview_id and dir_name are required")
+	}
+	if lease.CreatedAt.IsZero() || lease.ExpiresAt.IsZero() {
+		return fmt.Errorf("preview lease: creation and expiry timestamps are required")
+	}
+	if lease.State == "" {
+		lease.State = "active"
+	}
+	_, err := d.db.Exec(`INSERT INTO preview_leases(preview_id,owner,dir_name,build_status,state,created_at,expires_at)
+		VALUES(?,?,?,?,?,?,?) ON CONFLICT(preview_id) DO UPDATE SET
+		owner=excluded.owner,dir_name=excluded.dir_name,build_status=excluded.build_status,
+		state=excluded.state,created_at=excluded.created_at,expires_at=excluded.expires_at`,
+		lease.ID, lease.Owner, lease.DirName, lease.BuildStatus, lease.State,
+		lease.CreatedAt.UTC().Format(time.RFC3339Nano), lease.ExpiresAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (d *DB) ListPreviewLeases() ([]PreviewLease, error) {
+	rows, err := d.db.Query(`SELECT preview_id,owner,dir_name,build_status,state,created_at,expires_at
+		FROM preview_leases ORDER BY created_at,preview_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PreviewLease
+	for rows.Next() {
+		var lease PreviewLease
+		var createdAt, expiresAt string
+		if err := rows.Scan(&lease.ID, &lease.Owner, &lease.DirName, &lease.BuildStatus, &lease.State, &createdAt, &expiresAt); err != nil {
+			return nil, err
+		}
+		lease.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("preview lease %q created_at: %w", lease.ID, err)
+		}
+		lease.ExpiresAt, err = time.Parse(time.RFC3339Nano, expiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("preview lease %q expires_at: %w", lease.ID, err)
+		}
+		out = append(out, lease)
+	}
+	return out, rows.Err()
+}
+
+func (d *DB) DeletePreviewLease(id string) error {
+	_, err := d.db.Exec(`DELETE FROM preview_leases WHERE preview_id=?`, id)
+	return err
+}
+
+func (d *DB) DeletePreviewLeasesByOwner(owner string) error {
+	if owner == "" {
+		_, err := d.db.Exec(`DELETE FROM preview_leases`)
+		return err
+	}
+	_, err := d.db.Exec(`DELETE FROM preview_leases WHERE owner=?`, owner)
+	return err
+}
+
+// PutEphemeralRecord stores server-owned TTL state such as plans/snapshots.
+// The caller key is persisted with the payload boundary so a restarted server
+// retains the same isolation rule as the in-memory stores.
+func (d *DB) PutEphemeralRecord(kind, id, callerKey string, payload []byte, createdAt time.Time) error {
+	if kind == "" || id == "" || len(payload) == 0 {
+		return fmt.Errorf("ephemeral record: kind, id, and payload are required")
+	}
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	_, err := d.db.Exec(`INSERT INTO ephemeral_records(kind,record_id,caller_key,payload,created_at) VALUES(?,?,?,?,?) ON CONFLICT(kind,record_id) DO UPDATE SET caller_key=excluded.caller_key,payload=excluded.payload,created_at=excluded.created_at`, kind, id, callerKey, payload, createdAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (d *DB) GetEphemeralRecord(kind, id, callerKey string, ttl time.Duration) ([]byte, bool, error) {
+	var owner, created string
+	var payload []byte
+	err := d.db.QueryRow(`SELECT caller_key,payload,created_at FROM ephemeral_records WHERE kind=? AND record_id=?`, kind, id).Scan(&owner, &payload, &created)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if owner != callerKey {
+		return nil, false, nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, created)
+	if err != nil {
+		return nil, false, err
+	}
+	if ttl > 0 && time.Since(at) > ttl {
+		_, _ = d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=?`, kind, id)
+		return nil, false, nil
+	}
+	return payload, true, nil
+}
+
+func (d *DB) DeleteEphemeralRecord(kind, id, callerKey string) error {
+	_, err := d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=? AND caller_key=?`, kind, id, callerKey)
+	return err
+}
+
+// ListEphemeralRecords returns only unexpired records owned by callerKey.
+// Expiry is enforced here as well as on point lookup so a restart cannot make
+// an old snapshot listable beyond its advertised retention window.
+func (d *DB) ListEphemeralRecords(kind, callerKey string, ttl time.Duration) ([]EphemeralRecord, error) {
+	rows, err := d.db.Query(`SELECT record_id,payload,created_at FROM ephemeral_records WHERE kind=? AND caller_key=? ORDER BY created_at DESC`, kind, callerKey)
+	if err != nil {
+		return nil, err
+	}
+	var records []EphemeralRecord
+	var expiredIDs []string
+	for rows.Next() {
+		var record EphemeralRecord
+		var created string
+		if err := rows.Scan(&record.ID, &record.Payload, &created); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		at, err := time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if ttl > 0 && time.Since(at) > ttl {
+			expiredIDs = append(expiredIDs, record.ID)
+			continue
+		}
+		record.CreatedAt = at.UTC()
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	// rows must be fully drained and closed before issuing another statement
+	// on this *sql.DB: with SetMaxOpenConns(1), a nested Exec while rows still
+	// holds the only connection checked out would deadlock forever.
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for _, id := range expiredIDs {
+		if _, err := d.db.Exec(`DELETE FROM ephemeral_records WHERE kind=? AND record_id=? AND caller_key=?`, kind, id, callerKey); err != nil {
+			return nil, err
+		}
+	}
+	return records, nil
+}
+
+func (d *DB) RecordRecovery(e RecoveryEntry) error {
+	if e.OperationID == "" || e.Kind == "" || e.State == "" {
+		return fmt.Errorf("recovery journal: operation_id, kind, and state are required")
+	}
+	if e.UpdatedAt.IsZero() {
+		e.UpdatedAt = time.Now().UTC()
+	}
+	_, err := d.db.Exec(`INSERT INTO recovery_journal(operation_id,kind,state,payload,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(operation_id) DO UPDATE SET state=excluded.state,payload=excluded.payload,updated_at=excluded.updated_at`, e.OperationID, e.Kind, e.State, e.Payload, e.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (d *DB) PendingRecovery() ([]RecoveryEntry, error) {
+	rows, err := d.db.Query(`SELECT operation_id,kind,state,payload,updated_at FROM recovery_journal WHERE state NOT IN ('committed','reconciled') ORDER BY updated_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RecoveryEntry
+	for rows.Next() {
+		var e RecoveryEntry
+		var at string
+		if err := rows.Scan(&e.OperationID, &e.Kind, &e.State, &e.Payload, &at); err != nil {
+			return nil, err
+		}
+		e.UpdatedAt, err = time.Parse(time.RFC3339Nano, at)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
 }
 
 // RecordPublicationManifest persists a completed build's observed source and
@@ -246,17 +515,79 @@ func (d *DB) LookupMutation(callerKey, tool, key string, ttl time.Duration) (*Mu
 		return nil, fmt.Errorf("mutation journal: parse created_at: %w", err)
 	}
 	if ttl > 0 && time.Since(e.CreatedAt) > ttl {
-		_, _ = d.db.Exec(`DELETE FROM mutation_journal WHERE caller_key=? AND tool=? AND idempotency_key=?`, callerKey, tool, key)
+		if _, err := d.db.Exec(`DELETE FROM mutation_journal WHERE caller_key=? AND tool=? AND idempotency_key=?`, callerKey, tool, key); err != nil {
+			return nil, fmt.Errorf("mutation journal: delete expired entry: %w", err)
+		}
 		return nil, nil
 	}
 	e.CallerKey, e.Tool, e.Key = callerKey, tool, key
 	return &e, nil
 }
 
+// PruneMutationJournal deletes expired mutation outcomes and records the
+// maintenance fact in the same transaction. The durable fact lets operators
+// distinguish an empty journal from one that has never been maintained.
+func (d *DB) PruneMutationJournal(ttl time.Duration, now time.Time) (MutationJournalStats, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	removed := int64(0)
+	if ttl > 0 {
+		result, err := tx.Exec(`DELETE FROM mutation_journal WHERE created_at < ?`, now.Add(-ttl).UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return MutationJournalStats{}, err
+		}
+		removed, err = result.RowsAffected()
+		if err != nil {
+			return MutationJournalStats{}, err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO mutation_journal_maintenance(id,last_pruned_at,last_pruned_entries) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET last_pruned_at=excluded.last_pruned_at,last_pruned_entries=excluded.last_pruned_entries`, now.UTC().Format(time.RFC3339Nano), removed); err != nil {
+		return MutationJournalStats{}, err
+	}
+	var active int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM mutation_journal`).Scan(&active); err != nil {
+		return MutationJournalStats{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MutationJournalStats{}, err
+	}
+	return MutationJournalStats{ActiveEntries: active, LastPrunedAt: now.UTC(), LastPrunedEntries: int(removed)}, nil
+}
+
+func (d *DB) MutationJournalStats() (MutationJournalStats, error) {
+	var stats MutationJournalStats
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM mutation_journal`).Scan(&stats.ActiveEntries); err != nil {
+		return MutationJournalStats{}, err
+	}
+	var at string
+	err := d.db.QueryRow(`SELECT last_pruned_at,last_pruned_entries FROM mutation_journal_maintenance WHERE id=1`).Scan(&at, &stats.LastPrunedEntries)
+	if err == sql.ErrNoRows {
+		return stats, nil
+	}
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	stats.LastPrunedAt = parsed.UTC()
+	return stats, nil
+}
+
 // SyncPublicPage upserts a public (published) page, its taxonomy, its link graph,
 // and its FTS entry. It is hash-gated: unchanged pages are skipped.
 func (d *DB) SyncPublicPage(p site.Page, siteIdx *site.Index) error {
 	hash := hashPublicPage(p)
+	if err := d.syncContentRepresentation(d.publicRepresentation(p)); err != nil {
+		return fmt.Errorf("sync public shadow: %w", err)
+	}
 
 	// Quick hash check before opening a transaction.
 	var existing string
@@ -304,6 +635,9 @@ func (d *DB) SyncPublicPage(p site.Page, siteIdx *site.Index) error {
 // SyncSourcePage upserts a source (draft/markdown) page and its taxonomy and FTS entry.
 func (d *DB) SyncSourcePage(p hugosite.SourcePage) error {
 	hash := hashSourcePage(p)
+	if err := d.syncContentRepresentation(d.sourceRepresentation(p)); err != nil {
+		return fmt.Errorf("sync source shadow: %w", err)
+	}
 
 	var existing string
 	_ = d.db.QueryRow("SELECT content_hash FROM pages WHERE slug = ?", p.Slug).Scan(&existing)
@@ -356,6 +690,9 @@ func (d *DB) DeletePage(slug string) error {
 		return err
 	}
 	if _, err := tx.Exec("DELETE FROM pages WHERE slug = ?", slug); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM content_representations_v1 WHERE legacy_slug = ?", slug); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -461,11 +798,13 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 	// logical page (#475), which search_content's FTS path (keyed off the
 	// public index) can never reach anyway.
 	publicSourceSlugs := make(map[string]bool)
+	var syncErrs []error
 	if siteIdx != nil {
 		for _, p := range siteIdx.Sitemap() {
 			delete(hashes, p.Slug)
 			if err := d.SyncPublicPage(p, siteIdx); err != nil {
 				slog.Warn("db: startup sync: public page", "slug", p.Slug, "error", err)
+				syncErrs = append(syncErrs, fmt.Errorf("public page %q: %w", p.Slug, err))
 				continue
 			}
 			for _, c := range site.SourceSlugCandidates(strings.Trim(p.Slug, "/")) {
@@ -487,6 +826,7 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 			delete(hashes, p.Slug)
 			if err := d.SyncSourcePage(p); err != nil {
 				slog.Warn("db: startup sync: source page", "slug", p.Slug, "error", err)
+				syncErrs = append(syncErrs, fmt.Errorf("source page %q: %w", p.Slug, err))
 			}
 		}
 	}
@@ -495,9 +835,13 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 	for slug := range hashes {
 		if err := d.DeletePage(slug); err != nil {
 			slog.Warn("db: startup sync: delete orphan", "slug", slug, "error", err)
+			syncErrs = append(syncErrs, fmt.Errorf("delete orphan %q: %w", slug, err))
 		}
 	}
-	return nil
+	if err := d.reconcileContentRepresentations(siteIdx, srcIdx, true, true); err != nil {
+		syncErrs = append(syncErrs, fmt.Errorf("content representation shadow: %w", err))
+	}
+	return errors.Join(syncErrs...)
 }
 
 // PostBuildSync reindexes the public site index after a successful build,
@@ -544,6 +888,10 @@ func (d *DB) PostBuildSync(siteIdx *site.Index) error {
 		if err := d.DeletePage(slug); err != nil {
 			slog.Warn("db: post-build sync: delete stale page", "slug", slug, "error", err)
 		}
+	}
+	if err := d.reconcileContentRepresentations(siteIdx, nil, false, true); err != nil {
+		slog.Warn("db: post-build sync: content representation shadow", "error", err)
+		return err
 	}
 	return nil
 }

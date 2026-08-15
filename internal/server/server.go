@@ -8,6 +8,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +18,9 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/googleindex"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/indexnow"
@@ -136,10 +140,293 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 	if err != nil {
 		return nil, fmt.Errorf("server: sqlite index: %w", err)
 	}
+	resolvedMutations, sourceChanged := prepareMutationRecovery(cfg, siteDB)
+	if sourceChanged && srcIdx != nil {
+		if err := srcIdx.Reload(cfg.ContentRoot); err != nil {
+			slog.Warn("server: recovered source index reload failed", "error", err)
+			return siteDB, nil
+		}
+	}
 	if err := siteDB.StartupSync(idx, srcIdx); err != nil {
 		slog.Warn("server: startup db sync incomplete", "error", err)
+		return siteDB, nil
 	}
+	if _, err := siteDB.ReconcileLatestBuild(idx, srcIdx); err != nil {
+		slog.Warn("server: build manifest reconciliation failed", "error", err)
+	}
+	commitRecoveryReconciliation(siteDB, resolvedMutations)
+	// A build journal record can remain at in_progress/file_written only when
+	// the previous process died between lifecycle callbacks. The public swap is
+	// an atomic directory rename, so after StartupSync has freshly indexed the
+	// source and the public tree, the new process has reconciled the only two
+	// observable outcomes (old complete tree or new complete tree). Mark those
+	// build records reconciled; deliberately leave source-mutation records for
+	// their stricter file-level recovery journal (#1079 follow-up).
+	reconcileBuildRecoveryJournal(siteDB)
+	pruneMutationJournalRetention(cfg, siteDB)
 	return siteDB, nil
+}
+
+type sourceRecoveryPayload struct {
+	Path           string                      `json:"path"`
+	BundleDir      string                      `json:"bundle_dir"`
+	BeforeRevision string                      `json:"before_revision"`
+	AfterRevision  string                      `json:"after_revision"`
+	Files          []bundleRecoveryFilePayload `json:"files"`
+	Idempotency    *recoveryIdempotencyPayload `json:"idempotency"`
+	CleanupPaths   []string                    `json:"cleanup_paths"`
+}
+
+type recoveryIdempotencyPayload struct {
+	CallerKey   string          `json:"caller_key"`
+	Tool        string          `json:"tool"`
+	Key         string          `json:"key"`
+	RequestHash string          `json:"request_hash"`
+	ResultJSON  json.RawMessage `json:"result_json"`
+}
+
+type bundleRecoveryFilePayload struct {
+	Path   string  `json:"path"`
+	Before *string `json:"before"`
+	After  *string `json:"after"`
+}
+
+func recoveryPathAllowed(contentRoot, path string) bool {
+	if contentRoot == "" || path == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(contentRoot), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func observedRecoveryRevision(path string, bundle bool) (string, bool, error) {
+	if bundle {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return "", false, nil
+		} else if err != nil {
+			return "", false, err
+		}
+		rev, err := contentmodel.BundleRevision(path)
+		return rev, true, err
+	}
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return contentmodel.SourceRevisionBytes(raw), true, nil
+}
+
+func recoveryFileMatches(path string, expected *string) (bool, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return expected == nil, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return expected != nil && string(raw) == *expected, nil
+}
+
+// reconcileBundleFiles resolves the only crash window where a multilingual
+// source bundle can be mixed: process death between two atomic file renames.
+// A fully-before or fully-after bundle is already safe. A strict mixture of
+// those two known states is rolled back to the durable pre-state; any foreign
+// bytes are left untouched and pending for an operator.
+func reconcileBundleFiles(cfg config.Config, payload sourceRecoveryPayload) (resolved, changed, landed bool, err error) {
+	if len(payload.Files) == 0 {
+		return false, false, false, nil
+	}
+	allBefore, allAfter := true, true
+	for _, file := range payload.Files {
+		if !recoveryPathAllowed(cfg.ContentRoot, file.Path) || !recoveryPathAllowed(payload.BundleDir, file.Path) {
+			return false, false, false, nil
+		}
+		before, err := recoveryFileMatches(file.Path, file.Before)
+		if err != nil {
+			return false, false, false, err
+		}
+		after, err := recoveryFileMatches(file.Path, file.After)
+		if err != nil {
+			return false, false, false, err
+		}
+		if !before && !after {
+			return false, false, false, nil
+		}
+		allBefore = allBefore && before
+		allAfter = allAfter && after
+	}
+	if allBefore {
+		return true, false, false, nil
+	}
+	if allAfter {
+		changed := false
+		for _, cleanupPath := range payload.CleanupPaths {
+			if !recoveryPathAllowed(cfg.ContentRoot, cleanupPath) || !recoveryPathAllowed(payload.BundleDir, cleanupPath) {
+				return false, false, false, nil
+			}
+			if err := os.RemoveAll(cleanupPath); err != nil {
+				return false, false, false, err
+			}
+			changed = true
+		}
+		return true, changed, true, nil
+	}
+	pg, err := security.New(cfg.ContentRoot, cfg.RejectSymlinks)
+	if err != nil {
+		return false, false, false, err
+	}
+	for _, file := range payload.Files {
+		if file.Before == nil {
+			if err := pg.RevalidateForWrite(file.Path); err != nil {
+				return false, false, false, err
+			}
+			if err := os.Remove(file.Path); err != nil && !os.IsNotExist(err) {
+				return false, false, false, err
+			}
+			continue
+		}
+		if err := fileutil.AtomicWriteChecked(file.Path, *file.Before, pg); err != nil {
+			return false, false, false, err
+		}
+	}
+	return true, true, false, nil
+}
+
+type preparedMutationRecovery struct {
+	Entry  db.RecoveryEntry
+	Landed bool
+}
+
+func prepareMutationRecovery(cfg config.Config, siteDB *db.DB) ([]preparedMutationRecovery, bool) {
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		slog.Warn("server: recovery journal lookup failed", "error", err)
+		return nil, false
+	}
+	var resolvedEntries []preparedMutationRecovery
+	sourceChanged := false
+	for _, entry := range pending {
+		if entry.State != "in_progress" && entry.State != "file_written" {
+			continue
+		}
+		if entry.Kind != "content_write" && entry.Kind != "bundle_write" {
+			continue
+		}
+		var payload sourceRecoveryPayload
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			slog.Warn("server: mutation recovery payload invalid", "operation_id", entry.OperationID, "error", err)
+			continue
+		}
+		path := payload.Path
+		bundle := entry.Kind == "bundle_write"
+		if bundle {
+			resolved, changed, landed, reconcileErr := reconcileBundleFiles(cfg, payload)
+			if reconcileErr != nil {
+				slog.Warn("server: bundle mutation recovery failed", "operation_id", entry.OperationID, "error", reconcileErr)
+				continue
+			}
+			if !resolved {
+				slog.Warn("server: bundle mutation recovery remains ambiguous", "operation_id", entry.OperationID)
+				continue
+			}
+			resolvedEntries = append(resolvedEntries, preparedMutationRecovery{Entry: entry, Landed: landed})
+			sourceChanged = sourceChanged || changed
+			continue
+		}
+		if !recoveryPathAllowed(cfg.ContentRoot, path) {
+			slog.Warn("server: mutation recovery path rejected", "operation_id", entry.OperationID)
+			continue
+		}
+		observed, exists, err := observedRecoveryRevision(path, bundle)
+		if err != nil {
+			slog.Warn("server: mutation recovery read failed", "operation_id", entry.OperationID, "error", err)
+			continue
+		}
+		resolved := (exists && (observed == payload.BeforeRevision || observed == payload.AfterRevision)) ||
+			(!exists && (payload.BeforeRevision == "" || payload.AfterRevision == ""))
+		if !resolved {
+			slog.Warn("server: mutation recovery remains ambiguous", "operation_id", entry.OperationID)
+			continue
+		}
+		landed := (exists && observed == payload.AfterRevision) || (!exists && payload.AfterRevision == "")
+		if landed {
+			for _, cleanupPath := range payload.CleanupPaths {
+				if !recoveryPathAllowed(cfg.ContentRoot, cleanupPath) {
+					slog.Warn("server: mutation recovery cleanup path rejected", "operation_id", entry.OperationID)
+					resolved = false
+					break
+				}
+				if err := os.RemoveAll(cleanupPath); err != nil {
+					slog.Warn("server: mutation recovery cleanup failed", "operation_id", entry.OperationID, "error", err)
+					resolved = false
+					break
+				}
+				sourceChanged = true
+			}
+		}
+		if resolved {
+			resolvedEntries = append(resolvedEntries, preparedMutationRecovery{Entry: entry, Landed: landed})
+		}
+	}
+	return resolvedEntries, sourceChanged
+}
+
+func commitRecoveryReconciliation(siteDB *db.DB, entries []preparedMutationRecovery) {
+	for _, prepared := range entries {
+		entry := prepared.Entry
+		var payload sourceRecoveryPayload
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			slog.Warn("server: recovered mutation result decode failed", "operation_id", entry.OperationID, "error", err)
+			continue
+		}
+		if idem := payload.Idempotency; prepared.Landed && idem != nil && len(idem.ResultJSON) > 0 {
+			if err := siteDB.RememberMutation(db.MutationJournalEntry{
+				CallerKey: idem.CallerKey, Tool: idem.Tool, Key: idem.Key,
+				RequestHash: idem.RequestHash, ResultJSON: idem.ResultJSON, CreatedAt: entry.UpdatedAt,
+			}); err != nil {
+				slog.Warn("server: recovered idempotency result persistence failed", "operation_id", entry.OperationID, "error", err)
+				continue
+			}
+		}
+		entry.State = "reconciled"
+		if err := siteDB.RecordRecovery(entry); err != nil {
+			slog.Warn("server: mutation recovery reconciliation failed", "operation_id", entry.OperationID, "error", err)
+		}
+	}
+}
+
+func reconcileBuildRecoveryJournal(siteDB *db.DB) {
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		slog.Warn("server: recovery journal lookup failed", "error", err)
+		return
+	}
+	for _, entry := range pending {
+		if entry.Kind != "build" || (entry.State != "in_progress" && entry.State != "file_written") {
+			continue
+		}
+		entry.State = "reconciled"
+		if err := siteDB.RecordRecovery(entry); err != nil {
+			slog.Warn("server: build recovery reconciliation failed", "operation_id", entry.OperationID, "error", err)
+		}
+	}
+}
+
+func pruneMutationJournalRetention(cfg config.Config, siteDB *db.DB) {
+	ttl := time.Duration(cfg.IdempotencyTTLSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Duration(config.DefaultIdempotencyTTLSeconds) * time.Second
+	}
+	if _, err := siteDB.PruneMutationJournal(ttl, time.Now().UTC()); err != nil {
+		// Retention is maintenance, not a prerequisite for serving content.
+		// Keep the previous durable last_pruned_at fact visible so operators
+		// can detect the stale sweep without a transient cleanup failure
+		// turning into a full reader/writer outage.
+		slog.Warn("server: mutation journal retention maintenance failed", "error", err)
+	}
 }
 
 func knownToolsSet(reg *tools.Registry) map[string]bool {
@@ -441,7 +728,74 @@ func postBuildCallbacks(
 	srcIdx *hugosite.SourceIndex,
 	siteDB *db.DB,
 ) []admin.PostBuildCallback {
+	recordBuildRecovery := func(buildID, state string, observedAt time.Time) error {
+		if siteDB == nil {
+			return nil
+		}
+		payload, err := json.Marshal(map[string]string{"action": action})
+		if err != nil {
+			return err
+		}
+		return siteDB.RecordRecovery(db.RecoveryEntry{
+			OperationID: action + ":" + buildID,
+			Kind:        "build",
+			State:       state,
+			Payload:     payload,
+			UpdatedAt:   observedAt,
+		})
+	}
 	return []admin.PostBuildCallback{
+		{Name: "build_pages",
+			OnBuildPrepared: func(progress admin.BuildProgress) ([]admin.BuildPageChange, error) {
+				if siteDB == nil {
+					return nil, nil
+				}
+				changes, err := siteDB.BeginBuildRun(progress.BuildID, idx, srcIdx, progress.ObservedAt)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]admin.BuildPageChange, 0, len(changes))
+				for _, change := range changes {
+					out = append(out, admin.BuildPageChange{
+						SourceKey: change.SourceKey, Lang: change.Lang, Draft: change.Draft,
+						TestContent: change.TestContent, Deleted: change.Deleted,
+					})
+				}
+				return out, nil
+			},
+			OnBuildComplete: func(completion admin.BuildCompletion) error {
+				if siteDB == nil {
+					return nil
+				}
+				manifest := db.PublicationManifest{
+					BuildID: completion.BuildID, SourceRevision: completion.SourceRevision,
+					OutputRevision: completion.OutputRevision, HugoVersion: completion.HugoVersion,
+					Status: completion.Status, ObservedAt: completion.ObservedAt,
+				}
+				if err := siteDB.CompleteBuildRun(manifest); err != nil {
+					return err
+				}
+				_, err := siteDB.ReconcileLatestBuild(idx, srcIdx)
+				return err
+			},
+			OnBuildFailed: func(progress admin.BuildProgress, state string) error {
+				if siteDB == nil {
+					return nil
+				}
+				return siteDB.FailBuildRun(progress.BuildID, state, progress.ObservedAt)
+			},
+		},
+		{Name: "recovery_journal",
+			OnBuildStart: func(progress admin.BuildProgress) error {
+				return recordBuildRecovery(progress.BuildID, "in_progress", progress.ObservedAt)
+			},
+			OnOutputSwapped: func(progress admin.BuildProgress) error {
+				return recordBuildRecovery(progress.BuildID, "file_written", progress.ObservedAt)
+			},
+			OnBuildComplete: func(completion admin.BuildCompletion) error {
+				return recordBuildRecovery(completion.BuildID, "committed", completion.ObservedAt)
+			},
+		},
 		{Name: "index_reload", Fn: func() error {
 			if err := idx.Reload(cfg); err != nil {
 				return err
@@ -516,6 +870,7 @@ type serverCore struct {
 	srcIdx       *hugosite.SourceIndex
 	writeEnabled bool
 	siteDB       *db.DB
+	previews     *previewstore.Store
 }
 
 func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
@@ -549,6 +904,28 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 	if err != nil {
 		return nil, err
 	}
+	previewRoot := os.TempDir()
+	if cfg.DBPath != "" {
+		dbPath, absErr := filepath.Abs(cfg.DBPath)
+		if absErr != nil {
+			_ = siteDB.Close()
+			return nil, fmt.Errorf("server: resolve preview lease root: %w", absErr)
+		}
+		previewRoot = dbPath + ".previews"
+	}
+	previews, report, err := previewstore.NewPersistent(siteDB, previewRoot)
+	if err != nil {
+		if siteDB != nil {
+			_ = siteDB.Close()
+		}
+		return nil, fmt.Errorf("server: preview lease recovery: %w", err)
+	}
+	if report.Restored+report.Expired+report.Missing+report.Unsafe+report.OrphansRemoved > 0 {
+		slog.Info("server: preview leases reconciled",
+			"restored", report.Restored, "expired", report.Expired,
+			"missing", report.Missing, "unsafe", report.Unsafe,
+			"orphans_removed", report.OrphansRemoved)
+	}
 
 	// Build the known-tools set from the registry so the middleware can bucket
 	// any unrecognised client-supplied name as "unknown" (caps Prometheus cardinality).
@@ -564,6 +941,7 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 		srcIdx:       srcIdx,
 		writeEnabled: writeEnabled,
 		siteDB:       siteDB,
+		previews:     previews,
 	}, nil
 }
 
@@ -580,7 +958,7 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 // through the create_preview tool must be readable through that handler,
 // which only works if both sides share one previewstore.Store.
 func buildWriteScopedServer(core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension) (*mcp.Server, *previewstore.Store) {
-	previews := previewstore.New()
+	previews := core.previews
 	writeServer := buildPrivilegedScopedServer("write", core, cfg, idx, extensions, previews)
 	// Keep managed Hugo binary tools out of tools/list for ordinary write
 	// callers. Calls are also denied by ScopePolicy; this removes discovery
@@ -626,7 +1004,7 @@ func NewStdio(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) 
 	}
 	// Stdio is a trusted local operator transport; expose the full privileged
 	// catalog, including admin-gated Hugo lifecycle tools.
-	return buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, previewstore.New()), nil
+	return buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, core.previews), nil
 }
 
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {

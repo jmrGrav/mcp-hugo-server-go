@@ -45,6 +45,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -106,43 +107,88 @@ type bundlePlanStore struct {
 	ttl        time.Duration
 	maxEntries int
 	entries    map[string]bundlePlanEntry
+	persistent *db.DB
 }
 
-func newBundlePlanStore(ttl time.Duration, maxEntries int) *bundlePlanStore {
-	return &bundlePlanStore{ttl: ttl, maxEntries: maxEntries, entries: make(map[string]bundlePlanEntry)}
+func newBundlePlanStore(ttl time.Duration, maxEntries int, persistent ...*db.DB) *bundlePlanStore {
+	var journal *db.DB
+	if len(persistent) > 0 {
+		journal = persistent[0]
+	}
+	return &bundlePlanStore{ttl: ttl, maxEntries: maxEntries, entries: make(map[string]bundlePlanEntry), persistent: journal}
 }
 
-func (s *bundlePlanStore) put(id string, entry bundlePlanEntry) {
+func (s *bundlePlanStore) put(id string, entry bundlePlanEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
+	if s.persistent != nil {
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if err := s.persistent.PutEphemeralRecord("bundle_plan", id, entry.CallerKey, raw, entry.CreatedAt); err != nil {
+			return err
+		}
+	}
 	s.entries[id] = entry
 	s.trimLocked()
+	return nil
 }
 
-func (s *bundlePlanStore) get(id, callerKey string) (bundlePlanEntry, bool) {
+func (s *bundlePlanStore) get(id, callerKey string) (bundlePlanEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
-	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return bundlePlanEntry{}, false
+	if !ok && s.persistent != nil {
+		raw, found, err := s.persistent.GetEphemeralRecord("bundle_plan", id, callerKey, s.ttl)
+		if err != nil {
+			return bundlePlanEntry{}, false, fmt.Errorf("read persisted bundle plan: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return bundlePlanEntry{}, false, fmt.Errorf("decode persisted bundle plan: %w", err)
+			}
+			ok = true
+			s.entries[id] = entry
+		}
 	}
-	return entry, ok
+	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
+		return bundlePlanEntry{}, false, nil
+	}
+	return entry, ok, nil
 }
 
-func (s *bundlePlanStore) consume(id, callerKey string) (bundlePlanEntry, bool) {
+func (s *bundlePlanStore) consume(id, callerKey string) (bundlePlanEntry, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[id]
+	if !ok && s.persistent != nil {
+		raw, found, err := s.persistent.GetEphemeralRecord("bundle_plan", id, callerKey, s.ttl)
+		if err != nil {
+			return bundlePlanEntry{}, false, fmt.Errorf("read persisted bundle plan: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return bundlePlanEntry{}, false, fmt.Errorf("decode persisted bundle plan: %w", err)
+			}
+			ok = true
+		}
+	}
 	if ok && entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return bundlePlanEntry{}, false
+		return bundlePlanEntry{}, false, nil
 	}
 	if ok {
+		if s.persistent != nil {
+			if err := s.persistent.DeleteEphemeralRecord("bundle_plan", id, callerKey); err != nil {
+				return bundlePlanEntry{}, false, err
+			}
+		}
 		delete(s.entries, id)
 	}
-	return entry, ok
+	return entry, ok, nil
 }
 
 func (s *bundlePlanStore) pruneLocked(now time.Time) {
@@ -196,35 +242,64 @@ type bundleSnapshotStore struct {
 	ttl        time.Duration
 	maxEntries int
 	entries    map[string]bundleSnapshot
+	persistent *db.DB
 }
 
-func newBundleSnapshotStore(ttl time.Duration, maxEntries int) *bundleSnapshotStore {
-	return &bundleSnapshotStore{ttl: ttl, maxEntries: maxEntries, entries: make(map[string]bundleSnapshot)}
+func newBundleSnapshotStore(ttl time.Duration, maxEntries int, persistent ...*db.DB) *bundleSnapshotStore {
+	var journal *db.DB
+	if len(persistent) > 0 {
+		journal = persistent[0]
+	}
+	return &bundleSnapshotStore{ttl: ttl, maxEntries: maxEntries, entries: make(map[string]bundleSnapshot), persistent: journal}
 }
 
 func bundleSnapshotKey(dir, revision string) string { return dir + "\x00" + revision }
 
-func (s *bundleSnapshotStore) put(dir, revision, callerKey string, files map[string]string) {
+func (s *bundleSnapshotStore) put(dir, revision, callerKey string, files map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
 	s.pruneLocked(now)
-	s.entries[bundleSnapshotKey(dir, revision)] = bundleSnapshot{CallerKey: callerKey, Files: files, CreatedAt: now}
+	entry := bundleSnapshot{CallerKey: callerKey, Files: files, CreatedAt: now}
+	if s.persistent != nil {
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return err
+		}
+		if err := s.persistent.PutEphemeralRecord("bundle_snapshot", bundleSnapshotKey(dir, revision), callerKey, raw, now); err != nil {
+			return err
+		}
+	}
+	s.entries[bundleSnapshotKey(dir, revision)] = entry
 	s.trimLocked()
+	return nil
 }
 
-func (s *bundleSnapshotStore) get(dir, revision, callerKey string) (map[string]string, bool) {
+func (s *bundleSnapshotStore) get(dir, revision, callerKey string) (map[string]string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.pruneLocked(time.Now())
 	entry, ok := s.entries[bundleSnapshotKey(dir, revision)]
+	if !ok && s.persistent != nil {
+		raw, found, err := s.persistent.GetEphemeralRecord("bundle_snapshot", bundleSnapshotKey(dir, revision), callerKey, s.ttl)
+		if err != nil {
+			return nil, false, fmt.Errorf("read persisted bundle snapshot: %w", err)
+		}
+		if found {
+			if err := json.Unmarshal(raw, &entry); err != nil {
+				return nil, false, fmt.Errorf("decode persisted bundle snapshot: %w", err)
+			}
+			ok = true
+			s.entries[bundleSnapshotKey(dir, revision)] = entry
+		}
+	}
 	if !ok {
-		return nil, false
+		return nil, false, nil
 	}
 	if entry.CallerKey != "" && entry.CallerKey != callerKey {
-		return nil, false
+		return nil, false, nil
 	}
-	return entry.Files, true
+	return entry.Files, true, nil
 }
 
 func (s *bundleSnapshotStore) pruneLocked(now time.Time) {
@@ -393,13 +468,9 @@ func writeBundleTranslations(pg *security.PathGuard, files []struct {
 	Path    string
 	Content string
 }) (priorContent map[string]string, err error) {
-	priorContent = make(map[string]string, len(files))
-	for _, f := range files {
-		raw, readErr := os.ReadFile(f.Path)
-		if readErr != nil && !os.IsNotExist(readErr) {
-			return nil, fmt.Errorf("read_error: failed to read %s", filepath.Base(f.Path))
-		}
-		priorContent[f.Path] = string(raw)
+	priorContent, err = captureBundleTranslations(files)
+	if err != nil {
+		return nil, err
 	}
 
 	written := make([]string, 0, len(files))
@@ -428,6 +499,21 @@ func writeBundleTranslations(pg *security.PathGuard, files []struct {
 			return nil, fmt.Errorf("write_error: failed to write %s (bundle rolled back)", filepath.Base(f.Path))
 		}
 		written = append(written, f.Path)
+	}
+	return priorContent, nil
+}
+
+func captureBundleTranslations(files []struct {
+	Path    string
+	Content string
+}) (map[string]string, error) {
+	priorContent := make(map[string]string, len(files))
+	for _, f := range files {
+		raw, readErr := os.ReadFile(f.Path)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return nil, fmt.Errorf("read_error: failed to read %s", filepath.Base(f.Path))
+		}
+		priorContent[f.Path] = string(raw)
 	}
 	return priorContent, nil
 }
@@ -603,11 +689,13 @@ func registerPlanBundleChange(
 			return nil, planBundleChangeOutput{}, wrapErr(fmt.Errorf("internal_error: failed to allocate plan id"))
 		}
 		now := time.Now().UTC()
-		plans.put(planID, bundlePlanEntry{
+		if err := plans.put(planID, bundlePlanEntry{
 			CallerKey: isolationCallerKey(ctx),
 			Slug:      in.Slug, BundleDir: dir, BundleRevision: bundleRev,
 			Translations: planTranslations, CreatedAt: now,
-		})
+		}); err != nil {
+			return nil, planBundleChangeOutput{}, wrapErr(fmt.Errorf("persistence_error: failed to persist bundle plan: %w", err))
+		}
 		_ = siteIdx // state derivation intentionally deferred to apply
 		return nil, newPlanBundleChangeOutput(planBundleChangeData{
 			Slug: canonicalPublicSlug(in.Slug), BundleRevision: bundleRev, Translations: outcomes,
@@ -690,7 +778,10 @@ func registerApplyBundlePlan(
 		// Keep retryable bundle conflicts from consuming the plan (#1001):
 		// look the plan up without consuming it, and only consume it once
 		// the revision check below has passed.
-		entry, ok := plans.get(in.PlanID, isolationCallerKey(ctx))
+		entry, ok, planErr := plans.get(in.PlanID, isolationCallerKey(ctx))
+		if planErr != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to load bundle plan"))
+		}
 		if !ok {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_bundle_change again"))
 		}
@@ -714,12 +805,6 @@ func registerApplyBundlePlan(
 		if currentRev != entry.BundleRevision {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("bundle_conflict: bundle changed since the plan was created; call plan_bundle_change again"))
 		}
-		if !in.DryRun {
-			if _, ok := plans.consume(in.PlanID, isolationCallerKey(ctx)); !ok {
-				return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan is no longer available; call plan_bundle_change again"))
-			}
-		}
-
 		// Validate EVERY candidate before writing ANY — a single failure
 		// rejects the whole bundle with nothing applied (#854 AC5).
 		for _, tr := range entry.Translations {
@@ -751,15 +836,60 @@ func registerApplyBundlePlan(
 				Content string
 			}{Path: tr.FilePath, Content: tr.Content}
 		}
-		priorContent, writeErr := writeBundleTranslations(pg, files)
+		// Persist the complete pre-write bundle before the first filesystem
+		// rename. SQLite cannot join that rename atomically, but this ordering
+		// guarantees a successful apply never lacks its rollback payload after
+		// a process restart.
+		priorContent, captureErr := captureBundleTranslations(files)
+		if captureErr != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(captureErr)
+		}
+		if err := snapshots.put(entry.BundleDir, entry.BundleRevision, isolationCallerKey(ctx), priorContent); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to persist bundle rollback snapshot: %w", err))
+		}
+		recoveryFiles := make([]bundleRecoveryFile, 0, len(files))
+		recoveryTranslations := make([]map[string]any, 0, len(files))
+		for _, f := range files {
+			after := f.Content
+			transition, captureErr := captureBundleRecoveryFile(f.Path, &after)
+			if captureErr != nil {
+				return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to capture bundle recovery state"))
+			}
+			recoveryFiles = append(recoveryFiles, transition)
+			recoveryTranslations = append(recoveryTranslations, map[string]any{
+				"lang": inferLangFromIndexFile(f.Path), "source_path": fileutil.LogicalContentPath(cfg.ContentRoot, f.Path),
+				"status": "applied", "after_revision": contentmodel.SourceRevisionBytes([]byte(f.Content)),
+			})
+		}
+		recoveryOp, err := beginBundleWriteRecovery(siteDB, entry.BundleDir, recoveryFiles, recoveryIdempotencyFor(ctx, "apply_bundle_plan", in.IdempotencyKey, idemHash, map[string]any{
+			"plan_id": in.PlanID, "slug": canonicalPublicSlug(entry.Slug), "before_revision": currentRev,
+			"translations": recoveryTranslations,
+		}))
+		if err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record bundle write intent"))
+		}
+		_, writeErr := writeBundleTranslations(pg, files)
 		if writeErr != nil {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(writeErr)
 		}
-		// Snapshot the whole pre-apply bundle, keyed by the revision it is
-		// about to stop being, so rollback_bundle can restore it (#854 AC).
-		snapshots.put(entry.BundleDir, entry.BundleRevision, isolationCallerKey(ctx), priorContent)
-
+		if err := recoveryFilesystemBoundary("apply_bundle_plan", "after_bundle_write"); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after bundle write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("apply_bundle_plan: could not advance recovery journal", "plan_id", in.PlanID, "error", err)
+		}
 		var warnings []string
+		_, ok, err = plans.consume(in.PlanID, isolationCallerKey(ctx))
+		if err == nil {
+			err = planConsumeFailure("apply_bundle_plan")
+		}
+		if err != nil {
+			slog.Warn("apply_bundle_plan: plan consumption failed after write", "plan_id", in.PlanID, "error", err)
+			warnings = append(warnings, fmt.Sprintf("bundle changed but plan consumption could not be persisted: %v", err))
+		} else if !ok {
+			slog.Warn("apply_bundle_plan: plan consumption reported not-ok after write", "plan_id", in.PlanID)
+			warnings = append(warnings, "bundle changed but plan consumption could not be persisted")
+		}
 		outcomes := make([]bundleTranslationOutcomeDTO, 0, len(entry.Translations))
 		for _, tr := range entry.Translations {
 			if w := indexBundleTranslation(idx, siteIdx, siteDB, entry.Slug, tr.Lang, tr.FilePath, tr.Content); w != "" {
@@ -787,10 +917,16 @@ func registerApplyBundlePlan(
 			Translations: outcomes, Warning: appendLastBuildWarning(warning), State: &state,
 			RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "apply_bundle_plan", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("apply_bundle_plan: could not persist idempotency result", "plan_id", in.PlanID, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("apply_bundle_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
 		}
 		return nil, out, nil
 	}))
@@ -812,7 +948,7 @@ func registerRollbackBundle(
 		Name:  "rollback_bundle",
 		Title: "Rollback bundle",
 		Description: "Restore every translation of a page bundle to a prior bundle revision a previous apply_bundle_plan produced, atomically. " +
-			"`to_bundle_revision` must be a revision apply_bundle_plan snapshotted (24-hour retention); otherwise `snapshot_not_found`. " +
+			"`to_bundle_revision` must be a bundle snapshot from apply_bundle_plan or rollback_bundle (24-hour retention); otherwise `snapshot_not_found`. " +
 			"Non-dry-run calls require `expected_bundle_revision` (the bundle's current revision) — a stale value fails `bundle_conflict`, so this can never silently undo a newer change. " +
 			"All translations restore together or none do. `idempotency_key` safely replays; `dry_run` previews. Writes source only. " +
 			"Named rollback_bundle (not rollback_bundle_change) to stay within the 20-char connector tool-name budget (#329).",
@@ -899,9 +1035,13 @@ func registerRollbackBundle(
 			}
 		}
 
-		restore, ok := snapshots.get(dir, in.ToBundleRevision, isolationCallerKey(ctx))
+		restore, ok, snapshotErr := snapshots.get(dir, in.ToBundleRevision, isolationCallerKey(ctx))
+		if snapshotErr != nil {
+			slog.Error("rollback_bundle: snapshot persistence read failed", "slug", in.Slug, "error", snapshotErr)
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to load rollback snapshot"))
+		}
 		if !ok {
-			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no bundle snapshot recorded for revision %q — only revisions produced by a prior apply_bundle_plan (last 24h) can be rolled back to", in.ToBundleRevision))
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("snapshot_not_found: no bundle snapshot recorded for revision %q — snapshots from apply_bundle_plan or rollback_bundle are caller-isolated and retained for 24 hours", in.ToBundleRevision))
 		}
 
 		// Validate every snapshot file before touching disk (#636: a snapshot
@@ -944,8 +1084,41 @@ func registerRollbackBundle(
 				Content string
 			}{Path: p, Content: restore[p]}
 		}
+		priorContent, captureErr := captureBundleTranslations(files)
+		if captureErr != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(captureErr)
+		}
+		if err := snapshots.put(dir, currentRev, isolationCallerKey(ctx), priorContent); err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to persist pre-rollback bundle snapshot: %w", err))
+		}
+		recoveryFiles := make([]bundleRecoveryFile, 0, len(files))
+		recoveryTranslations := make([]map[string]any, 0, len(files))
+		for _, f := range files {
+			after := f.Content
+			transition, captureErr := captureBundleRecoveryFile(f.Path, &after)
+			if captureErr != nil {
+				return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to capture bundle recovery state"))
+			}
+			recoveryFiles = append(recoveryFiles, transition)
+			recoveryTranslations = append(recoveryTranslations, map[string]any{
+				"lang": inferLangFromIndexFile(f.Path), "source_path": fileutil.LogicalContentPath(cfg.ContentRoot, f.Path),
+				"status": "restored", "after_revision": contentmodel.SourceRevisionBytes([]byte(f.Content)),
+			})
+		}
+		recoveryOp, err := beginBundleWriteRecovery(siteDB, dir, recoveryFiles, recoveryIdempotencyFor(ctx, "rollback_bundle", in.IdempotencyKey, idemHash, map[string]any{
+			"slug": canonicalPublicSlug(in.Slug), "before_revision": currentRev, "translations": recoveryTranslations,
+		}))
+		if err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record bundle write intent"))
+		}
 		if _, writeErr := writeBundleTranslations(pg, files); writeErr != nil {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(writeErr)
+		}
+		if err := recoveryFilesystemBoundary("rollback_bundle", "after_bundle_write"); err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after bundle write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("rollback_bundle: could not advance recovery journal", "slug", in.Slug, "error", err)
 		}
 
 		var warnings []string
@@ -973,10 +1146,16 @@ func registerRollbackBundle(
 			Warning: appendLastBuildWarning(warning), State: &state,
 			RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "rollback_bundle", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("rollback_bundle: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("rollback_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
 		return nil, out, nil
 	}))

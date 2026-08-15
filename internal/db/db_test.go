@@ -1,6 +1,7 @@
 package db_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,6 +182,70 @@ func TestSnapshotHealth(t *testing.T) {
 	}
 }
 
+func TestRecoveryJournalListsOnlyUncommittedOperations(t *testing.T) {
+	d := openTestDB(t)
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "write-1", Kind: "content_write", State: "file_written", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "build-1", Kind: "build", State: "committed", Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := d.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].OperationID != "write-1" || pending[0].State != "file_written" {
+		t.Fatalf("PendingRecovery = %+v", pending)
+	}
+}
+
+func TestRecoveryJournalSurvivesReopenAndAdvancesStateInPlace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recovery.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "in_progress", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(in_progress): %v", err)
+	}
+	// Advancing state for the same operation_id must update the existing
+	// row, not create a second pending entry — startup recovery needs one
+	// current fact per operation, not a full history.
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "file_written", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(file_written): %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: the crash-recovery scenario this table exists for is a process
+	// restart finding an operation that never reached "committed".
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	pending, err := d.PendingRecovery()
+	if err != nil {
+		t.Fatalf("PendingRecovery after reopen: %v", err)
+	}
+	if len(pending) != 1 || pending[0].OperationID != "op-1" || pending[0].State != "file_written" {
+		t.Fatalf("PendingRecovery after reopen = %+v, want one op-1 entry in state file_written", pending)
+	}
+
+	if err := d.RecordRecovery(db.RecoveryEntry{OperationID: "op-1", Kind: "content_write", State: "committed", Payload: []byte(`{"path":"opaque"}`)}); err != nil {
+		t.Fatalf("RecordRecovery(committed): %v", err)
+	}
+	pending, err = d.PendingRecovery()
+	if err != nil {
+		t.Fatalf("PendingRecovery after commit: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("PendingRecovery after commit = %+v, want empty", pending)
+	}
+}
+
 func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "manifest.db")
 	d, err := db.Open(path)
@@ -223,6 +288,166 @@ func TestPublicationManifestSurvivesReopenAndReplaysByBuildID(t *testing.T) {
 	}
 	if got.BuildID != manifest.BuildID || got.SourceRevision != manifest.SourceRevision || got.OutputRevision != manifest.OutputRevision || got.HugoVersion != manifest.HugoVersion || got.Status != manifest.Status || !got.ObservedAt.Equal(observed) {
 		t.Fatalf("persisted manifest = %+v, want %+v", got, manifest)
+	}
+}
+
+func TestMutationJournalSurvivesReopenAndRespectsTTL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mutation.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	createdAt := time.Date(2026, time.August, 14, 12, 0, 0, 0, time.UTC)
+	entry := db.MutationJournalEntry{
+		CallerKey: "caller-a", Tool: "create_page", Key: "idem-1",
+		RequestHash: "sha256:abc", ResultJSON: []byte(`{"status":"created"}`), CreatedAt: createdAt,
+	}
+	if err := d.RememberMutation(entry); err != nil {
+		t.Fatalf("RememberMutation: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: the real restart this journal exists to survive.
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	got, err := d.LookupMutation("caller-a", "create_page", "idem-1", 0)
+	if err != nil {
+		t.Fatalf("LookupMutation after reopen: %v", err)
+	}
+	if got == nil || got.RequestHash != entry.RequestHash || string(got.ResultJSON) != string(entry.ResultJSON) {
+		t.Fatalf("LookupMutation after reopen = %+v, want a match for %+v", got, entry)
+	}
+
+	// A different caller_key or tool must not replay someone else's mutation.
+	if got, err := d.LookupMutation("caller-b", "create_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation(caller-b) = %+v err=%v, want nil, no error", got, err)
+	}
+	if got, err := d.LookupMutation("caller-a", "update_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation(different tool) = %+v err=%v, want nil, no error", got, err)
+	}
+
+	// A TTL in the past must expire the entry on read, mirroring the
+	// ephemeral-record store's TTL semantics.
+	if got, err := d.LookupMutation("caller-a", "create_page", "idem-1", time.Nanosecond); err != nil || got != nil {
+		t.Fatalf("LookupMutation with elapsed TTL = %+v err=%v, want nil, no error", got, err)
+	}
+	if got, err := d.LookupMutation("caller-a", "create_page", "idem-1", 0); err != nil || got != nil {
+		t.Fatalf("LookupMutation after TTL expiry deleted the row = %+v err=%v, want nil (TTL read also deletes)", got, err)
+	}
+}
+
+func TestEphemeralRecordSurvivesReopenAndRespectsCallerAndTTL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ephemeral.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	createdAt := time.Date(2026, time.August, 14, 10, 0, 0, 0, time.UTC)
+	if err := d.PutEphemeralRecord("content_plan", "plan-1", "caller-a", []byte(`{"field":"title"}`), createdAt); err != nil {
+		t.Fatalf("PutEphemeralRecord: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reopen: this is the actual restart this mechanism exists for — a fresh
+	// DB handle standing in for a fresh process, no in-memory state carried
+	// over except what's in the file.
+	d, err = db.Open(path)
+	if err != nil {
+		t.Fatalf("reopen db: %v", err)
+	}
+	t.Cleanup(func() { _ = d.Close() })
+
+	payload, found, err := d.GetEphemeralRecord("content_plan", "plan-1", "caller-a", 0)
+	if err != nil {
+		t.Fatalf("GetEphemeralRecord after reopen: %v", err)
+	}
+	if !found || string(payload) != `{"field":"title"}` {
+		t.Fatalf("GetEphemeralRecord after reopen = (%q, %v), want (%q, true)", payload, found, `{"field":"title"}`)
+	}
+
+	// A different caller_key must not read caller-a's plan back, even though
+	// the (kind, record_id) pair matches exactly — this is the persisted
+	// form of the same isolation the in-memory planStore already enforces.
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-1", "caller-b", 0); err != nil || found {
+		t.Fatalf("GetEphemeralRecord(caller-b) = found=%v err=%v, want found=false, no error (#627 caller isolation)", found, err)
+	}
+
+	// A TTL in the past must expire the record on read, mirroring the
+	// in-memory store's TTL semantics.
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-1", "caller-a", time.Nanosecond); err != nil || found {
+		t.Fatalf("GetEphemeralRecord with elapsed TTL = found=%v err=%v, want found=false, no error", found, err)
+	}
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-1", "caller-a", 0); err != nil || found {
+		t.Fatalf("GetEphemeralRecord after TTL expiry deleted the row = found=%v err=%v, want found=false (TTL read also deletes)", found, err)
+	}
+}
+
+func TestEphemeralRecordDeleteIsScopedToCaller(t *testing.T) {
+	d := openTestDB(t)
+	if err := d.PutEphemeralRecord("content_plan", "plan-2", "caller-a", []byte(`{}`), time.Time{}); err != nil {
+		t.Fatalf("PutEphemeralRecord: %v", err)
+	}
+	// A delete from the wrong caller must not remove someone else's record.
+	if err := d.DeleteEphemeralRecord("content_plan", "plan-2", "caller-b"); err != nil {
+		t.Fatalf("DeleteEphemeralRecord(caller-b): %v", err)
+	}
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-2", "caller-a", 0); err != nil || !found {
+		t.Fatalf("record after mismatched-caller delete = found=%v err=%v, want found=true (delete must not cross caller boundary)", found, err)
+	}
+	if err := d.DeleteEphemeralRecord("content_plan", "plan-2", "caller-a"); err != nil {
+		t.Fatalf("DeleteEphemeralRecord(caller-a): %v", err)
+	}
+	if _, found, err := d.GetEphemeralRecord("content_plan", "plan-2", "caller-a", 0); err != nil || found {
+		t.Fatalf("record after correct-caller delete = found=%v err=%v, want found=false", found, err)
+	}
+}
+
+func TestListEphemeralRecordsScopesByCallerAndExpiresByTTL(t *testing.T) {
+	d := openTestDB(t)
+	now := time.Now().UTC()
+	if err := d.PutEphemeralRecord("content_snapshot", "page-a\x00rev-1", "caller-a", []byte("first"), now.Add(-2*time.Hour)); err != nil {
+		t.Fatalf("PutEphemeralRecord(rev-1): %v", err)
+	}
+	if err := d.PutEphemeralRecord("content_snapshot", "page-a\x00rev-2", "caller-a", []byte("second"), now); err != nil {
+		t.Fatalf("PutEphemeralRecord(rev-2): %v", err)
+	}
+	if err := d.PutEphemeralRecord("content_snapshot", "page-a\x00rev-3", "caller-b", []byte("other caller"), now); err != nil {
+		t.Fatalf("PutEphemeralRecord(rev-3): %v", err)
+	}
+
+	// TTL of one hour: the two-hour-old record for caller-a must be pruned
+	// from the result and from the table, mirroring GetEphemeralRecord's
+	// read-time TTL expiry.
+	records, err := d.ListEphemeralRecords("content_snapshot", "caller-a", time.Hour)
+	if err != nil {
+		t.Fatalf("ListEphemeralRecords: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != "page-a\x00rev-2" {
+		t.Fatalf("ListEphemeralRecords(caller-a) = %+v, want only the unexpired rev-2 record", records)
+	}
+	if string(records[0].Payload) != "second" {
+		t.Fatalf("ListEphemeralRecords payload = %q, want %q", records[0].Payload, "second")
+	}
+
+	if _, found, err := d.GetEphemeralRecord("content_snapshot", "page-a\x00rev-1", "caller-a", time.Hour); err != nil || found {
+		t.Fatalf("expired rev-1 must have been deleted by the list's own TTL sweep: found=%v err=%v", found, err)
+	}
+
+	// caller-b's record must never appear in caller-a's listing.
+	bRecords, err := d.ListEphemeralRecords("content_snapshot", "caller-b", time.Hour)
+	if err != nil {
+		t.Fatalf("ListEphemeralRecords(caller-b): %v", err)
+	}
+	if len(bRecords) != 1 || bRecords[0].ID != "page-a\x00rev-3" {
+		t.Fatalf("ListEphemeralRecords(caller-b) = %+v, want only rev-3", bRecords)
 	}
 }
 
@@ -383,5 +608,61 @@ func TestPostBuildSyncPrunesStalePublishedPages(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("expected stale page pruned after next PostBuildSync, still got %d hits: %#v", len(results), results)
+	}
+}
+
+func TestPruneMutationJournalIsTransactionalAndObservable(t *testing.T) {
+	d := openTestDB(t)
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	for _, entry := range []db.MutationJournalEntry{
+		{CallerKey: "caller", Tool: "create_page", Key: "expired", RequestHash: "a", ResultJSON: []byte(`{}`), CreatedAt: now.Add(-2 * time.Hour)},
+		{CallerKey: "caller", Tool: "create_page", Key: "live", RequestHash: "b", ResultJSON: []byte(`{}`), CreatedAt: now.Add(-10 * time.Minute)},
+	} {
+		if err := d.RememberMutation(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := d.PruneMutationJournal(time.Hour, now)
+	if err != nil {
+		t.Fatalf("PruneMutationJournal: %v", err)
+	}
+	if stats.ActiveEntries != 1 || stats.LastPrunedEntries != 1 || !stats.LastPrunedAt.Equal(now) {
+		t.Fatalf("prune stats = %+v", stats)
+	}
+	if got, err := d.MutationJournalStats(); err != nil || got.ActiveEntries != 1 || got.LastPrunedEntries != 1 || !got.LastPrunedAt.Equal(now) {
+		t.Fatalf("MutationJournalStats = %+v, %v", got, err)
+	}
+	if _, err := d.LookupMutation("caller", "create_page", "expired", 0); err != nil {
+		t.Fatal(err)
+	} else if entry, _ := d.LookupMutation("caller", "create_page", "live", 0); entry == nil {
+		t.Fatal("live mutation was removed by prune")
+	}
+}
+
+func TestPruneMutationJournalRollsBackWhenMaintenanceWriteFails(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	if err := d.RememberMutation(db.MutationJournalEntry{CallerKey: "caller", Tool: "create_page", Key: "expired", RequestHash: "a", ResultJSON: []byte(`{}`), CreatedAt: now.Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`CREATE TRIGGER reject_journal_maintenance BEFORE INSERT ON mutation_journal_maintenance BEGIN SELECT RAISE(ABORT, 'injected maintenance failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PruneMutationJournal(time.Hour, now); err == nil {
+		t.Fatal("PruneMutationJournal succeeded despite injected maintenance failure")
+	}
+	entry, err := d.LookupMutation("caller", "create_page", "expired", 0)
+	if err != nil || entry == nil {
+		t.Fatalf("expired row was not rolled back after failed prune: entry=%+v err=%v", entry, err)
 	}
 }
