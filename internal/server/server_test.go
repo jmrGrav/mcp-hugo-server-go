@@ -2739,6 +2739,143 @@ func TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	}
 }
 
+// TestConcurrentApplyBundlePlanByDistinctPrincipalsIsolatesMutationStatus is
+// #1067's remaining bundle-mutation race scenario (noted as open in #1109's
+// PR body): TestBundlePlansAndSnapshotsAreIsolatedByCallerAcrossHTTP already
+// proves an intruder's apply_bundle_plan on someone else's plan_id is
+// rejected sequentially (plan_not_found, an authorization check that never
+// even reaches the content lock) — but that never exercises a genuine
+// content-level race, since two calls against two different plan_ids for
+// two different callers don't contend for anything until they both target
+// the same bundle. Here two distinct OAuth principals each independently
+// plan_bundle_change the *same* bundle (allowed — plan ownership, not page
+// ownership, is what's caller-scoped) and then race apply_bundle_plan
+// against each other under go test -race, with ContentMu pre-locked to
+// force genuine overlap. Exactly one must win (bundle_conflict for the
+// loser, whose captured BundleRevision goes stale the instant the winner
+// writes), and each principal's own get_mutation_status must reflect only
+// its own outcome with zero cross-caller leakage, mirroring
+// TestConcurrentUpdatePageByDistinctPrincipalsIsolatesMutationStatus's shape
+// for a bundle mutation instead of a single-page one.
+func TestConcurrentApplyBundlePlanByDistinctPrincipalsIsolatesMutationStatus(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const callerA = "bundle-race-principal-a"
+	const callerB = "bundle-race-principal-b"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	const slug = "posts/bundle-race"
+	createRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"%s","lang":"en","title":"Title","body":"Body v0","tags":[],"categories":[]}}}`, slug)))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+
+	planFor := func(caller, body string) string {
+		t.Helper()
+		payload := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"plan_bundle_change","arguments":{"slug":"%s","translations":[{"lang":"en","operations":[{"op":"update_body","body":"%s"}]}]}}}`, slug, body))
+		rec := doMCPCall(t, srv, caller, payload)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("plan_bundle_change(%s) status = %d body = %q", caller, rec.Code, rec.Body.String())
+		}
+		data := toolCallResultData(t, rec.Body.String())["data"].(map[string]any)
+		planID, _ := data["plan_id"].(string)
+		if planID == "" {
+			t.Fatalf("plan_bundle_change(%s) returned empty plan_id: %q", caller, rec.Body.String())
+		}
+		return planID
+	}
+	planA := planFor(callerA, "Body from A")
+	planB := planFor(callerB, "Body from B")
+
+	const keyA = "bundle-race-principal-a-key"
+	const keyB = "bundle-race-principal-b-key"
+	payloadA := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_bundle_plan","arguments":{"plan_id":"%s","idempotency_key":"%s"}}}`, planA, keyA))
+	payloadB := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"apply_bundle_plan","arguments":{"plan_id":"%s","idempotency_key":"%s"}}}`, planB, keyB))
+
+	hugosite.ContentMu.Lock()
+	started := make(chan struct{}, 2)
+	recA := make(chan *httptest.ResponseRecorder, 1)
+	recB := make(chan *httptest.ResponseRecorder, 1)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		recA <- doMCPCall(t, srv, callerA, payloadA)
+	}()
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		recB <- doMCPCall(t, srv, callerB, payloadB)
+	}()
+	<-started
+	<-started
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	if t.Failed() {
+		t.FailNow()
+	}
+
+	aRec, bRec := <-recA, <-recB
+	if aRec.Code != http.StatusOK || bRec.Code != http.StatusOK {
+		t.Fatalf("apply_bundle_plan race transport failure: A status=%d body=%q; B status=%d body=%q", aRec.Code, aRec.Body.String(), bRec.Code, bRec.Body.String())
+	}
+
+	statusOf := func(rec *httptest.ResponseRecorder) (ok bool, conflict bool) {
+		if toolCallBodyHasError(rec, "bundle_conflict") {
+			return false, true
+		}
+		data := toolCallResultData(t, rec.Body.String())["data"].(map[string]any)
+		return data["bundle_status"] == "applied", false
+	}
+	aOK, aConflict := statusOf(aRec)
+	bOK, bConflict := statusOf(bRec)
+	if !((aOK && bConflict) || (bOK && aConflict)) {
+		t.Fatalf("same-bundle race across principals must resolve to exactly one success and one bundle_conflict, got A(ok=%v,conflict=%v) B(ok=%v,conflict=%v): A=%q B=%q",
+			aOK, aConflict, bOK, bConflict, aRec.Body.String(), bRec.Body.String())
+	}
+
+	statusPayloadA := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_mutation_status","arguments":{"tool":"apply_bundle_plan","idempotency_key":"%s"}}}`, keyA))
+	statusPayloadB := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_mutation_status","arguments":{"tool":"apply_bundle_plan","idempotency_key":"%s"}}}`, keyB))
+
+	wantStatus := func(conflict bool) string {
+		if conflict {
+			return "unknown"
+		}
+		return "succeeded"
+	}
+	aStatusRec := doMCPCall(t, srv, callerA, statusPayloadA)
+	aStatusData := toolCallResultData(t, aStatusRec.Body.String())["data"].(map[string]any)
+	if got, _ := aStatusData["status"].(string); got != wantStatus(aConflict) {
+		t.Fatalf("get_mutation_status (caller A, own key) = %q, want %q: %#v", got, wantStatus(aConflict), aStatusData)
+	}
+	bStatusRec := doMCPCall(t, srv, callerB, statusPayloadB)
+	bStatusData := toolCallResultData(t, bStatusRec.Body.String())["data"].(map[string]any)
+	if got, _ := bStatusData["status"].(string); got != wantStatus(bConflict) {
+		t.Fatalf("get_mutation_status (caller B, own key) = %q, want %q: %#v", got, wantStatus(bConflict), bStatusData)
+	}
+
+	// Cross-caller: neither principal's key is visible to the other, even
+	// immediately after the race that just touched both.
+	bCrossRec := doMCPCall(t, srv, callerB, statusPayloadA)
+	bCrossData := toolCallResultData(t, bCrossRec.Body.String())["data"].(map[string]any)
+	if got, _ := bCrossData["status"].(string); got != "unknown" {
+		t.Fatalf("get_mutation_status (caller B, A's key) = %q, want unknown — leaked across the race", got)
+	}
+	aCrossRec := doMCPCall(t, srv, callerA, statusPayloadB)
+	aCrossData := toolCallResultData(t, aCrossRec.Body.String())["data"].(map[string]any)
+	if got, _ := aCrossData["status"].(string); got != "unknown" {
+		t.Fatalf("get_mutation_status (caller A, B's key) = %q, want unknown — leaked across the race", got)
+	}
+}
+
 // TestConcurrentUpdatePageByDistinctPrincipalsIsolatesMutationStatus is the
 // #1067 multi-principal concurrency test: internal/tools/write's own
 // concurrent-mutation tests (mutation_coordination_test.go) prove the
