@@ -115,6 +115,23 @@ tool returns `write_error`, verify:
 | `post_build_hooks` | array of strings | (empty) | URLs to POST a `{"event":"post_build"}` webhook to after successful site build. Only HTTPS endpoints and public DNS hostnames are allowed (SSRF protected); redirects are not followed and response bodies are bounded. |
 | `preview_external_verification` | bool | `false` | When enabled, `create_preview` verifies its signed entry redirect, cookie-backed nested HTML route, one asset, and strict missing-route 404 through `oauth.issuer` before returning success. Served bytes must match the isolated build; a homepage fallback is rejected as `preview_unreachable` and the failed preview is revoked. |
 
+### Operational SQLite Persistence
+
+| Field | Type | Default | Purpose |
+|-------|------|---------|---------|
+| `db_path` | string | (empty — disabled) | Absolute path to the server's *operational* SQLite database (derived search/link index, publication manifests, mutation/idempotency journal, restart-safe recovery journal, multilingual content shadow, preview lease persistence). This is a **different database from `oauth.storage_path`** (OAuth tokens) — the two are deliberately kept separate so revoking/rotating OAuth state never touches content-operations state or vice versa. Leaving `db_path` empty does not break anything: every feature it backs degrades to its pre-persistence, process-memory-only behavior instead of failing, so this is easy to forget to set on a fresh install or an in-place upgrade. See the pitfall below. |
+
+> **Pitfall — `db_path` unset silently disables an entire release's worth of restart-safety work.** `db_path` was introduced across v1.8.6 (#1074) to make build/publication state, the mutation idempotency journal, crash recovery, multilingual identity, and preview leases survive a service restart. None of that requires `db_path` to function at all when it's absent — every one of those subsystems has an explicit, deliberate in-memory fallback — so a server without it configured runs correctly and shows no errors; it just silently gets none of the new restart-safety guarantees, and `get_runtime_status`'s `content_index_shadow`/`mutation_journal`/`build_reconciliation` fields are simply absent from the response instead of erroring. On the v1.8.6 production deploy, `db_path` was not part of the existing config (only `oauth.storage_backend: sqlite` was set, for the *different*, OAuth-only database), so the entire persistence programme silently ran degraded from the moment the release went live until this was noticed and fixed. **After any fresh install or upgrade that introduces new SQLite-backed features, confirm `db_path` is set and call `get_runtime_status` to check that the fields the new release advertises actually appear in the response** — do not assume a clean restart with no errors means a config option took effect.
+>
+> Fix: add `db_path` to `config.yaml` pointing at a file inside a directory the service unit already has write access to (reuse the same directory as `oauth.storage_path` if one is already allowlisted in `ReadWritePaths` — no systemd changes needed in that case), then restart:
+> ```yaml
+> db_path: /var/lib/mcp-hugo-server-go/site.db
+> ```
+> ```bash
+> sudo systemctl restart mcp-hugo-server-go
+> ```
+> If `/var/lib/mcp-hugo-server-go` (or wherever you point `db_path`) is not yet in the service unit's `ReadWritePaths`, see Pitfall 1 below — the same "unable to open database file" failure mode applies to this database too.
+
 ### Managed Hugo Upgrade Configuration
 
 Managed Hugo upgrades are disabled by default. `get_hugo_update` can report the
@@ -1097,6 +1114,49 @@ curl -sS -o /dev/null -w '%{content_type}' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_site_information","arguments":{}}}' \
   | grep -q application/json && echo OK || echo FAIL
 ```
+
+---
+
+### Pitfall 5 — restart-safe persistence (recovery journal, mutation journal, preview leases, build reconciliation) silently doesn't survive a restart
+
+**Symptom:** No errors anywhere. The server starts, serves traffic normally, and every tool works — but a restart still loses in-flight mutation state, preview leases don't survive a restart, and `get_runtime_status`'s `content_index_shadow`, `mutation_journal`, and `build_reconciliation` fields are simply absent from the response instead of present-but-empty.
+
+**Cause:** All of this is backed by the *operational* SQLite database at `db_path` (see [Operational SQLite Persistence](#operational-sqlite-persistence) above) — not `oauth.storage_path`, which is a separate database for a separate purpose (OAuth tokens). Every one of these subsystems was deliberately built with an in-memory fallback so a deployment without `db_path` set keeps working exactly as before v1.8.6, with no crash and no error. This bit the actual v1.8.6 production deploy: only `oauth.storage_backend: sqlite` was configured, `db_path` never was, so the whole restart-safety programme ran silently degraded for hours until caught by manually cross-checking `get_runtime_status`'s response shape against what the release notes said should be there.
+
+**Since the follow-up fix, this is no longer a silent gap** — `get_capabilities` now reports it directly:
+
+```json
+"disabled_features": [
+  {"name": "durable_persistence", "reason": "feature_disabled", "required_configuration": "db_path"}
+]
+```
+
+and the server logs a startup warning on any http deployment with a `content_root` configured. Check `get_capabilities` first; the rest of this section is the fix once you've confirmed the gap.
+
+**Fix:**
+
+```yaml
+# /etc/mcp-hugo-server-go/config.yaml
+db_path: /var/lib/mcp-hugo-server-go/site.db
+```
+```bash
+sudo systemctl restart mcp-hugo-server-go
+```
+
+If the target directory isn't already in the service unit's `ReadWritePaths` (check whether `oauth.storage_path` already lives there — if so, reuse that directory and skip this step), see Pitfall 1 above.
+
+**Verify the fix actually took effect** — don't just check for a clean restart:
+
+```bash
+# durable_persistence must be gone from disabled_features
+curl -sS -X POST https://mcp.arleo.eu/mcp \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer <token>' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_capabilities","arguments":{}}}' \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin); data=d["result"]["structuredContent"]["data"]; names={f["name"] for f in data.get("disabled_features",[])}; print("durable_persistence" not in names)'
+```
+Should print `True`. `get_runtime_status`'s `content_index_shadow`/`mutation_journal` fields are the equivalent older signal; `build_reconciliation` only appears after the first `build_site` call post-restart, so its absence alone is not diagnostic.
+
+---
 
 ## References
 
