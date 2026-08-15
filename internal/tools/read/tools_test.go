@@ -4393,6 +4393,12 @@ func TestGetSiteHealthURLShapedTitleNeverReportsHealthy(t *testing.T) {
 	if contentStatus == "healthy" || contentStatus == "healthy_with_advisories" {
 		t.Fatalf("content_status = %q, want anything but healthy/healthy_with_advisories while a title is a raw URL (#1099's exact incident shape)", contentStatus)
 	}
+	// #719/#1066 established that a perfect 100 alongside a real content
+	// defect is misleading; a URL-shaped title is at least as severe as the
+	// cases those precedents cover, so it must cap score the same way.
+	if score, _ := data["score"].(float64); score >= 100 {
+		t.Fatalf("score = %v, want < 100 while a title is a raw URL", score)
+	}
 
 	badPages, _ := data["bad_title_shape_pages"].([]any)
 	if len(badPages) != 1 || badPages[0] != "posts/a" {
