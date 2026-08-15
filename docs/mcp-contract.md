@@ -1126,6 +1126,16 @@ before this feature existed. The guard only protects agents that have
 explicitly adopted separate `change_set_id`s, the same opt-in shape #1135
 established.
 
+The moment two or more change-sets genuinely have pending work at the same
+time — the normal state as soon as two agents are actually editing
+concurrently — a single `change_set_id` can never account for the other
+change-set's real pending page, and nothing but a full server restart
+clears that pending state otherwise. `change_set_ids` (plural) is the
+required escape hatch for this: pass every change-set with known pending
+work to acknowledge and build/publish them together. Without it this
+scenario would deadlock — neither side's single-change-set build could
+ever succeed.
+
 **What this guard does not do**, deliberately: it cannot tell "no
 change-set this process tracked ever touched this pending page" apart from
 "this page was edited outside the MCP server entirely" (a direct
@@ -1139,6 +1149,14 @@ external-source-drift detection; that needs the per-file fingerprinting
 concurrent edits made by two change-sets both tracked live, within the same
 process uptime — the exact incident shape #1140 targets, not a general
 drift detector.
+
+It also inspects the same volatile `BuildPending` bookkeeping `build_site`
+itself only uses as a compatibility fallback: on a `db_path`-configured
+deployment, the build's actual included-page set is instead derived from
+on-disk source fingerprints compared against the latest completed build
+(see `build_site`'s own doc), which is not necessarily identical to the
+`BuildPending` set this guard inspected. #1141's revision guards are the
+intended place to close that gap.
 
 ## 7. New tools (v1.3.8+)
 

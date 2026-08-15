@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
@@ -188,4 +189,116 @@ func TestForeignChangeSetBlocksPublishChanges(t *testing.T) {
 	if ownerData["success"] != true {
 		t.Fatalf("publish_changes under csOwner (its own pending page) did not succeed: %#v", ownerData)
 	}
+}
+
+// TestChangeSetIDsAcknowledgesMultiplePendingChangeSets is the direct
+// regression for the deadlock a single change_set_id would otherwise cause
+// the moment two change-sets genuinely have pending work at the same
+// time — the normal state once two agents are actually editing
+// concurrently, which is #1140's entire target scenario. With two pending
+// pages under two different change-sets and nothing yet built, every
+// single-change-set build must still be refused (each is foreign to the
+// other's pending page) — but change_set_ids acknowledging both must
+// succeed, since that's the caller affirmatively vouching for both.
+func TestChangeSetIDsAcknowledgesMultiplePendingChangeSets(t *testing.T) {
+	mockHugoOnPath(t)
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const sharedToken = "shared-credentials-principal-3"
+	addBearerToken(t, storePath, sharedToken, "write")
+
+	createChangeSet := func() string {
+		t.Helper()
+		rec := doMCPCall(t, srv, sharedToken, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_change_set","arguments":{}}}`))
+		data := toolCallResultData(t, rec.Body.String())["data"].(map[string]any)
+		id, _ := data["change_set_id"].(string)
+		if id == "" {
+			t.Fatalf("create_change_set returned empty change_set_id: %#v", data)
+		}
+		return id
+	}
+	csA := createChangeSet()
+	csB := createChangeSet()
+
+	createPage := func(slug, changeSetID string) {
+		t.Helper()
+		payload := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":%q,"title":"T","body":"B","tags":[],"categories":[],"change_set_id":%q}}}`, slug, changeSetID))
+		rec := doMCPCall(t, srv, sharedToken, payload)
+		data := toolCallResultData(t, rec.Body.String())
+		if data["success"] != true {
+			t.Fatalf("create_page(%q) did not succeed: %#v", slug, data)
+		}
+	}
+	// Neither page is built before the other is created — both are pending
+	// at once, the exact deadlock-prone state.
+	createPage("posts/deadlock-a", csA)
+	createPage("posts/deadlock-b", csB)
+
+	buildWith := func(argsJSON string) string {
+		t.Helper()
+		payload := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_site","arguments":%s}}`, argsJSON))
+		rec := doMCPCall(t, srv, sharedToken, payload)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("build_site transport status = %d body = %q", rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+
+	if code := toolCallErrorCode(t, buildWith(fmt.Sprintf(`{"change_set_id":%q}`, csA))); code != "foreign_change_set_present" {
+		t.Fatalf("build_site with only csA acknowledged while csB's page is also pending: error code = %q, want foreign_change_set_present (this would otherwise deadlock)", code)
+	}
+	if code := toolCallErrorCode(t, buildWith(fmt.Sprintf(`{"change_set_id":%q}`, csB))); code != "foreign_change_set_present" {
+		t.Fatalf("build_site with only csB acknowledged while csA's page is also pending: error code = %q, want foreign_change_set_present (this would otherwise deadlock)", code)
+	}
+
+	data := toolCallResultData(t, buildWith(fmt.Sprintf(`{"change_set_ids":[%q,%q]}`, csA, csB)))
+	if data["success"] != true {
+		t.Fatalf("build_site acknowledging both csA and csB did not succeed: %#v", data)
+	}
+}
+
+// TestGuardForeignChangeSetConcurrentWithCreatePageIsRaceFree stresses
+// guardForeignChangeSet's SourceIndex read (srcIdx.PendingPages(), called
+// before build_site's own runBuild takes hugosite.ContentMu) against
+// concurrent create_page calls that mutate the same SourceIndex under that
+// lock. SourceIndex itself has no internal synchronization — ContentMu is
+// what's supposed to serialize every reader/writer of it — so an
+// unguarded read here would be a genuine data race under -race the moment
+// it truly overlaps a concurrent Upsert. Run with -race; this test asserts
+// no crash/race, not any particular pending-page outcome (the race
+// detector is what actually verifies the property).
+func TestGuardForeignChangeSetConcurrentWithCreatePageIsRaceFree(t *testing.T) {
+	mockHugoOnPath(t)
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const sharedToken = "shared-credentials-principal-race"
+	addBearerToken(t, storePath, sharedToken, "write")
+
+	const iterations = 20
+	var wg sync.WaitGroup
+	for i := 0; i < iterations; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			payload := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/race-%d","title":"T","body":"B","tags":[],"categories":[]}}}`, i))
+			doMCPCall(t, srv, sharedToken, payload)
+		}(i)
+		go func() {
+			defer wg.Done()
+			doMCPCall(t, srv, sharedToken, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_site","arguments":{}}}`))
+		}()
+	}
+	wg.Wait()
 }
