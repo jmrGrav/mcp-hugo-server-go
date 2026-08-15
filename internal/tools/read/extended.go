@@ -1396,6 +1396,13 @@ func brokenLinksForPage(idx *site.Index, classifier *site.ContentClassifier, pag
 		if targetPage, found := idx.GetBySlug(target.Path); found && classifier.IsContent(*targetPage) {
 			continue
 		}
+		// A link to a canonical-collapsed alias's own URL is not broken —
+		// the file genuinely exists on disk, it just isn't canonical for
+		// its content (#184's dedup). Same fix on the SQL-backed path,
+		// internal/db/db.go's txSyncLinks (#1112).
+		if _, isAlias := idx.ResolveAlias(target.Path); isAlias {
+			continue
+		}
 		issues = append(issues, brokenLinkDTO{
 			PageSlug: page.Slug,
 			Link:     href,

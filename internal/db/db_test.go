@@ -231,6 +231,74 @@ func TestGetBrokenLinksIgnoresPaginationTargets(t *testing.T) {
 	}
 }
 
+// TestGetBrokenLinksIgnoresCanonicalCollapsedAliasOwnURL is #1112's fix on
+// the SQL-backed path: a link to a Grav-legacy alias's own URL (a real,
+// walkable file whose <link rel=canonical> points at a different page —
+// #184's dedup) must not be reported broken. Unlike the pagination test
+// above, this needs a real siteIdx — site.ShouldIgnoreBrokenLinkTarget's
+// static/nil-classifier check can't know which slugs are aliases; only
+// siteIdx.ResolveAlias can.
+func TestGetBrokenLinksIgnoresCanonicalCollapsedAliasOwnURL(t *testing.T) {
+	d := openTestDB(t)
+
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("csp-nonce/index.html", `<html><head><title>CSP Nonce</title></head><body>real canonical page</body></html>`)
+	write("grav-csp-nonce/index.html", `<html><head>
+<link rel="canonical" href="https://x.com/csp-nonce/">
+</head><body>legacy alias page</body></html>`)
+
+	siteIdx, err := site.NewIndex(config.Config{
+		SiteRoot:         root,
+		SiteURL:          "https://x.com",
+		SiteName:         "example",
+		DefaultLanguage:  "en",
+		RejectSymlinks:   true,
+		RejectHiddenPath: true,
+	})
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	p := site.Page{
+		Slug:    "/posts/hello/",
+		Title:   "Hello",
+		URL:     "https://x.com/posts/hello/",
+		Lang:    "en",
+		RawHTML: `<a href="/grav-csp-nonce/">legacy link to the alias's own URL</a> <a href="/missing/">real missing page</a>`,
+	}
+	if err := d.SyncPublicPage(p, siteIdx); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+
+	broken, err := d.GetBrokenLinks()
+	if err != nil {
+		t.Fatalf("GetBrokenLinks: %v", err)
+	}
+	for _, r := range broken {
+		if strings.Contains(r.Target, "grav-csp-nonce") {
+			t.Errorf("alias's own URL reported as broken: %+v", r)
+		}
+	}
+	var foundRealBroken bool
+	for _, r := range broken {
+		if strings.Contains(r.Target, "missing") {
+			foundRealBroken = true
+		}
+	}
+	if !foundRealBroken {
+		t.Errorf("a genuinely missing target must still be reported: %+v", broken)
+	}
+}
+
 // TestReconcileBrokenLinksAgainstIgnorePolicyFixesStaleRows is the #1101
 // deploy-correctness regression: txSyncLinks is hash-gated on page content
 // (SyncPublicPage: "if existing == hash { return nil }"), so a stable page

@@ -145,3 +145,49 @@ func TestCollectBrokenLinksIgnoresGeneratedAndNonHTTPLinks(t *testing.T) {
 		t.Fatalf("collectBrokenLinks() issue = %#v, want /missing/", issues[0])
 	}
 }
+
+// TestCollectBrokenLinksIgnoresCanonicalCollapsedAliasOwnURL is #1112's
+// fix: a link to a Grav-legacy alias's own URL (a real, walkable file whose
+// <link rel=canonical> points at a different page — #184's dedup) must not
+// be reported broken. Mirrors TestGetBrokenLinksIgnoresPaginationTargets
+// (internal/db) which covers the same fix on the SQL-backed path.
+func TestCollectBrokenLinksIgnoresCanonicalCollapsedAliasOwnURL(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/hello/index.html", `<html><body>
+<a href="/grav-csp-nonce/">legacy link to the alias's own URL</a>
+<a href="/missing/">real missing page</a>
+</body></html>`)
+	write("csp-nonce/index.html", `<html><head><title>CSP Nonce</title></head><body>real canonical page</body></html>`)
+	write("grav-csp-nonce/index.html", `<html><head>
+<link rel="canonical" href="https://example.test/csp-nonce/">
+</head><body>legacy alias page</body></html>`)
+
+	idx, err := site.NewIndex(config.Config{
+		SiteRoot:         root,
+		SiteURL:          "https://example.test",
+		SiteName:         "example",
+		DefaultLanguage:  "en",
+		RejectSymlinks:   true,
+		RejectHiddenPath: true,
+	})
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+
+	issues := collectBrokenLinks(idx)
+	if len(issues) != 1 {
+		t.Fatalf("collectBrokenLinks() = %#v, want only /missing/ (alias's own URL must not be flagged)", issues)
+	}
+	if issues[0].Link != "/missing/" {
+		t.Fatalf("collectBrokenLinks() issue = %#v, want /missing/", issues[0])
+	}
+}

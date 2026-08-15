@@ -1100,6 +1100,16 @@ func txSyncLinks(tx *sql.Tx, pageID int64, p site.Page, siteIdx *site.Index) err
 		if status == "broken" && site.ShouldIgnoreBrokenLinkTarget(targetSlug) {
 			status = "ok"
 		}
+		// A link to a canonical-collapsed alias's own URL (e.g. a Grav
+		// legacy route whose <link rel=canonical> points elsewhere) is a
+		// real, walkable file, not a missing target — same fix as above,
+		// but this one needs the live siteIdx since a static/nil-classifier
+		// check can't know which slugs are aliases (#1112).
+		if status == "broken" && siteIdx != nil {
+			if _, isAlias := siteIdx.ResolveAlias(targetSlug); isAlias {
+				status = "ok"
+			}
+		}
 		if _, err := tx.Exec(
 			"INSERT INTO links(source_page_id, target, target_slug, anchor_text, status) VALUES(?,?,?,?,?)",
 			pageID, href, targetSlug, "", status,

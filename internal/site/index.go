@@ -27,6 +27,7 @@ type Index struct {
 	mu                sync.RWMutex
 	entries           []entry
 	bySlug            map[string]int
+	aliasSlugs        map[string]string
 	tags              []string
 	categories        []string
 	info              map[string]string
@@ -73,6 +74,7 @@ func (idx *Index) Reload(cfg config.Config) error {
 	idx.mu.Lock()
 	idx.entries = fresh.entries
 	idx.bySlug = fresh.bySlug
+	idx.aliasSlugs = fresh.aliasSlugs
 	idx.tags = fresh.tags
 	idx.categories = fresh.categories
 	idx.info = fresh.info
@@ -238,9 +240,10 @@ func NewIndex(cfg config.Config) (*Index, error) {
 	root := strings.TrimSpace(cfg.SiteRoot)
 	if root == "" {
 		return &Index{
-			bySlug:  map[string]int{},
-			info:    map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": cfg.DefaultLanguage},
-			builtAt: builtAt,
+			bySlug:     map[string]int{},
+			aliasSlugs: map[string]string{},
+			info:       map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": cfg.DefaultLanguage},
+			builtAt:    builtAt,
 		}, nil
 	}
 
@@ -260,13 +263,22 @@ func NewIndex(cfg config.Config) (*Index, error) {
 	}
 
 	idx := &Index{
-		bySlug:  map[string]int{},
-		info:    map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": defaultLang},
-		builtAt: builtAt,
+		bySlug:     map[string]int{},
+		aliasSlugs: map[string]string{},
+		info:       map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": defaultLang},
+		builtAt:    builtAt,
 	}
 
 	tagSet := map[string]struct{}{}
 	catSet := map[string]struct{}{}
+	// ownerIsAlias tracks, per occupied slug, whether the entry currently
+	// sitting in bySlug got there via a <link rel=canonical> pointing at a
+	// *different* slug (an alias page, #184's grav-csp-nonce case) rather
+	// than by genuinely owning that slug. filepath.WalkDir order is lexical,
+	// not canonical-aware, so an alias can be walked before the page it
+	// points at — without this, that alias would permanently squat the slot
+	// and the real page would be dropped as a "duplicate" (#1112).
+	ownerIsAlias := map[string]bool{}
 
 	err = filepath.WalkDir(canonicalRoot, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -325,11 +337,41 @@ func NewIndex(cfg config.Config) (*Index, error) {
 			return nil
 		}
 		pg.OutputPath = rel
-		if _, exists := idx.bySlug[pg.Slug]; exists {
-			slog.Warn("site index: duplicate slug detected, skipping", "slug", pg.Slug, "path", p)
+		ownSlug := slugFromRel(rel)
+		isAlias := ownSlug != pg.Slug
+
+		if pos, exists := idx.bySlug[pg.Slug]; exists {
+			if isAlias {
+				// An alias never displaces whoever currently occupies its
+				// canonical target's slot — #184's dedup semantics are
+				// unchanged. Still record the alias mapping so a link to
+				// this file's own URL can be recognized as "exists, not
+				// canonical" instead of "missing" (#1112).
+				idx.aliasSlugs[ownSlug] = pg.Slug
+				slog.Warn("site index: duplicate slug detected, skipping", "slug", pg.Slug, "path", p)
+				return nil
+			}
+			if !ownerIsAlias[pg.Slug] {
+				// Two files both genuinely claim the same slug — a real
+				// content conflict, not a walk-order artifact. Unchanged
+				// first-wins behavior.
+				slog.Warn("site index: duplicate slug detected, skipping", "slug", pg.Slug, "path", p)
+				return nil
+			}
+			// The slot was squatted by an alias walked earlier; this file is
+			// that alias's genuine canonical owner. Demote the alias and
+			// install the real page in its place.
+			demoted := idx.entries[pos]
+			idx.aliasSlugs[slugFromRel(demoted.page.OutputPath)] = pg.Slug
+			idx.entries[pos] = entry{page: pg, parsedDate: parsedDate}
+			ownerIsAlias[pg.Slug] = false
 			return nil
 		}
 
+		if isAlias {
+			idx.aliasSlugs[ownSlug] = pg.Slug
+			ownerIsAlias[pg.Slug] = true
+		}
 		idx.bySlug[pg.Slug] = len(idx.entries)
 		idx.entries = append(idx.entries, entry{page: pg, parsedDate: parsedDate})
 
@@ -387,6 +429,21 @@ func (idx *Index) GetBySlug(slug string) (*Page, bool) {
 	}
 	p := idx.entries[pos].page
 	return &p, true
+}
+
+// ResolveAlias reports whether slug is a known canonical-collapse alias —
+// a real, walkable file whose own <link rel=canonical> pointed at a
+// different page, so #184's dedup never gave it its own bySlug/entries slot.
+// A true ok means slug legitimately exists on disk and resolves to the
+// returned canonical slug; it is not a "missing page" (#1112).
+func (idx *Index) ResolveAlias(slug string) (string, bool) {
+	if idx == nil || slug == "" {
+		return "", false
+	}
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
+	target, ok := idx.aliasSlugs[normalizeSlug(slug)]
+	return target, ok
 }
 
 // ScoredPage pairs a search result with its match score (the count of
