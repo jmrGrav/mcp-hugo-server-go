@@ -129,6 +129,20 @@ type scoreBreakdownDTO struct {
 	// category carries real weight — a URL-shaped title is a content defect
 	// serious enough that "healthy" must not be reported while it's present.
 	TitleShape scoreCategoryDTO `json:"title_shape"`
+	// BrokenLinks (#1105) mirrors TitleShape's pattern exactly: weight 0 (never
+	// moves the weighted score), but a nonzero count still forces
+	// status/content_status off healthy/healthy_with_advisories and caps score
+	// at 99. A pointer, unlike the other two categories, because it is only
+	// ever computed when db_path is configured — get_broken_links's own O(1)
+	// pre-computed link graph (siteDB.GetBrokenLinks()). Without db_path, the
+	// only way to get this count is the same full-HTML-rescan
+	// collectBrokenLinks pays on every get_broken_links call; running that
+	// unconditionally on every get_site_health call (a tool meant to be cheap
+	// enough to call before every publish) would impose that cost on every
+	// reader-profile deployment, not just db_path-configured ones. Nil (the
+	// whole score_breakdown.broken_links key omitted) means "not computed",
+	// never a false "0" that would misrepresent an unchecked site as clean.
+	BrokenLinks *scoreCategoryDTO `json:"broken_links,omitempty"`
 }
 
 type contentEnvelopeData struct {
@@ -214,6 +228,12 @@ type contentEnvelopeData struct {
 	// Exposed the same way OrphanPages is, so an agent can go fix the
 	// specific pages directly instead of only seeing an aggregate count.
 	BadTitleShapePages []string `json:"bad_title_shape_pages,omitempty"`
+	// BrokenLinksCount (#1105) is the same figure get_broken_links.data.broken_links
+	// would report, surfaced here so an operator doesn't have to make a second
+	// call to notice a link-graph problem alongside content-health ones. A
+	// pointer for the same reason as score_breakdown.broken_links: nil means
+	// "not computed" (db_path unset), never a misleading "0".
+	BrokenLinksCount *int `json:"broken_links_count,omitempty"`
 	// UntrackedSourcePages (#819) counts published pages whose source file
 	// isn't tracked by git — surfaced proactively here instead of only
 	// discovered per-page via diff_page's own git_untracked status. A
@@ -730,12 +750,12 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, newContentEnvelope(data, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. Counter populations are intentionally distinct: `source_pages` includes every indexed source document; `publishable_source_pages` is the backward-compatible count of ordinary content expected to resolve individually and excludes `_index` documents and other non-publishable sources; `published_pages` is the independently classified rendered content-page population and can include public routes not matched to publishable ordinary sources. New clients should use `publishable_content_pages`, `section_index_pages`, and the typed `publication_coverage` breakdown instead of comparing the three legacy counters directly. `public_output_complete` means every publishable ordinary content source has a public match, not that all three counters must be equal. `publication_coverage.completeness_basis` identifies that source population explicitly, while `counters_directly_comparable:false` warns agents not to subtract the independent source and public counters. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true, OR whenever `bad_title_shape_pages` is non-empty (see below); `runtime_degraded_reasons`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `bad_title_shape_pages` (#1105) lists slugs whose title field is a bare http(s) URL instead of actual page text — a corrupted-title defect a frontmatter-presence check cannot see, since the field is non-empty. `score_breakdown.title_shape` reports 0 whenever this list is non-empty, 100 otherwise; despite carrying weight 0 (like taxonomy, it never moves the weighted `score` calculation), a URL-shaped title still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` directly and caps an otherwise-perfect `score` at 99 — do not read weight 0 as harmless for this category the way it is for taxonomy. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. Counter populations are intentionally distinct: `source_pages` includes every indexed source document; `publishable_source_pages` is the backward-compatible count of ordinary content expected to resolve individually and excludes `_index` documents and other non-publishable sources; `published_pages` is the independently classified rendered content-page population and can include public routes not matched to publishable ordinary sources. New clients should use `publishable_content_pages`, `section_index_pages`, and the typed `publication_coverage` breakdown instead of comparing the three legacy counters directly. `public_output_complete` means every publishable ordinary content source has a public match, not that all three counters must be equal. `publication_coverage.completeness_basis` identifies that source population explicitly, while `counters_directly_comparable:false` warns agents not to subtract the independent source and public counters. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true, OR whenever `bad_title_shape_pages` is non-empty (see below); `runtime_degraded_reasons`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `bad_title_shape_pages` (#1105) lists slugs whose title field is a bare http(s) URL instead of actual page text — a corrupted-title defect a frontmatter-presence check cannot see, since the field is non-empty. `score_breakdown.title_shape` reports 0 whenever this list is non-empty, 100 otherwise; despite carrying weight 0 (like taxonomy, it never moves the weighted `score` calculation), a URL-shaped title still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` directly and caps an otherwise-perfect `score` at 99 — do not read weight 0 as harmless for this category the way it is for taxonomy. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. `broken_links_count` and `score_breakdown.broken_links` (#1105) surface the same figure `get_broken_links.data.broken_links` reports, but only when `db_path` is configured — computing it here otherwise would mean paying `get_broken_links`'s full-HTML-rescan cost on every `get_site_health` call, not just an explicit one. Both fields are entirely omitted (not a `0`) when not computed, the same `untracked_source_pages` distinction above; a present `0` means checked and clean. Like `title_shape`, `score_breakdown.broken_links` carries weight 0 (never moves the weighted `score`) but a nonzero count still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` and caps an otherwise-perfect `score` at 99 — this deliberately never folds link-graph resolution logic into this tool's own scoring, keeping `get_broken_links` the single source of truth for what counts as broken; it only reacts to that count as an override. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
-			health := buildSiteHealth(ctx, idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases, cfg)
+			health := buildSiteHealth(ctx, idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases, cfg, siteDB)
 			return nil, newContentEnvelope(contentEnvelopeData{
 				Status:                          health.Status,
 				Score:                           health.Score,
@@ -764,6 +784,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				TaxonomyInconsistencyDetails:    health.TaxonomyInconsistencyDetails,
 				UntrackedSourcePages:            health.UntrackedSourcePages,
 				BadTitleShapePages:              health.BadTitleShapePages,
+				BrokenLinksCount:                health.BrokenLinksCount,
 			}, time.Now().UTC()), nil
 		})
 
@@ -1837,7 +1858,7 @@ func untrackedSourcePageCount(ctx context.Context, srcIdx *hugosite.SourceIndex,
 	return count, true
 }
 
-func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string, cfg config.Config) contentEnvelopeData {
+func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string, cfg config.Config, siteDB *db.DB) contentEnvelopeData {
 	health := contentEnvelopeData{
 		Status: "healthy",
 	}
@@ -1940,6 +1961,21 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 		}
 	}
 
+	// #1105: broken-link volume only ever feeds this score when db_path is
+	// configured — siteDB.GetBrokenLinks() reads the pre-computed link graph
+	// (O(1)), the same source get_broken_links's own db_path path uses. A nil
+	// siteDB (no db_path) deliberately never falls back to the full-HTML-rescan
+	// collectBrokenLinks: that cost is acceptable for an explicit
+	// get_broken_links call, not for every get_site_health call.
+	var brokenLinksCount *int
+	if siteDB != nil {
+		if dbLinks, err := siteDB.GetBrokenLinks(); err == nil {
+			n := len(dbLinks)
+			brokenLinksCount = &n
+		}
+	}
+	health.BrokenLinksCount = brokenLinksCount
+
 	// score_breakdown (#419) is presentation only — it must not change what
 	// `score` itself was computed from (that's the pre-existing formula
 	// below, byte-for-byte). frontmatter carries 100% of the weight because
@@ -1982,6 +2018,18 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 		Taxonomy:    scoreCategoryDTO{Score: taxonomyScore, Weight: taxonomyWeight, Issues: taxonomyWarnings, Advisories: taxonomyAdvisories},
 		TitleShape:  scoreCategoryDTO{Score: titleShapeScore, Weight: titleShapeWeight, Issues: len(health.BadTitleShapePages)},
 	}
+	if brokenLinksCount != nil {
+		// Binary, same as title_shape: any broken link at all is a real
+		// content defect, not a gradient to score linearly — mirrors #1101's
+		// framing that a nonzero count on a previously-clean site (baseline
+		// near 0) is exactly the signal that mattered during #1099/#1105's
+		// own incident.
+		brokenLinksScore := 100
+		if *brokenLinksCount > 0 {
+			brokenLinksScore = 0
+		}
+		health.ScoreBreakdown.BrokenLinks = &scoreCategoryDTO{Score: brokenLinksScore, Weight: 0, Issues: *brokenLinksCount}
+	}
 	// AdvisoriesCount deliberately counts every taxonomy finding regardless
 	// of severity (taxonomyWarnings + taxonomyAdvisories == len(details)),
 	// NOT just score_breakdown.taxonomy.advisories (info-severity only,
@@ -2020,6 +2068,11 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	if score == 100 && len(health.BadTitleShapePages) > 0 {
 		score = 99
 	}
+	// #1105: same "perfect 100 is misleading" cap for a nonzero broken-link
+	// count, when we were actually able to check (db_path configured).
+	if score == 100 && brokenLinksCount != nil && *brokenLinksCount > 0 {
+		score = 99
+	}
 	health.Score = score
 	switch {
 	case score >= 90:
@@ -2037,6 +2090,18 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	// of where the weighted score lands (#1105: this is the exact case
 	// get_site_health silently passed as healthy/100 during #1099).
 	if len(health.BadTitleShapePages) > 0 && (health.Status == "healthy" || health.Status == "healthy_with_advisories") {
+		health.Status = "degraded"
+	}
+	// #1105: resolves this issue's own design question — broken-link volume
+	// does feed get_site_health, but only as a status override (same
+	// treatment as title_shape), never by folding link-graph scoring into the
+	// weighted score itself. That keeps get_broken_links's link-graph
+	// resolution logic as the single source of truth this tool defers to
+	// (avoiding the "quiet coupling" #1101 already showed drifts easily),
+	// while still closing the exact gap #1099 exposed: a previously-clean
+	// site (baseline near 0) suddenly showing broken links must not report
+	// healthy.
+	if brokenLinksCount != nil && *brokenLinksCount > 0 && (health.Status == "healthy" || health.Status == "healthy_with_advisories") {
 		health.Status = "degraded"
 	}
 	health.ContentStatus = health.Status
