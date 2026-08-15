@@ -138,6 +138,28 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 	}
 	if err := siteDB.StartupSync(idx, srcIdx); err != nil {
 		slog.Warn("server: startup db sync incomplete", "error", err)
+		return siteDB, nil
+	}
+	// A build journal record can remain at in_progress/file_written only when
+	// the previous process died between lifecycle callbacks. The public swap is
+	// an atomic directory rename, so after StartupSync has freshly indexed the
+	// source and the public tree, the new process has reconciled the only two
+	// observable outcomes (old complete tree or new complete tree). Mark those
+	// build records reconciled; deliberately leave source-mutation records for
+	// their stricter file-level recovery journal (#1079 follow-up).
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		slog.Warn("server: recovery journal lookup failed", "error", err)
+		return siteDB, nil
+	}
+	for _, entry := range pending {
+		if entry.Kind != "build" || (entry.State != "in_progress" && entry.State != "file_written") {
+			continue
+		}
+		entry.State = "reconciled"
+		if err := siteDB.RecordRecovery(entry); err != nil {
+			slog.Warn("server: build recovery reconciliation failed", "operation_id", entry.OperationID, "error", err)
+		}
 	}
 	return siteDB, nil
 }

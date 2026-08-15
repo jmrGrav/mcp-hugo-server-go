@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -295,7 +296,7 @@ func (d *DB) RecordRecovery(e RecoveryEntry) error {
 }
 
 func (d *DB) PendingRecovery() ([]RecoveryEntry, error) {
-	rows, err := d.db.Query(`SELECT operation_id,kind,state,payload,updated_at FROM recovery_journal WHERE state != 'committed' ORDER BY updated_at`)
+	rows, err := d.db.Query(`SELECT operation_id,kind,state,payload,updated_at FROM recovery_journal WHERE state NOT IN ('committed','reconciled') ORDER BY updated_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -614,11 +615,13 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 	// logical page (#475), which search_content's FTS path (keyed off the
 	// public index) can never reach anyway.
 	publicSourceSlugs := make(map[string]bool)
+	var syncErrs []error
 	if siteIdx != nil {
 		for _, p := range siteIdx.Sitemap() {
 			delete(hashes, p.Slug)
 			if err := d.SyncPublicPage(p, siteIdx); err != nil {
 				slog.Warn("db: startup sync: public page", "slug", p.Slug, "error", err)
+				syncErrs = append(syncErrs, fmt.Errorf("public page %q: %w", p.Slug, err))
 				continue
 			}
 			for _, c := range site.SourceSlugCandidates(strings.Trim(p.Slug, "/")) {
@@ -640,6 +643,7 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 			delete(hashes, p.Slug)
 			if err := d.SyncSourcePage(p); err != nil {
 				slog.Warn("db: startup sync: source page", "slug", p.Slug, "error", err)
+				syncErrs = append(syncErrs, fmt.Errorf("source page %q: %w", p.Slug, err))
 			}
 		}
 	}
@@ -648,9 +652,10 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 	for slug := range hashes {
 		if err := d.DeletePage(slug); err != nil {
 			slog.Warn("db: startup sync: delete orphan", "slug", slug, "error", err)
+			syncErrs = append(syncErrs, fmt.Errorf("delete orphan %q: %w", slug, err))
 		}
 	}
-	return nil
+	return errors.Join(syncErrs...)
 }
 
 // PostBuildSync reindexes the public site index after a successful build,

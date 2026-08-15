@@ -94,6 +94,31 @@ func TestStartupSyncProducesOneRowPerLogicalPage(t *testing.T) {
 	}
 }
 
+func TestStartupSyncReturnsPerPageWriteFailures(t *testing.T) {
+	d, err := Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.db.Exec(`CREATE TRIGGER reject_page_insert BEFORE INSERT ON pages BEGIN SELECT RAISE(ABORT, 'injected startup sync failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html><head><title>Injected</title></head><body></body></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = root
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = d.StartupSync(idx, nil)
+	if err == nil || !strings.Contains(err.Error(), "public page") || !strings.Contains(err.Error(), "injected startup sync failure") {
+		t.Fatalf("StartupSync error = %v, want aggregated per-page failure", err)
+	}
+}
+
 // TestStartupSyncCleansUpLegacyDuplicateRow is a regression test for #475:
 // a duplicate bare-slug row left over from before this fix (or from a
 // write-path SyncSourcePage call while the page was still source-only)

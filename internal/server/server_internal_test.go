@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
@@ -138,6 +140,98 @@ func TestOpenSiteDBBranches(t *testing.T) {
 			t.Fatal("openSiteDB(valid path) = nil, want non-nil handle")
 		}
 	})
+}
+
+func TestOpenSiteDBReconcilesOnlyInterruptedBuildsAfterFreshStartupSync(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html><head><title>x</title></head><body></body></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = root
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "site.sqlite")
+	journal, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []db.RecoveryEntry{
+		{OperationID: "build-before-swap", Kind: "build", State: "in_progress", Payload: []byte(`{}`)},
+		{OperationID: "build-after-swap", Kind: "build", State: "file_written", Payload: []byte(`{}`)},
+		{OperationID: "build-unknown", Kind: "build", State: "cleanup_pending", Payload: []byte(`{}`)},
+		{OperationID: "mutation-unknown", Kind: "content_write", State: "file_written", Payload: []byte(`{}`)},
+	} {
+		if err := journal.RecordRecovery(entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	siteDB, err := openSiteDB(config.Config{DBPath: path}, idx, nil)
+	if err != nil {
+		t.Fatalf("openSiteDB: %v", err)
+	}
+	defer siteDB.Close()
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 || pending[0].OperationID != "build-unknown" || pending[1].OperationID != "mutation-unknown" {
+		t.Fatalf("pending after startup reconciliation = %+v, want unknown build and untouched mutation", pending)
+	}
+}
+
+func TestOpenSiteDBLeavesInterruptedBuildPendingWhenStartupSyncFails(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.html"), []byte("<html><head><title>x</title></head><body></body></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.SiteRoot = root
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "site.sqlite")
+	journal, err := db.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.RecordRecovery(db.RecoveryEntry{OperationID: "build-pending", Kind: "build", State: "file_written", Payload: []byte(`{}`)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	rawDB, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawDB.Exec(`CREATE TRIGGER reject_page_insert BEFORE INSERT ON pages BEGIN SELECT RAISE(ABORT, 'injected startup sync failure'); END`); err != nil {
+		rawDB.Close()
+		t.Fatal(err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	siteDB, err := openSiteDB(config.Config{DBPath: path}, idx, nil)
+	if err != nil {
+		t.Fatalf("openSiteDB: %v", err)
+	}
+	defer siteDB.Close()
+	pending, err := siteDB.PendingRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].OperationID != "build-pending" || pending[0].State != "file_written" {
+		t.Fatalf("pending after failed startup sync = %+v, want untouched build", pending)
+	}
 }
 
 func TestKnownToolsSet(t *testing.T) {
