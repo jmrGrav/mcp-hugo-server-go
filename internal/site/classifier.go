@@ -115,18 +115,26 @@ func (c *ContentClassifier) IsContent(p Page) bool {
 
 // ShouldIgnoreBrokenLinkTarget reports whether a link to targetSlug should
 // never be flagged as broken, regardless of whether the index has a record
-// of it. Hugo's paginated listing pages (/en/page/2/, /en/page/3/, ...)
-// legitimately canonicalize back to page 1 for SEO, which makes the
-// indexer's own duplicate-slug collapse (NewIndex, #1099's alias-dedup
-// mechanism) drop them from bySlug even though they are real, independently
-// servable URLs (#1101) — so a link-target existence check must never treat
-// a pagination-shaped target as "missing" in the first place, the same way
-// it already skips taxonomy/section/technical targets that this index
-// doesn't track individually. Two independent broken-link implementations
-// (internal/tools/read's in-memory scan and internal/db's SQL-backed link
-// graph) both need this exact policy; #1104 was a live incident caused by
-// those two implementations drifting apart, so this is the single source of
-// truth for both from now on.
+// of it — true for any target this classifier (built with no known section/
+// taxonomy roots) does not classify as ordinary content: pagination routes,
+// technical routes, and the home route, today. Hugo's paginated listing
+// pages (/en/page/2/, /en/page/3/, ...) are the concrete case #1101 exists
+// for: they legitimately canonicalize back to page 1 for SEO, which makes
+// the indexer's own duplicate-slug collapse (NewIndex, the same mechanism
+// #184's grav-csp-nonce alias fix relies on) drop them from bySlug even
+// though they are real, independently servable URLs — so a link-target
+// existence check must never treat one as "missing" in the first place.
+//
+// internal/tools/read's in-memory broken-link scan builds its own
+// index-backed classifier (populated section/taxonomy roots) and only falls
+// back to this nil-classifier version when none is available, so it is NOT
+// currently routed through this exact function in production — the two
+// broken-link implementations still disagree for taxonomy/section targets
+// specifically (this nil-classifier version can't know the site's roots and
+// falls through to KindPage/content for those), matching the false-positive
+// direction #1101 reports, just not yet unified for those two kinds. Not a
+// single source of truth for every target kind; it is one for the
+// pagination/technical/home cases that don't depend on site-specific roots.
 func ShouldIgnoreBrokenLinkTarget(targetSlug string) bool {
 	return !NewClassifier(nil).IsContent(Page{Slug: targetSlug})
 }
