@@ -307,6 +307,18 @@ func (d *DB) createTables() error {
 			id INTEGER PRIMARY KEY CHECK (id = 1), last_pruned_at TEXT NOT NULL,
 			last_pruned_entries INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS change_sets (
+			id TEXT PRIMARY KEY, principal_id TEXT NOT NULL,
+			created_at TEXT NOT NULL, last_used_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS change_set_mutations (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			change_set_id TEXT NOT NULL, principal_id TEXT NOT NULL,
+			tool TEXT NOT NULL, source_key TEXT NOT NULL DEFAULT '',
+			mutation_type TEXT NOT NULL, created_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_change_set_mutations_change_set
+			ON change_set_mutations(change_set_id)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -591,6 +603,94 @@ func (d *DB) LookupMutation(callerKey, tool, key string, ttl time.Duration) (*Mu
 	}
 	e.CallerKey, e.Tool, e.Key = callerKey, tool, key
 	return &e, nil
+}
+
+// ChangeSetMutation is one mutation attributed to a change_set_id (#1135):
+// a persistent unit of publication ownership, distinct from principal_id so
+// two clients sharing the same OAuth token/principal (a realistic
+// mono-operator deployment shape) still get independently attributed
+// mutations.
+type ChangeSetMutation struct {
+	ChangeSetID  string
+	PrincipalID  string
+	Tool         string
+	SourceKey    string
+	MutationType string
+	CreatedAt    time.Time
+}
+
+// CreateChangeSet persists a newly minted change_set_id's ownership. Safe to
+// call twice for the same id (e.g. a retry) — ON CONFLICT DO NOTHING keeps
+// the original owner and creation time rather than overwriting them.
+func (d *DB) CreateChangeSet(id, principalID string, now time.Time) error {
+	if id == "" || principalID == "" {
+		return fmt.Errorf("change set: id and principal_id are required")
+	}
+	ts := now.UTC().Format(time.RFC3339Nano)
+	_, err := d.db.Exec(`INSERT INTO change_sets(id, principal_id, created_at, last_used_at) VALUES(?,?,?,?) ON CONFLICT(id) DO NOTHING`, id, principalID, ts, ts)
+	return err
+}
+
+// GetChangeSetOwner looks up which principal created change_set_id id, for
+// restoring ownership after a process restart (the in-memory registry is
+// otherwise the sole source of truth while the process is up).
+func (d *DB) GetChangeSetOwner(id string) (principalID string, found bool, err error) {
+	err = d.db.QueryRow(`SELECT principal_id FROM change_sets WHERE id=?`, id).Scan(&principalID)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return principalID, true, nil
+}
+
+// TouchChangeSet updates a change-set's last-used timestamp. Best-effort
+// from callers — a failure here must never block the mutation it's
+// attributing, which has already succeeded by the time this is called.
+func (d *DB) TouchChangeSet(id string, now time.Time) error {
+	_, err := d.db.Exec(`UPDATE change_sets SET last_used_at=? WHERE id=?`, now.UTC().Format(time.RFC3339Nano), id)
+	return err
+}
+
+// RecordChangeSetMutation appends one attributed mutation. Append-only by
+// design (unlike mutation_journal's upsert-by-key): #1140/#1142 need the
+// full history of what each change-set touched, not just its latest state.
+func (d *DB) RecordChangeSetMutation(m ChangeSetMutation) error {
+	if m.ChangeSetID == "" || m.PrincipalID == "" || m.Tool == "" || m.MutationType == "" {
+		return fmt.Errorf("change set mutation: change_set_id, principal_id, tool, and mutation_type are required")
+	}
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = time.Now().UTC()
+	}
+	_, err := d.db.Exec(`INSERT INTO change_set_mutations(change_set_id, principal_id, tool, source_key, mutation_type, created_at) VALUES(?,?,?,?,?,?)`, m.ChangeSetID, m.PrincipalID, m.Tool, m.SourceKey, m.MutationType, m.CreatedAt.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// ListChangeSetMutations returns every mutation recorded against
+// changeSetID, oldest first. Feeds #1140's foreign-change-set computation
+// and #1142's runtime-status observability — not consumed within #1135
+// itself, but the persistence shape both depend on.
+func (d *DB) ListChangeSetMutations(changeSetID string) ([]ChangeSetMutation, error) {
+	rows, err := d.db.Query(`SELECT change_set_id, principal_id, tool, source_key, mutation_type, created_at FROM change_set_mutations WHERE change_set_id=? ORDER BY created_at`, changeSetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ChangeSetMutation
+	for rows.Next() {
+		var m ChangeSetMutation
+		var created string
+		if err := rows.Scan(&m.ChangeSetID, &m.PrincipalID, &m.Tool, &m.SourceKey, &m.MutationType, &created); err != nil {
+			return nil, err
+		}
+		m.CreatedAt, err = time.Parse(time.RFC3339Nano, created)
+		if err != nil {
+			return nil, fmt.Errorf("change set mutation: parse created_at: %w", err)
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
 }
 
 // PruneMutationJournal deletes expired mutation outcomes and records the

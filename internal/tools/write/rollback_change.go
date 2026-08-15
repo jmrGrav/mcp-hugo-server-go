@@ -197,7 +197,9 @@ type rollbackChangeInput struct {
 	ToRevision       string `json:"to_revision"`
 	ExpectedRevision string `json:"expected_revision,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
-	DryRun           bool   `json:"dry_run,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 }
 
 type listPageSnapshotsInput struct {
@@ -264,6 +266,7 @@ func registerRollbackChange(
 	mutationLimiters map[string]*rate.Limiter,
 	idem *idempotencyStore,
 	snapshots *snapshotStore,
+	changeSets *changeSetRegistry,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "rollback_change",
@@ -322,6 +325,10 @@ func registerRollbackChange(
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: to_revision must not be empty"))
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
+		}
+		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
 		}
 		if !in.DryRun && !limiter.Allow() {
@@ -575,6 +582,7 @@ func registerRollbackChange(
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("rollback_change: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
+		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "rollback_change", in.Slug, "rollback", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

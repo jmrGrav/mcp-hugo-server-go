@@ -44,7 +44,12 @@ type createPageInput struct {
 	Categories              []string `json:"categories"`
 	NormalizeTaxonomyCasing bool     `json:"normalize_taxonomy_casing,omitempty"`
 	IdempotencyKey          string   `json:"idempotency_key,omitempty"`
-	DryRun                  bool     `json:"dry_run,omitempty"`
+	// ChangeSetID (#1135) attributes this mutation to a caller-owned
+	// change-set obtained from create_change_set, rather than the implicit
+	// per-principal default used when omitted. See create_change_set's
+	// description for when this matters.
+	ChangeSetID string `json:"change_set_id,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 	// TestContent (#661) is a deliberate, explicit opt-in — never inferred
 	// from slug/title — marking this page as disposable test/audit content.
 	// When set, the page is always created with draft:true regardless of
@@ -145,7 +150,9 @@ type updatePageInput struct {
 	// difference.
 	ExpectedBundleRevision string `json:"expected_bundle_revision,omitempty"`
 	IdempotencyKey         string `json:"idempotency_key,omitempty"`
-	DryRun                 bool   `json:"dry_run,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 }
 
 type updatePageOutput struct {
@@ -276,8 +283,10 @@ type deletePageInput struct {
 	Lang             string `json:"lang,omitempty"`
 	ExpectedRevision string `json:"expected_revision,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
-	DryRun           bool   `json:"dry_run,omitempty"`
-	ResponseMode     string `json:"response_mode,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID  string `json:"change_set_id,omitempty"`
+	DryRun       bool   `json:"dry_run,omitempty"`
+	ResponseMode string `json:"response_mode,omitempty"`
 	// Owner is an optional caller-supplied label for disposable test content,
 	// mirroring create_page's test_content.owner frontmatter field (#661).
 	// It is advisory metadata only: delete_page never infers identity or
@@ -714,16 +723,17 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 		return
 	}
 	rt := newWriteRegisterRuntime(cfg, siteDB, siteIdxs...)
-	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots)
-	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots)
+	registerCreateChangeSet(s, rt.changeSets)
+	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots, rt.changeSets)
+	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots, rt.changeSets)
 	registerListPageSnapshots(s, cfg, rt.snapshots)
-	registerBundleTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.bundlePlans, rt.bundleSnapshots)
+	registerBundleTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.bundlePlans, rt.bundleSnapshots, rt.changeSets)
 	registerBundleLifecycleTools(s, pg, idx, cfg, siteDB, rt)
 	registerCreatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerUpdatePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerDeletePageTool(s, pg, idx, cfg, siteDB, rt)
-	registerUploadPageAsset(s, pg, idx, cfg, rt.idem, &rt.mutationMu, rt.mutationLimiters)
-	registerDeletePageAsset(s, pg, idx, cfg, rt.idem, &rt.deleteMu, rt.deleteLimiters)
+	registerUploadPageAsset(s, pg, idx, cfg, rt.idem, &rt.mutationMu, rt.mutationLimiters, rt.changeSets)
+	registerDeletePageAsset(s, pg, idx, cfg, rt.idem, &rt.deleteMu, rt.deleteLimiters, rt.changeSets)
 	registerGetMutationStatus(s, rt.idem)
 	registerGetRateLimits(s, cfg, &rt.mutationMu, rt.mutationLimiters, &rt.deleteMu, rt.deleteLimiters)
 }
@@ -739,6 +749,7 @@ type writeRegisterRuntime struct {
 	snapshots        *snapshotStore
 	bundlePlans      *bundlePlanStore
 	bundleSnapshots  *bundleSnapshotStore
+	changeSets       *changeSetRegistry
 }
 
 func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) *writeRegisterRuntime {
@@ -755,6 +766,7 @@ func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, siteIdxs ...*site
 		snapshots:        newSnapshotStore(snapshotTTL, snapshotMaxEntries, siteDB),
 		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries, siteDB),
 		bundleSnapshots:  newBundleSnapshotStore(snapshotTTL, snapshotMaxEntries, siteDB),
+		changeSets:       newChangeSetRegistry(siteDB),
 	}
 }
 
@@ -819,6 +831,10 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, createPageOutput{}, wrapErrWithLimiter(err)
+		}
+		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
 		if in.TestContent != nil && in.TestContent.TTLHours != nil {
@@ -1062,6 +1078,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("create_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
+		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "create_page", in.Slug, "create", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -1151,6 +1168,10 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+		}
+		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 		}
 		// #887: Allow() is NOT consumed here anymore. Under the unified quota
@@ -1515,6 +1536,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("update_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
+		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "update_page", in.Slug, "update", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -1569,6 +1591,10 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+		}
+		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
 
@@ -1983,6 +2009,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("delete_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
+		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_page", in.Slug, "delete", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -2477,6 +2504,7 @@ func Defs() []tools.ToolDef {
 		{Name: "rollback_bundle", RequiredScope: "write"},
 		{Name: "create_bundle", RequiredScope: "write"},
 		{Name: "delete_bundle", RequiredScope: "write"},
+		{Name: "create_change_set", RequiredScope: "write"},
 	}
 }
 

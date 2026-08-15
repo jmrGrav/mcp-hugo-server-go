@@ -59,7 +59,9 @@ type uploadPageAssetInput struct {
 	Filename       string `json:"filename"`
 	ContentBase64  string `json:"content_base64"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
-	DryRun         bool   `json:"dry_run,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 }
 
 type uploadPageAssetOutput struct {
@@ -208,7 +210,7 @@ func findDuplicateAsset(dir string, data []byte) (string, error) {
 // registerUploadPageAsset registers upload_page_asset. Separate function
 // (mirrors registerListContentTypes's split from Register in the read
 // package) called from Register with the idempotency store it already owns.
-func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, mutationMu *sync.Mutex, mutationLimiters map[string]*rate.Limiter) {
+func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, mutationMu *sync.Mutex, mutationLimiters map[string]*rate.Limiter, changeSets *changeSetRegistry) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "upload_page_asset",
 		Title: "Upload page asset",
@@ -261,6 +263,10 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(fmt.Errorf("invalid_params: slug must not be empty"), strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
+		}
+		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
 		}
 		filename, ext, wantMIME, err := validateAssetFilename(in.Filename)
@@ -424,6 +430,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				slog.Warn("upload_page_asset: could not persist idempotency result", "slug", slug, "error", err)
 			}
 		}
+		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "upload_page_asset", slug, "create", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -502,7 +509,9 @@ type deletePageAssetInput struct {
 	ExpectedRevision string `json:"expected_revision,omitempty"`
 	Force            bool   `json:"force,omitempty"`
 	IdempotencyKey   string `json:"idempotency_key,omitempty"`
-	DryRun           bool   `json:"dry_run,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 	// Owner is optional advisory metadata only — see deletePageInput.Owner's
 	// comment in tools.go. It never affects authorization or destructive
 	// quota treatment on delete_page_asset.
@@ -639,7 +648,7 @@ func deleteAssetNotFoundErr(scope, filename, slug string) error {
 // delete_page's own destructive per-caller budget (deleteMu/deleteLimiters),
 // not upload_page_asset's create/update quota — deleting is the destructive
 // operation here, matching delete_page's own DestructiveHint.
-func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, deleteMu *sync.Mutex, deleteLimiters map[string]*rate.Limiter) {
+func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, deleteMu *sync.Mutex, deleteLimiters map[string]*rate.Limiter, changeSets *changeSetRegistry) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "delete_page_asset",
 		Title: "Delete page asset",
@@ -686,6 +695,10 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
+		}
+		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 		}
 		filename, err := validateDeleteAssetFilename(in.Filename)
@@ -931,6 +944,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				slog.Warn("delete_page_asset: could not persist idempotency result", "slug", slug, "filename", filename, "error", err)
 			}
 		}
+		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_page_asset", slug, "delete", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

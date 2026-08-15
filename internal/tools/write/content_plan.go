@@ -261,7 +261,9 @@ func newPlanContentChangeOutput(data planContentChangeData) planContentChangeOut
 type applyContentPlanInput struct {
 	PlanID         string `json:"plan_id"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
-	DryRun         bool   `json:"dry_run,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
+	DryRun      bool   `json:"dry_run,omitempty"`
 }
 
 type applyContentPlanData struct {
@@ -579,6 +581,7 @@ func registerContentPlanTools(
 	idem *idempotencyStore,
 	plans *planStore,
 	snapshots *snapshotStore,
+	changeSets *changeSetRegistry,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "plan_content_change",
@@ -755,6 +758,10 @@ func registerContentPlanTools(
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: plan_id must not be empty"))
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
+		}
+		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
 		}
 		if !in.DryRun && !limiter.Allow() {
@@ -978,6 +985,7 @@ func registerContentPlanTools(
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("apply_content_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
 		}
+		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "apply_content_plan", entry.Slug, "update", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

@@ -45,6 +45,8 @@ type createBundleInput struct {
 	Pages          []bundlePageInput `json:"pages"`
 	DryRun         bool              `json:"dry_run,omitempty"`
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
 }
 
 type deleteBundleInput struct {
@@ -53,6 +55,8 @@ type deleteBundleInput struct {
 	ExpectedRevisions map[string]string `json:"expected_revisions"`
 	DryRun            bool              `json:"dry_run,omitempty"`
 	IdempotencyKey    string            `json:"idempotency_key,omitempty"`
+	// ChangeSetID (#1135) — see createPageInput's field of the same name.
+	ChangeSetID string `json:"change_set_id,omitempty"`
 }
 
 type bundleLifecycleData struct {
@@ -98,6 +102,10 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(err)
+		}
+		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, bundleLifecycleOutput{}, wrap(err)
 		}
 		if err := validateSlugFormat(in.Slug); err != nil {
@@ -340,6 +348,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("create_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
+		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "create_bundle", in.Slug, "create", time.Now().UTC())
 		return nil, out, nil
 	}))
 
@@ -352,6 +361,10 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: slug must not be empty"))
 		}
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+			return nil, bundleLifecycleOutput{}, wrap(err)
+		}
+		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		if err != nil {
 			return nil, bundleLifecycleOutput{}, wrap(err)
 		}
 		if len(in.Languages) == 0 {
@@ -540,6 +553,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("delete_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
+		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_bundle", in.Slug, "delete", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

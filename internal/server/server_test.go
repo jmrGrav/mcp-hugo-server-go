@@ -2041,7 +2041,7 @@ clients:
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
-	if got, want := len(names), 64; got != want {
+	if got, want := len(names), 65; got != want {
 		t.Errorf("chatgpt write token tools/list = %d tools, want %d; got %v", got, want, names)
 	}
 	// Must see write tools.
