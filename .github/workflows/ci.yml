@@ -11,6 +11,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage-gate.outputs.coverage }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -47,10 +49,45 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
       - name: Coverage gate
+        id: coverage-gate
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
           echo "Coverage: ${COVERAGE}%"
+          echo "coverage=${COVERAGE}" >> "$GITHUB_OUTPUT"
           awk -v cov="$COVERAGE" 'BEGIN { if (cov + 0 < 85) { print "Coverage " cov "% is below 85%"; exit 1 } }'
+
+  publish-coverage-badge:
+    name: Publish test coverage badge
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    concurrency:
+      group: badges-branch
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Publish payload to badges branch
+        env:
+          COVERAGE: ${{ needs.test.outputs.coverage }}
+        run: |
+          set -euo pipefail
+          current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
+          if [[ "${current_main}" != "$GITHUB_SHA" ]]; then
+            echo "Skipping superseded badge payload for $GITHUB_SHA"
+            exit 0
+          fi
+          color="red"
+          awk -v cov="$COVERAGE" 'BEGIN { exit !(cov + 0 >= 85) }' && color="brightgreen"
+          if [[ "$color" == "red" ]]; then
+            awk -v cov="$COVERAGE" 'BEGIN { exit !(cov + 0 >= 70) }' && color="yellow"
+          fi
+          python3 -c "
+          import json
+          json.dump({'schemaVersion': 1, 'label': 'test coverage', 'message': '${COVERAGE}%', 'color': '${color}', 'cacheSeconds': 300}, open('/tmp/coverage-badge.json', 'w'), separators=(',', ':'))
+          "
+          .github/scripts/publish-badge.sh coverage-badge.json /tmp/coverage-badge.json
 
   source-loc:
     name: Production Go LOC
@@ -78,8 +115,8 @@ jobs:
     needs: source-loc
     runs-on: ubuntu-latest
     concurrency:
-      group: production-go-loc-badge
-      cancel-in-progress: true
+      group: badges-branch
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -88,9 +125,7 @@ jobs:
         with:
           name: source-loc-badge
           path: /tmp/source-loc-badge
-      - name: Publish payload to badges-data release asset
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Publish payload to badges branch
         run: |
           set -euo pipefail
           current_main=$(git ls-remote origin refs/heads/main | awk '{print $1}')
@@ -98,12 +133,7 @@ jobs:
             echo "Skipping superseded badge payload for $GITHUB_SHA"
             exit 0
           fi
-          if gh release download badges-data --repo "$GITHUB_REPOSITORY" --pattern source-loc.json --output /tmp/current-source-loc.json --clobber 2>/dev/null && \
-             cmp -s /tmp/source-loc-badge/source-loc.json /tmp/current-source-loc.json; then
-            echo "Badge payload is unchanged"
-            exit 0
-          fi
-          gh release upload badges-data /tmp/source-loc-badge/source-loc.json --repo "$GITHUB_REPOSITORY" --clobber
+          .github/scripts/publish-badge.sh source-loc.json /tmp/source-loc-badge/source-loc.json
 
   # Boot the real binary with a synthetic config and assert all 7 IsItAgentReady
   # discovery endpoints respond correctly, and that scopes_supported contains
