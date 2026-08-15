@@ -880,10 +880,20 @@ func registerContentPlanTools(
 		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
 			slog.Warn("apply_content_plan: could not advance recovery journal", "plan_id", in.PlanID, "error", err)
 		}
-		if _, ok, err := plans.consume(in.PlanID, isolationCallerKey(ctx)); err != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: source changed but plan consumption could not be persisted; retry with the same idempotency_key: %w", err))
+		status := "updated"
+		warning := ""
+		_, ok, err = plans.consume(in.PlanID, isolationCallerKey(ctx))
+		if err == nil {
+			err = planConsumeFailure("apply_content_plan")
+		}
+		if err != nil {
+			slog.Warn("apply_content_plan: plan consumption failed after write", "plan_id", in.PlanID, "error", err)
+			status = "partial_success"
+			warning = fmt.Sprintf("source updated but plan consumption could not be persisted: %v", err)
 		} else if !ok {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: source changed but plan consumption could not be persisted; retry with the same idempotency_key"))
+			slog.Warn("apply_content_plan: plan consumption reported not-ok after write", "plan_id", in.PlanID)
+			status = "partial_success"
+			warning = "source updated but plan consumption could not be persisted"
 		}
 		var updated hugosite.SourcePage
 		if existing, hasExisting := idx.GetBySlug(entry.Slug); hasExisting {
@@ -931,13 +941,16 @@ func registerContentPlanTools(
 			}
 		}
 
-		status := "updated"
-		warning := ""
 		if siteDB != nil {
 			if err := siteDB.SyncSourcePage(updated); err != nil {
 				slog.Warn("apply_content_plan: db sync failed", "plan_id", in.PlanID, "error", err)
 				status = "partial_success"
-				warning = fmt.Sprintf("source updated but derived DB could not be updated: %v", err)
+				dbWarning := fmt.Sprintf("source updated but derived DB could not be updated: %v", err)
+				if warning != "" {
+					warning = warning + "; " + dbWarning
+				} else {
+					warning = dbWarning
+				}
 			}
 		}
 

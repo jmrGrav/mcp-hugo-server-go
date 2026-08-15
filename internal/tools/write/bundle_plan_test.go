@@ -1,6 +1,7 @@
 package write_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -527,5 +528,54 @@ func TestApplyBundlePlanSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
 	warning, _ := data["warning"].(string)
 	if !strings.Contains(warning, "derived DB could not be updated") {
 		t.Fatalf("apply_bundle_plan warning = %q, want derived-DB warning", warning)
+	}
+}
+
+// TestApplyBundlePlanSurvivesPostWriteConsumeFailureWithWarning is the
+// apply_bundle_plan analogue of
+// TestApplyContentPlanSurvivesPostWriteConsumeFailureWithWarning: the bundle
+// write and recovery journal already succeeded by the time plans.consume()
+// runs, so a failure to free the plan slot afterward must downgrade to
+// partial_success with a warning, not fail the whole apply.
+func TestApplyBundlePlanSurvivesPostWriteConsumeFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/bundle-consume-warning")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/bundle-consume-warning",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{bodyOp("Nouveau corps FR.")}},
+			map[string]any{"lang": "en", "operations": []any{bodyOp("New body EN.")}},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_bundle_change failed: %s", marshalContent(t, planRes))
+	}
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	restore := write.SetPlanConsumeFailureHook(func(tool string) error {
+		if tool == "apply_bundle_plan" {
+			return errors.New("injected plan consumption failure")
+		}
+		return nil
+	})
+	defer restore()
+
+	applyRes := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID})
+	if applyRes.IsError {
+		t.Fatalf("apply_bundle_plan must survive a post-write consume failure, got error: %s", marshalContent(t, applyRes))
+	}
+	data := decodeWriteData(t, applyRes)
+	if data["status"] != "partial_success" {
+		t.Fatalf("apply_bundle_plan status = %v, want partial_success", data["status"])
+	}
+	warning, _ := data["warning"].(string)
+	if !strings.Contains(warning, "plan consumption could not be persisted") {
+		t.Fatalf("apply_bundle_plan warning = %q, want plan-consumption warning", warning)
+	}
+	if got := readFileString(t, contentRoot, "posts/bundle-consume-warning/index.fr.md"); !strings.Contains(got, "Nouveau corps FR.") {
+		t.Fatalf("apply_bundle_plan did not apply fr write despite consume failure: %q", got)
 	}
 }

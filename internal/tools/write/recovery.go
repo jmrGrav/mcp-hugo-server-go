@@ -106,9 +106,23 @@ type recoveryOperation struct {
 var afterRecoveryResultHook func(tool string) error
 var afterFilesystemWriteHook func(tool, stage string) error
 
+// planConsumeFailureHook is a deterministic test seam for the narrow window
+// after a plan's file write (and recovery-journal record) already landed but
+// before plans.consume() has freed the plan slot — see planConsumeFailure.
+var planConsumeFailureHook func(tool string) error
+
 func recoveryFilesystemBoundary(tool, stage string) error {
 	if afterFilesystemWriteHook != nil {
 		return afterFilesystemWriteHook(tool, stage)
+	}
+	return nil
+}
+
+// planConsumeFailure lets a test force plans.consume()'s post-write soft-degrade
+// branch without needing to fabricate a real store/persistence failure.
+func planConsumeFailure(tool string) error {
+	if planConsumeFailureHook != nil {
+		return planConsumeFailureHook(tool)
 	}
 	return nil
 }
