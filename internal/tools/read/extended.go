@@ -119,6 +119,16 @@ type scoreCategoryDTO struct {
 type scoreBreakdownDTO struct {
 	Frontmatter scoreCategoryDTO `json:"frontmatter"`
 	Taxonomy    scoreCategoryDTO `json:"taxonomy"`
+	// TitleShape (#1105) catches a title that is structurally wrong in a way
+	// front matter presence checks never would: a title field that is
+	// non-empty (so it passes the pre-existing "missing title" check) but is
+	// actually a raw URL, most often the page's own canonical URL written
+	// into the title field by a corrupted render or copy/paste
+	// (see #1099's grav-csp-nonce EN incident, where get_site_health kept
+	// reporting healthy/100 through exactly this). Unlike taxonomy, this
+	// category carries real weight — a URL-shaped title is a content defect
+	// serious enough that "healthy" must not be reported while it's present.
+	TitleShape scoreCategoryDTO `json:"title_shape"`
 }
 
 type contentEnvelopeData struct {
@@ -199,6 +209,11 @@ type contentEnvelopeData struct {
 	TaxonomyInconsistencies      []string                   `json:"taxonomy_inconsistencies,omitempty"`
 	TaxonomyInconsistencyDetails []taxonomyInconsistencyDTO `json:"taxonomy_inconsistency_details,omitempty"`
 	OrphanPages                  []string                   `json:"orphan_pages,omitempty"`
+	// BadTitleShapePages (#1105) lists slugs whose title field is a raw URL
+	// rather than actual page text — see scoreBreakdownDTO.TitleShape.
+	// Exposed the same way OrphanPages is, so an agent can go fix the
+	// specific pages directly instead of only seeing an aggregate count.
+	BadTitleShapePages []string `json:"bad_title_shape_pages,omitempty"`
 	// UntrackedSourcePages (#819) counts published pages whose source file
 	// isn't tracked by git — surfaced proactively here instead of only
 	// discovered per-page via diff_page's own git_untracked status. A
@@ -748,6 +763,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				TaxonomyInconsistencies:         health.TaxonomyInconsistencies,
 				TaxonomyInconsistencyDetails:    health.TaxonomyInconsistencyDetails,
 				UntrackedSourcePages:            health.UntrackedSourcePages,
+				BadTitleShapePages:              health.BadTitleShapePages,
 			}, time.Now().UTC()), nil
 		})
 
@@ -1655,6 +1671,20 @@ func testContentOwner(p hugosite.SourcePage) string {
 	return ""
 }
 
+// isURLShapedTitle reports whether title is a bare http(s) URL rather than
+// actual page text (#1105, incident #1099: a page's title field was
+// corrupted to its own raw canonical URL, and get_site_health kept reporting
+// healthy/100 through it because a non-empty title already satisfies the
+// pre-existing "missing title" check). Deliberately broader than an
+// exact-match against the page's own canonical URL: any URL-shaped title is
+// a content defect regardless of which URL it happens to be, and checking
+// only self-referential titles would miss e.g. a title accidentally
+// corrupted to a *different* page's URL.
+func isURLShapedTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	return strings.HasPrefix(t, "http://") || strings.HasPrefix(t, "https://")
+}
+
 func validateFrontMatterPage(p hugosite.SourcePage, aliases map[string]string) []string {
 	var issues []string
 	if strings.TrimSpace(p.Title) == "" {
@@ -1856,6 +1886,9 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 					}
 				}
 			}
+			if isURLShapedTitle(p.Title) {
+				health.BadTitleShapePages = append(health.BadTitleShapePages, p.Slug)
+			}
 		}
 		if idx != nil {
 			now := time.Now()
@@ -1903,14 +1936,29 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	// score_breakdown (#419) is presentation only — it must not change what
 	// `score` itself was computed from (that's the pre-existing formula
 	// below, byte-for-byte). frontmatter carries 100% of the weight because
-	// it's the only category this formula has ever penalized; taxonomy
-	// carries 0% because a taxonomy finding — even a "warning"-severity one
-	// — has never moved `score` and still doesn't. taxonomy.score is shown
-	// for reference only (a per-finding informational penalty local to that
-	// category) and does not feed into the top-level score.
-	const frontmatterWeight, taxonomyWeight = 100, 0
+	// it's the only category this formula has ever penalized; taxonomy and
+	// title_shape (#1105) both carry 0% weight: neither moves `score`
+	// through the weighted-score formula, matching the pre-existing taxonomy
+	// design (see #719/#1066's healthy_with_advisories/99-cap pattern
+	// below). A URL-shaped title instead forces `status` directly, the same
+	// way RuntimeDegraded does — see the status computation below — because
+	// a content defect this severe (a title field is a raw URL, not text;
+	// #1099's grav-csp-nonce incident) must never be reported as "healthy"
+	// regardless of what a numeric score says. title_shape.score is shown
+	// for reference only, same as taxonomy.score.
+	const frontmatterWeight, titleShapeWeight, taxonomyWeight = 100, 0, 0
 	frontmatterPenalty := (health.ValidationErrors * 10) + (health.MissingTitles * 5) + (health.MissingDates * 5)
 	frontmatterScore := clampScore(100 - frontmatterPenalty)
+
+	// Any single URL-shaped title zeroes this category's own score — unlike
+	// frontmatter's linear per-issue penalty, this is a binary structural
+	// defect (the title field holds a URL instead of text) with no natural
+	// "how bad" gradient, and #1099 showed exactly one such page is already
+	// bad enough that reporting anything but 0 here would understate it.
+	titleShapeScore := 100
+	if len(health.BadTitleShapePages) > 0 {
+		titleShapeScore = 0
+	}
 
 	var taxonomyWarnings, taxonomyAdvisories int
 	for _, d := range health.TaxonomyInconsistencyDetails {
@@ -1925,6 +1973,7 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	health.ScoreBreakdown = &scoreBreakdownDTO{
 		Frontmatter: scoreCategoryDTO{Score: frontmatterScore, Weight: frontmatterWeight, Issues: health.ValidationErrors},
 		Taxonomy:    scoreCategoryDTO{Score: taxonomyScore, Weight: taxonomyWeight, Issues: taxonomyWarnings, Advisories: taxonomyAdvisories},
+		TitleShape:  scoreCategoryDTO{Score: titleShapeScore, Weight: titleShapeWeight, Issues: len(health.BadTitleShapePages)},
 	}
 	// AdvisoriesCount deliberately counts every taxonomy finding regardless
 	// of severity (taxonomyWarnings + taxonomyAdvisories == len(details)),
@@ -1940,7 +1989,12 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	health.ActionableTaxonomyFindingsCount = taxonomyWarnings
 	health.TranslationPairsDetected = taxonomyAdvisories
 
-	score := frontmatterScore
+	// #1105: score is now the weighted combination of frontmatter and
+	// title_shape (taxonomy stays informational, weight 0, per the comment
+	// on the weights above). With no title-shape issues this reduces to the
+	// pre-existing frontmatterScore exactly, since frontmatterWeight +
+	// titleShapeWeight == 100 and titleShapeScore == 100.
+	score := (frontmatterScore*frontmatterWeight + titleShapeScore*titleShapeWeight) / 100
 	// #719/#1066: a perfect 100 alongside either actionable taxonomy drift
 	// or a failed build_site attempt is semantically misleading. Keep
 	// info-only translation pairs non-penalizing, and don't cap for
@@ -1964,6 +2018,13 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 	}
 	if health.Status == "healthy" && taxonomyWarnings > 0 {
 		health.Status = "healthy_with_advisories"
+	}
+	// A URL-shaped title is a content defect, not an operational one — it
+	// must never be masked as "healthy"/"healthy_with_advisories" regardless
+	// of where the weighted score lands (#1105: this is the exact case
+	// get_site_health silently passed as healthy/100 during #1099).
+	if len(health.BadTitleShapePages) > 0 && (health.Status == "healthy" || health.Status == "healthy_with_advisories") {
+		health.Status = "degraded"
 	}
 	health.ContentStatus = health.Status
 	if health.RuntimeDegraded != nil && *health.RuntimeDegraded {
