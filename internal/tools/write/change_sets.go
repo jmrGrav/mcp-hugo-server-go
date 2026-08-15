@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -58,27 +59,36 @@ type changeSetOwner struct {
 
 // changeSetRegistry tracks which principal owns each explicit change_set_id
 // and records per-mutation attribution. Mirrors idempotencyStore's
-// persistent-optional shape (#1086) deliberately: the in-memory map is
-// always authoritative for the running process, and SQLite persistence
-// (only when db_path is configured) exists purely so ownership survives a
-// restart — the core ownership-check security property this backs (and
-// that #1140 builds on) never depends on db_path being set, unlike some
-// other db_path-gated features in this codebase (e.g. #1105's broken-link
-// scoring, which simply doesn't compute without it).
+// persistent-optional shape (#1086) deliberately: the in-memory maps are
+// always authoritative for the running process — both ownership AND the
+// per-mutation attribution list are recorded in memory unconditionally —
+// and SQLite persistence (only when db_path is configured) exists purely
+// so both survive a restart. The ownership-check and attribution-recording
+// security properties this backs (and that #1140/#1142 build on) never
+// depend on db_path being set, unlike some other db_path-gated features in
+// this codebase (e.g. #1105's broken-link scoring, which simply doesn't
+// compute without it) — a durability failure or an absent db_path degrades
+// restart-survival only, never the current process's own bookkeeping.
 type changeSetRegistry struct {
 	mu         sync.Mutex
 	owners     map[string]changeSetOwner
+	mutations  map[string][]db.ChangeSetMutation
 	persistent *db.DB
 }
 
 func newChangeSetRegistry(persistent *db.DB) *changeSetRegistry {
 	return &changeSetRegistry{
 		owners:     make(map[string]changeSetOwner),
+		mutations:  make(map[string][]db.ChangeSetMutation),
 		persistent: persistent,
 	}
 }
 
-// create mints a fresh change-set owned by principalID.
+// create mints a fresh change-set owned by principalID. SQLite persistence
+// (when configured) is best-effort, matching resolve()'s TouchChangeSet
+// treatment: a durability failure here must never prevent the caller from
+// learning its own newly minted id, since the in-memory registry is
+// already authoritative for the running process regardless.
 func (r *changeSetRegistry) create(principalID string, now time.Time) (string, error) {
 	if principalID == "" {
 		return "", fmt.Errorf("internal_error: cannot create a change-set without a caller identity")
@@ -92,7 +102,7 @@ func (r *changeSetRegistry) create(principalID string, now time.Time) (string, e
 	r.mu.Unlock()
 	if r.persistent != nil {
 		if err := r.persistent.CreateChangeSet(id, principalID, now); err != nil {
-			return "", fmt.Errorf("internal_error: failed to persist change-set")
+			slog.Warn("create_change_set: could not persist change-set ownership", "change_set_id", id, "error", err)
 		}
 	}
 	return id, nil
@@ -141,24 +151,43 @@ func (r *changeSetRegistry) resolve(ctx context.Context, requested string, now t
 }
 
 // recordMutation attributes one already-successful mutation to its
-// resolved change-set. Best-effort against the persistent store — a
-// durability failure here must never fail the mutation itself, which has
-// already landed on disk by the time this is called — but this method
-// itself doesn't return an error at all, deliberately, so every mutation
-// tool call-site can invoke it unconditionally without another branch to
-// handle.
+// resolved change-set. Always recorded in-memory, regardless of db_path —
+// #1140's foreign-change-set computation must work on every deployment,
+// not just db_path-configured ones. SQLite persistence (when configured)
+// is additionally attempted, best-effort: a durability failure here must
+// never fail the mutation itself, which has already landed on disk by the
+// time this is called. This method itself doesn't return an error at all,
+// deliberately, so every mutation tool call-site can invoke it
+// unconditionally without another branch to handle.
 func (r *changeSetRegistry) recordMutation(changeSetID, principalID, tool, sourceKey, mutationType string, now time.Time) {
-	if r.persistent == nil {
-		return
-	}
-	_ = r.persistent.RecordChangeSetMutation(db.ChangeSetMutation{
+	entry := db.ChangeSetMutation{
 		ChangeSetID:  changeSetID,
 		PrincipalID:  principalID,
 		Tool:         tool,
 		SourceKey:    sourceKey,
 		MutationType: mutationType,
 		CreatedAt:    now,
-	})
+	}
+	r.mu.Lock()
+	r.mutations[changeSetID] = append(r.mutations[changeSetID], entry)
+	r.mu.Unlock()
+	if r.persistent != nil {
+		if err := r.persistent.RecordChangeSetMutation(entry); err != nil {
+			slog.Warn("change-set mutation attribution: could not persist", "change_set_id", changeSetID, "tool", tool, "error", err)
+		}
+	}
+}
+
+// mutationsFor returns every mutation recorded against changeSetID in this
+// process, oldest first — the in-memory record, which is always populated
+// regardless of db_path (see changeSetRegistry's own doc comment). Feeds
+// #1140/#1142; not consumed within #1135 itself beyond its own tests.
+func (r *changeSetRegistry) mutationsFor(changeSetID string) []db.ChangeSetMutation {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]db.ChangeSetMutation, len(r.mutations[changeSetID]))
+	copy(out, r.mutations[changeSetID])
+	return out
 }
 
 type createChangeSetInput struct{}

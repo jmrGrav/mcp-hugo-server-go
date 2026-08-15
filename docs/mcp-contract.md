@@ -1068,10 +1068,12 @@ second agent editing concurrently with no way to distinguish its changes
 from the first's.
 
 **`create_change_set`** mints a new opaque `change_set_id` (format `cs_<32
-hex chars>`), owned by the calling principal, persisted to SQLite when
-`db_path` is configured (so it survives a restart) and always tracked
-in-memory otherwise — the ownership-check security property never depends
-on `db_path` being set. Requires no input.
+hex chars>`), owned by the calling principal. Requires no input. Both
+ownership and every mutation's attribution record are tracked in-memory
+unconditionally — additionally persisted to SQLite (best-effort) when
+`db_path` is configured, purely so both survive a restart. Neither the
+ownership-check nor the attribution-recording property depends on
+`db_path` being set; only cross-restart durability does.
 
 Every mutation tool — `create_page`, `update_page`, `delete_page`,
 `create_bundle`, `delete_bundle`, `upload_page_asset`, `delete_page_asset`,
