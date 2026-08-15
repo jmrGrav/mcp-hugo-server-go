@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -756,6 +757,123 @@ func TestRefreshTokenGrant(t *testing.T) {
 	}
 	if !strings.Contains(reuseRec.Body.String(), "invalid_grant") {
 		t.Fatalf("refresh token reuse body = %q", reuseRec.Body.String())
+	}
+}
+
+// TestRefreshTokenGrantIsSingleUseUnderConcurrentRace is #1067's remaining
+// "refresh/reissue preserves a stable principal for quotas and ownership"
+// scenario, specifically for concurrent goroutines: TestRefreshTokenGrant
+// already proves a *sequential* replay of a spent refresh token is rejected,
+// but never proves the single-use rotation is atomic when two goroutines
+// present the same refresh token at the same instant under `go test -race`.
+// Exactly one must win; the loser must get invalid_grant, never a second,
+// independently valid token pair for the same client.
+func TestRefreshTokenGrantIsSingleUseUnderConcurrentRace(t *testing.T) {
+	svc, _ := newTestService(t)
+	clientID := registerClient(t, svc, []string{"https://client.test/callback"})
+
+	verifier := "test-verifier-test-verifier-test-verifier-test"
+	challenge := oauth.CodeChallengeS256(verifier)
+	authURL := "/authorize?" + url.Values{
+		"response_type":         {"code"},
+		"client_id":             {clientID},
+		"redirect_uri":          {"https://client.test/callback"},
+		"state":                 {"state-refresh-race"},
+		"code_challenge":        {challenge},
+		"code_challenge_method": {"S256"},
+	}.Encode()
+	authReq := httptest.NewRequest(http.MethodGet, authURL, nil)
+	authReq.RemoteAddr = "127.0.0.1:9999"
+	authRec := httptest.NewRecorder()
+	svc.HandleAuthorize(authRec, authReq)
+	location, err := url.Parse(authRec.Header().Get("Location"))
+	if err != nil {
+		t.Fatalf("authorize: parse location: %v", err)
+	}
+	code := location.Query().Get("code")
+
+	tokenForm := url.Values{
+		"grant_type":    {"authorization_code"},
+		"client_id":     {clientID},
+		"code":          {code},
+		"redirect_uri":  {"https://client.test/callback"},
+		"code_verifier": {verifier},
+	}
+	tokenReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(tokenForm.Encode()))
+	tokenReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	tokenRec := httptest.NewRecorder()
+	svc.HandleToken(tokenRec, tokenReq)
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token: status = %d body = %q", tokenRec.Code, tokenRec.Body.String())
+	}
+	var tokenResp struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
+		t.Fatalf("token: decode: %v", err)
+	}
+	if tokenResp.RefreshToken == "" {
+		t.Fatal("token: empty refresh_token")
+	}
+
+	refreshForm := url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {clientID},
+		"refresh_token": {tokenResp.RefreshToken},
+	}.Encode()
+
+	recs := make([]*httptest.ResponseRecorder, 2)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	for i := range recs {
+		i := i
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(refreshForm))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+			svc.HandleToken(rec, req)
+			recs[i] = rec
+		}()
+	}
+	wg.Wait()
+
+	type parsedResp struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	var winners []parsedResp
+	losers := 0
+	for _, rec := range recs {
+		if rec.Code == http.StatusOK {
+			var resp parsedResp
+			if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("winning refresh response decode: %v; body = %q", err, rec.Body.String())
+			}
+			winners = append(winners, resp)
+			continue
+		}
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_grant") {
+			t.Fatalf("losing refresh response = %d %q, want 400 invalid_grant", rec.Code, rec.Body.String())
+		}
+		losers++
+	}
+	if len(winners) != 1 || losers != 1 {
+		t.Fatalf("concurrent refresh must resolve to exactly one winner and one invalid_grant loser, got %d winners, %d losers", len(winners), losers)
+	}
+
+	// The winning access token must still authenticate as this same client —
+	// the race must not have corrupted or duplicated ownership identity.
+	bearerReq := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(url.Values{
+		"grant_type":    {"refresh_token"},
+		"client_id":     {clientID},
+		"refresh_token": {winners[0].RefreshToken},
+	}.Encode()))
+	bearerReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	bearerRec := httptest.NewRecorder()
+	svc.HandleToken(bearerRec, bearerReq)
+	if bearerRec.Code != http.StatusOK {
+		t.Fatalf("re-refreshing the race winner's own new refresh_token = %d %q, want success (identity/ownership intact)", bearerRec.Code, bearerRec.Body.String())
 	}
 }
 

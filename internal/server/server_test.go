@@ -2877,6 +2877,125 @@ func TestConcurrentUpdatePageByDistinctPrincipalsIsolatesMutationStatus(t *testi
 	}
 }
 
+// racePNG is a minimal PNG signature, enough for the asset-upload path's
+// content-type sniffing; content correctness isn't what this race exercises.
+var racePNG = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0}
+
+// TestConcurrentDeletePageAssetByDistinctPrincipalsIsolatesMutationStatus is
+// #1067's remaining asset-operation race scenario: two distinct OAuth
+// principals both attempt to delete the same asset with the same
+// expected_sha256 concurrency guard at the same instant. Mirrors
+// TestConcurrentUpdatePageByDistinctPrincipalsIsolatesMutationStatus's shape
+// (real bearer tokens, real HTTP, pre-locked ContentMu forcing genuine
+// overlap under -race) but for an asset op instead of a page mutation, and
+// proves the same per-principal mutation-status isolation holds there too.
+func TestConcurrentDeletePageAssetByDistinctPrincipalsIsolatesMutationStatus(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
+	cfg.ContentRoot = contentRoot
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const callerA = "asset-race-principal-a"
+	const callerB = "asset-race-principal-b"
+	addBearerToken(t, storePath, callerA, "write")
+	addBearerToken(t, storePath, callerB, "write")
+
+	const slug = "posts/asset-race"
+	createRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"%s","title":"Title","body":"Body v0","tags":[],"categories":[]}}}`, slug)))
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create_page status = %d body = %q", createRec.Code, createRec.Body.String())
+	}
+	uploadRec := doMCPCall(t, srv, callerA, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_page_asset","arguments":{"slug":"%s","filename":"cover.png","content_base64":"%s"}}}`, slug, base64.StdEncoding.EncodeToString(racePNG))))
+	if uploadRec.Code != http.StatusOK {
+		t.Fatalf("upload_page_asset status = %d body = %q", uploadRec.Code, uploadRec.Body.String())
+	}
+	uploadData := toolCallResultData(t, uploadRec.Body.String())["data"].(map[string]any)
+	sha256Hex, _ := uploadData["sha256"].(string)
+	if sha256Hex == "" {
+		t.Fatal("upload_page_asset returned empty sha256")
+	}
+
+	const keyA = "asset-race-principal-a-key"
+	const keyB = "asset-race-principal-b-key"
+	payloadA := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_page_asset","arguments":{"slug":"%s","filename":"cover.png","expected_sha256":"%s","idempotency_key":"%s"}}}`, slug, sha256Hex, keyA))
+	payloadB := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"delete_page_asset","arguments":{"slug":"%s","filename":"cover.png","expected_sha256":"%s","idempotency_key":"%s"}}}`, slug, sha256Hex, keyB))
+
+	hugosite.ContentMu.Lock()
+	started := make(chan struct{}, 2)
+	recA := make(chan *httptest.ResponseRecorder, 1)
+	recB := make(chan *httptest.ResponseRecorder, 1)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		recA <- doMCPCall(t, srv, callerA, payloadA)
+	}()
+	go func() {
+		defer wg.Done()
+		started <- struct{}{}
+		recB <- doMCPCall(t, srv, callerB, payloadB)
+	}()
+	<-started
+	<-started
+	hugosite.ContentMu.Unlock()
+	wg.Wait()
+	if t.Failed() {
+		t.FailNow()
+	}
+
+	aRec, bRec := <-recA, <-recB
+	if aRec.Code != http.StatusOK || bRec.Code != http.StatusOK {
+		t.Fatalf("delete_page_asset race transport failure: A status=%d body=%q; B status=%d body=%q", aRec.Code, aRec.Body.String(), bRec.Code, bRec.Body.String())
+	}
+
+	aDeleted := !toolCallBodyHasError(aRec, "not_found")
+	bDeleted := !toolCallBodyHasError(bRec, "not_found")
+	if aDeleted == bDeleted {
+		t.Fatalf("same-asset race across principals must resolve to exactly one deletion, got A(deleted=%v) B(deleted=%v): A=%q B=%q",
+			aDeleted, bDeleted, aRec.Body.String(), bRec.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, slug, "cover.png")); !os.IsNotExist(err) {
+		t.Fatalf("asset must be gone after the race regardless of which principal won, stat err = %v", err)
+	}
+
+	statusPayloadA := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_mutation_status","arguments":{"tool":"delete_page_asset","idempotency_key":"%s"}}}`, keyA))
+	statusPayloadB := []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_mutation_status","arguments":{"tool":"delete_page_asset","idempotency_key":"%s"}}}`, keyB))
+
+	wantStatus := func(deleted bool) string {
+		if deleted {
+			return "succeeded"
+		}
+		return "unknown"
+	}
+	aStatusRec := doMCPCall(t, srv, callerA, statusPayloadA)
+	aStatusData := toolCallResultData(t, aStatusRec.Body.String())["data"].(map[string]any)
+	if got, _ := aStatusData["status"].(string); got != wantStatus(aDeleted) {
+		t.Fatalf("get_mutation_status (caller A, own key) = %q, want %q: %#v", got, wantStatus(aDeleted), aStatusData)
+	}
+	bStatusRec := doMCPCall(t, srv, callerB, statusPayloadB)
+	bStatusData := toolCallResultData(t, bStatusRec.Body.String())["data"].(map[string]any)
+	if got, _ := bStatusData["status"].(string); got != wantStatus(bDeleted) {
+		t.Fatalf("get_mutation_status (caller B, own key) = %q, want %q: %#v", got, wantStatus(bDeleted), bStatusData)
+	}
+
+	// Cross-caller: neither principal's key is visible to the other, even
+	// immediately after the race that just touched both.
+	bCrossRec := doMCPCall(t, srv, callerB, statusPayloadA)
+	bCrossData := toolCallResultData(t, bCrossRec.Body.String())["data"].(map[string]any)
+	if got, _ := bCrossData["status"].(string); got != "unknown" {
+		t.Fatalf("get_mutation_status (caller B, A's key) = %q, want unknown — leaked across the race", got)
+	}
+	aCrossRec := doMCPCall(t, srv, callerA, statusPayloadB)
+	aCrossData := toolCallResultData(t, aCrossRec.Body.String())["data"].(map[string]any)
+	if got, _ := aCrossData["status"].(string); got != "unknown" {
+		t.Fatalf("get_mutation_status (caller A, B's key) = %q, want unknown — leaked across the race", got)
+	}
+}
+
 func TestPreviewToolsAreIsolatedByCallerAcrossHTTP(t *testing.T) {
 	mockDir := writeServerPreviewMockHugo(t, "<html><head><title>Demo</title><meta name=\"description\" content=\"Preview\"></head><body>preview</body></html>")
 	t.Setenv("PATH", mockDir+":"+os.Getenv("PATH"))
