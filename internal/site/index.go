@@ -552,7 +552,7 @@ func parseHTMLPage(raw []byte, rel string, modTime time.Time, siteURL, defaultLa
 		Categories: cats,
 		Date:       dateStr,
 		URL:        canonicalURL,
-		Lang:       firstNonEmptyStr(meta.lang, defaultLang),
+		Lang:       firstNonEmptyStr(primaryLangSubtag(meta.lang), defaultLang),
 		RawHTML:    bodyHTML(raw),
 	}
 	return pg, parsedDate, nil
@@ -824,6 +824,23 @@ func joinURL(siteURL, slug string) string {
 		return siteURL + "/"
 	}
 	return siteURL + normalizeSlug(slug)
+}
+
+// primaryLangSubtag collapses an HTML `<html lang>` attribute to its BCP-47
+// primary subtag ("fr-FR" -> "fr"). Themes commonly render the SEO-preferred
+// region-qualified form even though Hugo's own language key (and this
+// server's frontmatter `lang` field) is the short primary subtag, so
+// comparing the raw attribute against source languages silently orphans
+// every non-default-language page (#1096 runtime shadow investigation).
+func primaryLangSubtag(lang string) string {
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return ""
+	}
+	if i := strings.IndexAny(lang, "-_"); i > 0 {
+		lang = lang[:i]
+	}
+	return strings.ToLower(lang)
 }
 
 func firstNonEmptyStr(values ...string) string {

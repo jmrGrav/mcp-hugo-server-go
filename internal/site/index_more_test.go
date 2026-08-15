@@ -124,6 +124,34 @@ func TestSiteIndexHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("html lang attribute collapses to primary subtag", func(t *testing.T) {
+		raw := []byte(`
+<!doctype html>
+<html lang="fr-FR">
+  <head>
+    <title>Titre</title>
+    <link rel="canonical" href="https://example.test/posts/hello/">
+  </head>
+  <body><article><p>Corps</p></article></body>
+</html>`)
+		pg, _, err := parseHTMLPage(raw, "posts/hello/index.html", time.Unix(0, 0), "https://example.test", "en")
+		if err != nil {
+			t.Fatalf("parseHTMLPage() error = %v", err)
+		}
+		if pg.Lang != "fr" {
+			t.Fatalf("parseHTMLPage() lang = %q, want primary subtag %q", pg.Lang, "fr")
+		}
+		if got := primaryLangSubtag("EN-us"); got != "en" {
+			t.Fatalf("primaryLangSubtag(%q) = %q", "EN-us", got)
+		}
+		if got := primaryLangSubtag(""); got != "" {
+			t.Fatalf("primaryLangSubtag(\"\") = %q", got)
+		}
+		if got := primaryLangSubtag("fr"); got != "fr" {
+			t.Fatalf("primaryLangSubtag(%q) = %q", "fr", got)
+		}
+	})
+
 	t.Run("article section is not category fallback", func(t *testing.T) {
 		raw := []byte(`
 <!doctype html>
