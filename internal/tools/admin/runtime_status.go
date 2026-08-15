@@ -276,7 +276,8 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			data.Degraded = append(data.Degraded, "diff_page: git-backed source diffs are unavailable — "+data.Git.Error)
 		}
 
-		if snap := buildstatus.Last(); snap.Attempted {
+		snap := buildstatus.Last()
+		if snap.Attempted {
 			data.LastBuild = &lastBuildRuntimeStatus{
 				Status:     snap.Status,
 				ErrorClass: snap.ErrorClass,
@@ -285,19 +286,28 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			if snap.Status == "failed" {
 				data.Degraded = append(data.Degraded, "build_site: last attempt failed ("+snap.ErrorClass+") at "+data.LastBuild.At)
 			}
-		} else if siteDB != nil {
-			// The manifest is deliberately only a durable observation. The
-			// source/public revision checks below still read the filesystem;
-			// an out-of-band edit can make a persisted build fact stale.
+		}
+		// The manifest is deliberately only a durable observation. The
+		// source/public revision checks below still read the filesystem; an
+		// out-of-band edit can make a persisted build fact stale. Persistence
+		// is reported independently of whether this process itself already
+		// holds a fresher in-memory snapshot (#1096 runtime shadow
+		// investigation): a build attempted in this process is just as
+		// durable as one recovered after restart when db_path is configured,
+		// so LastBuildPersistence must not default to "process_memory" just
+		// because the process has since run its own build.
+		if siteDB != nil {
 			manifest, err := siteDB.LatestPublicationManifest()
 			if err != nil {
 				data.Degraded = append(data.Degraded, "publication manifest unavailable: "+err.Error())
-			} else if manifest != nil {
+			} else if manifest != nil && (!snap.Attempted || !manifest.ObservedAt.Before(snap.At)) {
 				data.LastBuildPersistence = "sqlite_manifest"
-				data.LastBuild = &lastBuildRuntimeStatus{
-					BuildID: manifest.BuildID,
-					Status:  manifest.Status,
-					At:      manifest.ObservedAt.UTC().Format(time.RFC3339),
+				if !snap.Attempted {
+					data.LastBuild = &lastBuildRuntimeStatus{
+						BuildID: manifest.BuildID,
+						Status:  manifest.Status,
+						At:      manifest.ObservedAt.UTC().Format(time.RFC3339),
+					}
 				}
 			}
 		}

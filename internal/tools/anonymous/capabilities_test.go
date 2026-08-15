@@ -240,6 +240,7 @@ func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
 	}
 	seenCloudflare := false
 	seenExternalImage := false
+	seenDurablePersistence := false
 	for _, raw := range disabled {
 		entry, ok := raw.(map[string]any)
 		if !ok {
@@ -254,12 +255,21 @@ func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
 		if entry["name"] == "external_image_generation" {
 			seenExternalImage = true
 		}
+		if entry["name"] == "durable_persistence" {
+			seenDurablePersistence = true
+			if entry["required_configuration"] != "db_path" {
+				t.Errorf("durable_persistence required_configuration = %v, want db_path", entry["required_configuration"])
+			}
+		}
 	}
 	if !seenCloudflare {
 		t.Error("disabled_features missing cloudflare_purge")
 	}
 	if seenExternalImage {
 		t.Error("disabled_features reported external_image_generation despite ImageGenURL being configured")
+	}
+	if !seenDurablePersistence {
+		t.Error("disabled_features missing durable_persistence when db_path is unset — this is the discoverability fix for the v1.8.6 deploy pitfall (#1099 follow-up)")
 	}
 
 	// Security invariant: the actual hook command must never be exposed.

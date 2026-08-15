@@ -240,7 +240,10 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 }
 
 func disabledCapabilityFeatures(cfg config.Config) []capabilitiesDisabledFeature {
-	features := make([]capabilitiesDisabledFeature, 0, 5)
+	features := make([]capabilitiesDisabledFeature, 0, 6)
+	if strings.TrimSpace(cfg.DBPath) == "" {
+		features = append(features, capabilitiesDisabledFeature{Name: "durable_persistence", Reason: "feature_disabled", RequiredConfiguration: "db_path"})
+	}
 	if !cfg.HugoUpgrade.Enabled {
 		features = append(features, capabilitiesDisabledFeature{Name: "hugo_upgrade", Reason: "feature_disabled", RequiredConfiguration: "hugo_upgrade.enabled"})
 	}
