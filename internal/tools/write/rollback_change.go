@@ -442,9 +442,22 @@ func registerRollbackChange(
 			slog.Warn("rollback_change: symlink-swap detected before write", "slug", in.Slug, "error", err)
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
 		}
+		afterRevision := contentmodel.SourceRevisionBytes([]byte(snapshotContent))
+		recoveryOp, err := beginSourceWriteRecovery(siteDB, filePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "rollback_change", in.IdempotencyKey, idemHash, map[string]any{
+			"slug": canonicalPublicSlug(in.Slug), "before_revision": currentRevision, "after_revision": afterRevision,
+		}))
+		if err != nil {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source write intent"))
+		}
 		if err := fileutil.AtomicWriteChecked(filePath, snapshotContent, pg); err != nil {
 			slog.Error("rollback_change: write failed", "slug", in.Slug, "error", err)
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
+		}
+		if err := recoveryFilesystemBoundary("rollback_change", "after_source_write"); err != nil {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source write"))
+		}
+		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+			slog.Warn("rollback_change: could not advance recovery journal", "slug", in.Slug, "error", err)
 		}
 
 		restoredTags, restoredCategories := currentTaxonomyFromRaw([]byte(snapshotContent))
@@ -551,10 +564,16 @@ func registerRollbackChange(
 			State:          &state,
 			RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 		}, rateLimitRemaining(limiter))
+		if err := recoveryOp.stageResult(siteDB, out); err != nil {
+			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}
 		if idemHash != "" {
 			if err := idem.remember(idempotencyCallerKey(ctx), "rollback_change", in.IdempotencyKey, idemHash, out); err != nil {
 				slog.Warn("rollback_change: could not persist idempotency result", "slug", in.Slug, "error", err)
 			}
+		}
+		if err := recoveryOp.record(siteDB, "committed"); err != nil {
+			slog.Warn("rollback_change: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
 		return nil, out, nil
 	}))

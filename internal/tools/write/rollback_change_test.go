@@ -980,3 +980,111 @@ func TestRollbackChangeUpdatesInMemorySourceIndexBody(t *testing.T) {
 		t.Fatal("source index Body still contains post-apply content after rollback_change — #643 regression")
 	}
 }
+
+// TestRollbackChangeUpdatesPublicIndexTitleAndTagsWhenPresent covers the
+// public-index sync branch: when the page already exists in the built
+// (public) site.Index, rollback_change must also push the restored
+// title/tags/categories into that public entry, not just the source index.
+func TestRollbackChangeUpdatesPublicIndexTitleAndTagsWhenPresent(t *testing.T) {
+	contentRoot := t.TempDir()
+	cfg := config.Default()
+	siteIdx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("site.NewIndex: %v", err)
+	}
+	siteIdx.UpsertPage(site.Page{
+		Slug:  "/posts/public-rollback/",
+		Title: "Stale Public Title",
+		URL:   "https://example.test/posts/public-rollback/",
+	})
+
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteIdx: siteIdx})
+	defer done()
+
+	createRes := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/public-rollback", "title": "Original Title",
+		"body": "body", "tags": []any{"orig-tag"}, "categories": []any{},
+	})
+	if createRes.IsError {
+		t.Fatalf("create_page failed: %s", marshalContent(t, createRes))
+	}
+	beforeRevision := decodeWriteData(t, createRes)["new_revision"].(string)
+
+	updateRes := callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/public-rollback", "title": "Changed Title",
+		"tags": []any{"changed-tag"}, "expected_revision": beforeRevision,
+	})
+	if updateRes.IsError {
+		t.Fatalf("update_page failed: %s", marshalContent(t, updateRes))
+	}
+	afterRevision := decodeWriteData(t, updateRes)["new_revision"].(string)
+
+	rollbackRes := callTool(t, session, "rollback_change", map[string]any{
+		"slug": "posts/public-rollback", "to_revision": beforeRevision, "expected_revision": afterRevision,
+	})
+	if rollbackRes.IsError {
+		t.Fatalf("rollback_change failed: %s", marshalContent(t, rollbackRes))
+	}
+
+	pub, ok := siteIdx.GetBySlug("posts/public-rollback")
+	if !ok {
+		t.Fatal("public index entry missing after rollback_change")
+	}
+	if pub.Title != "Original Title" {
+		t.Fatalf("public index Title = %q, want restored %q", pub.Title, "Original Title")
+	}
+	if len(pub.Tags) != 1 || pub.Tags[0] != "orig-tag" {
+		t.Fatalf("public index Tags = %v, want restored [orig-tag]", pub.Tags)
+	}
+}
+
+// TestRollbackChangeSurvivesDerivedDBSyncFailureWithWarning exercises
+// rollback_change's own siteDB.SyncSourcePage soft-degrade branch: the
+// source rollback and recovery journal already succeeded, so a subsequent
+// failure to sync the derived DB must downgrade to partial_success with a
+// warning rather than fail the whole rollback.
+func TestRollbackChangeSurvivesDerivedDBSyncFailureWithWarning(t *testing.T) {
+	contentRoot := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "test.sqlite")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: siteDB})
+	defer done()
+
+	createRes := callTool(t, session, "create_page", map[string]any{
+		"slug": "posts/rollback-derived-db-warning", "title": "Original Title",
+		"body": "body", "tags": []any{}, "categories": []any{},
+	})
+	if createRes.IsError {
+		t.Fatalf("create_page failed: %s", marshalContent(t, createRes))
+	}
+	beforeRevision := decodeWriteData(t, createRes)["new_revision"].(string)
+
+	updateRes := callTool(t, session, "update_page", map[string]any{
+		"slug": "posts/rollback-derived-db-warning", "title": "Changed Title", "expected_revision": beforeRevision,
+	})
+	if updateRes.IsError {
+		t.Fatalf("update_page failed: %s", marshalContent(t, updateRes))
+	}
+	afterRevision := decodeWriteData(t, updateRes)["new_revision"].(string)
+
+	dropPagesTable(t, dbPath)
+
+	rollbackRes := callTool(t, session, "rollback_change", map[string]any{
+		"slug": "posts/rollback-derived-db-warning", "to_revision": beforeRevision, "expected_revision": afterRevision,
+	})
+	if rollbackRes.IsError {
+		t.Fatalf("rollback_change must survive a derived-DB sync failure, got error: %s", marshalContent(t, rollbackRes))
+	}
+	data := decodeWriteData(t, rollbackRes)
+	if data["status"] != "partial_success" {
+		t.Fatalf("rollback_change status = %v, want partial_success", data["status"])
+	}
+	warning, _ := data["warning"].(string)
+	if !strings.Contains(warning, "derived DB could not be updated") {
+		t.Fatalf("rollback_change warning = %q, want derived-DB warning", warning)
+	}
+}
