@@ -72,12 +72,12 @@ func registerFullContractServer(t *testing.T) *mcp.Server {
 	toolsanon.Register(s, idx, cfg, "", srcIdx)
 	toolsread.Register(s, idx, cfg, srcIdx)
 	toolsread.RegisterWithSourceIndex(s, idx, srcIdx, cfg)
-	toolswrite.Register(s, pg, srcIdx, cfg, nil, idx)
+	toolswrite.Register(s, pg, srcIdx, cfg, nil, nil, idx)
 
 	// site.admin — same set and order as buildWriteScopedServer.
-	toolsadmin.Register(s, cfg, srcIdx)
+	toolsadmin.Register(s, cfg, srcIdx, nil)
 	toolsadmin.RegisterVerifyPublication(s, idx, srcIdx, cfg)
-	toolsadmin.RegisterPublishChanges(s, idx, srcIdx, cfg)
+	toolsadmin.RegisterPublishChanges(s, idx, srcIdx, cfg, nil)
 	previews := previewstore.New()
 	toolsadmin.RegisterCreatePreview(s, cfg, previews, "https://preview.example.test")
 	toolsadmin.RegisterPreviewAccessTools(s, cfg, previews, "https://preview.example.test")

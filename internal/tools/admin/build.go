@@ -22,6 +22,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -30,7 +31,16 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type buildSiteInput struct{}
+type buildSiteInput struct {
+	// ChangeSetID scopes #1140's foreign-change-set guard: if any page
+	// pending a build is known (to this same running process) to belong to
+	// a different change-set than the one this resolves to, the build is
+	// refused with foreign_change_set_present rather than silently
+	// publishing another change-set's in-flight edits. Omitting this uses
+	// the caller's implicit per-principal default change-set, matching
+	// every mutation tool's own omitted-change_set_id behavior (#1135).
+	ChangeSetID string `json:"change_set_id,omitempty"`
+}
 
 // buildSiteData is the canonical data.* payload (#572): build_site was the
 // last tool with zero envelope (no data/errors/meta/success at all, not
@@ -626,15 +636,16 @@ func notifyBuildFailed(callbacks []PostBuildCallback, progress BuildProgress, st
 	}
 }
 
-func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...PostBuildCallback) {
+func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, changeSets *changeset.Registry, siteReload ...PostBuildCallback) {
 	if s == nil {
 		return
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:         "build_site",
-		Title:        "Build website",
-		Description:  "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts or deleted). With operational SQLite configured, the page set is derived from fresh on-disk source fingerprints compared with the latest completed build and survives restart/external writes; without it, volatile BuildPending remains a compatibility fallback (#858, #1077).",
+		Name:  "build_site",
+		Title: "Build website",
+		Description: "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts or deleted). With operational SQLite configured, the page set is derived from fresh on-disk source fingerprints compared with the latest completed build and survives restart/external writes; without it, volatile BuildPending remains a compatibility fallback (#858, #1077). " +
+			"Optional `change_set_id` (#1140) guards against publishing a different change-set's in-flight edits: if any pending page is known to belong to a change-set other than the one this resolves to, the build is refused with `foreign_change_set_present` rather than silently building it. This only catches pending pages this same running process has tracked mutations for since it last started — it is not full external-source-drift detection (direct filesystem edits, or drift predating this process, are not caught; see #1141).",
 		InputSchema:  tools.MustSchema[buildSiteInput](),
 		OutputSchema: tools.MustSchema[buildSiteOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -643,7 +654,10 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceInde
 			IdempotentHint:  false,
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
-	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, _ buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
+	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in buildSiteInput) (*mcp.CallToolResult, buildSiteOutput, error) {
+		if err := guardForeignChangeSet(ctx, changeSets, srcIdx, in.ChangeSetID); err != nil {
+			return nil, buildSiteOutput{}, err
+		}
 		data, err := runBuild(ctx, cfg, srcIdx, siteReload...)
 		if err != nil {
 			return nil, buildSiteOutput{}, err

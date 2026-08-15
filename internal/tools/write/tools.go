@@ -21,6 +21,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -718,11 +719,23 @@ func rejectUnconfiguredLang(lang string, cfg config.Config) error {
 	return fmt.Errorf("invalid_params: lang %q is not in this site's configured_languages (%s); call get_capabilities to see the authoritative list", lang, strings.Join(cfg.ConfiguredLanguages, ", "))
 }
 
-func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) {
+// Register wires every write-scope tool. changeSets is the shared
+// change-set ownership/mutation-attribution registry (#1135); pass nil to
+// have this call construct its own (fine for standalone write-package
+// tests that never need admin's build_site/publish_changes to see the same
+// mutation history). Real server wiring (internal/server) must pass the
+// same *changeset.Registry instance also given to admin.Register/
+// admin.RegisterPublishChanges (#1140) — two independent registries would
+// each see only their own package's mutations, since #1135's mutation
+// record is in-memory-only and never shared any other way.
+func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, changeSets *changeset.Registry, siteIdxs ...*site.Index) {
 	if s == nil {
 		return
 	}
-	rt := newWriteRegisterRuntime(cfg, siteDB, siteIdxs...)
+	if changeSets == nil {
+		changeSets = changeset.NewRegistry(siteDB)
+	}
+	rt := newWriteRegisterRuntime(cfg, siteDB, changeSets, siteIdxs...)
 	registerCreateChangeSet(s, rt.changeSets)
 	registerContentPlanTools(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.plans, rt.snapshots, rt.changeSets)
 	registerRollbackChange(s, pg, idx, cfg, siteDB, rt.siteIdx, &rt.mutationMu, rt.mutationLimiters, rt.idem, rt.snapshots, rt.changeSets)
@@ -749,10 +762,10 @@ type writeRegisterRuntime struct {
 	snapshots        *snapshotStore
 	bundlePlans      *bundlePlanStore
 	bundleSnapshots  *bundleSnapshotStore
-	changeSets       *changeSetRegistry
+	changeSets       *changeset.Registry
 }
 
-func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, siteIdxs ...*site.Index) *writeRegisterRuntime {
+func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, changeSets *changeset.Registry, siteIdxs ...*site.Index) *writeRegisterRuntime {
 	var siteIdx *site.Index
 	if len(siteIdxs) > 0 {
 		siteIdx = siteIdxs[0]
@@ -766,7 +779,7 @@ func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, siteIdxs ...*site
 		snapshots:        newSnapshotStore(snapshotTTL, snapshotMaxEntries, siteDB),
 		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries, siteDB),
 		bundleSnapshots:  newBundleSnapshotStore(snapshotTTL, snapshotMaxEntries, siteDB),
-		changeSets:       newChangeSetRegistry(siteDB),
+		changeSets:       changeSets,
 	}
 }
 
@@ -833,7 +846,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
-		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, createPageOutput{}, wrapErrWithLimiter(err)
 		}
@@ -1078,7 +1091,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("create_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
-		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "create_page", in.Slug, "create", time.Now().UTC())
+		rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "create_page", in.Slug, "create", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -1170,7 +1183,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 		}
-		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 		}
@@ -1536,7 +1549,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("update_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
-		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "update_page", in.Slug, "update", time.Now().UTC())
+		rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "update_page", in.Slug, "update", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -1593,7 +1606,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
-		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
@@ -2009,7 +2022,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("delete_page: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
-		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_page", in.Slug, "delete", time.Now().UTC())
+		rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_page", in.Slug, "delete", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

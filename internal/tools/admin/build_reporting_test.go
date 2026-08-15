@@ -24,7 +24,7 @@ func buildSiteWith(t *testing.T, srcIdx *hugosite.SourceIndex, callbacks ...admi
 	cfg.HugoRoot = t.TempDir()
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, srcIdx, callbacks...)
+	admin.RegisterBuild(s, cfg, srcIdx, nil, callbacks...)
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := s.Connect(ctx, t1, nil); err != nil {

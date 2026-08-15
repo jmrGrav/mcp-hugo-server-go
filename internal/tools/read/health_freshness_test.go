@@ -31,7 +31,7 @@ func newReadWriteTestClient(t *testing.T, contentRoot string, srcIdx *hugosite.S
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	read.Register(s, siteIdx, cfg, srcIdx)
 	read.RegisterWithSourceIndex(s, siteIdx, srcIdx, cfg)
-	write.Register(s, pg, srcIdx, cfg, nil, siteIdx)
+	write.Register(s, pg, srcIdx, cfg, nil, nil, siteIdx)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

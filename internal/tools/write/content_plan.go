@@ -27,6 +27,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -581,7 +582,7 @@ func registerContentPlanTools(
 	idem *idempotencyStore,
 	plans *planStore,
 	snapshots *snapshotStore,
-	changeSets *changeSetRegistry,
+	changeSets *changeset.Registry,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "plan_content_change",
@@ -760,7 +761,7 @@ func registerContentPlanTools(
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
 		}
-		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
 		}
@@ -985,7 +986,7 @@ func registerContentPlanTools(
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("apply_content_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
 		}
-		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "apply_content_plan", entry.Slug, "update", time.Now().UTC())
+		changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "apply_content_plan", entry.Slug, "update", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

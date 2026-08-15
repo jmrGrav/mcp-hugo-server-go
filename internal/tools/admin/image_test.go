@@ -32,7 +32,7 @@ func newTestServer(t *testing.T, cfg config.Config) (*mcp.ClientSession, func())
 			t.Fatalf("NewSourceIndex(%q): %v", cfg.ContentRoot, err)
 		}
 	}
-	admin.Register(s, cfg, srcIdx)
+	admin.Register(s, cfg, srcIdx, nil)
 	admin.RegisterCreatePreview(s, cfg, previews, "https://mcp.example.test")
 	admin.RegisterPreviewAccessTools(s, cfg, previews, "https://mcp.example.test")
 	read.RegisterInspectPreviewRenderedPage(s, nil, srcIdx, cfg, previews, "https://mcp.example.test")

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -33,6 +34,10 @@ type publishChangesInput struct {
 	// (#421) — see that tool's doc for the local-only settle-then-check
 	// semantics and the server-side clamp.
 	WaitSeconds int `json:"wait_seconds,omitempty"`
+	// ChangeSetID is build_site's own #1140 guard field, forwarded here
+	// since publish_changes drives the same build — see buildSiteInput's
+	// doc comment for the exact semantics.
+	ChangeSetID string `json:"change_set_id,omitempty"`
 }
 
 type publishChangesBuildDTO struct {
@@ -71,7 +76,7 @@ func newPublishChangesOutput(data publishChangesData) publishChangesOutput {
 // verify_publication, it needs the public site index and (optionally) the
 // source index to resolve a page's lifecycle state, so it's registered
 // separately from admin.Register, alongside RegisterVerifyPublication.
-func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, siteReload ...PostBuildCallback) {
+func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, changeSets *changeset.Registry, siteReload ...PostBuildCallback) {
 	if s == nil {
 		return
 	}
@@ -82,6 +87,7 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 			"Never auto-chained onto apply_content_plan/update_page; publishing is always its own deliberate call (#340). " +
 			"`data.status` is \"published\" only when the build succeeds cleanly (no failed post-build callback — e.g. a CDN purge failure could leave stale bytes cached at the edge even though local files are fresh) and verify_publication's own check comes back \"fresh\" (source/build/public/index all agree and, if `site_url` is configured, the live HTTP response confirms it). If verify_publication reports an intentional exclusion (for example a `draft:true` or protected `test_content` page), `data.status` is `intentionally_unpublished` and `data.reason_code` mirrors the publication reason. Any other non-fresh publication result reports \"build_succeeded_unverified\" — the build did not fail outright, but publication isn't confirmed clean yet (see `data.build.warning` for a callback failure and `data.publication.status`/`data.publication.explanation` for which publication stage is behind). " +
 			"A failed build surfaces as a tool error (`build_error`/`build_in_progress`), identical to `build_site`'s own behavior — it never reaches `data.status`. " +
+			"Optional `change_set_id` (#1140) guards against publishing a different change-set's in-flight edits — see `build_site`'s own doc for the exact semantics and its `foreign_change_set_present` error. " +
 			"Optional `wait_seconds` is forwarded to verify_publication's own local settle-then-check wait (bounded server-side). " +
 			"Writes only build output and derived indexes — never touches page source; that's `apply_content_plan`/`update_page`'s layer.",
 		InputSchema:  tools.MustSchema[publishChangesInput](),
@@ -98,6 +104,9 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 		}
 		if in.Slug == "" {
 			return nil, publishChangesOutput{}, fmt.Errorf("invalid_params: slug must not be empty")
+		}
+		if err := guardForeignChangeSet(ctx, changeSets, srcIdx, in.ChangeSetID); err != nil {
+			return nil, publishChangesOutput{}, err
 		}
 
 		buildData, err := runBuild(ctx, cfg, srcIdx, siteReload...)
