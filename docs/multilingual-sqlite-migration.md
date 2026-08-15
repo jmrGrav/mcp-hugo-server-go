@@ -66,7 +66,13 @@ CREATE TABLE content_representations (
 ```
 
 `source_key` is derived from the resolved source path; it is never inferred
-from a public URL. Backfill must read the bytes for each source and public
+from a public URL. A legacy public row that cannot yet be correlated is placed
+under an opaque `@public/<digest>` key and counted as a counterpart gap; it is
+never presented as a source identity. Startup reconciliation resolves public
+rows against the source index, including explicit frontmatter `url`/`permalink`
+values, and refuses ambiguous guesses. Unlabelled `index.md` sources are
+canonicalized to the configured default language during that reconciliation.
+Backfill must read the bytes for each source and public
 representation under the content lock, calculate their revisions, and record
 only the facts observed at that time. It must not copy the old `pages.slug`
 uniqueness into the new table.

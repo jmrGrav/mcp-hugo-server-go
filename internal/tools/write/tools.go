@@ -1765,15 +1765,25 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		if bundleFullyRemoved && rt.siteIdx != nil {
 			rt.siteIdx.RemoveBySlug(in.Slug)
 		}
-		if bundleFullyRemoved && siteDB != nil {
-			if err := siteDB.DeletePage(in.Slug); err != nil {
+		if siteDB != nil {
+			var dbDeleteErr error
+			if bundleFullyRemoved {
+				if err := siteDB.DeleteBundleRepresentations(in.Slug, "source"); err != nil {
+					dbDeleteErr = err
+				} else {
+					dbDeleteErr = siteDB.DeletePage(in.Slug)
+				}
+			} else {
+				dbDeleteErr = siteDB.DeleteContentRepresentation(in.Slug, resolvedSource.Lang, "source")
+			}
+			if dbDeleteErr != nil {
 				// Source and in-memory indexes are already gone; surface the DB
 				// staleness explicitly so callers know get_broken_links may be
 				// stale until the next build (#242).
-				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", err)
+				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", dbDeleteErr)
 				dbDeleteFailed = true
 				degradedDelete = true
-				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", err)
+				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", dbDeleteErr)
 			}
 		}
 		publicCleanupFailed := false
@@ -1803,6 +1813,17 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				publicCleanupFailed = true
 				degradedDelete = true
 				slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
+			} else if siteDB != nil {
+				if err := siteDB.DeleteBundleRepresentations(in.Slug, "public"); err != nil {
+					msg := fmt.Sprintf("public output removed but derived public shadow could not be updated: %v", err)
+					if deleteWarning != "" {
+						deleteWarning += "; " + msg
+					} else {
+						deleteWarning = msg
+					}
+					degradedDelete = true
+					slog.Warn("delete_page: public shadow cleanup failed", "slug", in.Slug, "error", err)
+				}
 			}
 		}
 

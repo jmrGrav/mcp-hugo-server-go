@@ -104,6 +104,10 @@ func Open(path string) (*DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: create tables: %w", err)
 	}
+	if err := d.migrateContentRepresentations(); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("db: migrate content representations: %w", err)
+	}
 	return d, nil
 }
 
@@ -411,6 +415,9 @@ func (d *DB) LookupMutation(callerKey, tool, key string, ttl time.Duration) (*Mu
 // and its FTS entry. It is hash-gated: unchanged pages are skipped.
 func (d *DB) SyncPublicPage(p site.Page, siteIdx *site.Index) error {
 	hash := hashPublicPage(p)
+	if err := d.syncContentRepresentation(d.publicRepresentation(p)); err != nil {
+		return fmt.Errorf("sync public shadow: %w", err)
+	}
 
 	// Quick hash check before opening a transaction.
 	var existing string
@@ -458,6 +465,9 @@ func (d *DB) SyncPublicPage(p site.Page, siteIdx *site.Index) error {
 // SyncSourcePage upserts a source (draft/markdown) page and its taxonomy and FTS entry.
 func (d *DB) SyncSourcePage(p hugosite.SourcePage) error {
 	hash := hashSourcePage(p)
+	if err := d.syncContentRepresentation(d.sourceRepresentation(p)); err != nil {
+		return fmt.Errorf("sync source shadow: %w", err)
+	}
 
 	var existing string
 	_ = d.db.QueryRow("SELECT content_hash FROM pages WHERE slug = ?", p.Slug).Scan(&existing)
@@ -510,6 +520,9 @@ func (d *DB) DeletePage(slug string) error {
 		return err
 	}
 	if _, err := tx.Exec("DELETE FROM pages WHERE slug = ?", slug); err != nil {
+		return err
+	}
+	if _, err := tx.Exec("DELETE FROM content_representations_v1 WHERE legacy_slug = ?", slug); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -655,6 +668,9 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 			syncErrs = append(syncErrs, fmt.Errorf("delete orphan %q: %w", slug, err))
 		}
 	}
+	if err := d.reconcileContentRepresentations(siteIdx, srcIdx, true, true); err != nil {
+		syncErrs = append(syncErrs, fmt.Errorf("content representation shadow: %w", err))
+	}
 	return errors.Join(syncErrs...)
 }
 
@@ -702,6 +718,10 @@ func (d *DB) PostBuildSync(siteIdx *site.Index) error {
 		if err := d.DeletePage(slug); err != nil {
 			slog.Warn("db: post-build sync: delete stale page", "slug", slug, "error", err)
 		}
+	}
+	if err := d.reconcileContentRepresentations(siteIdx, nil, false, true); err != nil {
+		slog.Warn("db: post-build sync: content representation shadow", "error", err)
+		return err
 	}
 	return nil
 }

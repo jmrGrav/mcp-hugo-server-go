@@ -462,8 +462,14 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 				idx.DeleteLang(in.Slug, p.lang)
 			}
 		}
-		if siteDB != nil && !bundleHasRemainingLangFiles(dir) {
-			_ = siteDB.DeletePage(in.Slug)
+		if siteDB != nil {
+			for _, p := range paths {
+				_ = siteDB.DeleteContentRepresentation(in.Slug, p.lang, "source")
+			}
+			if !bundleHasRemainingLangFiles(dir) {
+				_ = siteDB.DeleteBundleRepresentations(in.Slug, "source")
+				_ = siteDB.DeletePage(in.Slug)
+			}
 		}
 		revs := map[string]string{}
 		for _, p := range paths {
