@@ -96,28 +96,35 @@ type lastBuildRuntimeStatus struct {
 	At         string `json:"at"`
 }
 
+type mutationJournalRuntimeStatus struct {
+	ActiveEntries     int    `json:"active_entries"`
+	LastPrunedAt      string `json:"last_pruned_at,omitempty"`
+	LastPrunedEntries int    `json:"last_pruned_entries"`
+}
+
 type runtimeStatusData struct {
 	// ReleaseVersion — see the comment on toolcontract.ResponseMeta.ReleaseVersion.
 	// Named ServerVersion/server_version through v1.5.7; renamed (#563).
-	ReleaseVersion          string                  `json:"release_version"`
-	SchemaVersion           string                  `json:"schema_version"`
-	Commit                  string                  `json:"commit,omitempty"`
-	CommitTime              string                  `json:"commit_time,omitempty"`
-	BuildChannel            string                  `json:"build_channel,omitempty"`
-	BuildDirty              bool                    `json:"build_dirty"`
-	BinaryBuildDirty        bool                    `json:"binary_build_dirty"`
-	SiteWorktreeDirty       bool                    `json:"site_worktree_dirty"`
-	SourceAheadOfPublic     bool                    `json:"source_ahead_of_public"`
-	UnpublishedChangesCount int                     `json:"unpublished_changes_count"`
-	SourceAheadReason       string                  `json:"source_ahead_reason"`
-	PublicationState        string                  `json:"publication_state"`
-	ProcessStartedAt        string                  `json:"process_started_at"`
-	LastBuildPersistence    string                  `json:"last_build_persistence"`
-	Hugo                    hugoRuntimeStatus       `json:"hugo"`
-	Git                     gitRuntimeStatus        `json:"git"`
-	Site                    siteRuntimeStatus       `json:"site"`
-	LastBuild               *lastBuildRuntimeStatus `json:"last_build,omitempty"`
-	Degraded                []string                `json:"degraded,omitempty"`
+	ReleaseVersion          string                        `json:"release_version"`
+	SchemaVersion           string                        `json:"schema_version"`
+	Commit                  string                        `json:"commit,omitempty"`
+	CommitTime              string                        `json:"commit_time,omitempty"`
+	BuildChannel            string                        `json:"build_channel,omitempty"`
+	BuildDirty              bool                          `json:"build_dirty"`
+	BinaryBuildDirty        bool                          `json:"binary_build_dirty"`
+	SiteWorktreeDirty       bool                          `json:"site_worktree_dirty"`
+	SourceAheadOfPublic     bool                          `json:"source_ahead_of_public"`
+	UnpublishedChangesCount int                           `json:"unpublished_changes_count"`
+	SourceAheadReason       string                        `json:"source_ahead_reason"`
+	PublicationState        string                        `json:"publication_state"`
+	ProcessStartedAt        string                        `json:"process_started_at"`
+	LastBuildPersistence    string                        `json:"last_build_persistence"`
+	Hugo                    hugoRuntimeStatus             `json:"hugo"`
+	Git                     gitRuntimeStatus              `json:"git"`
+	Site                    siteRuntimeStatus             `json:"site"`
+	LastBuild               *lastBuildRuntimeStatus       `json:"last_build,omitempty"`
+	MutationJournal         *mutationJournalRuntimeStatus `json:"mutation_journal,omitempty"`
+	Degraded                []string                      `json:"degraded,omitempty"`
 }
 
 type getRuntimeStatusOutput struct {
@@ -169,7 +176,8 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"`unpublished_changes_count` report server-known source changes awaiting publication. `source_ahead_reason` distinguishes " +
 			"`pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` " +
 			"is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` " +
-			"and `last_build_persistence` make restart behavior explicit. Read-only; does not expose secrets or arbitrary " +
+			"and `last_build_persistence` make restart behavior explicit. When SQLite is configured, `mutation_journal` reports only aggregate retention facts; " +
+			"`last_pruned_entries` is the number removed by the most recent successful maintenance transaction. Read-only; does not expose secrets or arbitrary " +
 			"host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
@@ -266,6 +274,20 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 					BuildID: manifest.BuildID,
 					Status:  manifest.Status,
 					At:      manifest.ObservedAt.UTC().Format(time.RFC3339),
+				}
+			}
+		}
+		if siteDB != nil {
+			stats, err := siteDB.MutationJournalStats()
+			if err != nil {
+				data.Degraded = append(data.Degraded, "mutation journal unavailable: "+err.Error())
+			} else {
+				data.MutationJournal = &mutationJournalRuntimeStatus{
+					ActiveEntries:     stats.ActiveEntries,
+					LastPrunedEntries: stats.LastPrunedEntries,
+				}
+				if !stats.LastPrunedAt.IsZero() {
+					data.MutationJournal.LastPrunedAt = stats.LastPrunedAt.UTC().Format(time.RFC3339)
 				}
 			}
 		}

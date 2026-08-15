@@ -98,6 +98,14 @@ type PreviewLease struct {
 	ExpiresAt   time.Time
 }
 
+// MutationJournalStats exposes retention maintenance without exposing caller,
+// tool, key, or result data.
+type MutationJournalStats struct {
+	ActiveEntries     int
+	LastPrunedAt      time.Time
+	LastPrunedEntries int
+}
+
 // Open opens (or creates) the SQLite database at path and runs migrations.
 func Open(path string) (*DB, error) {
 	sqlDB, err := sql.Open("sqlite", path)
@@ -204,6 +212,10 @@ func (d *DB) createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_preview_leases_owner_expiry
 			ON preview_leases(owner, expires_at)`,
+		`CREATE TABLE IF NOT EXISTS mutation_journal_maintenance (
+			id INTEGER PRIMARY KEY CHECK (id = 1), last_pruned_at TEXT NOT NULL,
+			last_pruned_entries INTEGER NOT NULL
+		)`,
 	}
 	for _, s := range stmts {
 		if _, err := d.db.Exec(s); err != nil {
@@ -481,11 +493,70 @@ func (d *DB) LookupMutation(callerKey, tool, key string, ttl time.Duration) (*Mu
 		return nil, fmt.Errorf("mutation journal: parse created_at: %w", err)
 	}
 	if ttl > 0 && time.Since(e.CreatedAt) > ttl {
-		_, _ = d.db.Exec(`DELETE FROM mutation_journal WHERE caller_key=? AND tool=? AND idempotency_key=?`, callerKey, tool, key)
+		if _, err := d.db.Exec(`DELETE FROM mutation_journal WHERE caller_key=? AND tool=? AND idempotency_key=?`, callerKey, tool, key); err != nil {
+			return nil, fmt.Errorf("mutation journal: delete expired entry: %w", err)
+		}
 		return nil, nil
 	}
 	e.CallerKey, e.Tool, e.Key = callerKey, tool, key
 	return &e, nil
+}
+
+// PruneMutationJournal deletes expired mutation outcomes and records the
+// maintenance fact in the same transaction. The durable fact lets operators
+// distinguish an empty journal from one that has never been maintained.
+func (d *DB) PruneMutationJournal(ttl time.Duration, now time.Time) (MutationJournalStats, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	tx, err := d.db.Begin()
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	removed := int64(0)
+	if ttl > 0 {
+		result, err := tx.Exec(`DELETE FROM mutation_journal WHERE created_at < ?`, now.Add(-ttl).UTC().Format(time.RFC3339Nano))
+		if err != nil {
+			return MutationJournalStats{}, err
+		}
+		removed, err = result.RowsAffected()
+		if err != nil {
+			return MutationJournalStats{}, err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO mutation_journal_maintenance(id,last_pruned_at,last_pruned_entries) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET last_pruned_at=excluded.last_pruned_at,last_pruned_entries=excluded.last_pruned_entries`, now.UTC().Format(time.RFC3339Nano), removed); err != nil {
+		return MutationJournalStats{}, err
+	}
+	var active int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM mutation_journal`).Scan(&active); err != nil {
+		return MutationJournalStats{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return MutationJournalStats{}, err
+	}
+	return MutationJournalStats{ActiveEntries: active, LastPrunedAt: now.UTC(), LastPrunedEntries: int(removed)}, nil
+}
+
+func (d *DB) MutationJournalStats() (MutationJournalStats, error) {
+	var stats MutationJournalStats
+	if err := d.db.QueryRow(`SELECT COUNT(*) FROM mutation_journal`).Scan(&stats.ActiveEntries); err != nil {
+		return MutationJournalStats{}, err
+	}
+	var at string
+	err := d.db.QueryRow(`SELECT last_pruned_at,last_pruned_entries FROM mutation_journal_maintenance WHERE id=1`).Scan(&at, &stats.LastPrunedEntries)
+	if err == sql.ErrNoRows {
+		return stats, nil
+	}
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, at)
+	if err != nil {
+		return MutationJournalStats{}, err
+	}
+	stats.LastPrunedAt = parsed.UTC()
+	return stats, nil
 }
 
 // SyncPublicPage upserts a public (published) page, its taxonomy, its link graph,

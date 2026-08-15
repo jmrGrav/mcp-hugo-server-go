@@ -200,6 +200,43 @@ func TestGetRuntimeStatusUsesPersistedPublicationManifestAfterRestart(t *testing
 	}
 }
 
+func TestGetRuntimeStatusExposesMutationJournalRetentionFacts(t *testing.T) {
+	d, err := db.Open(filepath.Join(t.TempDir(), "site.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	if err := d.RememberMutation(db.MutationJournalEntry{CallerKey: "caller", Tool: "create_page", Key: "live", RequestHash: "hash", ResultJSON: []byte(`{}`), CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.PruneMutationJournal(time.Hour, now); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.HugoRoot, cfg.SiteRoot = t.TempDir(), t.TempDir()
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	admin.RegisterRuntimeStatusWithDB(s, cfg, nil, d)
+	t1, t2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
+		t.Fatal(err)
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	session, err := client.Connect(context.Background(), t2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	res, err := callTool(t, session, "get_runtime_status", map[string]any{})
+	if err != nil || res.IsError {
+		t.Fatalf("get_runtime_status error = %v, result = %s", err, resultText(res))
+	}
+	journal, ok := decodeStructuredResult(t, res)["data"].(map[string]any)["mutation_journal"].(map[string]any)
+	if !ok || journal["active_entries"] != float64(1) || journal["last_pruned_at"] != now.Format(time.RFC3339) || journal["last_pruned_entries"] != float64(0) {
+		t.Fatalf("mutation_journal = %#v", journal)
+	}
+}
+
 func TestGetRuntimeStatusOmitsRevisionsByDefault(t *testing.T) {
 	buildstatus.ResetForTest()
 	t.Cleanup(buildstatus.ResetForTest)
