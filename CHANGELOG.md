@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here.
 
+## [v1.8.9] - 2026-08-16
+
+### Feat
+- **Persistent `change_set_id` ownership for unpublished mutations** (#1135): every write now records which change-set owns it, durably, so ownership survives a process restart instead of only living in memory.
+- **`build_site`/`publish_changes` guard against foreign change-sets and external source drift** (#1140): a build/publish call now refuses to silently absorb another caller's unpublished changes, or content that changed on disk outside this server's own mutation tracking, instead of publishing a mix nobody explicitly asked for.
+- **Atomic source/public revision guards on `build_site`/`publish_changes`** (#1141): optimistic-concurrency checks close a race where a build/publish could act on a stale source/public snapshot.
+- **Change-set ownership and publication safety exposed in `get_runtime_status`** (#1142): an agent can now see, before calling `build_site`/`publish_changes`, whether it's safe to publish and who owns what's currently unpublished, rather than discovering a conflict only after the call fails.
+- **Mobile layout risk heuristics** (#1138 Part 1): `inspect_rendered.responsive_checks` (static-analysis-only, no headless browser) flags wide/fixed-width tables, unwrapped tables with long unbreakable cell content, fixed-width code blocks, and oversized fixed-width images. `get_theme_status.table_overflow_protection` reports the theme-constant question separately (does this site's CSS scroll wide tables at all), computed once instead of per page.
+- **Opt-in site-wide mobile-layout aggregation** (#1138 Part 2): `get_site_health`'s `include_responsive_summary=true` adds `responsive_summary` (`pages_at_risk`/`fix_scope`) and `score_breakdown.mobile_readability` (weight 0, informational, never forces `status`).
+- **Tool exposure profiles** (#1137): an opt-in `?profile=` query parameter on the `/mcp` endpoint (`reader`/`editorial`/`advanced`/`admin`, cumulative tiers) narrows which tools are registered on a session, reducing agent tool-selection entropy across the full catalog without changing OAuth-scope authorization. Genuinely blocks calls to hidden tools, not just discovery.
+- **`get_site_health.rendered_seo_summary`, correctly cache-invalidated on template changes** (#1136, closed via #1151): a build-time cache of `inspect_rendered`'s checks (title/canonical/meta description/hreflang/render errors/missing images/unsafe URLs/inline handlers/preview-token leaks), invalidated via a new site-wide template/theme fingerprint whenever a template change alters rendered output even though no page's own content changed — the gap #1147's earlier partial fix (`rendered_seo_coverage.aggregated: false`) explicitly left open pending this design work. No opt-in flag needed (unlike `responsive_summary`): reads an O(1) cache, not a live re-scan. Part 1 scope: these counts don't yet feed `score`/`status`.
+
+### Content
+- **`/hall-of-fame/` given real bilingual frontmatter and content; `/abuseipdb-verification.html` left as an intentionally minimal ownership-verification file** (#1139): closes a blind spot #1136's own investigation surfaced — both pages were served publicly with missing title/canonical/meta description. Excluded from the sitemap and post listings by design.
+
+### Infra
+- Production nginx: added 301 redirects for `hall-of-fame.html`/`privacy-policies.html` (the exact URLs `security.txt` declares) to their real Hugo pages, fixing a pre-existing silent 404 on `privacy-policies.html` found during #1139.
+
 ## [v1.8.8] - 2026-08-15
 
 ### BREAKING
