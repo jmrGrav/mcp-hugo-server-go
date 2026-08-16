@@ -855,7 +855,7 @@ func registerReadAgentContextTools(s *mcp.Server, idx *site.Index, srcIdx *hugos
 						issues := validateFrontMatterPage(srcPages[0], aliases)
 						broken := 0
 						if indexedPage, found := idx.GetBySlug(p.Slug); found {
-							broken = len(brokenLinksForPage(idx, idx.Classifier(), *indexedPage))
+							broken = len(brokenLinksForPage(cfg, idx, idx.Classifier(), *indexedPage))
 						}
 						page.Quality = &pageQualityDTO{Valid: len(issues) == 0, BrokenLinks: broken}
 					}

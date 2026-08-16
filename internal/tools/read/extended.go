@@ -1016,7 +1016,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			}
 
 			// In-memory fallback: re-scan HTML on each call.
-			issues := collectBrokenLinks(idx)
+			issues := collectBrokenLinks(cfg, idx)
 			return nil, newBrokenLinkOutput(brokenLinkData{
 				TotalPages:       len(sitemap),
 				DocumentsScanned: len(sitemap),
@@ -1528,14 +1528,14 @@ func sliceContentPages(pages []site.Page, offset, limit int) []site.Page {
 	return out
 }
 
-func collectBrokenLinks(idx *site.Index) []brokenLinkDTO {
+func collectBrokenLinks(cfg config.Config, idx *site.Index) []brokenLinkDTO {
 	if idx == nil {
 		return nil
 	}
 	var issues []brokenLinkDTO
 	classifier := site.NewClassifier(idx)
 	for _, page := range idx.ContentPages() {
-		issues = append(issues, brokenLinksForPage(idx, classifier, page)...)
+		issues = append(issues, brokenLinksForPage(cfg, idx, classifier, page)...)
 	}
 	return issues
 }
@@ -1544,7 +1544,7 @@ func collectBrokenLinks(idx *site.Index) []brokenLinkDTO {
 // of walking the whole site (collectBrokenLinks's job). Used by
 // get_page_for_edit's quality signal, which must stay cheap since it runs
 // on the default path of a tool meant to be called before every edit.
-func brokenLinksForPage(idx *site.Index, classifier *site.ContentClassifier, page site.Page) []brokenLinkDTO {
+func brokenLinksForPage(cfg config.Config, idx *site.Index, classifier *site.ContentClassifier, page site.Page) []brokenLinkDTO {
 	base, err := url.Parse(page.URL)
 	if err != nil {
 		return nil
@@ -1566,6 +1566,13 @@ func brokenLinksForPage(idx *site.Index, classifier *site.ContentClassifier, pag
 		// its content (#184's dedup). Same fix on the SQL-backed path,
 		// internal/db/db.go's txSyncLinks (#1112).
 		if _, isAlias := idx.ResolveAlias(target.Path); isAlias {
+			continue
+		}
+		// A link to a real static file that was never a Hugo content page
+		// (e.g. /pgp-key.txt, referenced by security.txt) isn't in idx at
+		// all — check the actual built output before declaring it broken
+		// (#1155).
+		if staticFileExists(cfg, target.Path) {
 			continue
 		}
 		issues = append(issues, brokenLinkDTO{

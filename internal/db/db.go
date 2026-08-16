@@ -41,6 +41,26 @@ type DB struct {
 	db *sql.DB
 	// renderedCheckFn is optional (nil by default); see SetRenderedCheckFn.
 	renderedCheckFn RenderedCheckFn
+	// staticFileExistsFn is optional (nil by default); see
+	// SetStaticFileExistsFn.
+	staticFileExistsFn StaticFileExistsFn
+}
+
+// StaticFileExistsFn reports whether path (a public-URL path such as
+// "/pgp-key.txt") resolves to a real file under the built site output.
+// Injected by the caller (internal/server, at process startup) rather than
+// implemented in this package: this package must not import filesystem-root
+// config directly, matching the RenderedCheckFn injection pattern below.
+type StaticFileExistsFn func(publicPath string) bool
+
+// SetStaticFileExistsFn installs the function txSyncLinks calls, as a
+// fallback, before declaring a link target broken. Left nil (the zero
+// value), the fallback is simply skipped and behavior is unchanged from
+// before #1155 — a link to a real static file that was never a Hugo content
+// page (e.g. /pgp-key.txt, referenced by security.txt) is still misreported
+// as broken.
+func (d *DB) SetStaticFileExistsFn(fn StaticFileExistsFn) {
+	d.staticFileExistsFn = fn
 }
 
 // PublicationManifest records facts observed after a successful Hugo build.
@@ -813,7 +833,7 @@ func (d *DB) syncPublicPage(p site.Page, siteIdx *site.Index, forceRenderedReche
 		if err := txSyncCats(tx, id, p.Categories); err != nil {
 			return err
 		}
-		if err := txSyncLinks(tx, id, p, siteIdx); err != nil {
+		if err := txSyncLinks(tx, id, p, siteIdx, d.staticFileExistsFn); err != nil {
 			return err
 		}
 		if err := txSyncFTS(tx, p.Slug, p.Title, p.Summary, p.Tags, p.Categories); err != nil {
@@ -1171,7 +1191,7 @@ func txSyncFTS(tx *sql.Tx, slug, title, summary string, tags, cats []string) err
 
 // txSyncLinks extracts links from page.RawHTML, resolves them against siteIdx,
 // and stores them in the links table within the given transaction.
-func txSyncLinks(tx *sql.Tx, pageID int64, p site.Page, siteIdx *site.Index) error {
+func txSyncLinks(tx *sql.Tx, pageID int64, p site.Page, siteIdx *site.Index, staticFileExists StaticFileExistsFn) error {
 	if _, err := tx.Exec("DELETE FROM links WHERE source_page_id = ?", pageID); err != nil {
 		return err
 	}
@@ -1257,6 +1277,14 @@ func txSyncLinks(tx *sql.Tx, pageID int64, p site.Page, siteIdx *site.Index) err
 			if _, isAlias := siteIdx.ResolveAlias(targetSlug); isAlias {
 				status = "ok"
 			}
+		}
+		// A link to a real static file that was never a Hugo content page
+		// (e.g. /pgp-key.txt, referenced by security.txt's own Encryption:
+		// field) isn't in siteIdx at all — check the actual built output
+		// before declaring it broken, the same os.Stat-against-public-output
+		// fallback internal/tools/read's in-memory path uses (#1155).
+		if status == "broken" && staticFileExists != nil && staticFileExists(target.Path) {
+			status = "ok"
 		}
 		if _, err := tx.Exec(
 			"INSERT INTO links(source_page_id, target, target_slug, anchor_text, status) VALUES(?,?,?,?,?)",

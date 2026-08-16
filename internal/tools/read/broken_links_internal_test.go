@@ -43,19 +43,20 @@ func TestCollectBrokenLinks(t *testing.T) {
 	write("index.html", `<html><body><a href="/posts/hello/">ok</a><a href="/missing-home/">ignored home link</a></body></html>`)
 	write("posts/hello/index.html", `<html><body><a href="/missing/">bad</a></body></html>`)
 
-	idx, err := site.NewIndex(config.Config{
+	cfg := config.Config{
 		SiteRoot:         root,
 		SiteURL:          "https://example.test",
 		SiteName:         "example",
 		DefaultLanguage:  "en",
 		RejectSymlinks:   true,
 		RejectHiddenPath: true,
-	})
+	}
+	idx, err := site.NewIndex(cfg)
 	if err != nil {
 		t.Fatalf("NewIndex() error = %v", err)
 	}
 
-	issues := collectBrokenLinks(idx)
+	issues := collectBrokenLinks(cfg, idx)
 	if len(issues) != 1 {
 		t.Fatalf("collectBrokenLinks() = %#v", issues)
 	}
@@ -78,7 +79,7 @@ func TestCollectBrokenLinks(t *testing.T) {
 		t.Fatal("GetBySlug(/posts/hello/) not found")
 	}
 	classifier := site.NewClassifier(idx)
-	got := brokenLinksForPage(idx, classifier, *hello)
+	got := brokenLinksForPage(cfg, idx, classifier, *hello)
 	if len(got) != 1 || got[0].Link != "/missing/" {
 		t.Fatalf("brokenLinksForPage(/posts/hello/) = %#v, want one issue for /missing/", got)
 	}
@@ -95,7 +96,7 @@ func TestCollectBrokenLinks(t *testing.T) {
 	if !found {
 		t.Fatal("GetBySlug(/) not found")
 	}
-	if got := brokenLinksForPage(idx, classifier, *home); len(got) != 1 || got[0].Link != "/missing-home/" {
+	if got := brokenLinksForPage(cfg, idx, classifier, *home); len(got) != 1 || got[0].Link != "/missing-home/" {
 		t.Fatalf("brokenLinksForPage(/) = %#v, want one issue for /missing-home/", got)
 	}
 }
@@ -125,24 +126,73 @@ func TestCollectBrokenLinksIgnoresGeneratedAndNonHTTPLinks(t *testing.T) {
 <a href="/missing/">real missing page</a>
 </body></html>`)
 
-	idx, err := site.NewIndex(config.Config{
+	cfg := config.Config{
 		SiteRoot:         root,
 		SiteURL:          "https://example.test",
 		SiteName:         "example",
 		DefaultLanguage:  "en",
 		RejectSymlinks:   true,
 		RejectHiddenPath: false,
-	})
+	}
+	idx, err := site.NewIndex(cfg)
 	if err != nil {
 		t.Fatalf("NewIndex() error = %v", err)
 	}
 
-	issues := collectBrokenLinks(idx)
+	issues := collectBrokenLinks(cfg, idx)
 	if len(issues) != 1 {
 		t.Fatalf("collectBrokenLinks() = %#v, want only /missing/", issues)
 	}
 	if issues[0].Link != "/missing/" {
 		t.Fatalf("collectBrokenLinks() issue = %#v, want /missing/", issues[0])
+	}
+}
+
+// TestCollectBrokenLinksIgnoresRealStaticFileNeverAContentPage is the
+// #1155 regression test: a link to a real static file that was never a
+// Hugo content page (e.g. /pgp-key.txt, referenced by security.txt's own
+// Encryption: field) isn't in idx at all, so it used to be reported broken.
+// Confirmed live on production: 4 false positives against /pgp-key.txt,
+// from the homepage and hall-of-fame pages in both languages.
+func TestCollectBrokenLinksIgnoresRealStaticFileNeverAContentPage(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("index.html", `<html><body>
+<a href="/pgp-key.txt">PGP key</a>
+<a href="/missing/">real missing page</a>
+</body></html>`)
+	write("posts/hello/index.html", `<html><body>ok</body></html>`)
+	write("pgp-key.txt", "-----BEGIN PGP PUBLIC KEY BLOCK-----\n...\n-----END PGP PUBLIC KEY BLOCK-----\n")
+
+	cfg := config.Config{
+		SiteRoot:         root,
+		SiteURL:          "https://example.test",
+		SiteName:         "example",
+		DefaultLanguage:  "en",
+		RejectSymlinks:   true,
+		RejectHiddenPath: true,
+	}
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex() error = %v", err)
+	}
+
+	home, found := idx.GetBySlug("/")
+	if !found {
+		t.Fatal("GetBySlug(/) not found")
+	}
+	classifier := site.NewClassifier(idx)
+	got := brokenLinksForPage(cfg, idx, classifier, *home)
+	if len(got) != 1 || got[0].Link != "/missing/" {
+		t.Fatalf("brokenLinksForPage(/) = %#v, want only /missing/ (real static file /pgp-key.txt must not be flagged)", got)
 	}
 }
 
@@ -171,19 +221,20 @@ func TestCollectBrokenLinksIgnoresCanonicalCollapsedAliasOwnURL(t *testing.T) {
 <link rel="canonical" href="https://example.test/csp-nonce/">
 </head><body>legacy alias page</body></html>`)
 
-	idx, err := site.NewIndex(config.Config{
+	cfg := config.Config{
 		SiteRoot:         root,
 		SiteURL:          "https://example.test",
 		SiteName:         "example",
 		DefaultLanguage:  "en",
 		RejectSymlinks:   true,
 		RejectHiddenPath: true,
-	})
+	}
+	idx, err := site.NewIndex(cfg)
 	if err != nil {
 		t.Fatalf("NewIndex() error = %v", err)
 	}
 
-	issues := collectBrokenLinks(idx)
+	issues := collectBrokenLinks(cfg, idx)
 	if len(issues) != 1 {
 		t.Fatalf("collectBrokenLinks() = %#v, want only /missing/ (alias's own URL must not be flagged)", issues)
 	}
