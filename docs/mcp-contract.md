@@ -1643,6 +1643,23 @@ same cost class as `broken_links_count`. It does **not** yet feed
 (§6.19) stays `false` until a follow-up promotes it, mirroring how #1138
 Part 1 (raw signal) preceded Part 2 (score_breakdown wiring).
 
+**Scope correction (#1156)**: as shipped, `pages_checked` initially counted
+every published route `PostBuildSync` iterates — taxonomy/section/
+pagination/technical routes included, not just ordinary content pages.
+Confirmed live: `pages_checked: 245` against 82 actual content pages,
+exactly `content_pages + taxonomy_pages + section_pages + other_documents`
+from `get_sitemap`. Fixed by gating `internal/server`'s `RenderedCheckFn`
+wiring on `site.ContentClassifier.IsContent`: a non-content page now returns
+`ok=false` and its cached count is simply never populated (the same "not
+computed" contract already used for a missing rendered-HTML file), so
+`pages_checked` only reflects pages a caller can actually act on — a
+taxonomy list page's title/canonical/meta-description "failing" isn't the
+same actionable signal a content page's is, and this site's own taxonomy
+pages are intentionally `noindex,follow`. A one-time migration
+(`reconcileRenderedChecksScope`, `internal/db`) clears any stale non-content
+`rendered_issues_count` a pre-fix process already wrote, since those rows
+are hash-gated and would otherwise never re-sync on their own.
+
 ### 6.24 `dry_run` Predicted-Outcome Status (#1154)
 
 **Problem**: `dry_run:true` on `create_page`, `update_page`, `delete_page`,

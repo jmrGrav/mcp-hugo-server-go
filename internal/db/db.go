@@ -138,6 +138,10 @@ func Open(path string) (*DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: migrate rendered checks schema: %w", err)
 	}
+	if err := d.reconcileRenderedChecksScope(); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("db: reconcile rendered checks scope: %w", err)
+	}
 	return d, nil
 }
 
