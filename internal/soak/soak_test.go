@@ -151,7 +151,7 @@ func newSoakHarness(t *testing.T, withDB bool) *soakHarness {
 			return err
 		}
 		if siteDB != nil {
-			if err := siteDB.PostBuildSync(siteIdx); err != nil {
+			if err := siteDB.PostBuildSync(siteIdx, false); err != nil {
 				return err
 			}
 			if err := siteDB.SnapshotSiteHealth(); err != nil {

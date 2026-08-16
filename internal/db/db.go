@@ -39,6 +39,8 @@ type BrokenLinkRecord struct {
 // DB wraps a SQLite database used as the MCP site index.
 type DB struct {
 	db *sql.DB
+	// renderedCheckFn is optional (nil by default); see SetRenderedCheckFn.
+	renderedCheckFn RenderedCheckFn
 }
 
 // PublicationManifest records facts observed after a successful Hugo build.
@@ -132,6 +134,10 @@ func Open(path string) (*DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: reconcile broken links: %w", err)
 	}
+	if err := d.migrateRenderedChecksSchema(); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("db: migrate rendered checks schema: %w", err)
+	}
 	return d, nil
 }
 
@@ -216,7 +222,9 @@ func (d *DB) createTables() error {
 			content_hash TEXT DEFAULT '',
 			url          TEXT DEFAULT '',
 			published    INTEGER DEFAULT 1,
-			indexed_at   TEXT DEFAULT ''
+			indexed_at   TEXT DEFAULT '',
+			rendered_issues_count INTEGER,
+			rendered_checked_at   TEXT DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS page_tags (
 			page_id INTEGER NOT NULL REFERENCES pages(id) ON DELETE CASCADE,
@@ -753,6 +761,17 @@ func (d *DB) MutationJournalStats() (MutationJournalStats, error) {
 // SyncPublicPage upserts a public (published) page, its taxonomy, its link graph,
 // and its FTS entry. It is hash-gated: unchanged pages are skipped.
 func (d *DB) SyncPublicPage(p site.Page, siteIdx *site.Index) error {
+	return d.syncPublicPage(p, siteIdx, false)
+}
+
+// syncPublicPage is SyncPublicPage plus forceRenderedRecheck (#1151): when
+// true, a page whose content_hash is unchanged is still visited so its
+// rendered_issues_count can be recomputed via d.renderedCheckFn — the case
+// a template/theme change needs, since the page's own content_hash never
+// moves even though its rendered <head> output did. Tags/categories/links/
+// FTS are still skipped in that case (nothing about them could have
+// changed if content_hash didn't), only the rendered-checks recompute runs.
+func (d *DB) syncPublicPage(p site.Page, siteIdx *site.Index, forceRenderedRecheck bool) error {
 	hash := hashPublicPage(p)
 	if err := d.syncContentRepresentation(d.publicRepresentation(p)); err != nil {
 		return fmt.Errorf("sync public shadow: %w", err)
@@ -761,7 +780,8 @@ func (d *DB) SyncPublicPage(p site.Page, siteIdx *site.Index) error {
 	// Quick hash check before opening a transaction.
 	var existing string
 	_ = d.db.QueryRow("SELECT content_hash FROM pages WHERE slug = ?", p.Slug).Scan(&existing)
-	if existing == hash {
+	contentChanged := existing != hash
+	if !contentChanged && !forceRenderedRecheck {
 		return nil
 	}
 
@@ -772,31 +792,51 @@ func (d *DB) SyncPublicPage(p site.Page, siteIdx *site.Index) error {
 	defer tx.Rollback() //nolint:errcheck
 
 	var id int64
-	err = tx.QueryRow(`
-		INSERT INTO pages(slug, lang, title, summary, date, draft, content_hash, url, published, indexed_at)
-		VALUES (?, ?, ?, ?, ?, 0, ?, ?, 1, ?)
-		ON CONFLICT(slug) DO UPDATE SET
-			lang=excluded.lang, title=excluded.title, summary=excluded.summary,
-			date=excluded.date, content_hash=excluded.content_hash,
-			url=excluded.url, published=1, indexed_at=excluded.indexed_at
-		RETURNING id`,
-		p.Slug, p.Lang, p.Title, p.Summary, p.Date, hash, p.URL, now(),
-	).Scan(&id)
-	if err != nil {
-		return err
+	if contentChanged {
+		err = tx.QueryRow(`
+			INSERT INTO pages(slug, lang, title, summary, date, draft, content_hash, url, published, indexed_at)
+			VALUES (?, ?, ?, ?, ?, 0, ?, ?, 1, ?)
+			ON CONFLICT(slug) DO UPDATE SET
+				lang=excluded.lang, title=excluded.title, summary=excluded.summary,
+				date=excluded.date, content_hash=excluded.content_hash,
+				url=excluded.url, published=1, indexed_at=excluded.indexed_at
+			RETURNING id`,
+			p.Slug, p.Lang, p.Title, p.Summary, p.Date, hash, p.URL, now(),
+		).Scan(&id)
+		if err != nil {
+			return err
+		}
+
+		if err := txSyncTags(tx, id, p.Tags); err != nil {
+			return err
+		}
+		if err := txSyncCats(tx, id, p.Categories); err != nil {
+			return err
+		}
+		if err := txSyncLinks(tx, id, p, siteIdx); err != nil {
+			return err
+		}
+		if err := txSyncFTS(tx, p.Slug, p.Title, p.Summary, p.Tags, p.Categories); err != nil {
+			return err
+		}
+	} else {
+		// forceRenderedRecheck only: content itself is unchanged, so the row
+		// (and its tags/categories/links/FTS) already exist and already
+		// match — just resolve its id for the rendered-checks update below.
+		if err := tx.QueryRow("SELECT id FROM pages WHERE slug = ?", p.Slug).Scan(&id); err != nil {
+			return err
+		}
 	}
 
-	if err := txSyncTags(tx, id, p.Tags); err != nil {
-		return err
-	}
-	if err := txSyncCats(tx, id, p.Categories); err != nil {
-		return err
-	}
-	if err := txSyncLinks(tx, id, p, siteIdx); err != nil {
-		return err
-	}
-	if err := txSyncFTS(tx, p.Slug, p.Title, p.Summary, p.Tags, p.Categories); err != nil {
-		return err
+	if d.renderedCheckFn != nil {
+		if n, ok := d.renderedCheckFn(p); ok {
+			if _, err := tx.Exec(
+				"UPDATE pages SET rendered_issues_count = ?, rendered_checked_at = ? WHERE id = ?",
+				n, now(), id,
+			); err != nil {
+				return err
+			}
+		}
 	}
 	return tx.Commit()
 }
@@ -1024,14 +1064,22 @@ func (d *DB) StartupSync(siteIdx *site.Index, srcIdx *hugosite.SourceIndex) erro
 // low-traffic deployment a failed delete could leave a stale row (and a
 // stale search_content hit) in place for weeks. Running the same prune on
 // every post-build callback means it self-heals on the very next build.
-func (d *DB) PostBuildSync(siteIdx *site.Index) error {
+// forceRenderedRecheck (#1151) is set by the caller when the site-wide
+// template fingerprint changed since the last build — see
+// DB.SyncTemplateFingerprint. It forces every page's rendered_issues_count
+// to be recomputed even when its own content_hash is unchanged, which is
+// exactly the case a template-only regression produces: every page's
+// content_hash stays identical while the actually-rendered <head> output
+// (title/canonical/meta description/hreflang, all template-driven) changed
+// underneath it.
+func (d *DB) PostBuildSync(siteIdx *site.Index, forceRenderedRecheck bool) error {
 	if siteIdx == nil {
 		return nil
 	}
 	want := make(map[string]bool, len(siteIdx.Sitemap()))
 	for _, p := range siteIdx.Sitemap() {
 		want[p.Slug] = true
-		if err := d.SyncPublicPage(p, siteIdx); err != nil {
+		if err := d.syncPublicPage(p, siteIdx, forceRenderedRecheck); err != nil {
 			slog.Warn("db: post-build sync: public page", "slug", p.Slug, "error", err)
 		}
 	}

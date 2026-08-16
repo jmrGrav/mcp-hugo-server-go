@@ -183,6 +183,78 @@ func TestBuildSiteHealthReportsBrokenLinksOnlyWhenDBPathConfigured(t *testing.T)
 	})
 }
 
+// TestBuildSiteHealthReportsRenderedSEOSummaryOnlyWhenDBPathConfigured is
+// #1151's end-to-end regression test for the opt-in-free rendered_seo_summary
+// field: it must read the build-time cache (populated via
+// DB.SetRenderedCheckFn + PostBuildSync/SyncPublicPage) and stay entirely
+// omitted without db_path, same convention as broken_links_count immediately
+// above — never a live re-scan fallback.
+func TestBuildSiteHealthReportsRenderedSEOSummaryOnlyWhenDBPathConfigured(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, raw string) {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(raw), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("posts/bare/index.html", `<html><head></head><body>no title, no canonical, no description</body></html>`)
+
+	siteIdx, err := site.NewIndex(config.Config{
+		SiteRoot:         root,
+		SiteURL:          "https://example.test",
+		SiteName:         "example",
+		DefaultLanguage:  "en",
+		RejectSymlinks:   true,
+		RejectHiddenPath: true,
+	})
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	siteDB, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	defer siteDB.Close()
+
+	cfg := config.Config{SiteRoot: root, SiteURL: "https://example.test"}
+	siteDB.SetRenderedCheckFn(func(p site.Page) (int, bool) {
+		return RenderedIssueCount(cfg, siteIdx, p)
+	})
+
+	bare, found := siteIdx.GetBySlug("/posts/bare/")
+	if !found {
+		t.Fatal("GetBySlug(/posts/bare/) not found")
+	}
+	if err := siteDB.SyncPublicPage(*bare, siteIdx); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+
+	t.Run("without db_path: field entirely omitted, no live re-scan fallback", func(t *testing.T) {
+		health := buildSiteHealth(context.Background(), siteIdx, nil, nil, cfg, nil, false)
+		if health.RenderedSEOSummary != nil {
+			t.Fatalf("RenderedSEOSummary = %#v, want nil (not computed without db_path)", health.RenderedSEOSummary)
+		}
+	})
+
+	t.Run("with db_path: cached issue count surfaces without an opt-in flag", func(t *testing.T) {
+		health := buildSiteHealth(context.Background(), siteIdx, nil, nil, cfg, siteDB, false)
+		if health.RenderedSEOSummary == nil {
+			t.Fatal("RenderedSEOSummary = nil, want populated when db_path is configured and a page has been checked")
+		}
+		if health.RenderedSEOSummary.PagesChecked != 1 {
+			t.Fatalf("PagesChecked = %d, want 1", health.RenderedSEOSummary.PagesChecked)
+		}
+		if health.RenderedSEOSummary.PagesWithIssues != 1 {
+			t.Fatalf("PagesWithIssues = %d, want 1 (the bare page is missing title/canonical/meta_description)", health.RenderedSEOSummary.PagesWithIssues)
+		}
+	})
+}
+
 // TestBuildSiteHealthAlwaysDeclaresRenderedSEONotAggregated is #1136's
 // regression test: get_site_health must never let an agent read a clean
 // score and mistake it for coverage of rendered/SEO checks (missing
