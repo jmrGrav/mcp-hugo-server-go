@@ -103,8 +103,8 @@ func TestApplyBundlePlanDryRunProjectsOutcomesWithoutWriting(t *testing.T) {
 		t.Fatalf("dry-run apply_bundle_plan failed: %s", marshalContent(t, dryRun))
 	}
 	dryData := decodeWriteData(t, dryRun)
-	if dryData["status"] != "unchanged" {
-		t.Fatalf("dry-run status = %v, want unchanged", dryData["status"])
+	if dryData["status"] != "would_apply" {
+		t.Fatalf("dry-run status = %v, want would_apply", dryData["status"])
 	}
 	translations := dryData["translations"].([]any)
 	if len(translations) != 2 {

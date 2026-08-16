@@ -255,7 +255,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 					expires[f.page.Lang] = f.expiresAt
 				}
 			}
-			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "unchanged", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true, TestContentExpiresAt: expires}), nil
+			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "would_create", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true, TestContentExpiresAt: expires}), nil
 		}
 		createLimiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, mutationCallerKey(ctx), cfg.RateLimit.CreateUpdatePerMin)
 		if !createLimiter.Allow() {
@@ -464,7 +464,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			for _, p := range paths {
 				revs[p.lang] = p.rev
 			}
-			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "unchanged", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true, Revisions: revs}), nil
+			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "would_delete", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true, Revisions: revs}), nil
 		}
 		deleteLimiter := callerLimiter(&rt.deleteMu, rt.deleteLimiters, mutationCallerKey(ctx), cfg.RateLimit.DestructivePerMin)
 		if !deleteLimiter.Allow() {

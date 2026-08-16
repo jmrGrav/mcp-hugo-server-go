@@ -910,7 +910,7 @@ func registerCreatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			langWarning := unknownLangWarning(resolvedLang, idx, cfg.DefaultLanguage, cfg.ConfiguredLanguages)
 			return nil, newCreatePageOutput(createPageData{
-				Status:                   "unchanged",
+				Status:                   "would_create",
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedLang),
@@ -1382,8 +1382,12 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			diff := simpleDiff(diffLabel, string(raw), content)
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			dryRunChanged := content != string(raw)
+			dryRunStatus := "unchanged"
+			if dryRunChanged {
+				dryRunStatus = "would_update"
+			}
 			return nil, newUpdatePageOutput(updatePageData{
-				Status:                   "unchanged",
+				Status:                   dryRunStatus,
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedSource.Lang),
@@ -1762,7 +1766,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			}
 			backlinksCount := len(bls)
 			return nil, newDeletePageOutput(deletePageData{
-				Status:                   "unchanged",
+				Status:                   "would_delete",
 				Slug:                     canonicalPublicSlug(in.Slug),
 				SourceKey:                in.Slug,
 				ResolvedLang:             strPtr(resolvedSource.Lang),

@@ -392,8 +392,8 @@ func TestUploadPageAssetDryRunDoesNotWrite(t *testing.T) {
 		t.Fatalf("upload_page_asset dry_run returned error: %s", raw)
 	}
 	dataEnvelope := decodeWriteData(t, res)
-	if got := dataEnvelope["status"]; got != "unchanged" {
-		t.Fatalf("upload_page_asset dry_run data.status = %v, want unchanged", got)
+	if got := dataEnvelope["status"]; got != "would_create" {
+		t.Fatalf("upload_page_asset dry_run data.status = %v, want would_create", got)
 	}
 	if dryRun, _ := dataEnvelope["dry_run"].(bool); !dryRun {
 		t.Fatalf("upload_page_asset dry_run response data.dry_run = %v, want true", dataEnvelope["dry_run"])
