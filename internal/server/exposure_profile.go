@@ -67,6 +67,21 @@ const exposureProfileQueryParam = "profile"
 // (rather than hand-listing all ~36) keeps this table's exceptions
 // visible instead of burying them in a long flat list; the completeness
 // invariant is enforced by TestToolExposureTierCoversEveryRegisteredTool.
+//
+// get_capabilities is deliberately advanced-tier, not reader-tier — its
+// own masked_tools field (internal/tools/anonymous/capabilities.go) is
+// computed purely from OAuth scope, with no awareness of exposure profile
+// at all (maskedCapabilityTools closes over scopeName at registration
+// time, not the profile a given server variant was filtered for). Keeping
+// get_capabilities out of reader/editorial makes that gap structurally
+// unreachable rather than merely undocumented: it can only ever be called
+// under the advanced or admin profile, and at those tiers profile hides
+// exactly the same admin-only tools scope-masking already accounts for
+// (advanced = everything except the 4 admin-tier tools; scope's own
+// ceiling is also the admin tier) — so the two numbers agree by
+// construction. If get_capabilities is ever moved to a lower tier, this
+// reasoning breaks and maskedCapabilityTools needs profile-awareness
+// added at the same time.
 var toolExposureTier = map[string]string{
 	// reader
 	"get_page":             ExposureProfileReader,

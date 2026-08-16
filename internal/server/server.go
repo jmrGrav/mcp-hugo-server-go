@@ -1105,6 +1105,23 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		a.RemoveTools(hide...)
 		exposureServers[exposureServerKey("admin", profile)] = a
 	}
+	// Fail at startup, not silently at request time, if the matrix above
+	// ever stops covering exactly the 9 (scope, profile) cells the
+	// selector below assumes exist. A missing cell there would otherwise
+	// make the selector's lookup miss and silently fall through to an
+	// unfiltered server — a caller who explicitly asked for a narrower
+	// profile getting the full tool set back, unannounced. That is
+	// exactly the untrustworthy-silent-widening failure mode the
+	// reject-on-unknown-?profile= check in newMCPToolHandler exists to
+	// prevent; this assertion closes the same class of bug on the
+	// construction side.
+	for _, scopeName := range []string{"", "write", "admin"} {
+		for _, profile := range []string{ExposureProfileReader, ExposureProfileEditorial, ExposureProfileAdvanced} {
+			if _, ok := exposureServers[exposureServerKey(scopeName, profile)]; !ok {
+				panic(fmt.Sprintf("server: exposureServers matrix missing scope=%q profile=%q after construction", scopeName, profile))
+			}
+		}
+	}
 
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,
@@ -1129,9 +1146,19 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		profile := r.URL.Query().Get(exposureProfileQueryParam)
 		slog.Info("mcp: session created", "scope", scope, "rank", rank, "profile", profile, "remote_addr", r.RemoteAddr)
 		if profile != "" && profile != ExposureProfileAdmin {
-			if srv, ok := exposureServers[exposureServerKey(scopeNameForRank(rank), profile)]; ok {
-				return srv
+			srv, ok := exposureServers[exposureServerKey(scopeNameForRank(rank), profile)]
+			if !ok {
+				// Unreachable given the startup completeness assertion
+				// above and newMCPToolHandler's upfront profile
+				// validation — reaching here means a genuine invariant
+				// violation. Panic rather than silently falling through
+				// to the unfiltered server: that fallthrough is precisely
+				// the failure this whole feature exists to never produce
+				// (a caller who asked for a narrower tool set silently
+				// getting the full one back).
+				panic(fmt.Sprintf("server: no exposure-profile server for scope=%q profile=%q", scopeNameForRank(rank), profile))
 			}
+			return srv
 		}
 		if rank >= 2 {
 			return adminServer

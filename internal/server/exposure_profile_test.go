@@ -188,6 +188,33 @@ func TestExposureProfileUnknownValueRejected(t *testing.T) {
 	}
 }
 
+// TestExposureProfileUnknownValueRejectedWhenAuthenticated proves profile
+// validation runs on the OAuth-enabled path too, not just the no-OAuth one
+// TestExposureProfileUnknownValueRejected already covers: the bogus-profile
+// check in newMCPToolHandler executes after bearer verification succeeds
+// (the auth middleware wraps mcpToolHandler and only calls through to it
+// once the token is valid), so an authenticated caller with a typo'd
+// ?profile= must still get 400, not a silently unfiltered/wrong tool list.
+func TestExposureProfileUnknownValueRejectedWhenAuthenticated(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	srv := mustOAuthSQLiteServer(t, storePath)
+	const bearer = "write-token-for-bogus-profile-test"
+	addBearerToken(t, storePath, bearer, "write")
+
+	body := []byte(`{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.0.1"}}}`)
+	req := httptest.NewRequest(http.MethodPost, "/mcp?profile=superadmin", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	rec := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an unknown exposure profile on an authenticated request; body = %q", rec.Code, rec.Body.String())
+	}
+}
+
 // TestExposureProfileComposesWithWriteScope proves profile narrows within
 // whatever the caller's OAuth scope already grants, rather than being a
 // second independent axis: a write-scope token connecting with

@@ -1561,6 +1561,20 @@ tool defaults to `advanced` without a deliberate `reader`/`editorial`
 assignment; that judgment call is left to a human reviewing new tool
 additions, not to CI.
 
+**Known limitation: `get_capabilities.masked_tools` does not account for
+exposure-profile filtering.** That field (§ see `internal/tools/anonymous/
+capabilities.go`) is computed purely from OAuth scope — it has no
+awareness of which profile the caller's session was filtered to. This is
+made structurally safe rather than merely documented-around:
+`get_capabilities` itself is `advanced`-tier, so it is unreachable at all
+under `reader`/`editorial` profiles (the caller literally cannot query a
+stale count), and at the `advanced` profile the additional tools it hides
+beyond scope masking are exactly the 4 `admin`-only tools scope-masking
+already counts — so the numbers agree by construction, not by luck.
+`TestGetCapabilitiesStaysAboveEditorialTier` guards this: it fails if
+`get_capabilities` is ever moved to `reader`/`editorial` without also
+making `maskedCapabilityTools` profile-aware.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
