@@ -163,15 +163,54 @@ func (r *PageResolver) resolvePublicForSourceLang(sourceSlug, lang string) (*Pag
 
 func canonicalPublicSlugForSourceLang(sourceSlug, lang, defaultLang string) string {
 	sourceSlug = strings.Trim(sourceSlug, "/")
-	lang = strings.TrimSpace(lang)
-	defaultLang = strings.TrimSpace(defaultLang)
 	if sourceSlug == "" {
+		// Genuinely empty/invalid input (never a real source slug at all,
+		// e.g. "///") — distinct from a root "_index"/"_index.<lang>"
+		// slug, which also trims to "" below but *does* still get a
+		// language prefix, since it legitimately represents the homepage.
 		return ""
 	}
+	sourceSlug = trimIndexSlugSegment(sourceSlug)
+	lang = strings.TrimSpace(lang)
+	defaultLang = strings.TrimSpace(defaultLang)
 	if lang == "" || lang == defaultLang {
 		return normalizeSlug(sourceSlug)
 	}
+	if sourceSlug == "" {
+		return normalizeSlug("/" + lang)
+	}
 	return normalizeSlug("/" + lang + "/" + sourceSlug)
+}
+
+// trimIndexSlugSegment strips a trailing "_index" (or "_index.<lang>")
+// path segment from a source slug, mapping it to the public URL of the
+// section/root it indexes rather than a literal "_index"-shaped path
+// segment that Hugo never actually renders (#1174).
+//
+// hugosite.SlugFromRel deliberately keeps "_index"/"_index.<lang>" as a
+// literal slug segment for "_index.md"/"_index.<lang>.md" source files —
+// this is load-bearing elsewhere (e.g. #457's section-listing exclusion,
+// read-tool addressing) and must not change. But that same literal slug
+// was, until this fix, passed straight through to the public-URL mapping
+// here, which is wrong: Hugo renders "_index.en.md" at content root as the
+// homepage ("/", not "/_index.en/"), and "posts/_index.en.md" as the
+// section list page ("/posts/", not "/posts/_index.en/"). Without this
+// trim, canonicalPublicSlugForSourceLang could never produce the correct
+// public slug for any "_index" source file, which meant
+// content_shadow.go's resolvePublicSource never matched an "_index"
+// source to its real public page — every "_index"/section-index page's
+// public representation silently fell into the unresolved "@public:..."
+// bucket, permanently reporting as missing_public in
+// build_reconciliation.public_drift_count (visible as
+// get_runtime_status.publication_safety.safe_to_publish staying false
+// forever, even on a fully published, zero-drift site — see #1174).
+func trimIndexSlugSegment(slug string) string {
+	parts := strings.Split(slug, "/")
+	last := parts[len(parts)-1]
+	if base, _, _ := strings.Cut(last, "."); base != "_index" {
+		return slug
+	}
+	return strings.Join(parts[:len(parts)-1], "/")
 }
 
 // PublicSlugForSourceLang returns the rendered URL slug Hugo uses for a

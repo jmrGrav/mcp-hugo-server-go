@@ -82,6 +82,35 @@ func TestLanguageAndSourceSlugHelpersCoverNormalizationEdges(t *testing.T) {
 	}
 }
 
+// TestPublicSlugForSourceLangMapsIndexSourcesToTheirSectionOrHomepage is
+// #1174's regression coverage: SlugFromRel gives "_index.en.md"/
+// "_index.fr.md" at content root the literal source slug "_index.en"/
+// "_index.fr" (deliberately, load-bearing elsewhere), but Hugo renders
+// those files as the homepage, not a page literally named "_index.en".
+// Before this fix, PublicSlugForSourceLang returned the literal
+// "_index.en"-shaped slug for every case here, which could never match
+// the real public page — see resolvePublicSource in content_shadow.go,
+// which is what this fix actually unblocks.
+func TestPublicSlugForSourceLangMapsIndexSourcesToTheirSectionOrHomepage(t *testing.T) {
+	tests := []struct {
+		name, source, lang, defaultLang, want string
+	}{
+		{name: "bare root index", source: "_index", lang: "en", defaultLang: "en", want: "/"},
+		{name: "root index default lang", source: "_index.en", lang: "en", defaultLang: "en", want: "/"},
+		{name: "root index secondary lang", source: "_index.fr", lang: "fr", defaultLang: "en", want: "/fr/"},
+		{name: "section index default lang", source: "posts/_index.en", lang: "en", defaultLang: "en", want: "/posts/"},
+		{name: "section index secondary lang", source: "posts/_index.fr", lang: "fr", defaultLang: "en", want: "/fr/posts/"},
+		{name: "ordinary page named index-like is untouched", source: "posts/reindex", lang: "en", defaultLang: "en", want: "/posts/reindex/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PublicSlugForSourceLang(tt.source, tt.lang, tt.defaultLang); got != tt.want {
+				t.Fatalf("PublicSlugForSourceLang(%q, %q, %q) = %q, want %q", tt.source, tt.lang, tt.defaultLang, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPublicSlugForSourceLangNormalizesEmptyAndDefaultInputs(t *testing.T) {
 	tests := []struct {
 		name, source, lang, defaultLang, want string

@@ -269,6 +269,58 @@ func TestBuildRunReconciliationDetectsPublicFingerprintDrift(t *testing.T) {
 	}
 }
 
+// TestBuildRunReconciliationResolvesRootIndexPublicRepresentation is
+// #1174's regression coverage: a root "_index.<lang>.md" source (the
+// homepage) must reconcile as published, not report PublicDriftCount>0
+// forever. hugosite.SlugFromRel gives "_index.en.md" the literal source
+// slug "_index.en" (deliberate, load-bearing elsewhere), but Hugo renders
+// it as "/" — before #1174's fix, resolvePublicSource in content_shadow.go
+// could never map that literal "_index.en" source slug to the real
+// homepage Page (Slug: "/"), so the homepage's public representation
+// permanently fell into the unresolved bucket and reconciliation kept
+// reporting it missing, no matter how many times the site was rebuilt.
+// This is exactly what made get_runtime_status.publication_safety.
+// safe_to_publish stay false forever on a real, fully-published site.
+func TestBuildRunReconciliationResolvesRootIndexPublicRepresentation(t *testing.T) {
+	contentRoot := t.TempDir()
+	body := "---\ntitle: Home\nlang: en\ndraft: false\n---\nHome body\n"
+	if err := os.WriteFile(filepath.Join(contentRoot, "_index.en.md"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.DefaultLanguage = "en"
+	publicIdx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicIdx.UpsertPage(site.Page{Slug: "/", Lang: "en", Title: "Home", RawHTML: "<p>Home body</p>"})
+	d, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if _, err := d.BeginBuildRun("home-a", publicIdx, srcIdx, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.StartupSync(publicIdx, srcIdx); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.CompleteBuildRun(db.PublicationManifest{BuildID: "home-a", SourceRevision: "s", OutputRevision: "p", HugoVersion: "0.164.0+extended", Status: "ok", ObservedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	reconciled, err := d.ReconcileLatestBuild(publicIdx, srcIdx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled == nil || reconciled.PublicDriftCount != 0 {
+		t.Fatalf("homepage reconciliation = %+v, want PublicDriftCount 0", reconciled)
+	}
+}
+
 func TestBuildRunValidationAndNoCompletedRun(t *testing.T) {
 	d, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
 	if err != nil {
