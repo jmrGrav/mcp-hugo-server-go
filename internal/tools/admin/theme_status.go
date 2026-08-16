@@ -124,6 +124,35 @@ func TableOverflowProtection(ctx context.Context, cfg config.Config) *bool {
 	return detectTableOverflowProtection(cfg, themes)
 }
 
+// ResolvedThemeLayoutDirs returns the on-disk `layouts` directory of every
+// classic themes_dir theme currently active, resolved the same way
+// get_theme_status does. Exported for #1151's template-change fingerprint,
+// which needs to hash every input that can change a page's rendered <head>
+// output — the resolved theme's own layout tree is a separate resolution
+// root from the site's local layouts/ overrides, so a fingerprint over only
+// the local tree would miss a theme-side template regression.
+//
+// Hugo Module themes are intentionally excluded, same limitation as
+// TableOverflowProtection/detectTableOverflowProtection above: they resolve
+// through Hugo's own module cache, not a local checkout under HugoRoot, so
+// there is no local directory here to hash. A fingerprint that can't see a
+// module theme's layout changes is a known, accepted scope limit — not
+// silently claiming coverage it doesn't have.
+func ResolvedThemeLayoutDirs(ctx context.Context, cfg config.Config) []string {
+	names, source, _ := resolveThemeNames(ctx, cfg)
+	if source != "themes_dir" {
+		return nil
+	}
+	dirs := make([]string, 0, len(names))
+	for _, name := range names {
+		dir := filepath.Join(cfg.HugoRoot, "themes", name, "layouts")
+		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
+}
+
 // resolveThemeNames runs `hugo config --format json` (bounded env/timeout)
 // and extracts theme names from either the classic `theme` key or Hugo
 // Modules `module.imports`. Returns an empty slice (not an error) for a

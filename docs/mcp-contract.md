@@ -1316,10 +1316,14 @@ issue's primary ask. Two approaches were considered:
 Both routes require either dropping the hash short-circuit entirely
 (re-reading and re-parsing every page's HTML on every build) or adding a
 template/theme fingerprint to the cache invalidation — real design work
-beyond this issue's scope. Until one of those lands, `inspect_rendered`
-remains the sole per-page authority for rendered/SEO checks;
-`get_site_health` names that fact explicitly on every call instead of
-implying coverage it doesn't have.
+beyond this issue's scope. `inspect_rendered` remains the sole per-page
+authority for rendered/SEO checks; `get_site_health` names that fact
+explicitly on every call instead of implying coverage it doesn't have.
+
+**Update (#1151)**: the template/theme fingerprint option was implemented —
+see §6.23 for the design and `rendered_seo_summary`, the resulting opt-in-
+free site-wide count. `aggregated` stays `false` here regardless: §6.23 is
+Part 1 scope, a raw signal that does not yet feed `score`/`status`.
 
 **Amendment (#1138 Part 2)**: `aggregated: false` describes the SEO/
 head-level checks named above (title, canonical, meta description,
@@ -1585,6 +1589,59 @@ neither claims the gap is fully closed. Making `maskedCapabilityTools`
 profile-aware (threading the profile through registration or request
 context) would close it properly; that is a larger change than this issue
 warrants and is left for a follow-up if the gap ever matters in practice.
+
+### 6.23 `rendered_seo_summary`: Closing #1136's Cache-Invalidation Gap (#1151)
+
+§6.19 above left two options on the table for aggregating `inspect_rendered`
+checks cheaply: drop `SyncPublicPage`'s `content_hash` short-circuit
+entirely, or add a template/theme fingerprint to the cache-invalidation
+key. #1151 implements the second.
+
+**The fingerprint** (`read.ComputeTemplateFingerprint`) hashes every input
+that can change a page's rendered `<head>` output without the page's own
+content changing: the site's local `layouts/**`, the resolved theme's own
+`layouts/**` (a separate resolution root — Hugo Module themes are excluded,
+same limitation as `get_theme_status.table_overflow_protection`, since they
+resolve through Hugo's module cache with no local checkout to hash), the
+Hugo binary version, and the site's config file (`hugo.toml`/`config.toml`/
+etc.). It deliberately does **not** use the build's `output_revision` — that
+changes on every single content edit too, which would collapse this back
+into "re-check everything on every build," the exact cost this issue exists
+to avoid. One value for the whole site, compared once per build via
+`DB.SyncTemplateFingerprint`, not stored per page: every page shares the
+same template, so a mismatch means every page's cached
+`rendered_issues_count` needs recomputing, not just some.
+
+**The cache**: `pages.rendered_issues_count`/`rendered_checked_at`,
+populated by `syncPublicPage` via an injected `DB.RenderedCheckFn` (set
+once at server startup to `read.RenderedIssueCount`, which reuses the exact
+check functions `inspect_rendered` calls live — title, canonical, meta
+description, hreflang, render errors, missing images, unsafe URLs, inline
+event handlers, preview-token leaks — so a cached count can never disagree
+with a direct `inspect_rendered` call against the same build).
+`internal_links` is excluded from that list: it's already surfaced by
+`broken_links_count` (#1105), and counting it here too would make the same
+broken link move two different fields. `featured_image` is also excluded:
+it needs source frontmatter this build-time pass doesn't have without
+threading the source index through as well — left for a future extension.
+
+**Invalidation**: `PostBuildSync` gained a `forceRenderedRecheck` argument.
+The `db_reindex` post-build callback computes the fingerprint, compares it
+via `SyncTemplateFingerprint`, and passes the result through. When
+`forceRenderedRecheck` is true, `syncPublicPage` recomputes
+`rendered_issues_count` even for a page whose `content_hash` is unchanged —
+exactly the case #1136 was filed over: a template-only regression leaves
+every page's `content_hash` identical while the actually-rendered output
+underneath it changed.
+
+**What shipped is Part 1 scope only**: `get_site_health.rendered_seo_summary`
+(`pages_checked`/`pages_with_issues`) is populated whenever `db_path` is
+configured — no opt-in flag, unlike `responsive_summary` (§6.21), because
+this reads an O(1) build-time cache rather than re-scanning HTML live, the
+same cost class as `broken_links_count`. It does **not** yet feed
+`score`/`score_breakdown`/`status` — `rendered_seo_coverage.aggregated`
+(§6.19) stays `false` until a follow-up promotes it, mirroring how #1138
+Part 1 (raw signal) preceded Part 2 (score_breakdown wiring).
 
 ## 7. New tools (v1.3.8+)
 

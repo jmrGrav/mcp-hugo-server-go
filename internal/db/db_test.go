@@ -857,7 +857,7 @@ func TestPostBuildSyncPrunesStalePublishedPages(t *testing.T) {
 		Lang:  "en",
 	})
 
-	if err := d.PostBuildSync(siteIdx); err != nil {
+	if err := d.PostBuildSync(siteIdx, false); err != nil {
 		t.Fatalf("PostBuildSync (1st): %v", err)
 	}
 	if results, _ := d.Search("GoingAwayUniqueTitle", 10); len(results) != 1 {
@@ -869,7 +869,7 @@ func TestPostBuildSyncPrunesStalePublishedPages(t *testing.T) {
 	// no DeletePage was ever issued for it directly.
 	siteIdx.RemoveBySlug("/going-away/")
 
-	if err := d.PostBuildSync(siteIdx); err != nil {
+	if err := d.PostBuildSync(siteIdx, false); err != nil {
 		t.Fatalf("PostBuildSync (2nd): %v", err)
 	}
 

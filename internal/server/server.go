@@ -153,6 +153,15 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 	if err != nil {
 		return nil, fmt.Errorf("server: sqlite index: %w", err)
 	}
+	// #1151: lets syncPublicPage cache each page's rendered-checks issue
+	// count without this package (db) importing internal/tools/read (which
+	// itself already imports db-adjacent packages — importing it here would
+	// invert the codebase's layering). idx is reloaded in place on every
+	// build (idx.Reload(cfg)), so capturing it by reference here always
+	// reflects the current build, never a stale snapshot from server start.
+	siteDB.SetRenderedCheckFn(func(p site.Page) (int, bool) {
+		return read.RenderedIssueCount(cfg, idx, p)
+	})
 	resolvedMutations, sourceChanged := prepareMutationRecovery(cfg, siteDB)
 	if sourceChanged && srcIdx != nil {
 		if err := srcIdx.Reload(cfg.ContentRoot); err != nil {
@@ -846,7 +855,22 @@ func postBuildCallbacks(
 		}},
 		{Name: "db_reindex", Fn: func() error {
 			if siteDB != nil {
-				if err := siteDB.PostBuildSync(idx); err != nil {
+				// #1151: a template/theme change leaves every page's
+				// content_hash untouched (its own content didn't move) even
+				// though the rendered <head> output every page shares did —
+				// exactly the staleness PostBuildSync's forceRenderedRecheck
+				// arg exists to catch. Computed once per build, compared
+				// once, site-wide (see SyncTemplateFingerprint's doc
+				// comment) rather than per page.
+				forceRenderedRecheck := false
+				if fp, fpErr := read.ComputeTemplateFingerprint(context.Background(), cfg); fpErr != nil {
+					logger.Warn(action+": template fingerprint failed", "error", fpErr)
+				} else if changed, syncErr := siteDB.SyncTemplateFingerprint(fp); syncErr != nil {
+					logger.Warn(action+": template fingerprint sync failed", "error", syncErr)
+				} else {
+					forceRenderedRecheck = changed
+				}
+				if err := siteDB.PostBuildSync(idx, forceRenderedRecheck); err != nil {
 					logger.Warn(action+": db reindex failed", "error", err)
 				}
 				if err := siteDB.SnapshotSiteHealth(); err != nil {

@@ -517,6 +517,16 @@ func computePublicationSafety(ctx context.Context, changeSets *changeset.Registr
 	return result, nil
 }
 
+// HugoVersionString reports the resolved Hugo binary's semantic version
+// (e.g. "v0.150.0"), or "" if it could not be determined (hugo not on
+// PATH, timed out, unparseable output). Exported for #1151's template
+// fingerprint, which needs the same "did the binary itself change"
+// signal probeHugo already computes for get_runtime_status, without
+// duplicating the probe/parse logic.
+func HugoVersionString(ctx context.Context, cfg config.Config) string {
+	return probeHugo(ctx, cfg).Version
+}
+
 // probeHugo shells out to `hugo version` with a bounded environment and
 // timeout, and parses the semantic version and extended-build flag out of
 // output like "hugo v0.150.0+extended linux/amd64 BuildDate=...".
