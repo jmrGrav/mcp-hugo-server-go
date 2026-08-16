@@ -15,6 +15,7 @@ package admin
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
@@ -95,6 +96,7 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 			"A failed build surfaces as a tool error (`build_error`/`build_in_progress`), identical to `build_site`'s own behavior — it never reaches `data.status`. " +
 			"Optional `change_set_id`/`change_set_ids` (#1140) guard against publishing a different change-set's in-flight edits — see `build_site`'s own doc for the exact semantics and its `foreign_change_set_present` error. " +
 			"Optional `expected_source_revision`/`expected_public_revision` (#1141) are optimistic-concurrency guards against publishing over a source/public change you never saw — see `build_site`'s own doc for the exact semantics and its `source_revision_conflict`/`public_revision_conflict`/`source_changed_during_build` errors. " +
+			"`data.status` can also report `build_succeeded_unverified` with `data.reason_code: \"source_changed_during_verification\"` (#1141): the build itself succeeded and its output is correctly promoted for the source state it was built from, but a source mutation landed during the verify_publication poll that follows the build (after this call's own build-time stability lock was released) — the \"published\" confirmation is no longer trustworthy for the current source, so it is deliberately not claimed. " +
 			"Optional `wait_seconds` is forwarded to verify_publication's own local settle-then-check wait (bounded server-side). " +
 			"Writes only build output and derived indexes — never touches page source; that's `apply_content_plan`/`update_page`'s layer.",
 		InputSchema:  tools.MustSchema[publishChangesInput](),
@@ -140,6 +142,24 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 			reasonCode = pub.ReasonCode
 		} else if buildData.Status == "ok" && pub.Status == "fresh" {
 			status = "published"
+			// #1141: pollForFreshPublication runs after runBuild has
+			// already released hugosite.ContentMu, so a concurrent
+			// create_page/update_page/delete_page could mutate the
+			// source during the poll window — after the build-time
+			// stability check already passed, but before this handler
+			// reports "published" for what it verified. Re-hash the
+			// source one more time here; if it moved, the build output
+			// on disk is still correct for the state it was built from
+			// (nothing wrong was promoted), but the "published" verdict
+			// itself is no longer trustworthy — downgrade rather than
+			// claim a confirmation this call can no longer back up.
+			if strings.TrimSpace(cfg.ContentRoot) != "" && buildData.SourceRevision != "" {
+				currentRevision, hashErr := hashTree(cfg.ContentRoot)
+				if hashErr != nil || currentRevision != buildData.SourceRevision {
+					status = "build_succeeded_unverified"
+					reasonCode = "source_changed_during_verification"
+				}
+			}
 		}
 
 		return nil, newPublishChangesOutput(publishChangesData{

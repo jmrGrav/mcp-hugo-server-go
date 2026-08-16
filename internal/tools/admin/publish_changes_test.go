@@ -336,3 +336,80 @@ func TestPublishChangesRequiresSlug(t *testing.T) {
 		t.Fatal("publish_changes without slug should fail")
 	}
 }
+
+// TestPublishChangesDowngradesWhenSourceChangesDuringVerificationPoll is
+// #1141's direct regression for the gap advisor review caught: runBuild
+// releases hugosite.ContentMu before pollForFreshPublication runs, so a
+// mutation landing in that window (after the build-time stability check
+// already passed) could previously go unnoticed, and publish_changes would
+// report "published" for a source state it never actually verified. An
+// OnOutputSwapped callback — the last thing runBuild runs before returning,
+// after its own before/after fingerprint check has already succeeded and
+// the build has been promoted — deterministically stands in for "a
+// mutation landed after this handler's build-time check but before its
+// final published determination," without depending on real wall-clock
+// timing. data.status must downgrade to build_succeeded_unverified with
+// reason_code source_changed_during_verification, and the promoted output
+// itself must be left exactly as it was (the build WAS correct for the
+// state it was built from — only the "published" confidence is revoked).
+func TestPublishChangesDowngradesWhenSourceChangesDuringVerificationPoll(t *testing.T) {
+	wantRoot := t.TempDir()
+	dir := writeMockHugo(t, "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+
+	contentRoot := t.TempDir()
+	pagePath := filepath.Join(contentRoot, "posts", "hello", "index.md")
+	if err := os.MkdirAll(filepath.Dir(pagePath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(pagePath, []byte("---\ntitle: Hello\ndate: 2026-07-14\n---\nHello body.\n"), 0o644); err != nil {
+		t.Fatalf("write page: %v", err)
+	}
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	siteRoot := t.TempDir()
+	writePublicHTML(t, siteRoot, "posts/hello/index.html", `<!DOCTYPE html>
+<html><head><title>Hello</title></head>
+<body>Hello.</body></html>`)
+	if err := os.WriteFile(filepath.Join(siteRoot, "sitemap.xml"), []byte("<xml/>"), 0o644); err != nil {
+		t.Fatalf("write sitemap: %v", err)
+	}
+
+	cfg := config.Default()
+	cfg.SiteRoot = siteRoot
+	cfg.HugoRoot = wantRoot
+	cfg.ContentRoot = contentRoot
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+
+	mutateAfterSwap := admin.PostBuildCallback{
+		Name: "simulate_concurrent_mutation",
+		OnOutputSwapped: func(admin.BuildProgress) error {
+			return os.WriteFile(pagePath, []byte("---\ntitle: Hello\ndate: 2026-07-14\n---\nChanged during the verification window.\n"), 0o644)
+		},
+	}
+	session, done := newPublishChangesServer(t, cfg, srcIdx, mutateAfterSwap)
+	defer done()
+
+	res, err := callTool(t, session, "publish_changes", map[string]any{"slug": "posts/hello"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("publish_changes returned error: %s", resultText(res))
+	}
+	data := decodeStructuredResult(t, res)["data"].(map[string]any)
+	if got := data["status"]; got != "build_succeeded_unverified" {
+		t.Fatalf("data.status = %v, want build_succeeded_unverified (data=%v)", got, data)
+	}
+	if got := data["reason_code"]; got != "source_changed_during_verification" {
+		t.Fatalf("data.reason_code = %v, want source_changed_during_verification (data=%v)", got, data)
+	}
+	pub, ok := data["publication"].(map[string]any)
+	if !ok || pub["status"] != "fresh" {
+		t.Fatalf("data.publication.status = %v, want fresh (the build/public state itself was genuinely fresh; only the final verdict is downgraded)", data["publication"])
+	}
+}

@@ -70,6 +70,14 @@ type buildSiteData struct {
 	DurationMs     int64  `json:"duration_ms"`
 	BuildID        string `json:"build_id"`
 	OutputRevision string `json:"output_revision,omitempty"`
+	// SourceRevision (#1141) is the content_root hash this build verified
+	// and built against (empty when content_root isn't configured) — the
+	// same hashTree value get_runtime_status's include_revisions option
+	// reports, and what a caller can pass back as expected_source_revision
+	// on a later call. publish_changes also uses this internally to detect
+	// source drift during its post-build verify_publication poll (see its
+	// own handler).
+	SourceRevision string `json:"source_revision,omitempty"`
 	PublishReady   bool   `json:"publish_ready"`
 	Warning        string `json:"warning,omitempty"`
 	// Stages / Pages are additive, stage-aware and page-aware reporting
@@ -789,11 +797,24 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		}
 	}
 
+	if err := checkDirWritable(filepath.Dir(cfg.SiteRoot)); err != nil {
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildSiteData{}, err
+	}
+	if err := checkBuildWritable(filepath.Join(cfg.HugoRoot, "resources")); err != nil {
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildSiteData{}, err
+	}
+
 	// #1141: verify the caller's optimistic-concurrency expectations, and
 	// capture the source fingerprint this build will use for its own
 	// during-build stability check further below, all while still holding
 	// ContentMu so nothing can land between this check and the build
-	// actually starting.
+	// actually starting. Deliberately placed after the writability checks
+	// above: a misconfigured/unwritable deployment should fail with its
+	// own honest permission_denied first, not pay a full-tree hash (or
+	// report a revision conflict) on a build that was never going to
+	// succeed anyway.
 	var sourceRevisionBeforeBuild string
 	if strings.TrimSpace(cfg.ContentRoot) != "" {
 		rev, err := hashTree(cfg.ContentRoot)
@@ -820,14 +841,6 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		}
 	}
 
-	if err := checkDirWritable(filepath.Dir(cfg.SiteRoot)); err != nil {
-		buildstatus.RecordFailure("permission_denied", time.Now())
-		return buildSiteData{}, err
-	}
-	if err := checkBuildWritable(filepath.Join(cfg.HugoRoot, "resources")); err != nil {
-		buildstatus.RecordFailure("permission_denied", time.Now())
-		return buildSiteData{}, err
-	}
 	buildDir, buildDirErr := os.MkdirTemp(filepath.Dir(cfg.SiteRoot), ".mcp-build-output-")
 	if buildDirErr != nil {
 		buildstatus.RecordFailure("permission_denied", time.Now())
@@ -1196,6 +1209,7 @@ cbLoop:
 		DurationMs:     durationMs,
 		BuildID:        runID,
 		OutputRevision: outputRevision,
+		SourceRevision: sourceRevisionBeforeBuild,
 		PublishReady:   publishReady,
 		Warning:        cbWarning,
 		Stages:         &stages,
