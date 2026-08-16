@@ -134,6 +134,40 @@ func (r *Registry) Create(principalID string, now time.Time) (string, error) {
 // confirms or denies that a given id belongs to *someone else*, only that
 // it isn't usable by this caller.
 func (r *Registry) Resolve(ctx context.Context, requested string, now time.Time) (string, error) {
+	resolved, err := r.checkOwnership(ctx, requested)
+	if err != nil {
+		return "", err
+	}
+	if requested == "" {
+		return resolved, nil
+	}
+	r.mu.Lock()
+	updated := r.owners[requested]
+	updated.LastUsedAt = now
+	r.owners[requested] = updated
+	r.mu.Unlock()
+	if r.persistent != nil {
+		_ = r.persistent.TouchChangeSet(requested, now)
+	}
+	return resolved, nil
+}
+
+// Peek is Resolve without the LastUsedAt bookkeeping side effect (no
+// in-memory update, no best-effort SQLite touch) — for read-only callers
+// like #1142's publication-safety reporting on get_runtime_status, which
+// carries ReadOnlyHint:true and so must not mutate change-set state merely
+// by being asked about it. Ownership rules are otherwise identical to
+// Resolve.
+func (r *Registry) Peek(ctx context.Context, requested string) (string, error) {
+	return r.checkOwnership(ctx, requested)
+}
+
+// checkOwnership is Resolve/Peek's shared validation: blank resolves to the
+// caller's implicit default bucket; anything else must be owned by the
+// caller (rehydrating from SQLite on a cache miss, same as Resolve always
+// has), or it's rejected without confirming/denying that a given id belongs
+// to *someone else*.
+func (r *Registry) checkOwnership(ctx context.Context, requested string) (string, error) {
 	principalID := caller.MutationKey(ctx)
 	if requested == "" {
 		return DefaultID(principalID), nil
@@ -156,14 +190,6 @@ func (r *Registry) Resolve(ctx context.Context, requested string, now time.Time)
 	}
 	if !ok || o.PrincipalID != principalID {
 		return "", fmt.Errorf("invalid_params: change_set_id is unknown or does not belong to this caller — call create_change_set to obtain one")
-	}
-	r.mu.Lock()
-	updated := r.owners[requested]
-	updated.LastUsedAt = now
-	r.owners[requested] = updated
-	r.mu.Unlock()
-	if r.persistent != nil {
-		_ = r.persistent.TouchChangeSet(requested, now)
 	}
 	return requested, nil
 }
