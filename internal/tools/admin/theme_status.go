@@ -108,6 +108,22 @@ func RegisterThemeStatus(s *mcp.Server, cfg config.Config) {
 	}))
 }
 
+// TableOverflowProtection resolves the active theme(s) the same way
+// get_theme_status does and reports the same three-state
+// table_overflow_protection result (see themeStatusData's doc comment for
+// the full contract). Exported for get_site_health's opt-in
+// responsive_summary aggregation (#1138 Part 2), which needs this
+// theme-constant signal to decide fix_scope without duplicating the theme
+// resolution/CSS-scanning logic.
+func TableOverflowProtection(ctx context.Context, cfg config.Config) *bool {
+	names, source, _ := resolveThemeNames(ctx, cfg)
+	themes := make([]themeInfo, 0, len(names))
+	for _, name := range names {
+		themes = append(themes, themeStatusFor(ctx, cfg, name, source))
+	}
+	return detectTableOverflowProtection(cfg, themes)
+}
+
 // resolveThemeNames runs `hugo config --format json` (bounded env/timeout)
 // and extracts theme names from either the classic `theme` key or Hugo
 // Modules `module.imports`. Returns an empty slice (not an error) for a

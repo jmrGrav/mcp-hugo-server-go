@@ -22,6 +22,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
@@ -143,6 +144,18 @@ type scoreBreakdownDTO struct {
 	// whole score_breakdown.broken_links key omitted) means "not computed",
 	// never a false "0" that would misrepresent an unchecked site as clean.
 	BrokenLinks *scoreCategoryDTO `json:"broken_links,omitempty"`
+	// MobileReadability (#1138 Part 2) mirrors BrokenLinks exactly: weight
+	// 0 (informational only, never moves the weighted score), never forces
+	// status. Unlike BrokenLinks/TitleShape, it deliberately does NOT force
+	// status off healthy even when nonzero — this is a starting posture the
+	// issue itself specified ("weight 0 at first", the same phrase used for
+	// broken_links before #1105 added forcing), not an oversight; a future
+	// issue can add that escalation once this heuristic surface has some
+	// track record. A pointer for the same reason as BrokenLinks: only
+	// computed when include_responsive_summary=true is requested (a
+	// full-site rendered-HTML scan, too costly to run on every
+	// get_site_health call by default).
+	MobileReadability *scoreCategoryDTO `json:"mobile_readability,omitempty"`
 }
 
 // renderedSEOCoverageDTO (#1136) is a deliberate, always-present admission
@@ -170,10 +183,55 @@ type scoreBreakdownDTO struct {
 // failure class #1136 was filed over (site-wide template regression, not a
 // single bad page). Until that staleness gap has its own fix, per-page
 // rendered/SEO checking stays exclusively on inspect_rendered.
+//
+// aggregated:false covers the SEO/head-level checks named above and is
+// never true for them — that has not changed. The one narrow exception,
+// added in #1138 Part 2, is opt-in: passing include_responsive_summary=true
+// does read rendered HTML for a different, non-SEO purpose (the
+// responsive_summary mobile-layout-risk aggregate and
+// score_breakdown.mobile_readability). That is a deliberate, explicitly
+// requested exception to the "cheap enough to call before every publish"
+// default, gated the same way get_runtime_status gates include_revisions —
+// it does not aggregate title/canonical/meta description/hreflang/
+// unsafe-URL checks into this response, and does not change what
+// aggregated:false means for those.
 type renderedSEOCoverageDTO struct {
 	Aggregated        bool   `json:"aggregated"`
 	Reason            string `json:"reason"`
 	AuthoritativeTool string `json:"authoritative_tool"`
+}
+
+// responsiveSummaryDTO (#1138 Part 2) is the opt-in site-wide aggregate of
+// inspect_rendered.responsive_checks (#1138 Part 1): how many published
+// pages show at least one mobile-layout risk signal, and where the fix
+// belongs. Computed only when include_responsive_summary=true — it re-reads
+// and re-parses every published page's rendered HTML, the same cost class
+// #1136 already evaluated and rejected as an unconditional default for this
+// tool (see renderedSEOCoverageDTO's doc comment). Gating it behind an
+// explicit flag, mirroring get_runtime_status's include_revisions, is what
+// makes that cost acceptable: every existing caller's cost is unchanged.
+type responsiveSummaryDTO struct {
+	PagesAtRisk int `json:"pages_at_risk"`
+	// FixScope is "none" (pages_at_risk == 0), "theme_level" (the active
+	// theme's CSS does not scroll wide tables at all —
+	// get_theme_status.table_overflow_protection is false — so a single
+	// theme-level CSS fix addresses most/all at-risk pages), "page_level"
+	// (the theme already protects tables, so at-risk pages need individual
+	// fixes — e.g. an inline fixed-width override), or "unknown"
+	// (table_overflow_protection could not be determined at all, e.g. a
+	// Hugo Module theme with no local checkout to scan — see
+	// TableOverflowProtection's own doc comment for why that case returns
+	// nil rather than a guessed false).
+	//
+	// FixScope describes table-overflow risk specifically — it is derived
+	// entirely from table_overflow_protection, a table-only theme-CSS
+	// signal. pages_at_risk itself is broader (also counts code-block and
+	// image risk signals with no theme-constant remedy), so a page whose
+	// only signal was an oversized image or an unsafe code block does not
+	// necessarily need the fix FixScope names; per-page detail always
+	// comes from inspect_rendered.responsive_checks, not from this
+	// aggregate field.
+	FixScope string `json:"fix_scope"`
 }
 
 type contentEnvelopeData struct {
@@ -237,6 +295,10 @@ type contentEnvelopeData struct {
 	// for other tools reusing contentEnvelopeData, same convention as
 	// ScoreBreakdown) — see renderedSEOCoverageDTO's own doc comment.
 	RenderedSEOCoverage *renderedSEOCoverageDTO `json:"rendered_seo_coverage,omitempty"`
+	// ResponsiveSummary (#1138 Part 2) is populated only by get_site_health,
+	// only when include_responsive_summary=true was requested — see
+	// responsiveSummaryDTO's own doc comment.
+	ResponsiveSummary *responsiveSummaryDTO `json:"responsive_summary,omitempty"`
 	// TaxonomyInconsistencies keeps its original string[] shape for
 	// backward compatibility (#210/#328: no v1.x field-shape breaks).
 	// TaxonomyInconsistencyDetails is the additive, structured sibling —
@@ -557,6 +619,15 @@ type responseModeOnlyInput struct {
 	ResponseMode string `json:"response_mode,omitempty"`
 }
 
+// getSiteHealthInput adds IncludeResponsiveSummary (#1138 Part 2) on top of
+// the shared response_mode field — off by default, since it triggers a
+// full-site rendered-HTML re-scan (see responsiveSummaryDTO's doc comment).
+// Mirrors get_runtime_status's include_revisions opt-in pattern.
+type getSiteHealthInput struct {
+	ResponseMode             string `json:"response_mode,omitempty"`
+	IncludeResponsiveSummary bool   `json:"include_responsive_summary,omitempty"`
+}
+
 type linkSuggestionDTO struct {
 	Slug             string   `json:"slug"`
 	Title            string   `json:"title"`
@@ -785,12 +856,12 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, newContentEnvelope(data, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. Counter populations are intentionally distinct: `source_pages` includes every indexed source document; `publishable_source_pages` is the backward-compatible count of ordinary content expected to resolve individually and excludes `_index` documents and other non-publishable sources; `published_pages` is the independently classified rendered content-page population and can include public routes not matched to publishable ordinary sources. New clients should use `publishable_content_pages`, `section_index_pages`, and the typed `publication_coverage` breakdown instead of comparing the three legacy counters directly. `public_output_complete` means every publishable ordinary content source has a public match, not that all three counters must be equal. `publication_coverage.completeness_basis` identifies that source population explicitly, while `counters_directly_comparable:false` warns agents not to subtract the independent source and public counters. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true, OR whenever `bad_title_shape_pages` is non-empty (see below); `runtime_degraded_reasons`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `bad_title_shape_pages` (#1105) lists slugs whose title field is a bare http(s) URL instead of actual page text — a corrupted-title defect a frontmatter-presence check cannot see, since the field is non-empty. `score_breakdown.title_shape` reports 0 whenever this list is non-empty, 100 otherwise; despite carrying weight 0 (like taxonomy, it never moves the weighted `score` calculation), a URL-shaped title still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` directly and caps an otherwise-perfect `score` at 99 — do not read weight 0 as harmless for this category the way it is for taxonomy. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. `broken_links_count` and `score_breakdown.broken_links` (#1105) surface the same figure `get_broken_links.data.broken_links` reports, but only when `db_path` is configured — computing it here otherwise would mean paying `get_broken_links`'s full-HTML-rescan cost on every `get_site_health` call, not just an explicit one. Both fields are entirely omitted (not a `0`) when not computed, the same `untracked_source_pages` distinction above; a present `0` means checked and clean. Like `title_shape`, `score_breakdown.broken_links` carries weight 0 (never moves the weighted `score`) but a nonzero count still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` and caps an otherwise-perfect `score` at 99 — this deliberately never folds link-graph resolution logic into this tool's own scoring, keeping `get_broken_links` the single source of truth for what counts as broken; it only reacts to that count as an override. `rendered_seo_coverage` (#1136) is always present with `aggregated:false`: every check above is source-document or link-graph based — a missing `<title>`/canonical/meta description/hreflang, or an unsafe/leaked URL in the actually-rendered HTML, can coexist with `score:100` here, because this tool never inspects rendered output. `inspect_rendered` (per-page) is the authoritative check for that surface; see `docs/mcp-contract.md` §6.19 for why it isn't aggregated here. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. Counter populations are intentionally distinct: `source_pages` includes every indexed source document; `publishable_source_pages` is the backward-compatible count of ordinary content expected to resolve individually and excludes `_index` documents and other non-publishable sources; `published_pages` is the independently classified rendered content-page population and can include public routes not matched to publishable ordinary sources. New clients should use `publishable_content_pages`, `section_index_pages`, and the typed `publication_coverage` breakdown instead of comparing the three legacy counters directly. `public_output_complete` means every publishable ordinary content source has a public match, not that all three counters must be equal. `publication_coverage.completeness_basis` identifies that source population explicitly, while `counters_directly_comparable:false` warns agents not to subtract the independent source and public counters. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true, OR whenever `bad_title_shape_pages` is non-empty (see below); `runtime_degraded_reasons`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `bad_title_shape_pages` (#1105) lists slugs whose title field is a bare http(s) URL instead of actual page text — a corrupted-title defect a frontmatter-presence check cannot see, since the field is non-empty. `score_breakdown.title_shape` reports 0 whenever this list is non-empty, 100 otherwise; despite carrying weight 0 (like taxonomy, it never moves the weighted `score` calculation), a URL-shaped title still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` directly and caps an otherwise-perfect `score` at 99 — do not read weight 0 as harmless for this category the way it is for taxonomy. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. `broken_links_count` and `score_breakdown.broken_links` (#1105) surface the same figure `get_broken_links.data.broken_links` reports, but only when `db_path` is configured — computing it here otherwise would mean paying `get_broken_links`'s full-HTML-rescan cost on every `get_site_health` call, not just an explicit one. Both fields are entirely omitted (not a `0`) when not computed, the same `untracked_source_pages` distinction above; a present `0` means checked and clean. Like `title_shape`, `score_breakdown.broken_links` carries weight 0 (never moves the weighted `score`) but a nonzero count still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` and caps an otherwise-perfect `score` at 99 — this deliberately never folds link-graph resolution logic into this tool's own scoring, keeping `get_broken_links` the single source of truth for what counts as broken; it only reacts to that count as an override. `rendered_seo_coverage` (#1136) is always present with `aggregated:false`: every check above is source-document or link-graph based — a missing `<title>`/canonical/meta description/hreflang, or an unsafe/leaked URL in the actually-rendered HTML, can coexist with `score:100` here, because this tool never inspects rendered output. `inspect_rendered` (per-page) is the authoritative check for that surface; see `docs/mcp-contract.md` §6.19 for why it isn't aggregated here. Set `include_responsive_summary=true` for an opt-in site-wide mobile-layout-risk scan: `responsive_summary.pages_at_risk`/`fix_scope` and `score_breakdown.mobile_readability` (weight 0, informational only, never forces `status` — see §6.20). Off by default since it re-scans every published page's rendered HTML. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+		func(ctx context.Context, _ *mcp.CallToolRequest, in getSiteHealthInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
 			}
-			health := buildSiteHealth(ctx, idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases, cfg, siteDB)
+			health := buildSiteHealth(ctx, idx, sourceIndexForProfile(srcIdx, site.IsReaderProfile(ctx)), aliases, cfg, siteDB, in.IncludeResponsiveSummary)
 			return nil, newContentEnvelope(contentEnvelopeData{
 				Status:                          health.Status,
 				Score:                           health.Score,
@@ -802,6 +873,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				RuntimeDegradedReasons:          health.RuntimeDegradedReasons,
 				ScoreBreakdown:                  health.ScoreBreakdown,
 				RenderedSEOCoverage:             health.RenderedSEOCoverage,
+				ResponsiveSummary:               health.ResponsiveSummary,
 				PublishedPages:                  health.PublishedPages,
 				SourcePages:                     health.SourcePages,
 				DraftPages:                      health.DraftPages,
@@ -1894,7 +1966,7 @@ func untrackedSourcePageCount(ctx context.Context, srcIdx *hugosite.SourceIndex,
 	return count, true
 }
 
-func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string, cfg config.Config, siteDB *db.DB) contentEnvelopeData {
+func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string, cfg config.Config, siteDB *db.DB, includeResponsiveSummary bool) contentEnvelopeData {
 	health := contentEnvelopeData{
 		Status: "healthy",
 		// See renderedSEOCoverageDTO's own doc comment for why this is
@@ -2077,6 +2149,22 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 		}
 		health.ScoreBreakdown.BrokenLinks = &scoreCategoryDTO{Score: brokenLinksScore, Weight: 0, Issues: *brokenLinksCount}
 	}
+	// #1138 Part 2: responsive_summary/mobile_readability are only ever
+	// computed when explicitly requested — see responsiveSummaryDTO's own
+	// doc comment for why (the same full-site rendered-HTML-scan cost
+	// concern #1136 already evaluated and rejected as a default).
+	if includeResponsiveSummary {
+		health.ResponsiveSummary = computeResponsiveSummary(ctx, cfg, idx)
+		if health.ResponsiveSummary != nil {
+			mobileReadabilityScore := 100
+			if health.ResponsiveSummary.PagesAtRisk > 0 {
+				mobileReadabilityScore = 0
+			}
+			health.ScoreBreakdown.MobileReadability = &scoreCategoryDTO{
+				Score: mobileReadabilityScore, Weight: 0, Issues: health.ResponsiveSummary.PagesAtRisk,
+			}
+		}
+	}
 	// AdvisoriesCount deliberately counts every taxonomy finding regardless
 	// of severity (taxonomyWarnings + taxonomyAdvisories == len(details)),
 	// NOT just score_breakdown.taxonomy.advisories (info-severity only,
@@ -2156,6 +2244,99 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 		health.Status = "degraded"
 	}
 	return health
+}
+
+// computeResponsiveSummary runs inspect_rendered's #1138 Part 1 heuristics
+// (computeResponsiveChecks) across every published page and aggregates the
+// result — the opt-in site-wide scan behind include_responsive_summary. A
+// page's rendered HTML that can't be loaded/parsed is silently skipped
+// (best-effort, mirrors buildSiteHealth's other per-page loops), not
+// treated as at-risk.
+//
+// idx (the public rendered-content index) is used here regardless of
+// reader profile, the same posture inspect_rendered itself already has (no
+// reader-profile gate on the checks it runs against idx). This is safe
+// because idx is built by site.NewIndex(cfg) walking cfg.SiteRoot's actual
+// rendered output: (1) Hugo never renders draft/unpublished content into
+// that tree in the first place, and (2) token-gated preview builds are not
+// under cfg.SiteRoot at all — they live in previewstore's own directory
+// (internal/server's previewRoot, os.TempDir() or dbPath+".previews",
+// wired only to the separate inspect_preview tool via its own *store
+// argument), so idx never sees them either. idx.ContentPages() therefore
+// cannot contain anything a reader token couldn't already fetch as a
+// public URL. Unlike srcIdx (gated via sourceIndexForProfile above), idx
+// has no source-only or preview-only population to leak.
+func computeResponsiveSummary(ctx context.Context, cfg config.Config, idx *site.Index) *responsiveSummaryDTO {
+	if idx == nil {
+		return nil
+	}
+	pagesAtRisk := 0
+	for _, page := range idx.ContentPages() {
+		doc, _, err := loadRenderedHTML(cfg, page)
+		if err != nil {
+			continue
+		}
+		if isPageAtMobileLayoutRisk(computeResponsiveChecks(doc)) {
+			pagesAtRisk++
+		}
+	}
+	var protection *bool
+	if pagesAtRisk > 0 {
+		// Only resolved when needed: fixScopeFor ignores this argument
+		// entirely when pagesAtRisk == 0, and resolving it always would
+		// spend an unconditional `hugo config` exec on every clean site.
+		protection = admin.TableOverflowProtection(ctx, cfg)
+	}
+	return &responsiveSummaryDTO{PagesAtRisk: pagesAtRisk, FixScope: fixScopeFor(pagesAtRisk, protection)}
+}
+
+// fixScopeFor is a pure decision table, factored out of
+// computeResponsiveSummary so all four outcomes can be unit-tested without
+// a resolvable `hugo` binary or an on-disk theme. tableOverflowProtection
+// is only ever queried when pagesAtRisk > 0 — computeResponsiveSummary
+// evaluates it lazily for that reason; this function accepts the already-
+// resolved value so its own tests can supply either state directly.
+//
+// fix_scope describes table-overflow risk specifically (it is derived
+// entirely from table_overflow_protection, a table-only theme-CSS signal)
+// — it may not describe the right remedy for a page whose only signal was
+// an oversized image or an unsafe code block, since neither has a
+// theme-constant fix an agent could apply site-wide the way a table CSS
+// fix can. See responsiveSummaryDTO's own doc comment.
+func fixScopeFor(pagesAtRisk int, tableOverflowProtection *bool) string {
+	if pagesAtRisk == 0 {
+		return "none"
+	}
+	switch {
+	case tableOverflowProtection == nil:
+		return "unknown"
+	case !*tableOverflowProtection:
+		return "theme_level"
+	default:
+		return "page_level"
+	}
+}
+
+// isPageAtMobileLayoutRisk reduces one page's responsiveChecksDTO to a
+// single at-risk boolean for site-wide aggregation: any fixed-width table
+// without a responsive wrapper, any table with a long unbreakable cell
+// (independent of wrapping — word-wrap can't break an unspaced token
+// regardless of overflow-x scrolling), a code block anti-pattern, or a
+// non-responsive oversized image.
+func isPageAtMobileLayoutRisk(rc responsiveChecksDTO) bool {
+	if rc.Tables.FixedWidth > 0 && rc.Tables.ResponsiveWrapper == 0 {
+		return true
+	}
+	if rc.Tables.LongCellRisk > 0 {
+		return true
+	}
+	if !rc.CodeBlocks.OverflowSafe {
+		return true
+	}
+	if !rc.Images.Responsive {
+		return true
+	}
+	return false
 }
 
 func sourceExpectedInPublic(p hugosite.SourcePage, now time.Time) bool {

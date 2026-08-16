@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,6 +60,19 @@ func TestScanThemeCSSForTableOverflowProtectionNoCSSFiles(t *testing.T) {
 	_, ok := scanThemeCSSForTableOverflowProtection(dir)
 	if ok {
 		t.Fatalf("expected ok=false when the theme has no stylesheet to inspect")
+	}
+}
+
+// TestTableOverflowProtectionUnknownWithNoResolvableTheme is a regression
+// test for the #1138 Part 2 exported wrapper: an empty/unconfigured
+// HugoRoot resolves no theme names at all (resolveThemeNames returns an
+// error string, not a panic), and TableOverflowProtection must report that
+// as "unknown" (nil), not a guessed false.
+func TestTableOverflowProtectionUnknownWithNoResolvableTheme(t *testing.T) {
+	cfg := config.Config{HugoRoot: t.TempDir()}
+	got := TableOverflowProtection(context.Background(), cfg)
+	if got != nil {
+		t.Fatalf("TableOverflowProtection() = %v, want nil (no resolvable theme)", *got)
 	}
 }
 
