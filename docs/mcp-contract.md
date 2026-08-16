@@ -1661,13 +1661,29 @@ payload.
 `would_create` / `would_update` / `would_delete` / `would_apply` /
 `would_restore`, matching the verb the real (non-dry-run) call would use —
 with `"unchanged"` reserved for the case where the predicted write is a
-genuine no-op (currently only reachable on `update_page`, whose dry_run
-already computed `data.changed` for exactly this purpose). This is a
-breaking change to the `status` string's value set for `dry_run` responses;
-callers matching on the previous `"unchanged"` literal under `dry_run` need
-to switch to checking for the tool-appropriate `would_*` value, or the
-`data.changed` field where present. `delete_page_asset`'s dry_run was
-already correct (`status: "ok"`, a distinct, deliberate convention) and is
-unaffected.
+genuine no-op. `create_page`/`delete_page`/`upload_page_asset`/
+`create_bundle`/`delete_bundle` always predict a real change (their dry_run
+branch is only reachable after an existence/not-found check has already
+ruled out the no-op case). `update_page`, `apply_content_plan`, and
+`apply_bundle_plan` compute the no-op case genuinely, from the same
+diff/candidate-content comparison the response already carries (`content !=
+raw` for the single-page tools; "does any translation have a non-empty
+diff" for the bundle-plan case) — a plan whose every operation resolves to
+what the page already has now correctly reports `"unchanged"`, not a false
+`would_update`/`would_apply`. `rollback_change`/`rollback_bundle` restore a
+snapshot that differs from current content by construction, so their dry_run
+is unconditionally `would_restore`.
+
+This is a breaking change to the `status` string's value set for `dry_run`
+responses; callers matching on the previous `"unchanged"` literal under
+`dry_run` need to switch to checking for the tool-appropriate `would_*`
+value, or the `data.changed` field where present. `delete_page_asset`'s
+dry_run was already correct (`status: "ok"`, a distinct, deliberate
+convention) and is unaffected. `SchemaVersion` (`internal/buildinfo`) was
+already `"v2.0.0"` before this change — it was bumped for #1118's removal of
+deprecated root-payload aliases, not reserved for the v2.0.0 milestone body
+of work — so this dry_run status change ships as a further breaking change
+under an already-published `v2.0.0` schema string, the same as #1118 itself
+did; it is not bumped again here.
 
 New tools added in v1.3.8 use the **structured envelope** by default.

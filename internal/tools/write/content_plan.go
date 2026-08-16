@@ -852,8 +852,12 @@ func registerContentPlanTools(
 				_, hadPublic = siteIdx.GetBySlug(entry.Slug)
 			}
 			state := updatePageState(siteIdx != nil, hadPublic)
+			dryRunStatus := "unchanged"
+			if entry.Content != string(raw) {
+				dryRunStatus = "would_update"
+			}
 			return nil, newApplyContentPlanOutput(applyContentPlanData{
-				Status:         "would_update",
+				Status:         dryRunStatus,
 				PlanID:         in.PlanID,
 				Slug:           canonicalPublicSlug(entry.Slug),
 				DryRun:         true,

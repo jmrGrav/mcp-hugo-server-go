@@ -94,3 +94,65 @@ func TestRollbackBundleDryRunReportsWouldRestoreNotUnchanged(t *testing.T) {
 		t.Fatalf("rollback_bundle dry_run data.status = %v, want would_restore", got)
 	}
 }
+
+// TestApplyContentPlanDryRunNoOpReportsUnchanged is the flip side of #1154:
+// a plan that resolves to a genuine no-op (setting the title to what it
+// already is) must not claim "would_update" just because a plan exists.
+func TestApplyContentPlanDryRunNoOpReportsUnchanged(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/noop-plan-1154")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planRes := callTool(t, session, "plan_content_change", map[string]any{
+		"slug":       "posts/noop-plan-1154",
+		"operations": []any{map[string]any{"op": "set_title", "value": "Article"}},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_content_change failed: %s", marshalContent(t, planRes))
+	}
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	dryRun := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID, "dry_run": true})
+	if dryRun.IsError {
+		t.Fatalf("apply_content_plan dry_run failed: %s", marshalContent(t, dryRun))
+	}
+	data := decodeWriteData(t, dryRun)
+	if got := data["status"]; got != "unchanged" {
+		t.Fatalf("apply_content_plan dry_run (no-op plan) data.status = %v, want unchanged", got)
+	}
+}
+
+// TestApplyBundlePlanDryRunNoOpReportsUnchanged is the flip side of #1154
+// for the bundle path: a plan whose every translation resolves to a no-op
+// must not claim "would_apply".
+func TestApplyBundlePlanDryRunNoOpReportsUnchanged(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/noop-bundle-plan-1154")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	setTitleOp := func(title string) map[string]any {
+		return map[string]any{"op": "set_title", "value": title}
+	}
+	planRes := callTool(t, session, "plan_bundle_change", map[string]any{
+		"slug": "posts/noop-bundle-plan-1154",
+		"translations": []any{
+			map[string]any{"lang": "fr", "operations": []any{setTitleOp("Article FR")}},
+			map[string]any{"lang": "en", "operations": []any{setTitleOp("Article EN")}},
+		},
+	})
+	if planRes.IsError {
+		t.Fatalf("plan_bundle_change failed: %s", marshalContent(t, planRes))
+	}
+	planID := decodeWriteData(t, planRes)["plan_id"].(string)
+
+	dryRun := callTool(t, session, "apply_bundle_plan", map[string]any{"plan_id": planID, "dry_run": true})
+	if dryRun.IsError {
+		t.Fatalf("apply_bundle_plan dry_run failed: %s", marshalContent(t, dryRun))
+	}
+	data := decodeWriteData(t, dryRun)
+	if got := data["status"]; got != "unchanged" {
+		t.Fatalf("apply_bundle_plan dry_run (no-op plan) data.status = %v, want unchanged", got)
+	}
+}
