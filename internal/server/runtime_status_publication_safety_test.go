@@ -175,3 +175,39 @@ func TestRuntimeStatusPublicationSafetyRejectsForeignChangeSetID(t *testing.T) {
 		t.Fatalf("get_runtime_status(change_set_id=csA) as principal-b: error code = %q, want invalid_params", code)
 	}
 }
+
+// TestRuntimeStatusPublicationSafetyTruePredictsSuccessfulBuild is the other
+// half of #1142's contract: not just that safe_to_publish=false predicts a
+// refusal (covered above), but that safe_to_publish=true actually predicts
+// build_site succeeding under the same change_set_id — a single change-set
+// with its own pending page and nothing foreign pending.
+func TestRuntimeStatusPublicationSafetyTruePredictsSuccessfulBuild(t *testing.T) {
+	mockHugoOnPath(t)
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	cfg := config.Default()
+	cfg.SiteRoot = copyServerFixtureTree(t, filepath.Join("..", "..", "testdata", "fixtures", "public", "minimal"))
+	cfg.ContentRoot = t.TempDir()
+	cfg.HugoRoot = t.TempDir()
+	srv := mustOAuthSQLiteServerWithConfig(t, cfg, storePath)
+
+	const token = "solo-principal"
+	addBearerToken(t, storePath, token, "write")
+
+	rec := doMCPCall(t, srv, token, []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_change_set","arguments":{}}}`))
+	cs := toolCallResultData(t, rec.Body.String())["data"].(map[string]any)["change_set_id"].(string)
+
+	createRec := doMCPCall(t, srv, token, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_page","arguments":{"slug":"posts/solo","title":"T","body":"B","tags":[],"categories":[],"change_set_id":%q}}}`, cs)))
+	if toolCallResultData(t, createRec.Body.String())["success"] != true {
+		t.Fatalf("create_page failed: %s", createRec.Body.String())
+	}
+
+	safety := getRuntimeStatusPublicationSafety(t, srv, token, cs)
+	if safety["safe_to_publish"] != true {
+		t.Fatalf("safe_to_publish = %#v with only this change-set's own pending page, want true", safety["safe_to_publish"])
+	}
+
+	buildRec := doMCPCall(t, srv, token, []byte(fmt.Sprintf(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"build_site","arguments":{"change_set_id":%q}}}`, cs)))
+	if buildRec.Code != http.StatusOK || toolCallResultData(t, buildRec.Body.String())["success"] != true {
+		t.Fatalf("build_site under %q failed despite safe_to_publish=true: %s", cs, buildRec.Body.String())
+	}
+}

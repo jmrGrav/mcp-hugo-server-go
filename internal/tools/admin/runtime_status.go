@@ -267,13 +267,12 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only " +
 			"language/representation counts, counterpart gaps, and legacy mismatch facts; `build_reconciliation` reports aggregate source/public drift recomputed from filesystem fingerprints rather than volatile BuildPending flags. No page identity or body is exposed. When SQLite is configured, " +
 			"`mutation_journal` reports only aggregate retention facts; `last_pruned_entries` is the number removed by the most recent successful maintenance " +
-			"transaction. When the shared change-set registry is wired (#1135/#1140), `publication_safety` (#1142) tells you whether a build_site/publish_changes call " +
-			"made right now with the same optional `change_set_id` (resolved identically — blank means your implicit default change-set) would be safe: " +
-			"`current_change_set` is that change-set's own pending work, `other_change_sets` is pending work known to belong to a different change-set (what would trip " +
-			"#1140's foreign_change_set_present guard), `external_unknown_changes` is pending pages no change-set this process has tracked (direct filesystem/SSH edits, " +
-			"or edits from before this process last restarted — a blind spot, not proof they're safe), and `safe_to_publish` is false if either of the latter two is " +
-			"nonzero. Read-only; resolving `change_set_id` never updates its last-used bookkeeping (unlike the mutating tools) so calling this repeatedly has no side " +
-			"effect. Does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
+			"transaction. When the shared change-set registry is wired (#1135/#1140), `publication_safety` (#1142) previews whether a build_site/publish_changes call " +
+			"with the same optional `change_set_id` would trip the foreign_change_set_present guard: `safe_to_publish` is false if `other_change_sets` (a different " +
+			"change-set's pending work) or `external_unknown_changes` (pending pages no change-set this process has tracked — common right after a restart) is " +
+			"nonzero — note `external_unknown_changes` alone does NOT actually block build_site itself; confirm those changes are expected, then build (see " +
+			"docs/mcp-contract.md §6.18 for the full field breakdown and remedy). Read-only; resolving `change_set_id` here never updates its last-used bookkeeping. " +
+			"Does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
 		Annotations: &mcp.ToolAnnotations{

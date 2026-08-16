@@ -1,9 +1,13 @@
 package admin
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 )
 
 // TestClassifyDirtyPorcelainResourceClasses is the #864 regression test: git
@@ -54,5 +58,45 @@ func TestClassifyDirtyPathShapes(t *testing.T) {
 		if got := classifyDirtyPath(path); got != want {
 			t.Errorf("classifyDirtyPath(%q) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+// TestComputePublicationSafetyExternalUnknownIsUnsafe is #1142's direct
+// coverage for the case nothing in the server-level tests reaches: a
+// pending page no change-set this process has recorded a mutation for
+// (changeset.Registry.OwnerOfSourceKey returns ok=false). This is exactly
+// what happens to every pending page on a fresh process after a restart —
+// mutation attribution is process-lifetime-only (see Registry's own doc
+// comment) — so this is the common case on a redeployed server with
+// unpublished work still sitting in content_root, not an edge case.
+// SafeToPublish must be false here even though guardForeignChangeSet itself
+// would let this exact page through unblocked (an unowned pending page is
+// never "foreign" to that guard) — this field is deliberately stricter,
+// see runtime_status.go's own doc comment on publicationSafetyRuntimeStatus.
+func TestComputePublicationSafetyExternalUnknownIsUnsafe(t *testing.T) {
+	srcIdx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	srcIdx.Upsert(hugosite.SourcePage{Slug: "posts/untracked", BuildPending: true})
+
+	changeSets := changeset.NewRegistry(nil)
+	ctx := context.Background()
+
+	result, err := computePublicationSafety(ctx, changeSets, srcIdx, "")
+	if err != nil {
+		t.Fatalf("computePublicationSafety() error = %v", err)
+	}
+	if result.ExternalUnknownChanges != 1 {
+		t.Fatalf("ExternalUnknownChanges = %d, want 1", result.ExternalUnknownChanges)
+	}
+	if result.CurrentChangeSet.Changes != 0 {
+		t.Fatalf("CurrentChangeSet.Changes = %d, want 0 (the pending page belongs to no tracked change-set)", result.CurrentChangeSet.Changes)
+	}
+	if result.SafeToPublish {
+		t.Fatal("SafeToPublish = true with an untracked pending page present, want false — an untracked change might not be the caller's own")
+	}
+	if result.UnpublishedChangesCount != 1 {
+		t.Fatalf("UnpublishedChangesCount = %d, want 1", result.UnpublishedChangesCount)
 	}
 }

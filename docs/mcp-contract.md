@@ -1234,12 +1234,20 @@ the guard itself uses), then bucketed relative to the resolved id:
 - `external_unknown_changes` — pending pages no change-set this process
   has tracked a mutation for (a direct filesystem/SSH edit, or an edit made
   before this process last restarted — see #1140's own "what this guard
-  does not do" section for the exact blind spot). The guard itself lets
-  these through unblocked; `publication_safety` deliberately does **not**
-  — `safe_to_publish` is `false` whenever `external_unknown_changes` is
-  nonzero, since an untracked change might not be the caller's own. This is
-  the one place `publication_safety`'s answer is intentionally stricter
-  than what `build_site` will actually do.
+  does not do" section for the exact blind spot). Because mutation
+  attribution is process-lifetime-only (`internal/changeset.Registry`'s own
+  doc comment), this is the **common** case, not an edge case: every pending
+  page on a freshly restarted process with unpublished work still on disk
+  reports `external_unknown_changes` this way until a build runs. The guard
+  itself lets these through unblocked; `publication_safety` deliberately
+  does **not** — `safe_to_publish` is `false` whenever
+  `external_unknown_changes` is nonzero, since an untracked change might
+  not be the caller's own. This is the one place `publication_safety`'s
+  answer is intentionally stricter than what `build_site` will actually do.
+  **The remedy is not to wait for it to clear itself** (it never will
+  without a build): confirm the untracked pending pages are expected — e.g.
+  via `list_pages` or `diff_page` — then build/publish anyway; the guard
+  permits it.
 - `safe_to_publish` — `other_change_sets.changes == 0 &&
   external_unknown_changes == 0`.
 
@@ -1253,9 +1261,12 @@ touch.
 `unpublished_changes_count` inside `publication_safety` is the sum of the
 three buckets above — a change-set-attribution view of pending work. It is
 **not** the same field as the top-level `data.unpublished_changes_count`,
-which also folds in index-reconciliation signals (out-of-band source
-drift, generated-asset drift) this change-set-scoped view does not
-consider; the two can legitimately disagree.
+and the two can legitimately disagree for two independent reasons: the
+top-level field also folds in index-reconciliation signals (out-of-band
+source drift, generated-asset drift) this change-set-scoped view does not
+consider, and `publication_safety` deduplicates by slug (a page pending in
+both `en` and `fr` counts once) while the top-level field counts
+`PendingCount()`'s per-language rows.
 
 ## 7. New tools (v1.3.8+)
 
