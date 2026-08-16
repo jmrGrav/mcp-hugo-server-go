@@ -1703,4 +1703,35 @@ of work — so this dry_run status change ships as a further breaking change
 under an already-published `v2.0.0` schema string, the same as #1118 itself
 did; it is not bumped again here.
 
+### 6.25 Broken-Link Checks Recognize Real Static Files (#1155)
+
+`internal_links` (`inspect_rendered`'s in-memory path), its SQL-backed
+`get_broken_links` sibling (`txSyncLinks`), and `collectBrokenLinks`/
+`brokenLinksForPage`'s own in-memory fallback previously only resolved a
+link target against the Hugo content-page index. A link to a real, live
+static file that was never a Hugo content page (e.g. `/pgp-key.txt`,
+declared by `security.txt`'s own `Encryption:` field) was absent from that
+index and misreported as broken — confirmed live: 4 false positives against
+`/pgp-key.txt`. All three implementations now fall back to `os.Stat`-ing the
+built site output (`checkMissingImages`'s existing pattern) before declaring
+a target broken; the SQL-backed path gets this via an injected
+`StaticFileExistsFn` (`internal/db` must not take a filesystem-root config
+dependency directly, mirroring `RenderedCheckFn`'s injection pattern, §6.23).
+
+**Follow-up**: `txSyncLinks` only re-runs for a page whose `content_hash`
+changes, so a stale `'broken'` row for a page that never changes on its own
+(exactly the position `/pgp-key.txt`'s two referring pages were in) doesn't
+pick up the new fallback just because the fix shipped — confirmed live:
+after the initial fix deployed, `get_broken_links` still reported 2 of the
+original 4 false positives. `DB.ReconcileBrokenLinksAgainstStaticFiles`
+(exported, unlike the sibling `reconcileBrokenLinksAgainstIgnorePolicy`,
+because it needs `staticFileExistsFn` — wired in by `internal/server` only
+*after* `db.Open` returns) is a one-time, version-gated catch-up: it applies
+the current `staticFileExistsFn` to every existing `'broken'` row on the
+next process start and flips the ones it now resolves to `'ok'`, the same
+shape `reconcileBrokenLinksAgainstIgnorePolicy` already uses for #1101's
+pagination-target policy.
+
+## 7. New tools (v1.3.8+)
+
 New tools added in v1.3.8 use the **structured envelope** by default.

@@ -181,6 +181,12 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 		_, statErr := os.Stat(localPath)
 		return statErr == nil
 	})
+	// One-time catch-up for pre-existing 'broken' rows the hash-gated
+	// txSyncLinks won't revisit on its own — see
+	// ReconcileBrokenLinksAgainstStaticFiles's doc comment (#1155 follow-up).
+	if err := siteDB.ReconcileBrokenLinksAgainstStaticFiles(); err != nil {
+		slog.Warn("server: reconcile broken links against static files failed", "error", err)
+	}
 	resolvedMutations, sourceChanged := prepareMutationRecovery(cfg, siteDB)
 	if sourceChanged && srcIdx != nil {
 		if err := srcIdx.Reload(cfg.ContentRoot); err != nil {

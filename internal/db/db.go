@@ -230,6 +230,87 @@ func (d *DB) reconcileBrokenLinksAgainstIgnorePolicy() error {
 	return tx.Commit()
 }
 
+// staticFileLinksPolicySchemaVersion identifies this reconciliation pass —
+// the #1155 follow-up to linksIgnorePolicySchemaVersion above, same
+// convention. Bump if the static-file fallback policy changes again.
+const staticFileLinksPolicySchemaVersion = 1
+
+// ReconcileBrokenLinksAgainstStaticFiles is #1155's one-time catch-up,
+// exported (unlike reconcileBrokenLinksAgainstIgnorePolicy) because it needs
+// staticFileExistsFn, which internal/server only wires in via
+// SetStaticFileExistsFn *after* Open returns — this package must not take a
+// filesystem-root config dependency of its own, so it cannot run inside
+// Open() the way the ignore-policy reconciliation does. Callers must invoke
+// this once, immediately after SetStaticFileExistsFn.
+//
+// txSyncLinks is hash-gated on page content (SyncPublicPage: "if existing ==
+// hash { return nil }"), so a stable page whose links never change (e.g.
+// security.txt's own referring pages) never re-runs txSyncLinks and never
+// picks up the new static-file fallback on its own — confirmed live: after
+// #1155 shipped, get_broken_links still reported 2 of the original 4
+// /pgp-key.txt false positives, from pages whose content_hash hadn't
+// changed since before the fix. This pass applies the current
+// staticFileExistsFn to every existing 'broken' row and flips the ones it
+// now resolves to 'ok', the same shape reconcileBrokenLinksAgainstIgnorePolicy
+// already uses for the #1101 pagination-target policy. No-op (and safe to
+// call unconditionally) when staticFileExistsFn is nil.
+func (d *DB) ReconcileBrokenLinksAgainstStaticFiles() error {
+	if d.staticFileExistsFn == nil {
+		return nil
+	}
+	var applied int
+	_ = d.db.QueryRow(`SELECT version FROM derived_schema_migrations WHERE name = 'static_file_links_policy'`).Scan(&applied)
+	if applied >= staticFileLinksPolicySchemaVersion {
+		return nil
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// target (not target_slug): the literal href, matching what txSyncLinks
+	// itself passes to staticFileExistsFn (target.Path, deliberately not the
+	// trailing-slash-normalized targetSlug — see the comment at that call
+	// site in txSyncLinks).
+	rows, err := tx.Query(`SELECT id, target FROM links WHERE status = 'broken'`)
+	if err != nil {
+		return err
+	}
+	type brokenRow struct {
+		id     int64
+		target string
+	}
+	var toFix []brokenRow
+	for rows.Next() {
+		var r brokenRow
+		if err := rows.Scan(&r.id, &r.target); err != nil {
+			rows.Close()
+			return err
+		}
+		if r.target != "" && d.staticFileExistsFn(r.target) {
+			toFix = append(toFix, r)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, r := range toFix {
+		if _, err := tx.Exec(`UPDATE links SET status = 'ok' WHERE id = ?`, r.id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO derived_schema_migrations(name,version,applied_at) VALUES('static_file_links_policy',?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,applied_at=excluded.applied_at`, staticFileLinksPolicySchemaVersion, now()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (d *DB) Close() error { return d.db.Close() }
 
 func (d *DB) createTables() error {
