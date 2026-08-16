@@ -110,6 +110,96 @@ func (d *DB) SyncTemplateFingerprint(fp string) (changed bool, err error) {
 	return true, nil
 }
 
+// renderedChecksScopeSchemaVersion identifies the one-time reconciliation
+// pass below, the same "run once per DB file, bump on policy change"
+// convention linksIgnorePolicySchemaVersion already uses.
+const renderedChecksScopeSchemaVersion = 1
+
+// reconcileRenderedChecksScope is #1156's one-time catch-up: before this
+// fix, syncPublicPage's forceRenderedRecheck sweep (#1151) populated
+// rendered_issues_count for every published route in the pages table —
+// taxonomy/section/pagination/technical routes included, not just ordinary
+// content pages — because it never consulted classification at all.
+// Confirmed live: rendered_seo_summary.pages_checked reported 245 against a
+// site with 82 publishable content pages. Those non-content rows are
+// hash-gated (SyncPublicPage: "if existing == hash { return nil }"), so a
+// stable taxonomy page that never changes would carry a stale, in-scope
+// rendered_issues_count forever without this pass — the deploy that ships
+// the new content-only gating (internal/server's RenderedCheckFn wiring)
+// does not retroactively clear rows a previous process already wrote.
+// This runs once per DB file: classify every currently-published page from
+// its own stored slug (NewClassifierFromPages needs only the sibling slug
+// set to detect section/taxonomy roots, no live site.Index required) and
+// null out rendered_issues_count/rendered_checked_at for every page that
+// isn't ordinary content, so RenderedIssuesSummary's "checked" count only
+// reflects the checks a caller can actually act on.
+func (d *DB) reconcileRenderedChecksScope() error {
+	var applied int
+	_ = d.db.QueryRow(`SELECT version FROM derived_schema_migrations WHERE name = 'rendered_checks_scope'`).Scan(&applied)
+	if applied >= renderedChecksScopeSchemaVersion {
+		return nil
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Classify against every published slug, not just the ones this pass is
+	// about to fix: NewClassifierFromPages derives section roots from the
+	// sibling slug set, so restricting that input to already-checked rows
+	// would make a real section index misclassify as ordinary content
+	// whenever some other page under it hadn't been checked yet.
+	rows, err := tx.Query(`SELECT id, slug, rendered_issues_count IS NOT NULL FROM pages WHERE published = 1`)
+	if err != nil {
+		return err
+	}
+	type checkedRow struct {
+		id   int64
+		slug string
+	}
+	var checkedRows []checkedRow
+	slugs := make([]site.Page, 0)
+	for rows.Next() {
+		var id int64
+		var slug string
+		var checked bool
+		if err := rows.Scan(&id, &slug, &checked); err != nil {
+			rows.Close()
+			return err
+		}
+		slugs = append(slugs, site.Page{Slug: slug})
+		if checked {
+			checkedRows = append(checkedRows, checkedRow{id: id, slug: slug})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	classifier := site.NewClassifierFromPages(slugs)
+	for _, r := range checkedRows {
+		if classifier.IsContent(site.Page{Slug: r.slug}) {
+			continue
+		}
+		if _, err := tx.Exec(
+			`UPDATE pages SET rendered_issues_count = NULL, rendered_checked_at = '' WHERE id = ?`,
+			r.id,
+		); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`INSERT INTO derived_schema_migrations(name,version,applied_at) VALUES('rendered_checks_scope',?,?) ON CONFLICT(name) DO UPDATE SET version=excluded.version,applied_at=excluded.applied_at`, renderedChecksScopeSchemaVersion, now()); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // RenderedIssuesSummary reports how many published pages have a cached
 // rendered-checks result (checked) and how many of those have at least one
 // failing check (withIssues), for get_site_health's opt-in aggregation

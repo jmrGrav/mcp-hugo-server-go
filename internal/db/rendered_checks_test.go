@@ -1,9 +1,12 @@
 package db_test
 
 import (
+	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 )
 
@@ -171,5 +174,204 @@ func TestRenderedIssuesSummaryCountsOnlyCheckedPages(t *testing.T) {
 	}
 	if withIssues != 1 {
 		t.Fatalf("expected 1 page with issues, got %d", withIssues)
+	}
+}
+
+// TestReconcileRenderedChecksScopeClearsNonContentPagesOnReopen is #1156's
+// regression test: before this fix, syncPublicPage's forceRenderedRecheck
+// sweep populated rendered_issues_count for every published route,
+// taxonomy/section pages included — confirmed live as pages_checked=245
+// against 82 actual content pages. A stale DB file carrying that pre-fix
+// data must be corrected the next time it's opened, since a taxonomy page's
+// content_hash never changes and would otherwise never re-sync.
+func TestReconcileRenderedChecksScopeClearsNonContentPagesOnReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+
+	// Simulate the pre-#1156 bug: renderedCheckFn fires for every page,
+	// content and taxonomy alike, with no classification gate.
+	d.SetRenderedCheckFn(func(p site.Page) (int, bool) { return 0, true })
+
+	siteIdx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	siteIdx.UpsertPage(site.Page{Slug: "/posts/hello/", Title: "Hello", URL: "https://example.test/posts/hello/", Lang: "en"})
+	siteIdx.UpsertPage(site.Page{Slug: "/tags/go/", Title: "Go", URL: "https://example.test/tags/go/", Lang: "en"})
+	if err := d.PostBuildSync(siteIdx, false); err != nil {
+		t.Fatalf("PostBuildSync: %v", err)
+	}
+
+	checked, _, err := d.RenderedIssuesSummary()
+	if err != nil {
+		t.Fatalf("RenderedIssuesSummary (pre-fix state): %v", err)
+	}
+	if checked != 2 {
+		t.Fatalf("expected both pages checked in the simulated pre-fix state, got %d", checked)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Reset the migration marker set by the *first* db.Open above (which
+	// found an empty pages table and had nothing to reconcile) — simulating
+	// a real pre-#1156 production DB that never had this migration's code
+	// run against it at all, only now, on the first open under the new
+	// binary, with the stale rows already sitting in the pages table.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := raw.Exec(`DELETE FROM derived_schema_migrations WHERE name = 'rendered_checks_scope'`); err != nil {
+		t.Fatalf("reset migration marker: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw handle: %v", err)
+	}
+
+	// Reopen: reconcileRenderedChecksScope must run and clear the taxonomy
+	// page's stale cached count, leaving only the content page checked.
+	d2, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open (reopen): %v", err)
+	}
+	defer func() { _ = d2.Close() }()
+
+	checked, withIssues, err := d2.RenderedIssuesSummary()
+	if err != nil {
+		t.Fatalf("RenderedIssuesSummary (after reconciliation): %v", err)
+	}
+	if checked != 1 {
+		t.Fatalf("expected only the content page counted as checked after reconciliation, got %d", checked)
+	}
+	if withIssues != 0 {
+		t.Fatalf("expected 0 pages with issues, got %d", withIssues)
+	}
+
+	// Reopening a third time must be a no-op: the migration is version-
+	// gated and must not re-run (and there's nothing left to fix anyway).
+	if err := d2.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	d3, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open (3rd open): %v", err)
+	}
+	defer func() { _ = d3.Close() }()
+	checked, _, err = d3.RenderedIssuesSummary()
+	if err != nil {
+		t.Fatalf("RenderedIssuesSummary (3rd open): %v", err)
+	}
+	if checked != 1 {
+		t.Fatalf("expected reconciliation to be idempotent, got checked=%d", checked)
+	}
+}
+
+// TestRenderedCheckFnGatingSkipsNonContentPages is #1156's regression test
+// on the internal/server wiring itself: a RenderedCheckFn that only
+// computes for content pages (the fix in internal/server.go) must leave a
+// taxonomy page's rendered_issues_count untouched (NULL, never checked),
+// while still checking an ordinary content page normally.
+func TestRenderedCheckFnGatingSkipsNonContentPages(t *testing.T) {
+	d := openTestDB(t)
+
+	siteIdx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	// The same content-only gate internal/server.go's SetRenderedCheckFn
+	// closure applies, expressed directly against the classifier here so
+	// this test doesn't need to construct a whole server.
+	classifier := siteIdx.Classifier()
+	d.SetRenderedCheckFn(func(p site.Page) (int, bool) {
+		if !classifier.IsContent(p) {
+			return 0, false
+		}
+		return 0, true
+	})
+
+	siteIdx.UpsertPage(site.Page{Slug: "/posts/hello/", Title: "Hello", URL: "https://example.test/posts/hello/", Lang: "en"})
+	siteIdx.UpsertPage(site.Page{Slug: "/tags/go/", Title: "Go", URL: "https://example.test/tags/go/", Lang: "en"})
+	if err := d.PostBuildSync(siteIdx, false); err != nil {
+		t.Fatalf("PostBuildSync: %v", err)
+	}
+
+	checked, _, err := d.RenderedIssuesSummary()
+	if err != nil {
+		t.Fatalf("RenderedIssuesSummary: %v", err)
+	}
+	if checked != 1 {
+		t.Fatalf("expected only the content page counted as checked, got %d", checked)
+	}
+}
+
+// TestReconcileRenderedChecksScopeClassifiesAgainstFullSitemapNotJustCheckedRows
+// is a regression test for a review finding on the #1156 fix itself:
+// reconcileRenderedChecksScope must build its classifier from every
+// published slug, not just the rows it's about to fix. NewClassifierFromPages
+// derives section roots from the sibling slug set — restricting that input
+// to already-checked rows would make a real section index (e.g. /notes/)
+// misclassify as ordinary content whenever its child page (e.g.
+// /notes/first/) hadn't been checked yet (rendered_issues_count still NULL),
+// since nothing else in the checked-only set would mark /notes/ as having
+// children.
+func TestReconcileRenderedChecksScopeClassifiesAgainstFullSitemapNotJustCheckedRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+
+	siteIdx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	// The section index (/notes/) gets checked (simulating the pre-#1156
+	// bug); its child page (/notes/first/), which is what makes /notes/
+	// classify as a section rather than an ordinary page, is synced with no
+	// renderedCheckFn wired yet, so its own rendered_issues_count stays NULL.
+	d.SetRenderedCheckFn(func(p site.Page) (int, bool) { return 0, true })
+	siteIdx.UpsertPage(site.Page{Slug: "/notes/", Title: "Notes", URL: "https://example.test/notes/", Lang: "en"})
+	if err := d.PostBuildSync(siteIdx, false); err != nil {
+		t.Fatalf("PostBuildSync (section index): %v", err)
+	}
+	d.SetRenderedCheckFn(nil)
+	siteIdx.UpsertPage(site.Page{Slug: "/notes/first/", Title: "First", URL: "https://example.test/notes/first/", Lang: "en"})
+	if err := d.PostBuildSync(siteIdx, false); err != nil {
+		t.Fatalf("PostBuildSync (child page): %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := raw.Exec(`DELETE FROM derived_schema_migrations WHERE name = 'rendered_checks_scope'`); err != nil {
+		t.Fatalf("reset migration marker: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw handle: %v", err)
+	}
+
+	d2, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open (reopen): %v", err)
+	}
+	defer func() { _ = d2.Close() }()
+
+	// /notes/ is a section index (it has a child, /notes/first/, even though
+	// that child was never itself checked) — its stale checked-state must be
+	// cleared by the migration.
+	checked, _, err := d2.RenderedIssuesSummary()
+	if err != nil {
+		t.Fatalf("RenderedIssuesSummary: %v", err)
+	}
+	if checked != 0 {
+		t.Fatalf("expected the section index's stale rendered_issues_count to be cleared (0 checked), got %d — classifier likely missed /notes/first/ as a sibling", checked)
 	}
 }

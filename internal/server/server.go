@@ -160,6 +160,16 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 	// build (idx.Reload(cfg)), so capturing it by reference here always
 	// reflects the current build, never a stale snapshot from server start.
 	siteDB.SetRenderedCheckFn(func(p site.Page) (int, bool) {
+		// #1156: rendered_seo_summary.pages_checked must only count ordinary
+		// content pages, not taxonomy/section/pagination/technical routes —
+		// confirmed live as 245 checked against 82 actual content pages.
+		// Returning ok=false here for a non-content page leaves its cached
+		// rendered_issues_count untouched (nil after #1156's one-time
+		// reconciliation), the same "not computed" contract RenderedCheckFn
+		// already documents for a missing rendered-HTML file.
+		if idx != nil && !idx.Classifier().IsContent(p) {
+			return 0, false
+		}
 		return read.RenderedIssueCount(cfg, idx, p)
 	})
 	// #1155: lets txSyncLinks recognize a real static file that was never a
