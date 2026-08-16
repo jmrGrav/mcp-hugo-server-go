@@ -145,6 +145,37 @@ type scoreBreakdownDTO struct {
 	BrokenLinks *scoreCategoryDTO `json:"broken_links,omitempty"`
 }
 
+// renderedSEOCoverageDTO (#1136) is a deliberate, always-present admission
+// rather than a silently misleading gap: every score_breakdown category
+// above is source-document or link-graph based (frontmatter, taxonomy,
+// title_shape, broken_links) and none of them inspect rendered HTML output
+// at all — a missing <title> tag, canonical, meta description, hreflang
+// alternate, or an unsafe/leaked URL in the actually-published bytes can
+// coexist with score:100 here, because nothing in this tool ever looks at
+// that surface. inspect_rendered is the authoritative per-page check for
+// exactly those findings.
+//
+// Aggregating inspect_rendered's checks into this score was evaluated for
+// #1136 and declined, for a reason specific to this codebase, not a general
+// cost excuse: a live full-site scan on every get_site_health call would
+// make a tool meant to be "cheap enough to call before every publish" slow
+// on any site of real size, and the alternative — a build-time cache
+// mirroring broken_links_count's own pattern — would go stale exactly when
+// it matters most. hashPublicPage (internal/db/db.go) hashes only each
+// page's own title/summary/date/lang/URL/tags/categories/body; it has no
+// input derived from the theme or shared templates. A regression in a
+// site's head.html that drops the canonical tag from every page would
+// change zero page hashes, so a cache built on that hash would report every
+// page unchanged and never re-check it — silently green through the exact
+// failure class #1136 was filed over (site-wide template regression, not a
+// single bad page). Until that staleness gap has its own fix, per-page
+// rendered/SEO checking stays exclusively on inspect_rendered.
+type renderedSEOCoverageDTO struct {
+	Aggregated        bool   `json:"aggregated"`
+	Reason            string `json:"reason"`
+	AuthoritativeTool string `json:"authoritative_tool"`
+}
+
 type contentEnvelopeData struct {
 	Pages    []pageDTO `json:"pages,omitempty"`
 	Total    int       `json:"total,omitempty"`
@@ -202,6 +233,10 @@ type contentEnvelopeData struct {
 	// without re-deriving the scoring logic. Nil for tools other than
 	// get_site_health.
 	ScoreBreakdown *scoreBreakdownDTO `json:"score_breakdown,omitempty"`
+	// RenderedSEOCoverage (#1136) is populated only by get_site_health (nil
+	// for other tools reusing contentEnvelopeData, same convention as
+	// ScoreBreakdown) — see renderedSEOCoverageDTO's own doc comment.
+	RenderedSEOCoverage *renderedSEOCoverageDTO `json:"rendered_seo_coverage,omitempty"`
 	// TaxonomyInconsistencies keeps its original string[] shape for
 	// backward compatibility (#210/#328: no v1.x field-shape breaks).
 	// TaxonomyInconsistencyDetails is the additive, structured sibling —
@@ -750,7 +785,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 			return nil, newContentEnvelope(data, time.Now().UTC()), nil
 		})
 
-	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. Counter populations are intentionally distinct: `source_pages` includes every indexed source document; `publishable_source_pages` is the backward-compatible count of ordinary content expected to resolve individually and excludes `_index` documents and other non-publishable sources; `published_pages` is the independently classified rendered content-page population and can include public routes not matched to publishable ordinary sources. New clients should use `publishable_content_pages`, `section_index_pages`, and the typed `publication_coverage` breakdown instead of comparing the three legacy counters directly. `public_output_complete` means every publishable ordinary content source has a public match, not that all three counters must be equal. `publication_coverage.completeness_basis` identifies that source population explicitly, while `counters_directly_comparable:false` warns agents not to subtract the independent source and public counters. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true, OR whenever `bad_title_shape_pages` is non-empty (see below); `runtime_degraded_reasons`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `bad_title_shape_pages` (#1105) lists slugs whose title field is a bare http(s) URL instead of actual page text — a corrupted-title defect a frontmatter-presence check cannot see, since the field is non-empty. `score_breakdown.title_shape` reports 0 whenever this list is non-empty, 100 otherwise; despite carrying weight 0 (like taxonomy, it never moves the weighted `score` calculation), a URL-shaped title still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` directly and caps an otherwise-perfect `score` at 99 — do not read weight 0 as harmless for this category the way it is for taxonomy. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. `broken_links_count` and `score_breakdown.broken_links` (#1105) surface the same figure `get_broken_links.data.broken_links` reports, but only when `db_path` is configured — computing it here otherwise would mean paying `get_broken_links`'s full-HTML-rescan cost on every `get_site_health` call, not just an explicit one. Both fields are entirely omitted (not a `0`) when not computed, the same `untracked_source_pages` distinction above; a present `0` means checked and clean. Like `title_shape`, `score_breakdown.broken_links` carries weight 0 (never moves the weighted `score`) but a nonzero count still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` and caps an otherwise-perfect `score` at 99 — this deliberately never folds link-graph resolution logic into this tool's own scoring, keeping `get_broken_links` the single source of truth for what counts as broken; it only reacts to that count as an override. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "get_site_health", "Get site health", "Return a concise health summary for the Hugo site, including content counts, validation signals, taxonomy inconsistency warnings, and public-output completeness. Counter populations are intentionally distinct: `source_pages` includes every indexed source document; `publishable_source_pages` is the backward-compatible count of ordinary content expected to resolve individually and excludes `_index` documents and other non-publishable sources; `published_pages` is the independently classified rendered content-page population and can include public routes not matched to publishable ordinary sources. New clients should use `publishable_content_pages`, `section_index_pages`, and the typed `publication_coverage` breakdown instead of comparing the three legacy counters directly. `public_output_complete` means every publishable ordinary content source has a public match, not that all three counters must be equal. `publication_coverage.completeness_basis` identifies that source population explicitly, while `counters_directly_comparable:false` warns agents not to subtract the independent source and public counters. `content_status` preserves the source/front-matter classification, while top-level `status` becomes `degraded` whenever `runtime_degraded` is true, OR whenever `bad_title_shape_pages` is non-empty (see below); `runtime_degraded_reasons`, `missing_public_pages`, and `public_output_complete` explain whether a failed build or an incomplete rendered tree caused that operational state. `bad_title_shape_pages` (#1105) lists slugs whose title field is a bare http(s) URL instead of actual page text — a corrupted-title defect a frontmatter-presence check cannot see, since the field is non-empty. `score_breakdown.title_shape` reports 0 whenever this list is non-empty, 100 otherwise; despite carrying weight 0 (like taxonomy, it never moves the weighted `score` calculation), a URL-shaped title still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` directly and caps an otherwise-perfect `score` at 99 — do not read weight 0 as harmless for this category the way it is for taxonomy. `taxonomy_inconsistency_details` gives each warning's affected page slugs (`pages_with_term_a`/`pages_with_term_b`) so you can go fix front matter directly, without a separate list_pages/filter lookup; `taxonomy_inconsistencies` (plain strings) is kept for backward compatibility. Each detail's `kind` distinguishes an actionable finding (`alias_mismatch`, `possible_duplicate`, `casing_variant` — the same term spelled with different casing within one language) from `translation_pair` — two terms used on the same page bundle in different languages, which is the site's own localization, not a content problem to fix. Each detail's `severity` distinguishes an actionable content issue (`warning`) from expected localization (`info`). Info-only findings still do not move the top-level `score`; warning findings remain zero-weight in `score_breakdown.taxonomy.weight`, but now cap an otherwise-perfect top-level `score` at 99 so the response no longer advertises perfection while surfacing actionable taxonomy drift (#719). `advisories_count` is the total count of *all* `taxonomy_inconsistency_details` findings (both `info` and `warning` severity) at the top level next to `score`/`status`; a pure `translation_pair`/`info` finding stays visible there but no longer degrades `content_status` on an otherwise healthy site, while a `warning`-severity taxonomy finding promotes `content_status` to `healthy_with_advisories` without directly moving `score` (#761). This is broader than `score_breakdown.taxonomy.advisories`, which counts only `info`-severity findings specifically (a sub-field with its own narrower, pre-existing meaning) — `advisories_count` exists precisely so a `casing_variant`/`alias_mismatch`/`possible_duplicate` finding is just as visible as a `translation_pair` one. `score_breakdown` shows the per-category score/weight/issue-count behind the top-level `score` (weight 0 means that category is informational only and never directly contributes points to the score), so you don't have to re-derive why a finding did or didn't change it. `untracked_source_pages` (#819) counts source pages with no git-tracked file — an operational-hygiene signal (no git-based rollback path for that content) surfaced proactively instead of only discoverable per-page via diff_page's own git_untracked status; omitted entirely (not a zero) when git status can't be determined at all (no repo, git unavailable), never affects `score`/`content_status`. `broken_links_count` and `score_breakdown.broken_links` (#1105) surface the same figure `get_broken_links.data.broken_links` reports, but only when `db_path` is configured — computing it here otherwise would mean paying `get_broken_links`'s full-HTML-rescan cost on every `get_site_health` call, not just an explicit one. Both fields are entirely omitted (not a `0`) when not computed, the same `untracked_source_pages` distinction above; a present `0` means checked and clean. Like `title_shape`, `score_breakdown.broken_links` carries weight 0 (never moves the weighted `score`) but a nonzero count still forces `status`/`content_status` off `healthy`/`healthy_with_advisories` and caps an otherwise-perfect `score` at 99 — this deliberately never folds link-graph resolution logic into this tool's own scoring, keeping `get_broken_links` the single source of truth for what counts as broken; it only reacts to that count as an override. `rendered_seo_coverage` (#1136) is always present with `aggregated:false`: every check above is source-document or link-graph based — a missing `<title>`/canonical/meta description/hreflang, or an unsafe/leaked URL in the actually-rendered HTML, can coexist with `score:100` here, because this tool never inspects rendered output. `inspect_rendered` (per-page) is the authoritative check for that surface; see `docs/mcp-contract.md` §6.19 for why it isn't aggregated here. Use this before publishing or reviewing content. Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ responseModeOnlyInput) (*mcp.CallToolResult, contentEnvelope, error) {
 			if idx == nil {
 				return nil, contentEnvelope{}, fmt.Errorf("index not initialized")
@@ -766,6 +801,7 @@ func registerReadExtendedSearchAndHealthTools(s *mcp.Server, idx *site.Index, sr
 				RuntimeDegraded:                 health.RuntimeDegraded,
 				RuntimeDegradedReasons:          health.RuntimeDegradedReasons,
 				ScoreBreakdown:                  health.ScoreBreakdown,
+				RenderedSEOCoverage:             health.RenderedSEOCoverage,
 				PublishedPages:                  health.PublishedPages,
 				SourcePages:                     health.SourcePages,
 				DraftPages:                      health.DraftPages,
@@ -1861,6 +1897,17 @@ func untrackedSourcePageCount(ctx context.Context, srcIdx *hugosite.SourceIndex,
 func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.SourceIndex, aliases map[string]string, cfg config.Config, siteDB *db.DB) contentEnvelopeData {
 	health := contentEnvelopeData{
 		Status: "healthy",
+		// See renderedSEOCoverageDTO's own doc comment for why this is
+		// always false rather than computed — it must never be silently
+		// omitted the way a genuinely optional/not-yet-computed field
+		// would be, since this response's score is never influenced by
+		// rendered/SEO checks at all, and an agent needs that to be
+		// explicit every single call, not just discoverable in prose.
+		RenderedSEOCoverage: &renderedSEOCoverageDTO{
+			Aggregated:        false,
+			Reason:            "rendered_html_checks_not_computed_here_see_inspect_rendered",
+			AuthoritativeTool: "inspect_rendered",
+		},
 	}
 	snapshot := buildstatus.Last()
 	if snapshot.Attempted {
