@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -83,7 +84,7 @@ func TestComputePublicationSafetyExternalUnknownIsUnsafe(t *testing.T) {
 	changeSets := changeset.NewRegistry(nil)
 	ctx := context.Background()
 
-	result, err := computePublicationSafety(ctx, changeSets, srcIdx, "")
+	result, err := computePublicationSafety(ctx, changeSets, srcIdx, "", 0)
 	if err != nil {
 		t.Fatalf("computePublicationSafety() error = %v", err)
 	}
@@ -98,5 +99,77 @@ func TestComputePublicationSafetyExternalUnknownIsUnsafe(t *testing.T) {
 	}
 	if result.UnpublishedChangesCount != 1 {
 		t.Fatalf("UnpublishedChangesCount = %d, want 1", result.UnpublishedChangesCount)
+	}
+}
+
+// TestComputePublicationSafetyDoesNotDoubleCountOrdinaryMCPWork guards the
+// caller contract of the externalOutOfBandPending parameter: the handler
+// (registerRuntimeStatus) is responsible for excluding any page with
+// BuildPending==true or a known change-set owner before counting it into
+// externalOutOfBandPending — computePublicationSafety trusts that
+// pre-filtering and adds the count directly (see its own doc comment). This
+// test proves the caller-side exclusion actually holds for the common case
+// this whole fix exists to not regress: ordinary in-progress MCP editing,
+// with no drift at all, must not report SafeToPublish=false.
+func TestComputePublicationSafetyDoesNotDoubleCountOrdinaryMCPWork(t *testing.T) {
+	srcIdx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	srcIdx.Upsert(hugosite.SourcePage{Slug: "posts/tracked", BuildPending: true})
+
+	changeSets := changeset.NewRegistry(nil)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	changeSets.RecordMutation("default:unknown", "unknown", "create_page", "posts/tracked", "create", now)
+
+	// externalOutOfBandPending == 0: "posts/tracked" has BuildPending==true
+	// and a known owner, so the handler's own filtering (BuildPending==false
+	// AND unowned) would never have included it here in the first place —
+	// this call mirrors exactly what the handler would actually pass.
+	result, err := computePublicationSafety(ctx, changeSets, srcIdx, "", 0)
+	if err != nil {
+		t.Fatalf("computePublicationSafety() error = %v", err)
+	}
+	if result.ExternalUnknownChanges != 0 {
+		t.Fatalf("ExternalUnknownChanges = %d, want 0 (fully attributed to the current change-set, not real drift)", result.ExternalUnknownChanges)
+	}
+	if !result.SafeToPublish {
+		t.Fatal("SafeToPublish = false with only ordinary attributed MCP work pending, want true — must not false-positive on normal editing")
+	}
+}
+
+// TestComputePublicationSafetyDetectsOutOfBandDriftBeyondChangeSets is the
+// direct regression test for the bug an external live audit caught: a page
+// that drifted via a direct filesystem/git edit — never touched by this
+// process's own write tools — never carries a BuildPending flag, so
+// srcIdx.PendingPages() alone can never see it, even though
+// data.source_ahead_reason on the very same get_runtime_status response
+// already reports out_of_band_source_drift. Confirmed live: safe_to_publish
+// stayed true while source_ahead_reason said out_of_band_source_drift with
+// unpublished_changes_count:2. With no change-set activity at all
+// (attributed == 0) and externalOutOfBandPending == 2 (what the resolver
+// walk found), the full 2 must now surface as unattributed drift.
+func TestComputePublicationSafetyDetectsOutOfBandDriftBeyondChangeSets(t *testing.T) {
+	srcIdx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	// No srcIdx.Upsert with BuildPending at all: this process tracked
+	// nothing itself — the drift is entirely external, exactly the
+	// production scenario (a fresh process, or an edit this process never
+	// touched).
+	changeSets := changeset.NewRegistry(nil)
+	ctx := context.Background()
+
+	result, err := computePublicationSafety(ctx, changeSets, srcIdx, "", 2)
+	if err != nil {
+		t.Fatalf("computePublicationSafety() error = %v", err)
+	}
+	if result.ExternalUnknownChanges != 2 {
+		t.Fatalf("ExternalUnknownChanges = %d, want 2 (unattributed out-of-band drift)", result.ExternalUnknownChanges)
+	}
+	if result.SafeToPublish {
+		t.Fatal("SafeToPublish = true with unattributed out-of-band drift present, want false")
 	}
 }

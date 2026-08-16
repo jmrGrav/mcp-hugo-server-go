@@ -1248,6 +1248,21 @@ the guard itself uses), then bucketed relative to the resolved id:
   without a build): confirm the untracked pending pages are expected — e.g.
   via `list_pages` or `diff_page` — then build/publish anyway; the guard
   permits it.
+
+  **Fix**: `external_unknown_changes` originally only ever consulted
+  `srcIdx.PendingPages()` — the in-memory `BuildPending`-flag set this
+  process's own write tools populate — so a page that drifted via a direct
+  filesystem/git edit, never touched by this process's own writes, never
+  carried that flag and was structurally invisible here, even when
+  `data.source_ahead_reason` on the very same response already reported
+  `out_of_band_source_drift`. Confirmed live: `safe_to_publish:true`
+  alongside `source_ahead_reason:out_of_band_source_drift` and
+  `unpublished_changes_count:2` at the top level. `external_unknown_changes`
+  now also folds in the resolver-based out-of-band reconciliation the
+  top-level field already used, restricted to pages with `BuildPending ==
+  false` *and* no change-set owner at all — disjoint from the
+  BuildPending-flagged case above, so ordinary in-progress MCP editing
+  cannot false-positive into `safe_to_publish:false`.
 - `safe_to_publish` — `other_change_sets.changes == 0 &&
   external_unknown_changes == 0`.
 
@@ -1261,12 +1276,14 @@ touch.
 `unpublished_changes_count` inside `publication_safety` is the sum of the
 three buckets above — a change-set-attribution view of pending work. It is
 **not** the same field as the top-level `data.unpublished_changes_count`,
-and the two can legitimately disagree for two independent reasons: the
-top-level field also folds in index-reconciliation signals (out-of-band
-source drift, generated-asset drift) this change-set-scoped view does not
-consider, and `publication_safety` deduplicates by slug (a page pending in
-both `en` and `fr` counts once) while the top-level field counts
-`PendingCount()`'s per-language rows.
+and the two can still legitimately disagree in magnitude — `publication_safety`
+deduplicates by slug (a page pending in both `en` and `fr` counts once)
+while the top-level field counts `PendingCount()`'s per-language rows, and
+the top-level field also folds in `generated_asset_drift`, which
+`publication_safety` has no bucket for at all. They should no longer
+disagree on out-of-band *source* drift specifically: both now reflect the
+same resolver-based reconciliation for that class of change (see the fix
+above).
 
 ### 6.19 `rendered_seo_coverage`: `get_site_health` Never Aggregates Rendered/SEO Checks (#1136)
 
