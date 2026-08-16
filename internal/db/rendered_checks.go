@@ -146,7 +146,12 @@ func (d *DB) reconcileRenderedChecksScope() error {
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	rows, err := tx.Query(`SELECT id, slug FROM pages WHERE published = 1 AND rendered_issues_count IS NOT NULL`)
+	// Classify against every published slug, not just the ones this pass is
+	// about to fix: NewClassifierFromPages derives section roots from the
+	// sibling slug set, so restricting that input to already-checked rows
+	// would make a real section index misclassify as ordinary content
+	// whenever some other page under it hadn't been checked yet.
+	rows, err := tx.Query(`SELECT id, slug, rendered_issues_count IS NOT NULL FROM pages WHERE published = 1`)
 	if err != nil {
 		return err
 	}
@@ -157,13 +162,17 @@ func (d *DB) reconcileRenderedChecksScope() error {
 	var checkedRows []checkedRow
 	slugs := make([]site.Page, 0)
 	for rows.Next() {
-		var r checkedRow
-		if err := rows.Scan(&r.id, &r.slug); err != nil {
+		var id int64
+		var slug string
+		var checked bool
+		if err := rows.Scan(&id, &slug, &checked); err != nil {
 			rows.Close()
 			return err
 		}
-		checkedRows = append(checkedRows, r)
-		slugs = append(slugs, site.Page{Slug: r.slug})
+		slugs = append(slugs, site.Page{Slug: slug})
+		if checked {
+			checkedRows = append(checkedRows, checkedRow{id: id, slug: slug})
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

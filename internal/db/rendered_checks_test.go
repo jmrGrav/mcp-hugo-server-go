@@ -307,3 +307,71 @@ func TestRenderedCheckFnGatingSkipsNonContentPages(t *testing.T) {
 		t.Fatalf("expected only the content page counted as checked, got %d", checked)
 	}
 }
+
+// TestReconcileRenderedChecksScopeClassifiesAgainstFullSitemapNotJustCheckedRows
+// is a regression test for a review finding on the #1156 fix itself:
+// reconcileRenderedChecksScope must build its classifier from every
+// published slug, not just the rows it's about to fix. NewClassifierFromPages
+// derives section roots from the sibling slug set — restricting that input
+// to already-checked rows would make a real section index (e.g. /notes/)
+// misclassify as ordinary content whenever its child page (e.g.
+// /notes/first/) hadn't been checked yet (rendered_issues_count still NULL),
+// since nothing else in the checked-only set would mark /notes/ as having
+// children.
+func TestReconcileRenderedChecksScopeClassifiesAgainstFullSitemapNotJustCheckedRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+
+	siteIdx, err := site.NewIndex(config.Default())
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+	// The section index (/notes/) gets checked (simulating the pre-#1156
+	// bug); its child page (/notes/first/), which is what makes /notes/
+	// classify as a section rather than an ordinary page, is synced with no
+	// renderedCheckFn wired yet, so its own rendered_issues_count stays NULL.
+	d.SetRenderedCheckFn(func(p site.Page) (int, bool) { return 0, true })
+	siteIdx.UpsertPage(site.Page{Slug: "/notes/", Title: "Notes", URL: "https://example.test/notes/", Lang: "en"})
+	if err := d.PostBuildSync(siteIdx, false); err != nil {
+		t.Fatalf("PostBuildSync (section index): %v", err)
+	}
+	d.SetRenderedCheckFn(nil)
+	siteIdx.UpsertPage(site.Page{Slug: "/notes/first/", Title: "First", URL: "https://example.test/notes/first/", Lang: "en"})
+	if err := d.PostBuildSync(siteIdx, false); err != nil {
+		t.Fatalf("PostBuildSync (child page): %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := raw.Exec(`DELETE FROM derived_schema_migrations WHERE name = 'rendered_checks_scope'`); err != nil {
+		t.Fatalf("reset migration marker: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw handle: %v", err)
+	}
+
+	d2, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open (reopen): %v", err)
+	}
+	defer func() { _ = d2.Close() }()
+
+	// /notes/ is a section index (it has a child, /notes/first/, even though
+	// that child was never itself checked) — its stale checked-state must be
+	// cleared by the migration.
+	checked, _, err := d2.RenderedIssuesSummary()
+	if err != nil {
+		t.Fatalf("RenderedIssuesSummary: %v", err)
+	}
+	if checked != 0 {
+		t.Fatalf("expected the section index's stale rendered_issues_count to be cleared (0 checked), got %d — classifier likely missed /notes/first/ as a sibling", checked)
+	}
+}
