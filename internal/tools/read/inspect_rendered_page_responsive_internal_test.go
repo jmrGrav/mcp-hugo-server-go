@@ -88,6 +88,31 @@ func TestComputeResponsiveChecksImageFixedOverlargeWidthUnsafe(t *testing.T) {
 	}
 }
 
+func TestComputeResponsiveChecksOverflowHiddenIsNotAWrapper(t *testing.T) {
+	doc := mustParseFragment(t, `<div class="overflow-hidden"><table style="width:900px"><tr><td>a</td></tr></table></div>`)
+	got := computeResponsiveChecks(doc)
+	if got.Tables.ResponsiveWrapper != 0 {
+		t.Fatalf("Tables.ResponsiveWrapper = %d, want 0 (overflow-hidden clips, it does not scroll)", got.Tables.ResponsiveWrapper)
+	}
+}
+
+func TestComputeResponsiveChecksMaxWidthIsNotFixedWidth(t *testing.T) {
+	doc := mustParseFragment(t, `<table style="max-width: 900px"><tr><td>a</td></tr></table>`)
+	got := computeResponsiveChecks(doc)
+	if got.Tables.FixedWidth != 0 {
+		t.Fatalf("Tables.FixedWidth = %d, want 0 (max-width is the responsive-friendly declaration)", got.Tables.FixedWidth)
+	}
+}
+
+func TestComputeResponsiveChecksSkipsChromaLineNumberTable(t *testing.T) {
+	longToken := strings.Repeat("a", 40)
+	doc := mustParseFragment(t, `<div class="highlight"><table class="lntable"><tr><td class="lntd"><pre>1</pre></td><td class="lntd"><pre>`+longToken+`</pre></td></tr></table></div>`)
+	got := computeResponsiveChecks(doc)
+	if got.Tables.Count != 0 {
+		t.Fatalf("Tables.Count = %d, want 0 (chroma line-number tables must be excluded)", got.Tables.Count)
+	}
+}
+
 func TestComputeResponsiveChecksImageWithSrcsetIsResponsive(t *testing.T) {
 	doc := mustParseFragment(t, `<img src="/x.png" width="800" srcset="/x-400.png 400w, /x-800.png 800w">`)
 	got := computeResponsiveChecks(doc)

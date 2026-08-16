@@ -94,11 +94,11 @@ type responsiveTablesDTO struct {
 }
 
 // responsiveCodeBlocksDTO: Count is every <pre> element found. OverflowSafe
-// is false only when a code block itself carries a fixed pixel width or an
-// explicit `white-space: nowrap` style with no width escape hatch — an
-// anti-pattern heuristic, not a positive confirmation that the theme's own
-// CSS provides overflow-x scrolling (that theme-constant property is
-// reported once by get_theme_status, not recomputed per page here).
+// is false only when a code block itself carries a fixed pixel width or a
+// `nowrap` token in its inline style — an anti-pattern heuristic, not a
+// positive confirmation that the theme's own CSS provides overflow-x
+// scrolling (that theme-constant property is reported once by
+// get_theme_status, not recomputed per page here).
 type responsiveCodeBlocksDTO struct {
 	Count        int  `json:"count"`
 	OverflowSafe bool `json:"overflow_safe"`
@@ -754,8 +754,19 @@ func firstElementText(doc *html.Node, tag string) string {
 }
 
 var (
-	inlineFixedWidthPxRe = regexp.MustCompile(`(?i)width\s*:\s*[0-9]+px`)
+	// inlineFixedWidthPxRe requires a word boundary (start-of-string or a
+	// preceding `;`/whitespace) before "width" so it does not match inside
+	// `max-width: 900px` — max-width is the responsive-friendly declaration,
+	// the opposite of what this regex exists to flag.
+	inlineFixedWidthPxRe = regexp.MustCompile(`(?i)(^|[;\s])width\s*:\s*[0-9]+px`)
 	longUnbreakableToken = regexp.MustCompile(`\S{25,}`)
+	// scrollWrapperClassRe/scrollWrapperStyleRe require the value to
+	// indicate an actual scroll container (overflow-x/overflow set to auto
+	// or scroll), not merely contain the substring "overflow" — a bare
+	// overflow:hidden or class="overflow-hidden" clips content instead of
+	// scrolling it and must not count as protection.
+	scrollWrapperClassRe = regexp.MustCompile(`overflow(-x)?-(auto|scroll)`)
+	scrollWrapperStyleRe = regexp.MustCompile(`overflow(-x)?\s*:\s*(auto|scroll)`)
 )
 
 // computeResponsiveChecks runs the #1138 static-analysis mobile-layout
@@ -775,6 +786,9 @@ func computeResponsiveChecks(doc *html.Node) responsiveChecksDTO {
 		}
 		switch n.Data {
 		case "table":
+			if isChromaLineNumberTable(n) {
+				return true
+			}
 			tables.Count++
 			if elementHasFixedPixelWidth(n) {
 				tables.FixedWidth++
@@ -821,7 +835,12 @@ func elementHasFixedPixelWidth(n *html.Node) bool {
 
 // tableHasResponsiveWrapper walks table's ancestor chain looking for a
 // class or inline style suggesting horizontal-scroll wrapping — the common
-// theme idiom for making a wide table usable on a narrow viewport.
+// theme idiom for making a wide table usable on a narrow viewport. Requires
+// the value to indicate scrolling specifically (auto/scroll), not merely
+// contain "overflow" — overflow:hidden clips content instead of scrolling
+// it and is not protection, despite being a very common ancestor class
+// (mobile-menu-open states, rounded-corner card clipping, Tailwind
+// utilities).
 func tableHasResponsiveWrapper(table *html.Node) bool {
 	for p := table.Parent; p != nil; p = p.Parent {
 		if p.Type != html.ElementNode {
@@ -830,9 +849,34 @@ func tableHasResponsiveWrapper(table *html.Node) bool {
 		class := strings.ToLower(htmlAttr(p, "class"))
 		style := strings.ToLower(htmlAttr(p, "style"))
 		if strings.Contains(class, "table-responsive") || strings.Contains(class, "table-wrap") ||
-			strings.Contains(class, "overflow") || strings.Contains(class, "scrollable") ||
-			strings.Contains(style, "overflow-x") || strings.Contains(style, "overflow:") {
+			strings.Contains(class, "scrollable") ||
+			scrollWrapperClassRe.MatchString(class) || scrollWrapperStyleRe.MatchString(style) {
 			return true
+		}
+	}
+	return false
+}
+
+// chromaTableSelfOrAncestorClasses are the class names Hugo's chroma
+// syntax highlighter emits when lineNumbersInTable is enabled, wrapping
+// every code block in a real <table> purely for line-number alignment.
+// Without this exclusion, tables.count would include every code block on
+// the page and long_cell_risk would fire on ordinary code lines >=25
+// characters — noise on exactly the content type this check is least
+// useful for.
+var chromaTableSelfOrAncestorClasses = map[string]bool{
+	"lntable": true, "highlighttable": true, "chroma": true, "highlight": true,
+}
+
+func isChromaLineNumberTable(table *html.Node) bool {
+	for n := table; n != nil; n = n.Parent {
+		if n.Type != html.ElementNode {
+			continue
+		}
+		for _, cls := range strings.Fields(strings.ToLower(htmlAttr(n, "class"))) {
+			if chromaTableSelfOrAncestorClasses[cls] {
+				return true
+			}
 		}
 	}
 	return false
