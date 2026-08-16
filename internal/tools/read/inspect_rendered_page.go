@@ -191,7 +191,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 				checkMetaDescription(doc),
 				checkCanonical(doc, cfg.SiteURL, page.Slug),
 				checkHreflang(doc, idx, page),
-				checkInternalLinks(idx, page, doc),
+				checkInternalLinks(cfg, idx, page, doc),
 				checkMissingImages(cfg, page, doc),
 				checkFeaturedImage(cfg, resolved, doc),
 				checkRenderedTitleMarkup(raw),
@@ -383,7 +383,18 @@ func siteIsMultilingual(idx *site.Index) bool {
 // — using brokenLinksForPage's stale RawHTML for one and this for the
 // other would let a single inspect_rendered response contradict itself
 // under build drift, exactly the condition this tool exists to catch.
-func brokenInternalLinksFromDoc(idx *site.Index, page site.Page, doc *html.Node) ([]string, error) {
+// staticFileExists reports whether publicPath (a public-URL path such as
+// "/pgp-key.txt") resolves to a real file under the built site output —
+// shared by every internal-link-brokenness check (#1155) so a real static
+// file that was never a Hugo content page is never misreported as broken,
+// on any of this codebase's link-checking paths.
+func staticFileExists(cfg config.Config, publicPath string) bool {
+	localPath := filepath.Join(cfg.SiteRoot, filepath.FromSlash(strings.TrimPrefix(publicPath, "/")))
+	_, statErr := os.Stat(localPath)
+	return statErr == nil
+}
+
+func brokenInternalLinksFromDoc(cfg config.Config, idx *site.Index, page site.Page, doc *html.Node) ([]string, error) {
 	base, err := url.Parse(page.URL)
 	if err != nil {
 		return nil, err
@@ -403,13 +414,19 @@ func brokenInternalLinksFromDoc(idx *site.Index, page site.Page, doc *html.Node)
 		if targetPage, found := idx.GetBySlug(target.Path); found && classifier.IsContent(*targetPage) {
 			continue
 		}
+		// Not a recognized content page — before declaring it broken, check
+		// whether it's a real static file that was never a Hugo content page
+		// (e.g. /pgp-key.txt, referenced by security.txt) (#1155).
+		if staticFileExists(cfg, target.Path) {
+			continue
+		}
 		broken = append(broken, href)
 	}
 	return broken, nil
 }
 
-func checkInternalLinks(idx *site.Index, page site.Page, doc *html.Node) renderCheckResult {
-	broken, err := brokenInternalLinksFromDoc(idx, page, doc)
+func checkInternalLinks(cfg config.Config, idx *site.Index, page site.Page, doc *html.Node) renderCheckResult {
+	broken, err := brokenInternalLinksFromDoc(cfg, idx, page, doc)
 	if err != nil {
 		return renderCheckResult{Check: "internal_links", Status: "warn", Detail: "page URL could not be parsed, skipped internal link check"}
 	}

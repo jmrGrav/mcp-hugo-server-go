@@ -108,7 +108,7 @@ func premutationPreview(ctx context.Context, idx *site.Index, cfg config.Config,
 		preview.Risks = append(preview.Risks, "uncommitted source changes: "+diffSummary)
 	}
 
-	broken, _ := brokenInternalLinksFromDoc(idx, page, doc)
+	broken, _ := brokenInternalLinksFromDoc(cfg, idx, page, doc)
 	preview.BrokenLinksCount = len(broken)
 	if len(broken) > 0 {
 		preview.Risks = append(preview.Risks, fmt.Sprintf("%d broken internal link(s) on this page", len(broken)))

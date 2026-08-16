@@ -187,6 +187,70 @@ func TestGetBrokenLinksIgnoresRawMarkdownSourceLinks(t *testing.T) {
 	}
 }
 
+// TestGetBrokenLinksIgnoresRealStaticFileNeverAContentPage is the #1155
+// regression test: a link to a real static file that was never a Hugo
+// content page (e.g. /pgp-key.txt, referenced by security.txt's own
+// Encryption: field) isn't in siteIdx at all, so txSyncLinks used to flag it
+// broken. Confirmed live on production: 4 false positives against
+// /pgp-key.txt. With StaticFileExistsFn wired up, a target that resolves on
+// disk under the public output root must be reported "ok"; a target that
+// genuinely doesn't exist anywhere must still be reported broken.
+func TestGetBrokenLinksIgnoresRealStaticFileNeverAContentPage(t *testing.T) {
+	d := openTestDB(t)
+	var gotPaths []string
+	d.SetStaticFileExistsFn(func(publicPath string) bool {
+		gotPaths = append(gotPaths, publicPath)
+		return publicPath == "/pgp-key.txt"
+	})
+
+	p := site.Page{
+		Slug:    "/",
+		Title:   "Home",
+		URL:     "https://x.com/",
+		Lang:    "en",
+		RawHTML: `<a href="/pgp-key.txt">PGP key</a> <a href="/still-missing/">Missing</a>`,
+	}
+	if err := d.SyncPublicPage(p, nil); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+
+	// Confirm the actual value passed to StaticFileExistsFn, rather than
+	// assuming it — target.Path must be the literal URL path ("/pgp-key.txt"),
+	// not idx's directory-style normalized slug ("/pgp-key.txt/"), or a real
+	// on-disk file would never match.
+	found := false
+	for _, gp := range gotPaths {
+		if gp == "/pgp-key.txt" {
+			found = true
+		}
+		if strings.HasSuffix(gp, ".txt/") {
+			t.Errorf("StaticFileExistsFn called with normalized-slug-style path %q, want the literal URL path without a trailing slash", gp)
+		}
+	}
+	if !found {
+		t.Fatalf("StaticFileExistsFn was never called with /pgp-key.txt; got %v", gotPaths)
+	}
+
+	broken, err := d.GetBrokenLinks()
+	if err != nil {
+		t.Fatalf("GetBrokenLinks: %v", err)
+	}
+	for _, r := range broken {
+		if r.Target == "/pgp-key.txt" {
+			t.Errorf("real static file reported as broken: %+v", r)
+		}
+	}
+	var foundRealBroken bool
+	for _, r := range broken {
+		if strings.Contains(r.Target, "still-missing") {
+			foundRealBroken = true
+		}
+	}
+	if !foundRealBroken {
+		t.Errorf("a genuinely missing target must still be reported: %+v", broken)
+	}
+}
+
 // TestGetBrokenLinksIgnoresPaginationTargets is the #1101 regression test:
 // Hugo's paginated listing pages (/en/page/2/, ...) legitimately canonicalize
 // back to page 1 for SEO, so internal/site's NewIndex collapses them out of

@@ -113,7 +113,7 @@ func RegisterInspectPreviewRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *
 			checkMetaDescription(doc),
 			checkCanonical(doc, previewCfg.SiteURL, page.Slug),
 			checkHreflang(doc, idx, page),
-			checkInternalLinks(idx, page, doc),
+			checkInternalLinks(previewCfg, idx, page, doc),
 			checkPreviewLanguagePrefix(raw, previewID),
 			checkMissingImages(previewCfg, page, doc),
 			checkFeaturedImage(previewCfg, resolved, doc),

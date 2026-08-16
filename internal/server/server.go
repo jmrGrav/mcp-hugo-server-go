@@ -162,6 +162,15 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 	siteDB.SetRenderedCheckFn(func(p site.Page) (int, bool) {
 		return read.RenderedIssueCount(cfg, idx, p)
 	})
+	// #1155: lets txSyncLinks recognize a real static file that was never a
+	// Hugo content page (e.g. /pgp-key.txt, referenced by security.txt) as a
+	// live target instead of misreporting it broken, without this package
+	// (db) taking on a filesystem-root dependency of its own.
+	siteDB.SetStaticFileExistsFn(func(publicPath string) bool {
+		localPath := filepath.Join(cfg.SiteRoot, filepath.FromSlash(strings.TrimPrefix(publicPath, "/")))
+		_, statErr := os.Stat(localPath)
+		return statErr == nil
+	})
 	resolvedMutations, sourceChanged := prepareMutationRecovery(cfg, siteDB)
 	if sourceChanged && srcIdx != nil {
 		if err := srcIdx.Reload(cfg.ContentRoot); err != nil {
