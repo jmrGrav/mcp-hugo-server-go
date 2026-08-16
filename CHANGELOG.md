@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [v1.9.0] - 2026-08-16
+
+An exhaustive adversarial live-tool sweep against production, followed by fixing every finding and a full documentation freshness pass. No breaking changes.
+
+### Fix
+- **`publication_safety.safe_to_publish` now sees pre-existing out-of-band source drift** (#1162): previously only consulted `srcIdx.PendingPages()`, so a page that drifted via a direct filesystem/git edit — never touched by this process's own write tools — was invisible to the safety preview even though `source_ahead_reason` already reported `out_of_band_source_drift` on the same response. `get_runtime_status` now walks the resolver once to compute this signal directly, disjoint from ordinary in-progress MCP work.
+- **`create_page`/`update_page`/`create_bundle` reject Unicode bidirectional-control characters** (#1158): title/body/description previously accepted RTL-override and isolate control code points (U+202A-U+202E, U+2066-U+2069), which enable bidi-spoofing (e.g. rendering a filename as something other than its real name). Rejected the same way null bytes already are.
+- **`dry_run` responses report predicted status instead of hardcoded `"unchanged"`** (#1154).
+- **`inspect_rendered`'s `internal_links` check no longer false-positives on real static files outside the content index** (#1155), including a follow-up reconciling pre-existing broken-link rows against the new static-file fallback.
+- **`rendered_seo_summary.pages_checked` scoped to content pages only**, no longer silently including taxonomy/pagination/technical routes (#1156).
+
+### Docs
+- Clarified `search_content`: a non-empty `query` always forces relevance ranking, silently overriding any requested `sort`/`order` — now documented in the tool description and `docs/mcp-contract.md` rather than left as a surprise (#1164).
+- Clarified `get_runtime_status.data.mutation_journal.active_entries`: counts idempotency-replay retention, not unpublished/pending work — a fully-published site can legitimately report a large nonzero value. `publication_safety`/`unpublished_changes_count` answers the pending-work question instead (#1165).
+- Fixed a stale README "Release flow" section describing a standalone `Release` workflow that no longer exists (absorbed into `Deploy to Production`'s `release_version` input); rewrote it against the workflow's actual gates.
+- `docs/tools.md` was missing four registered tools entirely — `create_bundle`, `delete_bundle`, `create_change_set`, `list_page_snapshots` — now documented, along with README pointers to the bundle tools for multi-translation edits.
+
+### CI
+- Added `milestone-sequence-check.yml`: catches a milestone numbering mistake (this release itself was originally mis-numbered `v2.0.0` before being corrected) before issues/PRs pile up under it.
+
 ## [v1.8.9] - 2026-08-16
 
 ### Feat
