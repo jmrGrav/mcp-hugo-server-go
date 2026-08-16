@@ -197,7 +197,9 @@ func TestGetBrokenLinksIgnoresRawMarkdownSourceLinks(t *testing.T) {
 // genuinely doesn't exist anywhere must still be reported broken.
 func TestGetBrokenLinksIgnoresRealStaticFileNeverAContentPage(t *testing.T) {
 	d := openTestDB(t)
+	var gotPaths []string
 	d.SetStaticFileExistsFn(func(publicPath string) bool {
+		gotPaths = append(gotPaths, publicPath)
 		return publicPath == "/pgp-key.txt"
 	})
 
@@ -210,6 +212,23 @@ func TestGetBrokenLinksIgnoresRealStaticFileNeverAContentPage(t *testing.T) {
 	}
 	if err := d.SyncPublicPage(p, nil); err != nil {
 		t.Fatalf("SyncPublicPage: %v", err)
+	}
+
+	// Confirm the actual value passed to StaticFileExistsFn, rather than
+	// assuming it — target.Path must be the literal URL path ("/pgp-key.txt"),
+	// not idx's directory-style normalized slug ("/pgp-key.txt/"), or a real
+	// on-disk file would never match.
+	found := false
+	for _, gp := range gotPaths {
+		if gp == "/pgp-key.txt" {
+			found = true
+		}
+		if strings.HasSuffix(gp, ".txt/") {
+			t.Errorf("StaticFileExistsFn called with normalized-slug-style path %q, want the literal URL path without a trailing slash", gp)
+		}
+	}
+	if !found {
+		t.Fatalf("StaticFileExistsFn was never called with /pgp-key.txt; got %v", gotPaths)
 	}
 
 	broken, err := d.GetBrokenLinks()

@@ -1283,6 +1283,10 @@ func txSyncLinks(tx *sql.Tx, pageID int64, p site.Page, siteIdx *site.Index, sta
 		// field) isn't in siteIdx at all — check the actual built output
 		// before declaring it broken, the same os.Stat-against-public-output
 		// fallback internal/tools/read's in-memory path uses (#1155).
+		// Deliberately target.Path here, not targetSlug: normalizeSlug()
+		// appends a trailing slash to every non-root path (a directory-style
+		// convention for content pages), which would turn "/pgp-key.txt"
+		// into "/pgp-key.txt/" and make a real file never match on disk.
 		if status == "broken" && staticFileExists != nil && staticFileExists(target.Path) {
 			status = "ok"
 		}
