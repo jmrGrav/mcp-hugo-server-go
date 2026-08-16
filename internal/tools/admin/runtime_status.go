@@ -158,10 +158,14 @@ type otherChangeSetsRuntimeStatus struct {
 type publicationSafetyRuntimeStatus struct {
 	// UnpublishedChangesCount is CurrentChangeSet.Changes +
 	// OtherChangeSets.Changes + ExternalUnknownChanges — every pending page
-	// this registry knows about, regardless of owner. Not necessarily equal
-	// to the top-level data.unpublished_changes_count, which also folds in
-	// index-reconciliation signals (out-of-band drift, generated-asset
-	// drift) this change-set-scoped view doesn't consider.
+	// this view knows about, regardless of owner. Previously could disagree
+	// with the top-level data.unpublished_changes_count/data.source_ahead_reason
+	// (which also folds in resolver-based out-of-band-drift reconciliation)
+	// for exactly the reason ExternalUnknownChanges' own fix below closes;
+	// the two now describe the same underlying drift, computed two
+	// different ways, and should not diverge in the way live production
+	// once showed (safe_to_publish:true alongside
+	// source_ahead_reason:out_of_band_source_drift).
 	UnpublishedChangesCount int                           `json:"unpublished_changes_count"`
 	ActiveChangeSets        int                           `json:"active_change_sets"`
 	CurrentChangeSet        currentChangeSetRuntimeStatus `json:"current_change_set"`
@@ -170,11 +174,21 @@ type publicationSafetyRuntimeStatus struct {
 	// process has tracked a mutation for — direct filesystem/SSH edits, or
 	// edits made before this process last restarted (see
 	// changeset.Registry.OwnerOfSourceKey's own doc comment on this blind
-	// spot). Unlike guardForeignChangeSet, which allows these through
-	// (it cannot tell "untracked" apart from "genuinely nobody else's"),
-	// SafeToPublish here treats them as unsafe: this field exists purely to
-	// inform an agent, and "an untracked change might not be mine" is
-	// exactly the risk #1142 asks this surface to name.
+	// spot), PLUS any out-of-band source drift the resolver-based
+	// reconciliation detects that no change-set can attribute (a fix: this
+	// field's own name and doc always claimed to cover direct filesystem/SSH
+	// edits, but before this fix it only ever consulted
+	// srcIdx.PendingPages() — the in-memory BuildPending-flag set this
+	// process's own write tools populate — so a page that drifted via a
+	// direct external edit, never touched by this process's own writes,
+	// never carried that flag and was structurally invisible here, even
+	// when data.source_ahead_reason on the very same response already
+	// reported out_of_band_source_drift). Unlike guardForeignChangeSet,
+	// which allows these through (it cannot tell "untracked" apart from
+	// "genuinely nobody else's"), SafeToPublish here treats them as unsafe:
+	// this field exists purely to inform an agent, and "an untracked change
+	// might not be mine" is exactly the risk #1142 asks this surface to
+	// name.
 	ExternalUnknownChanges int  `json:"external_unknown_changes"`
 	SafeToPublish          bool `json:"safe_to_publish"`
 }
@@ -271,7 +285,9 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"with the same optional `change_set_id` would trip the foreign_change_set_present guard: `safe_to_publish` is false if `other_change_sets` (a different " +
 			"change-set's pending work) or `external_unknown_changes` (pending pages no change-set this process has tracked — common right after a restart) is " +
 			"nonzero — note `external_unknown_changes` alone does NOT actually block build_site itself; confirm those changes are expected, then build (see " +
-			"docs/mcp-contract.md §6.18 for the full field breakdown and remedy). Read-only; resolving `change_set_id` here never updates its last-used bookkeeping. " +
+			"docs/mcp-contract.md §6.18 for the full field breakdown and remedy). `external_unknown_changes` also now folds in pre-existing out-of-band source drift " +
+			"detected via resolver reconciliation, not just pages this process's own write tools flagged — the same drift class `source_ahead_reason:out_of_band_source_drift` " +
+			"reports at the top level of this response; the two are no longer able to disagree the way they once could. Read-only; resolving `change_set_id` here never updates its last-used bookkeeping. " +
 			"Does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
@@ -313,6 +329,35 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		// out-of-band source change after restart and clears it after a full
 		// successful Hugo build (#1066).
 		externalPending := 0
+		// unattributedExternalPending feeds computePublicationSafety's
+		// out-of-band-drift detection (a fix — see the issue tracking this):
+		// srcIdx.PendingPages() (computePublicationSafety's own "external"
+		// count, BuildPending-flagged pages with no change-set owner) only
+		// carries pages this *process* flagged via its own
+		// create_page/update_page/delete_page writes, so a page that
+		// drifted via a direct filesystem/git edit — this process's
+		// BuildPending flag never set for it at all — was structurally
+		// invisible to that check, even when data.SourceAheadReason on the
+		// very same response already reported out_of_band_source_drift.
+		//
+		// Deliberately restricted to !source.BuildPending, disjoint from
+		// computePublicationSafety's own "external" count (which already
+		// covers the BuildPending-flagged-and-unowned case) — double
+		// counting the same page in both would be one failure mode, but the
+		// bigger one this guards against is a resolved-pending state that
+		// is NOT genuine drift at all: a page this process just created
+		// (registry-attributed) whose resolved public output simply hasn't
+		// caught up yet (e.g. immediately after a build_site call whose
+		// underlying Hugo run produced no real output — a real possibility
+		// in tests, not just hypothetical). Registry attribution survives a
+		// build (only the in-memory BuildPending flag clears, mutation
+		// history does not), so requiring "no owner at all" here — on top
+		// of "this process's own BuildPending flag was never even set" —
+		// is what tells "MCP already knows whose work this was, it just
+		// hasn't rebuilt yet" apart from "nobody tracked in the registry
+		// ever touched this page", which is the actual signal #1142's
+		// safety preview needs.
+		unattributedExternalPending := 0
 		if len(publicIndexes) > 0 && publicIndexes[0] != nil && srcIdx != nil {
 			resolver := site.NewPageResolver(publicIndexes[0], srcIdx, cfg)
 			for _, source := range srcIdx.ListPages(0, 0) {
@@ -322,6 +367,11 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 				resolved, ok := resolver.ResolveWithLang(source.Slug, source.Lang)
 				if !ok || site.StateForResolvedPage(resolved, cfg.SiteRoot).BuildState == "pending" {
 					externalPending++
+					if changeSets != nil && !source.BuildPending {
+						if _, owned := changeSets.OwnerOfSourceKey(source.Slug); !owned {
+							unattributedExternalPending++
+						}
+					}
 				}
 			}
 		}
@@ -436,7 +486,7 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		data.Site.OverdueTestContent = CollectStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours, time.Now())
 
 		if changeSets != nil && srcIdx != nil {
-			safety, err := computePublicationSafety(ctx, changeSets, srcIdx, in.ChangeSetID)
+			safety, err := computePublicationSafety(ctx, changeSets, srcIdx, in.ChangeSetID, unattributedExternalPending)
 			if err != nil {
 				return nil, getRuntimeStatusOutput{}, err
 			}
@@ -465,7 +515,21 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 // here and "would build_site with change_set_id=X succeed" give the same
 // answer for the single-id case (the change_set_ids plural escape hatch is
 // intentionally not modeled here — this is one specific change-set's view).
-func computePublicationSafety(ctx context.Context, changeSets *changeset.Registry, srcIdx *hugosite.SourceIndex, requestedChangeSetID string) (*publicationSafetyRuntimeStatus, error) {
+//
+// externalOutOfBandPending is the caller's own unattributedExternalPending
+// count (computed once, just above this call, from a resolver walk
+// comparing every source page against its resolved public output) — a fix
+// for a defect this field was blind to before (see the issue tracking
+// this): srcIdx.PendingPages() only carries pages this *process* flagged
+// via its own create_page/update_page/delete_page writes, so a page that
+// drifted via a direct filesystem/git edit never gets a BuildPending flag
+// and was structurally invisible here, even when data.SourceAheadReason on
+// the same response already reported out_of_band_source_drift. The caller
+// deliberately restricts this count to pages with BuildPending==false and
+// no change-set owner at all, so it is disjoint from this function's own
+// "external" count below (BuildPending-flagged-and-unowned) — safe to add
+// directly, no further attribution subtraction needed here.
+func computePublicationSafety(ctx context.Context, changeSets *changeset.Registry, srcIdx *hugosite.SourceIndex, requestedChangeSetID string, externalOutOfBandPending int) (*publicationSafetyRuntimeStatus, error) {
 	// Peek, not Resolve: get_runtime_status carries ReadOnlyHint:true and
 	// must not mutate change-set LastUsedAt bookkeeping merely by being
 	// asked about it.
@@ -511,7 +575,7 @@ func computePublicationSafety(ctx context.Context, changeSets *changeset.Registr
 		result.OtherChangeSets.Count++
 		result.OtherChangeSets.Changes += changesByOwner[id]
 	}
-	result.ExternalUnknownChanges = external
+	result.ExternalUnknownChanges = external + externalOutOfBandPending
 	result.UnpublishedChangesCount = result.CurrentChangeSet.Changes + result.OtherChangeSets.Changes + result.ExternalUnknownChanges
 	result.SafeToPublish = result.OtherChangeSets.Changes == 0 && result.ExternalUnknownChanges == 0
 	return result, nil
