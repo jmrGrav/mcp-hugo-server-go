@@ -39,6 +39,11 @@ type publishChangesInput struct {
 	// buildSiteInput's doc comment for the exact semantics.
 	ChangeSetID  string   `json:"change_set_id,omitempty"`
 	ChangeSetIDs []string `json:"change_set_ids,omitempty"`
+	// ExpectedSourceRevision and ExpectedPublicRevision are build_site's own
+	// #1141 guard fields, forwarded here since publish_changes drives the
+	// same build — see buildSiteInput's doc comment for the exact semantics.
+	ExpectedSourceRevision string `json:"expected_source_revision,omitempty"`
+	ExpectedPublicRevision string `json:"expected_public_revision,omitempty"`
 }
 
 type publishChangesBuildDTO struct {
@@ -89,6 +94,7 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 			"`data.status` is \"published\" only when the build succeeds cleanly (no failed post-build callback — e.g. a CDN purge failure could leave stale bytes cached at the edge even though local files are fresh) and verify_publication's own check comes back \"fresh\" (source/build/public/index all agree and, if `site_url` is configured, the live HTTP response confirms it). If verify_publication reports an intentional exclusion (for example a `draft:true` or protected `test_content` page), `data.status` is `intentionally_unpublished` and `data.reason_code` mirrors the publication reason. Any other non-fresh publication result reports \"build_succeeded_unverified\" — the build did not fail outright, but publication isn't confirmed clean yet (see `data.build.warning` for a callback failure and `data.publication.status`/`data.publication.explanation` for which publication stage is behind). " +
 			"A failed build surfaces as a tool error (`build_error`/`build_in_progress`), identical to `build_site`'s own behavior — it never reaches `data.status`. " +
 			"Optional `change_set_id`/`change_set_ids` (#1140) guard against publishing a different change-set's in-flight edits — see `build_site`'s own doc for the exact semantics and its `foreign_change_set_present` error. " +
+			"Optional `expected_source_revision`/`expected_public_revision` (#1141) are optimistic-concurrency guards against publishing over a source/public change you never saw — see `build_site`'s own doc for the exact semantics and its `source_revision_conflict`/`public_revision_conflict`/`source_changed_during_build` errors. " +
 			"Optional `wait_seconds` is forwarded to verify_publication's own local settle-then-check wait (bounded server-side). " +
 			"Writes only build output and derived indexes — never touches page source; that's `apply_content_plan`/`update_page`'s layer.",
 		InputSchema:  tools.MustSchema[publishChangesInput](),
@@ -110,7 +116,7 @@ func RegisterPublishChanges(s *mcp.Server, idx *site.Index, srcIdx *hugosite.Sou
 			return nil, publishChangesOutput{}, err
 		}
 
-		buildData, err := runBuild(ctx, cfg, srcIdx, siteReload...)
+		buildData, err := runBuild(ctx, cfg, srcIdx, in.ExpectedSourceRevision, in.ExpectedPublicRevision, siteReload...)
 		if err != nil {
 			return nil, publishChangesOutput{}, err
 		}
