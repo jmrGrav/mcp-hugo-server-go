@@ -1072,55 +1072,48 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	adminServer := buildAdminScopedServer(core, cfg, idx, extensions, previews)
 	previewHandler := previews.HTTPHandler()
 
-	// #1137: exposure-profile-filtered variants of all three scope servers.
-	// The admin profile is not built separately — it is, by definition, the
-	// unfiltered set, i.e. exactly publicServer/writeServer/adminServer
-	// above (writeServer's own RemoveTools for the managed-Hugo-binary
-	// tools above is a scope boundary, unaffected by profile). Each of
-	// these is a genuinely separate *mcp.Server built via the same
-	// registration functions as the unfiltered servers, sharing the same
-	// underlying core.previews/core.siteDB/core.srcIdx/core.changeSets
-	// state (buildWriteScopedServer/buildAdminScopedServer both take
-	// `previews` from core, never allocate their own) — only the
-	// *mcp.Server's own tool-registration map differs per instance, so
-	// building nine of them here at startup costs nothing beyond map
-	// inserts, not nine copies of application state.
+	// #1137: exposure-profile-filtered variants of all three scope servers,
+	// built lazily on first use rather than eagerly here. Eager
+	// construction (the original shape of this code) built all 9 (scope,
+	// profile) combinations unconditionally on every server.New() call —
+	// harmless in isolated cost, but the entire internal/server test suite
+	// calls server.New() (directly or via mustTestServer/mustOAuthServer)
+	// hundreds of times, so quadrupling per-call server construction
+	// (1 unfiltered set of 3 -> 4 sets of 3) pushed that whole package
+	// over the `go test -race` CI timeout — a real regression, not a
+	// flaky run. Almost no caller ever passes ?profile= at all, so paying
+	// this cost on every server.New() call regardless was never
+	// justified; building each cell only the first time a session
+	// actually requests that specific (scope, profile) combination pays
+	// the cost exactly once, for exactly the deployments/tests that use
+	// it. exposureServersMu serializes concurrent first-requests for the
+	// same cell so two racing sessions can't both build (and duplicate
+	// registration work for) it.
 	allToolNames := make([]string, 0, len(core.knownTools))
 	for name := range core.knownTools {
 		allToolNames = append(allToolNames, name)
 	}
-	exposureServers := make(map[string]*mcp.Server, 9)
-	for _, profile := range []string{ExposureProfileReader, ExposureProfileEditorial, ExposureProfileAdvanced} {
-		hide := toolsToHideForExposureProfile(allToolNames, profile)
-
-		p := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
-		p.RemoveTools(hide...)
-		exposureServers[exposureServerKey("", profile)] = p
-
-		w, _ := buildWriteScopedServer(core, cfg, idx, extensions)
-		w.RemoveTools(hide...)
-		exposureServers[exposureServerKey("write", profile)] = w
-
-		a := buildAdminScopedServer(core, cfg, idx, extensions, previews)
-		a.RemoveTools(hide...)
-		exposureServers[exposureServerKey("admin", profile)] = a
-	}
-	// Fail at startup, not silently at request time, if the matrix above
-	// ever stops covering exactly the 9 (scope, profile) cells the
-	// selector below assumes exist. A missing cell there would otherwise
-	// make the selector's lookup miss and silently fall through to an
-	// unfiltered server — a caller who explicitly asked for a narrower
-	// profile getting the full tool set back, unannounced. That is
-	// exactly the untrustworthy-silent-widening failure mode the
-	// reject-on-unknown-?profile= check in newMCPToolHandler exists to
-	// prevent; this assertion closes the same class of bug on the
-	// construction side.
-	for _, scopeName := range []string{"", "write", "admin"} {
-		for _, profile := range []string{ExposureProfileReader, ExposureProfileEditorial, ExposureProfileAdvanced} {
-			if _, ok := exposureServers[exposureServerKey(scopeName, profile)]; !ok {
-				panic(fmt.Sprintf("server: exposureServers matrix missing scope=%q profile=%q after construction", scopeName, profile))
-			}
+	var exposureServersMu sync.Mutex
+	exposureServers := make(map[string]*mcp.Server)
+	buildExposureServer := func(scopeName, profile string) *mcp.Server {
+		exposureServersMu.Lock()
+		defer exposureServersMu.Unlock()
+		key := exposureServerKey(scopeName, profile)
+		if srv, ok := exposureServers[key]; ok {
+			return srv
 		}
+		var srv *mcp.Server
+		switch scopeName {
+		case "write":
+			srv, _ = buildWriteScopedServer(core, cfg, idx, extensions)
+		case "admin":
+			srv = buildAdminScopedServer(core, cfg, idx, extensions, previews)
+		default:
+			srv = newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
+		}
+		srv.RemoveTools(toolsToHideForExposureProfile(allToolNames, profile)...)
+		exposureServers[key] = srv
+		return srv
 	}
 
 	opts := &mcp.StreamableHTTPOptions{
@@ -1146,19 +1139,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		profile := r.URL.Query().Get(exposureProfileQueryParam)
 		slog.Info("mcp: session created", "scope", scope, "rank", rank, "profile", profile, "remote_addr", r.RemoteAddr)
 		if profile != "" && profile != ExposureProfileAdmin {
-			srv, ok := exposureServers[exposureServerKey(scopeNameForRank(rank), profile)]
-			if !ok {
-				// Unreachable given the startup completeness assertion
-				// above and newMCPToolHandler's upfront profile
-				// validation — reaching here means a genuine invariant
-				// violation. Panic rather than silently falling through
-				// to the unfiltered server: that fallthrough is precisely
-				// the failure this whole feature exists to never produce
-				// (a caller who asked for a narrower tool set silently
-				// getting the full one back).
-				panic(fmt.Sprintf("server: no exposure-profile server for scope=%q profile=%q", scopeNameForRank(rank), profile))
-			}
-			return srv
+			return buildExposureServer(scopeNameForRank(rank), profile)
 		}
 		if rank >= 2 {
 			return adminServer
