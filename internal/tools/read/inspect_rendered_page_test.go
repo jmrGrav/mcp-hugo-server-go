@@ -1050,3 +1050,51 @@ func TestInspectRenderedPageOmitsPreviewByDefault(t *testing.T) {
 		t.Fatalf("preview = %#v, want omitted when include_preview is not requested", data["preview"])
 	}
 }
+
+// TestInspectRenderedPageResponsiveChecksSurfacesTableRisk is an
+// end-to-end regression test for #1138: a wide, unwrapped table with a long
+// unbreakable cell must show up in responsive_checks without affecting the
+// page's overall status (purely additive, heuristic-only surface).
+func TestInspectRenderedPageResponsiveChecksSurfacesTableRisk(t *testing.T) {
+	siteRoot := t.TempDir()
+	longToken := strings.Repeat("a", 40)
+	writeRenderedHTML(t, siteRoot, "posts/wide-table/index.html", `<!DOCTYPE html>
+<html lang="en">
+<head><title>Wide Table</title><meta name="description" content="A page with a very wide unwrapped table in it."><link rel="canonical" href="https://example.test/posts/wide-table/"></head>
+<body>
+<table style="width:900px"><tr><td>`+longToken+`</td></tr></table>
+</body>
+</html>`)
+	idx := inspectRenderedPageIndex(t, siteRoot)
+	session, done := newInspectRenderedPageClient(t, siteRoot, idx)
+	defer done()
+
+	res := callTool(t, session, "inspect_rendered", map[string]any{"slug": "/posts/wide-table/"})
+	if res.IsError {
+		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
+	}
+	data := decodeContent(t, res)
+	if got := data["status"]; got != "ok" {
+		t.Fatalf("status = %v, want ok (responsive_checks must not affect status)", got)
+	}
+	rc, ok := data["responsive_checks"].(map[string]any)
+	if !ok {
+		t.Fatalf("responsive_checks field type = %T, want present map", data["responsive_checks"])
+	}
+	tables, ok := rc["tables"].(map[string]any)
+	if !ok {
+		t.Fatalf("responsive_checks.tables type = %T", rc["tables"])
+	}
+	if tables["count"] != float64(1) {
+		t.Fatalf("tables.count = %v, want 1", tables["count"])
+	}
+	if tables["fixed_width"] != float64(1) {
+		t.Fatalf("tables.fixed_width = %v, want 1", tables["fixed_width"])
+	}
+	if tables["responsive_wrapper"] != float64(0) {
+		t.Fatalf("tables.responsive_wrapper = %v, want 0", tables["responsive_wrapper"])
+	}
+	if tables["long_cell_risk"] != float64(1) {
+		t.Fatalf("tables.long_cell_risk = %v, want 1", tables["long_cell_risk"])
+	}
+}

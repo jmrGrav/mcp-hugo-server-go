@@ -1321,6 +1321,68 @@ remains the sole per-page authority for rendered/SEO checks;
 `get_site_health` names that fact explicitly on every call instead of
 implying coverage it doesn't have.
 
+### 6.20 Mobile Layout Risk Heuristics: `inspect_rendered.responsive_checks` and `get_theme_status.table_overflow_protection` (#1138)
+
+#1138 asked for static-analysis mobile-layout risk detection — no headless
+browser, no Playwright/Chromium, no real viewport rendering. If real
+rendered-viewport verification is ever built, the issue explicitly frames it
+as a future milestone and, likely, a separate companion service rather than
+inside this process (the production host already runs Hugo, OpenResty,
+CrowdSec, and multiple KVM VMs alongside this server).
+
+**What shipped** (Part 1 of #1138; site-wide aggregation and the
+`mobile_readability` score category are tracked separately):
+
+- **`inspect_rendered.responsive_checks`** (always present, purely
+  additive — none of its fields affect `status`): per-page heuristics over
+  the already-parsed rendered DOM.
+  - `tables`: `count`, `fixed_width` (hardcoded pixel width, not %/auto),
+    `responsive_wrapper` (an ancestor looks like it provides horizontal
+    scroll — `table-responsive`/`overflow-x`/etc. class or style
+    heuristics), `long_cell_risk` (a cell contains a 25+ character
+    unspaced token — a URL or file path — that can force table width
+    regardless of wrapping).
+  - `code_blocks`: `count`, `overflow_safe` (false only on an anti-pattern:
+    a `<pre>` with a fixed pixel width or explicit `white-space: nowrap`
+    and no width escape hatch — not a positive confirmation the theme's
+    CSS actually scrolls it, see `table_overflow_protection` below for
+    that theme-constant question).
+  - `images`: `count`, `responsive` (false only when an `<img>` has a
+    hardcoded pixel width over 400 with no `max-width` style or `srcset`
+    escape hatch).
+- **`get_theme_status.table_overflow_protection`** (`bool` or omitted):
+  whether the active theme's own CSS/Sass source contains a rule scoping a
+  `table` selector to `overflow-x: auto|scroll` — the standard fix that
+  lets a wide table scroll instead of breaking layout. This is a
+  theme-constant property and is deliberately computed **once** here, not
+  per-page in `inspect_rendered` — the issue's own explicit "don't
+  recompute this on every one of N pages" requirement.
+
+**Three-state result, biased toward the false negative over the false
+positive**: a false `true` would hide a real overflow problem from an
+agent — the exact class of mistake §6.19/#1136 exists to prevent. `true`
+only when a table-scoped overflow rule is found in an introspectable
+classic `themes_dir` theme; `false` when at least one such theme was
+inspected and none qualified; omitted/`nil` when no `themes_dir` theme
+could be inspected at all. Hugo Module themes are resolved through Hugo's
+own module cache, not a local checkout under `HugoRoot`
+(`themeStatusFor`'s own doc comment already establishes this same
+introspection limit for commit/dirty state) — their CSS cannot be read
+here, so the honest answer is "unknown," not a guessed `false`. Only the
+theme's own source tree under `themes/<name>/` is scanned, not site-level
+override CSS layered on top of it (e.g. `assets/css/custom.css`) — a known
+scope limit.
+
+The detection deliberately scans the theme's **unminified source**, not the
+built `public/` output: a minified stylesheet packs many unrelated rules
+per line, and a naive proximity search over it cannot reliably tell a
+table-scoped `overflow-x` rule from an unrelated one sitting nearby in the
+same minified blob. The block-level regex used here
+(`selector{...overflow-x:auto|scroll...}` with `table` required in the
+selector) only parses correctly against readable, brace-delimited source —
+another reason Hugo Module themes (no guaranteed local checkout) fall back
+to "unknown" rather than attempting to scan whatever happens to be present.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
