@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here.
 
+## [v1.9.1] - 2026-08-16
+
+Follow-up fixes from post-deploy live audits of v1.9.0 (two independent AI agents, "sol"/ChatGPT and Sonnet).
+
+### Fix
+- **`publication_safety.safe_to_publish` could never report `true`** (#1174): the homepage's source slug (`_index.en`/`_index.fr`) was never correctly mapped back to its real public URL (`/`), so the reconciliation engine permanently classified the homepage as unpublished — even immediately after a clean build with zero real drift. Affected every deployment's homepage (and, by the same code path, any section `_index` page). Root-caused directly against production's reconciliation database; fixed in `canonicalPublicSlugForSourceLang`, which now strips the `_index`/`_index.<lang>` segment before computing the expected public slug.
+- **`get_capabilities` description falsely claimed only two scopes exist** (#1172): said `read`/`write` were "the only two the server ever grants," when `admin` is a real, grantable third tier. Description-only correction.
+
+### CI
+- Milestone v1.9.0 was left open after all its issues closed, briefly leaving two open semver milestones at once — caught by the `milestone-sequence-check.yml` workflow added in v1.9.0 (#1171), confirming it works as intended.
+
 ## [v1.9.0] - 2026-08-16
 
 An exhaustive adversarial live-tool sweep against production, followed by fixing every finding and a full documentation freshness pass. No breaking changes.
