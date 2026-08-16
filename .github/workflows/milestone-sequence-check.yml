@@ -1,0 +1,67 @@
+name: milestone sequence check
+
+# Catches a milestone numbering mistake before issues/PRs pile up under it.
+# The milestone after v1.8.9 was briefly created as "v2.0.0" — a jump this
+# project's release history has never made (it always increments by one
+# patch, rolling over into the minor digit at 10, e.g. v1.8.9 -> v1.9.0) —
+# and three issues plus four merged PRs had already been filed under it
+# before the mistake was caught and everything had to be moved to a
+# manually-created v1.9.0 milestone. This workflow is the backstop: it
+# reacts immediately to milestone creation/edits, and re-checks weekly in
+# case a mistake is made outside a tracked event (e.g. via the API).
+
+on:
+  milestone:
+    types: [created, edited, opened, reopened]
+  schedule:
+    - cron: '30 7 * * 1' # weekly, Monday 07:30 UTC (after the npm version drift check)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-milestone-sequence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Verify the open milestone is exactly one release ahead of the latest closed one
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ./scripts/check-milestone-sequence.sh > /tmp/report.txt 2>&1; then
+            in_sequence=1
+          else
+            in_sequence=0
+          fi
+          report="$(cat /tmp/report.txt)"
+          echo "$report"
+
+          title="Milestone numbering drift: open milestone is not the expected next release"
+          existing="$(gh issue list --state open --search "in:title \"Milestone numbering drift\"" --json number,title \
+            --jq '.[] | select(.title | startswith("Milestone numbering drift")) | .number' | head -1)"
+
+          if [ "$in_sequence" -eq 1 ]; then
+            echo "Milestone sequence is correct."
+            if [ -n "$existing" ]; then
+              echo "Closing existing tracking issue #$existing"
+              gh issue close "$existing" --comment "Milestone sequence now correct. $report"
+            fi
+            exit 0
+          fi
+
+          body="$(printf '%s\n\nThis issue was filed automatically by the milestone sequence check workflow. It stays open (and gets its content refreshed) until the open milestone matches the expected next release, at which point the next run closes it automatically.\n' "$report")"
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue edit "$existing" --title "$title" --body "$body"
+          else
+            echo "Filing new issue"
+            gh issue create --title "$title" --body "$body" --label "process" || \
+              gh issue create --title "$title" --body "$body"
+          fi
+          exit 1
