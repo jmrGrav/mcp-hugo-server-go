@@ -23,6 +23,30 @@ func TestRejectUnsafeTextRejectsC1Controls(t *testing.T) {
 	}
 }
 
+// TestRejectUnsafeTextRejectsBidiControlChars is #1158's regression
+// coverage: RTL-override and isolate control characters (used for bidi
+// spoofing, e.g. making "gpj.exe" render as "exe.jpg") must be rejected in
+// title/body/description the same way null bytes already are.
+func TestRejectUnsafeTextRejectsBidiControlChars(t *testing.T) {
+	bidiChars := []rune{
+		0x202A, // LRE
+		0x202B, // RLE
+		0x202C, // PDF
+		0x202D, // LRO
+		0x202E, // RLO
+		0x2066, // LRI
+		0x2067, // RLI
+		0x2068, // FSI
+		0x2069, // PDI
+	}
+	for _, r := range bidiChars {
+		s := "safe title " + string(r) + " rest"
+		if err := rejectUnsafeText(s); err == nil {
+			t.Errorf("rejectUnsafeText(%q): want error for bidi control U+%04X, got nil", s, r)
+		}
+	}
+}
+
 func TestRejectUnsafeTextAllowsNewlinesTabsCarriageReturns(t *testing.T) {
 	if err := rejectUnsafeText("line one\nline two\ttabbed\r\n"); err != nil {
 		t.Fatalf("rejectUnsafeText: want nil for \\n\\t\\r, got %v", err)
