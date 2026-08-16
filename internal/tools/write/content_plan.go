@@ -853,7 +853,7 @@ func registerContentPlanTools(
 			}
 			state := updatePageState(siteIdx != nil, hadPublic)
 			return nil, newApplyContentPlanOutput(applyContentPlanData{
-				Status:         "unchanged",
+				Status:         "would_update",
 				PlanID:         in.PlanID,
 				Slug:           canonicalPublicSlug(entry.Slug),
 				DryRun:         true,

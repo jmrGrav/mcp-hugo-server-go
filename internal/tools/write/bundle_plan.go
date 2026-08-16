@@ -830,7 +830,7 @@ func registerApplyBundlePlan(
 		if in.DryRun {
 			state := updatePageState(siteIdx != nil, bundleHasPublic(siteIdx, entry.Slug))
 			return nil, newApplyBundlePlanOutput(applyBundlePlanData{
-				Status: "unchanged", PlanID: in.PlanID, Slug: canonicalPublicSlug(entry.Slug), DryRun: true,
+				Status: "would_apply", PlanID: in.PlanID, Slug: canonicalPublicSlug(entry.Slug), DryRun: true,
 				BundleStatus: "valid", BeforeRevision: entry.BundleRevision,
 				Translations: bundleDryRunOutcomes(cfg.ContentRoot, entry.Translations), State: &state,
 				RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -1085,7 +1085,7 @@ func registerRollbackBundle(
 				})
 			}
 			return nil, newRollbackBundleOutput(rollbackBundleData{
-				Status: "unchanged", Slug: canonicalPublicSlug(in.Slug), DryRun: true, BundleStatus: "restorable",
+				Status: "would_restore", Slug: canonicalPublicSlug(in.Slug), DryRun: true, BundleStatus: "restorable",
 				BeforeRevision: currentRev, Translations: outcomes,
 				RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
 			}, rateLimitRemaining(limiter)), nil

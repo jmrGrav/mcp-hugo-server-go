@@ -369,6 +369,10 @@ func TestApplyContentPlanDryRunDoesNotConsumePlan(t *testing.T) {
 	if dryData["dry_run"] != true {
 		t.Fatalf("apply_content_plan dry_run response data.dry_run = %v, want true", dryData["dry_run"])
 	}
+	// #1154: the plan adds a real tag, so dry_run must not report "unchanged".
+	if got := dryData["status"]; got != "would_update" {
+		t.Fatalf("apply_content_plan dry_run data.status = %v, want would_update", got)
+	}
 
 	real := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
 	if real.IsError {

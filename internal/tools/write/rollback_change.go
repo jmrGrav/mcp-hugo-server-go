@@ -431,7 +431,7 @@ func registerRollbackChange(
 			diffLabel := in.Slug + "/" + filepath.Base(filePath)
 			diff := simpleDiff(diffLabel, string(raw), snapshotContent)
 			return nil, newRollbackChangeOutput(rollbackChangeData{
-				Status:         "unchanged",
+				Status:         "would_restore",
 				Slug:           canonicalPublicSlug(in.Slug),
 				DryRun:         true,
 				Diff:           diff,

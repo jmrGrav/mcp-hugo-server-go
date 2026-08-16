@@ -326,6 +326,12 @@ func TestRollbackChangeDryRunDoesNotWrite(t *testing.T) {
 	if diff, _ := dryData["diff"].(string); diff == "" {
 		t.Fatal("rollback_change dry_run did not return a diff")
 	}
+	// #1154: dry_run must not report the misleading "unchanged" status when
+	// it would genuinely restore a prior revision — the diff above proves a
+	// real change is predicted.
+	if got := dryData["status"]; got != "would_restore" {
+		t.Fatalf("rollback_change dry_run data.status = %v, want would_restore", got)
+	}
 
 	stillApplied := readFileString(t, contentRoot, "posts/article/index.md")
 	if stillApplied != afterContent {

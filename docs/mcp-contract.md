@@ -1643,6 +1643,31 @@ same cost class as `broken_links_count`. It does **not** yet feed
 (§6.19) stays `false` until a follow-up promotes it, mirroring how #1138
 Part 1 (raw signal) preceded Part 2 (score_breakdown wiring).
 
-## 7. New tools (v1.3.8+)
+### 6.24 `dry_run` Predicted-Outcome Status (#1154)
+
+**Problem**: `dry_run:true` on `create_page`, `update_page`, `delete_page`,
+`upload_page_asset`, `create_bundle`, `delete_bundle`, `apply_bundle_plan`,
+`rollback_bundle`, `apply_content_plan`, and `rollback_change` all hardcoded
+top-level `data.status: "unchanged"`, regardless of what the response's own
+`diff`/`data.changed`/per-item outcomes showed would actually happen — even
+for a `create_page` dry_run against a brand-new slug, where "unchanged" is
+not even a meaningful reading (nothing existed to be unchanged from).
+`update_page` was the only one of these with a separate `data.changed`
+boolean a caller could cross-check; the rest had no fallback signal at all,
+making the misleading `status` field the *only* outcome indicator in the
+payload.
+
+**Fix**: dry_run responses now report the real predicted outcome instead —
+`would_create` / `would_update` / `would_delete` / `would_apply` /
+`would_restore`, matching the verb the real (non-dry-run) call would use —
+with `"unchanged"` reserved for the case where the predicted write is a
+genuine no-op (currently only reachable on `update_page`, whose dry_run
+already computed `data.changed` for exactly this purpose). This is a
+breaking change to the `status` string's value set for `dry_run` responses;
+callers matching on the previous `"unchanged"` literal under `dry_run` need
+to switch to checking for the tool-appropriate `would_*` value, or the
+`data.changed` field where present. `delete_page_asset`'s dry_run was
+already correct (`status: "ok"`, a distinct, deliberate convention) and is
+unaffected.
 
 New tools added in v1.3.8 use the **structured envelope** by default.

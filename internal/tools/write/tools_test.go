@@ -3927,6 +3927,11 @@ func TestDeletePageDryRun(t *testing.T) {
 	if _, ok := m["backlinks"]; !ok {
 		t.Error("dry_run response must include data.backlinks key")
 	}
+	// #1154: a page that genuinely exists and would be deleted must not
+	// report "unchanged" under dry_run.
+	if got := m["status"]; got != "would_delete" {
+		t.Errorf("delete_page dry_run data.status = %v, want would_delete", got)
+	}
 
 	// #466 regression: delete_page's dry_run must report the caller's actual
 	// remaining rate-limit budget, not a false 0 — dry_run doesn't consume
@@ -4713,6 +4718,12 @@ func TestCreatePageDryRun(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(contentRoot, "dry-post", "index.md")); !os.IsNotExist(err) {
 		t.Error("create_page dry_run must not write file to disk")
 	}
+	// #1154: a brand-new slug's dry_run must not claim "unchanged" — nothing
+	// existed before, so the predicted outcome is a create.
+	data := decodeWriteData(t, res)
+	if got := data["status"]; got != "would_create" {
+		t.Fatalf("create_page dry_run data.status = %v, want would_create", got)
+	}
 }
 
 func TestUpdatePageDryRun(t *testing.T) {
@@ -4753,6 +4764,11 @@ func TestUpdatePageDryRun(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "Original Title") {
 		t.Errorf("update_page dry_run must not write to disk; file = %q", data)
+	}
+	// #1154: a real title change must not be reported as "unchanged".
+	respData := decodeWriteData(t, res)
+	if got := respData["status"]; got != "would_update" {
+		t.Fatalf("update_page dry_run data.status = %v, want would_update", got)
 	}
 }
 
