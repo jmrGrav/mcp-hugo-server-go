@@ -48,6 +48,16 @@ type buildSiteInput struct {
 	// and ChangeSetID are set, ChangeSetIDs wins. Every id is resolved and
 	// ownership-checked individually.
 	ChangeSetIDs []string `json:"change_set_ids,omitempty"`
+	// ExpectedSourceRevision/ExpectedPublicRevision (#1141) are optional
+	// optimistic-concurrency guards: pass a revision previously read from
+	// get_runtime_status (include_revisions:true) to have this build
+	// refuse with source_revision_conflict/public_revision_conflict if the
+	// tree has since changed, rather than silently building/promoting over
+	// a change you never saw. See runBuild's own doc comment for the full
+	// TOCTOU discussion, including the independent (always-on) check for
+	// source drift during the build itself.
+	ExpectedSourceRevision string `json:"expected_source_revision,omitempty"`
+	ExpectedPublicRevision string `json:"expected_public_revision,omitempty"`
 }
 
 // buildSiteData is the canonical data.* payload (#572): build_site was the
@@ -60,6 +70,14 @@ type buildSiteData struct {
 	DurationMs     int64  `json:"duration_ms"`
 	BuildID        string `json:"build_id"`
 	OutputRevision string `json:"output_revision,omitempty"`
+	// SourceRevision (#1141) is the content_root hash this build verified
+	// and built against (empty when content_root isn't configured) — the
+	// same hashTree value get_runtime_status's include_revisions option
+	// reports, and what a caller can pass back as expected_source_revision
+	// on a later call. publish_changes also uses this internally to detect
+	// source drift during its post-build verify_publication poll (see its
+	// own handler).
+	SourceRevision string `json:"source_revision,omitempty"`
 	PublishReady   bool   `json:"publish_ready"`
 	Warning        string `json:"warning,omitempty"`
 	// Stages / Pages are additive, stage-aware and page-aware reporting
@@ -653,7 +671,8 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceInde
 		Name:  "build_site",
 		Title: "Build website",
 		Description: "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts or deleted). With operational SQLite configured, the page set is derived from fresh on-disk source fingerprints compared with the latest completed build and survives restart/external writes; without it, volatile BuildPending remains a compatibility fallback (#858, #1077). " +
-			"Optional `change_set_id` (#1140) guards against publishing a different change-set's in-flight edits: if any pending page is known to belong to a change-set the caller hasn't acknowledged, the build is refused with `foreign_change_set_present` rather than silently building it. When two or more change-sets genuinely have pending work at once, pass every one of them in `change_set_ids` instead — a single `change_set_id` can never account for another change-set's real pending page, so without this a concurrent-editing scenario would deadlock (neither side's build could ever succeed). This only catches pending pages this same running process has tracked mutations for since it last started — it is not full external-source-drift detection (direct filesystem edits, or drift predating this process, are not caught; see #1141).",
+			"Optional `change_set_id` (#1140) guards against publishing a different change-set's in-flight edits: if any pending page is known to belong to a change-set the caller hasn't acknowledged, the build is refused with `foreign_change_set_present` rather than silently building it. When two or more change-sets genuinely have pending work at once, pass every one of them in `change_set_ids` instead — a single `change_set_id` can never account for another change-set's real pending page, so without this a concurrent-editing scenario would deadlock (neither side's build could ever succeed). This only catches pending pages this same running process has tracked mutations for since it last started — it is not full external-source-drift detection. " +
+			"Optional `expected_source_revision`/`expected_public_revision` (#1141) are optimistic-concurrency guards: obtain a revision from `get_runtime_status` (`include_revisions:true`) and pass it here to have the build refuse with `source_revision_conflict`/`public_revision_conflict` if the tree has changed since you read it, instead of silently building/promoting over a change you never saw. Independently of those (always on, no input required), every build re-verifies the source tree is unchanged immediately before promoting — a mismatch (only possible via a direct filesystem write outside this server, since ContentMu already blocks every other MCP mutation during a build) fails with `source_changed_during_build` and the freshly built output is discarded, never published.",
 		InputSchema:  tools.MustSchema[buildSiteInput](),
 		OutputSchema: tools.MustSchema[buildSiteOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -666,7 +685,7 @@ func RegisterBuild(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceInde
 		if err := guardForeignChangeSet(ctx, changeSets, srcIdx, in.ChangeSetID, in.ChangeSetIDs); err != nil {
 			return nil, buildSiteOutput{}, err
 		}
-		data, err := runBuild(ctx, cfg, srcIdx, siteReload...)
+		data, err := runBuild(ctx, cfg, srcIdx, in.ExpectedSourceRevision, in.ExpectedPublicRevision, siteReload...)
 		if err != nil {
 			return nil, buildSiteOutput{}, err
 		}
@@ -741,7 +760,30 @@ func isTruthyFrontmatter(v any) bool {
 // (#340, #438) can drive a build without going through the MCP tool
 // dispatch layer a second time. Takes and releases hugosite.ContentMu itself,
 // so callers must not already hold it.
-func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...PostBuildCallback) (buildSiteData, error) {
+//
+// expectedSourceRevision/expectedPublicRevision (#1141) are optimistic-
+// concurrency guards: when non-empty, the caller is asserting "I read the
+// source/public tree at this exact revision, reject if it has since
+// changed" rather than silently building/promoting over a change they
+// never saw. Checked inside the ContentMu lock, immediately after it is
+// acquired, so nothing can land between this check and the build actually
+// starting. Both are computed via hashTree, the same full-tree hash
+// get_runtime_status's own include_revisions option exposes — this
+// guard works identically with or without db_path configured, since it
+// never touches SQLite.
+//
+// Independently of expectedSourceRevision, runBuild always re-hashes the
+// source tree immediately before promoting the build (source_changed_
+// during_build) — ContentMu already serializes every MCP-originated
+// mutation against a build in progress (create_page et al. poll for the
+// same lock rather than proceeding), so this specifically catches a
+// direct filesystem write bypassing this server entirely (e.g. an SSH
+// session editing content_root mid-build), the one channel ContentMu
+// cannot see. On a mismatch the freshly built output in the temp
+// directory is discarded (never passed to swapBuildOutput) and the error
+// is returned — the existing `defer os.RemoveAll(buildDir)` cleans it up,
+// so nothing unstable is ever promoted.
+func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceIndex, expectedSourceRevision, expectedPublicRevision string, siteReload ...PostBuildCallback) (buildSiteData, error) {
 	if cfg.HugoRoot == "" {
 		return buildSiteData{}, fmt.Errorf("config_error: hugo_root is not configured")
 	}
@@ -763,6 +805,42 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		buildstatus.RecordFailure("permission_denied", time.Now())
 		return buildSiteData{}, err
 	}
+
+	// #1141: verify the caller's optimistic-concurrency expectations, and
+	// capture the source fingerprint this build will use for its own
+	// during-build stability check further below, all while still holding
+	// ContentMu so nothing can land between this check and the build
+	// actually starting. Deliberately placed after the writability checks
+	// above: a misconfigured/unwritable deployment should fail with its
+	// own honest permission_denied first, not pay a full-tree hash (or
+	// report a revision conflict) on a build that was never going to
+	// succeed anyway.
+	var sourceRevisionBeforeBuild string
+	if strings.TrimSpace(cfg.ContentRoot) != "" {
+		rev, err := hashTree(cfg.ContentRoot)
+		if err != nil {
+			return buildSiteData{}, fmt.Errorf("internal_error: failed to compute source revision: %w", err)
+		}
+		sourceRevisionBeforeBuild = rev
+		if expectedSourceRevision != "" && rev != expectedSourceRevision {
+			return buildSiteData{}, fmt.Errorf("source_revision_conflict: source has changed since expected_source_revision was captured (expected %s, actual %s) — re-read the current source revision (get_runtime_status with include_revisions:true) and retry deliberately if the new state is still what you intend to build", expectedSourceRevision, rev)
+		}
+	} else if expectedSourceRevision != "" {
+		return buildSiteData{}, fmt.Errorf("config_error: expected_source_revision was supplied but content_root is not configured, so it cannot be verified")
+	}
+	if expectedPublicRevision != "" {
+		if strings.TrimSpace(cfg.SiteRoot) == "" {
+			return buildSiteData{}, fmt.Errorf("config_error: expected_public_revision was supplied but site_root is not configured, so it cannot be verified")
+		}
+		rev, err := hashTree(cfg.SiteRoot)
+		if err != nil {
+			return buildSiteData{}, fmt.Errorf("internal_error: failed to compute public revision: %w", err)
+		}
+		if rev != expectedPublicRevision {
+			return buildSiteData{}, fmt.Errorf("public_revision_conflict: public output has changed since expected_public_revision was captured (expected %s, actual %s) — someone else may have published in the meantime; re-read the current public revision and retry deliberately if that's intended", expectedPublicRevision, rev)
+		}
+	}
+
 	buildDir, buildDirErr := os.MkdirTemp(filepath.Dir(cfg.SiteRoot), ".mcp-build-output-")
 	if buildDirErr != nil {
 		buildstatus.RecordFailure("permission_denied", time.Now())
@@ -906,6 +984,28 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		return buildSiteData{}, fmt.Errorf("build_error: %s", jsonPayload)
 	}
 	buildstatus.RecordSuccess(time.Now())
+	// #1141: re-hash the source tree one last time before promoting, and
+	// refuse to promote at all if it moved since sourceRevisionBeforeBuild
+	// was captured at the top of this function. ContentMu already blocked
+	// every MCP-originated mutation for this entire build; a mismatch here
+	// can only mean something wrote to content_root outside this server
+	// (direct filesystem/SSH access) while the build was running — content
+	// that never went through Hugo. Promoting the temp build in that case
+	// would silently publish a stale/incomplete render of a source state
+	// that no longer exists.
+	if sourceRevisionBeforeBuild != "" {
+		sourceRevisionAfterBuild, hashErr := hashTree(cfg.ContentRoot)
+		if hashErr != nil {
+			buildstatus.RecordFailure("source_fingerprint_failed", time.Now())
+			notifyBuildFailed(siteReload, progress, "failed:source_fingerprint")
+			return buildSiteData{}, fmt.Errorf("internal_error: failed to verify source stability before promotion: %w", hashErr)
+		}
+		if sourceRevisionAfterBuild != sourceRevisionBeforeBuild {
+			buildstatus.RecordFailure("source_changed_during_build", time.Now())
+			notifyBuildFailed(siteReload, progress, "failed:source_changed_during_build")
+			return buildSiteData{}, fmt.Errorf("source_changed_during_build: source changed while this build was running — this build's output was discarded and never promoted; rebuild once the source is stable")
+		}
+	}
 	swapWarning, swapErr := swapBuildOutput(buildDir, cfg.SiteRoot)
 	if swapErr != nil {
 		buildstatus.RecordFailure("output_swap", time.Now())
@@ -1109,6 +1209,7 @@ cbLoop:
 		DurationMs:     durationMs,
 		BuildID:        runID,
 		OutputRevision: outputRevision,
+		SourceRevision: sourceRevisionBeforeBuild,
 		PublishReady:   publishReady,
 		Warning:        cbWarning,
 		Stages:         &stages,

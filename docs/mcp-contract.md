@@ -1158,6 +1158,56 @@ on-disk source fingerprints compared against the latest completed build
 `BuildPending` set this guard inspected. #1141's revision guards are the
 intended place to close that gap.
 
+### 6.17 Optimistic-Concurrency Revision Guards on Build/Publish (#1141)
+
+`build_site` and `publish_changes` both accept optional
+`expected_source_revision`/`expected_public_revision`, obtained from
+`get_runtime_status`'s `include_revisions:true` option (`data.site.
+source_revision`/`public_revision` — both a `sha256:`-prefixed hash of the
+full content_root/site_root tree, `internal/tools/admin.hashTree`). Passing
+either turns "read the current state, then act on it" into an explicit
+optimistic-concurrency assertion: if the source or public tree has changed
+since the caller's read, the call is refused with
+`source_revision_conflict`/`public_revision_conflict` respectively — before
+any build work happens — rather than silently building or promoting over a
+change the caller never saw. Both are checked while `hugosite.ContentMu` is
+held (inside `runBuild`, immediately after the lock is acquired), so
+nothing can land between this check and the build actually starting.
+
+Neither parameter depends on `db_path`: the comparison is a direct
+filesystem hash, the same primitive `get_runtime_status` itself already
+uses, not a SQLite-stored revision history.
+
+**#1140 vs #1141**: #1140 answers "whose pending work is this?" (attribution
+by change-set); #1141 answers "has the tree moved since I last looked?"
+(optimistic concurrency by content hash). They compose independently — a
+caller can pass both `change_set_id`(s) and `expected_*_revision` on the
+same call — and neither depends on the other.
+
+**Always-on protection, independent of the two input fields above**: every
+`build_site`/`publish_changes` call re-hashes the source tree immediately
+before promoting the freshly built output (right before `swapBuildOutput`,
+after Hugo has already succeeded) and compares it against the hash taken at
+the very start of the same build. `hugosite.ContentMu` already serializes
+every MCP-originated mutation against a build in progress (`create_page`
+et al. poll for the same lock rather than proceeding, so no MCP mutation
+can land mid-build) — this second check exists specifically for the one
+channel that lock cannot see: a direct filesystem write to `content_root`
+(e.g. an SSH session) happening concurrently with the build. A mismatch
+fails the call with `source_changed_during_build`; the build's temp output
+directory is discarded via the existing `defer os.RemoveAll`, and
+`swapBuildOutput` is never called — nothing unstable is ever promoted to
+the public tree.
+
+This before/after fingerprint doubles the cost of a full `hashTree` walk
+(reads every byte of `content_root` twice per build, once at the start and
+once just before promotion) on every single build, not only when a caller
+opts in via `expected_source_revision` — a deliberate correctness-over-
+throughput choice matching the issue's explicit "minimum acceptable"
+requirement (never promote unverified output). On a very large content
+tree this is a real, measurable added cost per build; there is currently
+no opt-out.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.

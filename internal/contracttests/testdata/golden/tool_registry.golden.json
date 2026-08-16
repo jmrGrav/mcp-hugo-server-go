@@ -371,7 +371,7 @@
   {
     "name": "build_site",
     "required_scope": "write",
-    "description": "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts or deleted). With operational SQLite configured, the page set is derived from fresh on-disk source fingerprints compared with the latest completed build and survives restart/external writes; without it, volatile BuildPending remains a compatibility fallback (#858, #1077). Optional `change_set_id` (#1140) guards against publishing a different change-set's in-flight edits: if any pending page is known to belong to a change-set the caller hasn't acknowledged, the build is refused with `foreign_change_set_present` rather than silently building it. When two or more change-sets genuinely have pending work at once, pass every one of them in `change_set_ids` instead — a single `change_set_id` can never account for another change-set's real pending page, so without this a concurrent-editing scenario would deadlock (neither side's build could ever succeed). This only catches pending pages this same running process has tracked mutations for since it last started — it is not full external-source-drift detection (direct filesystem edits, or drift predating this process, are not caught; see #1141).",
+    "description": "Build the Hugo site and return the build duration in milliseconds. Use this after content changes or before publishing. Returns build_in_progress if another build or content mutation is active. Response is stage-aware (`data.stages`: hugo_build, output_swap, source/public index reload, per-callback outcomes) and page-aware (`data.pages`: which changed translations were included vs excluded_drafts or deleted). With operational SQLite configured, the page set is derived from fresh on-disk source fingerprints compared with the latest completed build and survives restart/external writes; without it, volatile BuildPending remains a compatibility fallback (#858, #1077). Optional `change_set_id` (#1140) guards against publishing a different change-set's in-flight edits: if any pending page is known to belong to a change-set the caller hasn't acknowledged, the build is refused with `foreign_change_set_present` rather than silently building it. When two or more change-sets genuinely have pending work at once, pass every one of them in `change_set_ids` instead — a single `change_set_id` can never account for another change-set's real pending page, so without this a concurrent-editing scenario would deadlock (neither side's build could ever succeed). This only catches pending pages this same running process has tracked mutations for since it last started — it is not full external-source-drift detection. Optional `expected_source_revision`/`expected_public_revision` (#1141) are optimistic-concurrency guards: obtain a revision from `get_runtime_status` (`include_revisions:true`) and pass it here to have the build refuse with `source_revision_conflict`/`public_revision_conflict` if the tree has changed since you read it, instead of silently building/promoting over a change you never saw. Independently of those (always on, no input required), every build re-verifies the source tree is unchanged immediately before promoting — a mismatch (only possible via a direct filesystem write outside this server, since ContentMu already blocks every other MCP mutation during a build) fails with `source_changed_during_build` and the freshly built output is discarded, never published.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -386,6 +386,12 @@
             "null",
             "array"
           ]
+        },
+        "expected_public_revision": {
+          "type": "string"
+        },
+        "expected_source_revision": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -400,6 +406,7 @@
       "data.pages.included:unspecified:required",
       "data.pages:unspecified",
       "data.publish_ready:boolean:required",
+      "data.source_revision:string",
       "data.stages.callbacks:object",
       "data.stages.callbacks_status:string:required",
       "data.stages.hugo_build:string:required",
@@ -444,7 +451,7 @@
       "warning:string",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "ac0e5a71c30893acbd3aa8516c58592227890874b9c4dcc82d5234ac846d6105"
+    "output_schema_sha256": "1017b1914fb996d3f4c304a7cbaab2157d713644186d647fcc914dc656b18e75"
   },
   {
     "name": "check_ai_readiness",
@@ -4490,7 +4497,7 @@
   {
     "name": "publish_changes",
     "required_scope": "write",
-    "description": "Build the site and confirm a page is actually live — bundles build_site + verify_publication into one explicit, separately-confirmed step. Never auto-chained onto apply_content_plan/update_page; publishing is always its own deliberate call (#340). `data.status` is \"published\" only when the build succeeds cleanly (no failed post-build callback — e.g. a CDN purge failure could leave stale bytes cached at the edge even though local files are fresh) and verify_publication's own check comes back \"fresh\" (source/build/public/index all agree and, if `site_url` is configured, the live HTTP response confirms it). If verify_publication reports an intentional exclusion (for example a `draft:true` or protected `test_content` page), `data.status` is `intentionally_unpublished` and `data.reason_code` mirrors the publication reason. Any other non-fresh publication result reports \"build_succeeded_unverified\" — the build did not fail outright, but publication isn't confirmed clean yet (see `data.build.warning` for a callback failure and `data.publication.status`/`data.publication.explanation` for which publication stage is behind). A failed build surfaces as a tool error (`build_error`/`build_in_progress`), identical to `build_site`'s own behavior — it never reaches `data.status`. Optional `change_set_id`/`change_set_ids` (#1140) guard against publishing a different change-set's in-flight edits — see `build_site`'s own doc for the exact semantics and its `foreign_change_set_present` error. Optional `wait_seconds` is forwarded to verify_publication's own local settle-then-check wait (bounded server-side). Writes only build output and derived indexes — never touches page source; that's `apply_content_plan`/`update_page`'s layer.",
+    "description": "Build the site and confirm a page is actually live — bundles build_site + verify_publication into one explicit, separately-confirmed step. Never auto-chained onto apply_content_plan/update_page; publishing is always its own deliberate call (#340). `data.status` is \"published\" only when the build succeeds cleanly (no failed post-build callback — e.g. a CDN purge failure could leave stale bytes cached at the edge even though local files are fresh) and verify_publication's own check comes back \"fresh\" (source/build/public/index all agree and, if `site_url` is configured, the live HTTP response confirms it). If verify_publication reports an intentional exclusion (for example a `draft:true` or protected `test_content` page), `data.status` is `intentionally_unpublished` and `data.reason_code` mirrors the publication reason. Any other non-fresh publication result reports \"build_succeeded_unverified\" — the build did not fail outright, but publication isn't confirmed clean yet (see `data.build.warning` for a callback failure and `data.publication.status`/`data.publication.explanation` for which publication stage is behind). A failed build surfaces as a tool error (`build_error`/`build_in_progress`), identical to `build_site`'s own behavior — it never reaches `data.status`. Optional `change_set_id`/`change_set_ids` (#1140) guard against publishing a different change-set's in-flight edits — see `build_site`'s own doc for the exact semantics and its `foreign_change_set_present` error. Optional `expected_source_revision`/`expected_public_revision` (#1141) are optimistic-concurrency guards against publishing over a source/public change you never saw — see `build_site`'s own doc for the exact semantics and its `source_revision_conflict`/`public_revision_conflict`/`source_changed_during_build` errors. `data.status` can also report `build_succeeded_unverified` with `data.reason_code: \"source_changed_during_verification\"` (#1141): the build itself succeeded and its output is correctly promoted for the source state it was built from, but a source mutation landed during the verify_publication poll that follows the build (after this call's own build-time stability lock was released) — the \"published\" confirmation is no longer trustworthy for the current source, so it is deliberately not claimed. Optional `wait_seconds` is forwarded to verify_publication's own local settle-then-check wait (bounded server-side). Writes only build output and derived indexes — never touches page source; that's `apply_content_plan`/`update_page`'s layer.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -4505,6 +4512,12 @@
             "null",
             "array"
           ]
+        },
+        "expected_public_revision": {
+          "type": "string"
+        },
+        "expected_source_revision": {
+          "type": "string"
         },
         "slug": {
           "type": "string"

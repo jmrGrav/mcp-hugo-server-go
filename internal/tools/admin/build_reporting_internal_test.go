@@ -60,7 +60,7 @@ func TestRunBuildPreparationFailuresFinalizeDurableIntent(t *testing.T) {
 				failedState = state
 				return nil
 			}}
-			_, err := runBuild(context.Background(), cfg, nil, tc.callback, observer)
+			_, err := runBuild(context.Background(), cfg, nil, "", "", tc.callback, observer)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("runBuild error=%v, want %s", err, tc.want)
 			}
