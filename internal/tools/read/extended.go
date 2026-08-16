@@ -2256,11 +2256,16 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 // idx (the public rendered-content index) is used here regardless of
 // reader profile, the same posture inspect_rendered itself already has (no
 // reader-profile gate on the checks it runs against idx). This is safe
-// because idx is built from cfg.SiteRoot's actual rendered output — Hugo
-// itself never renders draft/unpublished content into that tree in the
-// first place, so idx.ContentPages() cannot contain anything a reader
-// token couldn't already fetch as a public URL. Unlike srcIdx (gated via
-// sourceIndexForProfile above), idx has no source-only population to leak.
+// because idx is built by site.NewIndex(cfg) walking cfg.SiteRoot's actual
+// rendered output: (1) Hugo never renders draft/unpublished content into
+// that tree in the first place, and (2) token-gated preview builds are not
+// under cfg.SiteRoot at all — they live in previewstore's own directory
+// (internal/server's previewRoot, os.TempDir() or dbPath+".previews",
+// wired only to the separate inspect_preview tool via its own *store
+// argument), so idx never sees them either. idx.ContentPages() therefore
+// cannot contain anything a reader token couldn't already fetch as a
+// public URL. Unlike srcIdx (gated via sourceIndexForProfile above), idx
+// has no source-only or preview-only population to leak.
 func computeResponsiveSummary(ctx context.Context, cfg config.Config, idx *site.Index) *responsiveSummaryDTO {
 	if idx == nil {
 		return nil
