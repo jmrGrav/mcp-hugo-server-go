@@ -1001,3 +1001,103 @@ func TestPruneMutationJournalRollsBackWhenMaintenanceWriteFails(t *testing.T) {
 		t.Fatalf("expired row was not rolled back after failed prune: entry=%+v err=%v", entry, err)
 	}
 }
+
+// TestReconcileBrokenLinksAgainstStaticFilesFixesStaleRows is the #1155
+// follow-up regression test: txSyncLinks's new static-file fallback only
+// runs for pages whose content_hash changes, so a stale 'broken' row for a
+// page that never changes (the exact situation /pgp-key.txt's referring
+// pages were in) needs its own one-time reconciliation, the same shape
+// TestReconcileBrokenLinksAgainstIgnorePolicyFixesStaleRows already covers
+// for the #1101 pagination-target policy. Confirmed live: after #1155
+// shipped, get_broken_links still reported 2 of the original 4 /pgp-key.txt
+// false positives, from pages whose content hadn't changed since before the
+// fix.
+func TestReconcileBrokenLinksAgainstStaticFilesFixesStaleRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := d.SyncPublicPage(site.Page{
+		Slug: "/hall-of-fame/", Title: "Hall of Fame", URL: "https://x.com/hall-of-fame/", Lang: "en",
+	}, nil); err != nil {
+		t.Fatalf("SyncPublicPage: %v", err)
+	}
+	if err := d.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	// Simulate rows written before the static-file fallback was wired up:
+	// one broken row for a real static file the fallback should now excuse,
+	// one broken row for a target that must remain reported.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	var pageID int64
+	if err := raw.QueryRow(`SELECT id FROM pages WHERE slug = '/hall-of-fame/'`).Scan(&pageID); err != nil {
+		t.Fatalf("lookup page id: %v", err)
+	}
+	if _, err := raw.Exec(
+		`INSERT INTO links(source_page_id, target, target_slug, anchor_text, status) VALUES (?, '/pgp-key.txt', '/pgp-key.txt/', '', 'broken'), (?, '/missing/', '/missing/', '', 'broken')`,
+		pageID, pageID,
+	); err != nil {
+		t.Fatalf("insert stale rows: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw handle: %v", err)
+	}
+
+	d2, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open (reopen): %v", err)
+	}
+	t.Cleanup(func() { _ = d2.Close() })
+
+	d2.SetStaticFileExistsFn(func(publicPath string) bool {
+		return publicPath == "/pgp-key.txt"
+	})
+	if err := d2.ReconcileBrokenLinksAgainstStaticFiles(); err != nil {
+		t.Fatalf("ReconcileBrokenLinksAgainstStaticFiles: %v", err)
+	}
+
+	broken, err := d2.GetBrokenLinks()
+	if err != nil {
+		t.Fatalf("GetBrokenLinks: %v", err)
+	}
+	for _, r := range broken {
+		if r.Target == "/pgp-key.txt" {
+			t.Errorf("stale static-file row not reconciled to ok: %+v", r)
+		}
+	}
+	var foundStillBroken bool
+	for _, r := range broken {
+		if strings.Contains(r.Target, "missing") {
+			foundStillBroken = true
+		}
+	}
+	if !foundStillBroken {
+		t.Errorf("a genuinely broken row must survive reconciliation: %+v", broken)
+	}
+
+	// A second call must be a no-op (version-gated) — calling it again with
+	// a fn that would now also excuse "/missing/" must NOT flip that row,
+	// proving the migration doesn't silently re-run every process restart.
+	d2.SetStaticFileExistsFn(func(publicPath string) bool { return true })
+	if err := d2.ReconcileBrokenLinksAgainstStaticFiles(); err != nil {
+		t.Fatalf("ReconcileBrokenLinksAgainstStaticFiles (2nd call): %v", err)
+	}
+	broken, err = d2.GetBrokenLinks()
+	if err != nil {
+		t.Fatalf("GetBrokenLinks (after 2nd call): %v", err)
+	}
+	foundStillBroken = false
+	for _, r := range broken {
+		if strings.Contains(r.Target, "missing") {
+			foundStillBroken = true
+		}
+	}
+	if !foundStillBroken {
+		t.Errorf("2nd ReconcileBrokenLinksAgainstStaticFiles call must be a no-op (version-gated), but /missing/ was reconciled: %+v", broken)
+	}
+}
