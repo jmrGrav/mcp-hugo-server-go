@@ -1321,6 +1321,17 @@ remains the sole per-page authority for rendered/SEO checks;
 `get_site_health` names that fact explicitly on every call instead of
 implying coverage it doesn't have.
 
+**Amendment (#1138 Part 2)**: `aggregated: false` describes the SEO/
+head-level checks named above (title, canonical, meta description,
+hreflang, unsafe/leaked URLs) and remains true for those without
+exception. §6.21 below adds one narrow, opt-in exception for a *different*
+purpose: `get_site_health`'s `include_responsive_summary=true` flag does
+read rendered HTML, but only to compute a mobile-layout-risk aggregate, not
+any SEO/head-level check — the live-full-site-scan rejection above still
+holds as the *default* behavior; opting in explicitly is what makes the
+cost acceptable, the same reasoning `get_runtime_status`'s
+`include_revisions` already established.
+
 ### 6.20 Mobile Layout Risk Heuristics: `inspect_rendered.responsive_checks` and `get_theme_status.table_overflow_protection` (#1138)
 
 #1138 asked for static-analysis mobile-layout risk detection — no headless
@@ -1391,6 +1402,57 @@ same minified blob. The block-level regex used here
 selector) only parses correctly against readable, brace-delimited source —
 another reason Hugo Module themes (no guaranteed local checkout) fall back
 to "unknown" rather than attempting to scan whatever happens to be present.
+
+### 6.21 Opt-In Site-Wide Aggregation: `get_site_health.responsive_summary` and `score_breakdown.mobile_readability` (#1138 Part 2)
+
+Part 1 (§6.20) shipped per-page detection (`inspect_rendered.responsive_checks`)
+and the theme-constant signal (`get_theme_status.table_overflow_protection`).
+This part adds the site-wide aggregate the issue also asked for, gated
+behind an explicit opt-in flag rather than folded into `get_site_health`'s
+default response — the same live-full-site-scan cost concern §6.19 already
+evaluated and rejected as a default applies here too, since aggregating
+`responsive_checks` requires re-reading and re-parsing every published
+page's rendered HTML.
+
+**What shipped**:
+
+- `get_site_health.include_responsive_summary` (input, default `false`):
+  mirrors `get_runtime_status`'s `include_revisions` opt-in pattern exactly.
+- `data.responsive_summary` (present only when requested):
+  `pages_at_risk` (count of published pages where `computeResponsiveChecks`
+  found at least one risk signal — a fixed-width table with no responsive
+  wrapper, a table with a long unbreakable cell regardless of wrapping, an
+  unsafe code block, or a non-responsive oversized image) and `fix_scope`:
+  `"none"` (`pages_at_risk == 0`), `"theme_level"`
+  (`table_overflow_protection == false` — the theme itself doesn't scroll
+  wide tables at all, so a single CSS fix addresses most/all at-risk
+  pages), `"page_level"` (`table_overflow_protection == true` — the theme
+  already protects tables, so at-risk pages need individual fixes, e.g. an
+  inline width override), or `"unknown"`
+  (`table_overflow_protection` could not be determined, e.g. a Hugo Module
+  theme with no local checkout).
+- `score_breakdown.mobile_readability` (present only when requested):
+  weight 0, `score` 100 when `pages_at_risk == 0` else 0, `issues` ==
+  `pages_at_risk`.
+
+**Deliberately does NOT force `status`/`content_status` off
+healthy/healthy_with_advisories, and does NOT cap `score` at 99** — unlike
+`title_shape`/`broken_links`, which both carry weight 0 *and* force status.
+This is a deliberate starting posture for a heuristic surface with no
+production track record yet (static-analysis heuristics over inline
+styles/DOM structure, not a verified rendering outcome — see §6.20), not an
+oversight; `title_shape`/`broken_links` earned status-forcing only after
+their own incidents (#1099, #1105) demonstrated the signal was reliable
+enough to act on. A future issue can add that escalation once
+`mobile_readability` has some. `taxonomy` is the closest existing
+precedent for this weight-0/no-forcing shape (not `broken_links`, which
+never had a pre-#1105 no-forcing state in `score_breakdown` — #1105 added
+weight 0 *with* forcing in the same change).
+
+`TableOverflowProtection` (`internal/tools/admin`) is exported specifically
+so `get_site_health`'s aggregation can reuse `get_theme_status`'s exact
+theme-resolution and CSS-scanning logic rather than duplicating it — both
+call sites report identically for the same theme.
 
 ## 7. New tools (v1.3.8+)
 

@@ -147,7 +147,7 @@ func TestBuildSiteHealthReportsBrokenLinksOnlyWhenDBPathConfigured(t *testing.T)
 	}
 
 	t.Run("without db_path: signal entirely omitted, no full-rescan fallback", func(t *testing.T) {
-		health := buildSiteHealth(context.Background(), siteIdx, nil, nil, config.Config{}, nil)
+		health := buildSiteHealth(context.Background(), siteIdx, nil, nil, config.Config{}, nil, false)
 		if health.BrokenLinksCount != nil {
 			t.Fatalf("BrokenLinksCount = %v, want nil (not computed without db_path)", *health.BrokenLinksCount)
 		}
@@ -163,7 +163,7 @@ func TestBuildSiteHealthReportsBrokenLinksOnlyWhenDBPathConfigured(t *testing.T)
 	})
 
 	t.Run("with db_path: nonzero broken links degrades status and caps score", func(t *testing.T) {
-		health := buildSiteHealth(context.Background(), siteIdx, nil, nil, config.Config{}, siteDB)
+		health := buildSiteHealth(context.Background(), siteIdx, nil, nil, config.Config{}, siteDB, false)
 		if health.BrokenLinksCount == nil || *health.BrokenLinksCount != 1 {
 			t.Fatalf("BrokenLinksCount = %v, want *1", health.BrokenLinksCount)
 		}
@@ -192,7 +192,7 @@ func TestBuildSiteHealthReportsBrokenLinksOnlyWhenDBPathConfigured(t *testing.T)
 // call, on an otherwise perfectly healthy site, not just when something is
 // already wrong.
 func TestBuildSiteHealthAlwaysDeclaresRenderedSEONotAggregated(t *testing.T) {
-	health := buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{}, nil)
+	health := buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{}, nil, false)
 	if health.Score != 100 || health.Status != "healthy" {
 		t.Fatalf("baseline health = score=%d status=%q, want a clean 100/healthy so this test actually proves the field survives a perfect score", health.Score, health.Status)
 	}
@@ -230,7 +230,7 @@ func TestBuildSiteHealthTitleShapeCoversDraftAndSectionIndexPages(t *testing.T) 
 		Title: "https://example.com/posts/",
 	})
 
-	health := buildSiteHealth(context.Background(), &site.Index{}, src, nil, config.Config{}, nil)
+	health := buildSiteHealth(context.Background(), &site.Index{}, src, nil, config.Config{}, nil, false)
 
 	want := map[string]bool{"posts/draft-corrupted": true, "posts": true}
 	got := map[string]bool{}
@@ -248,7 +248,7 @@ func TestBuildSiteHealthSurfacesRuntimeDegraded(t *testing.T) {
 	buildstatus.ResetForTest()
 	defer buildstatus.ResetForTest()
 	buildstatus.RecordFailure("permission_denied", time.Now())
-	health := buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{}, nil)
+	health := buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{}, nil, false)
 	if health.RuntimeDegraded == nil || !*health.RuntimeDegraded {
 		t.Fatalf("runtime_degraded after failed build = %#v, want true", health.RuntimeDegraded)
 	}
@@ -259,7 +259,7 @@ func TestBuildSiteHealthSurfacesRuntimeDegraded(t *testing.T) {
 		t.Fatalf("score after failed build = %d, want 99 so a degraded runtime never advertises perfection", health.Score)
 	}
 	buildstatus.RecordSuccess(time.Now())
-	health = buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{}, nil)
+	health = buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{}, nil, false)
 	if health.RuntimeDegraded == nil || *health.RuntimeDegraded {
 		t.Fatalf("runtime_degraded after successful build = %#v, want false", health.RuntimeDegraded)
 	}
@@ -314,7 +314,7 @@ func TestBuildSiteHealthDetectsIncompleteMultilingualPublicOutput(t *testing.T) 
 		t.Fatalf("NewSourceIndex: %v", err)
 	}
 
-	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg, nil)
+	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg, nil, false)
 	if health.PublishableSourcePages != 2 || health.MissingPublicPages != 1 {
 		t.Fatalf("publishable/missing = %d/%d, want 2/1", health.PublishableSourcePages, health.MissingPublicPages)
 	}
@@ -374,7 +374,7 @@ func TestBuildSiteHealthRecognizesCustomPublicURL(t *testing.T) {
 		t.Fatalf("NewSourceIndex: %v", err)
 	}
 
-	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg, nil)
+	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg, nil, false)
 	if health.PublishableSourcePages != 1 || health.MissingPublicPages != 0 {
 		t.Fatalf("publishable/missing = %d/%d, want 1/0", health.PublishableSourcePages, health.MissingPublicPages)
 	}
@@ -439,7 +439,7 @@ func TestBuildSiteHealthIgnoresSectionIndexBundles(t *testing.T) {
 		t.Fatalf("NewSourceIndex: %v", err)
 	}
 
-	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg, nil)
+	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg, nil, false)
 	if health.PublishableSourcePages != 0 || health.MissingPublicPages != 0 {
 		t.Fatalf("publishable/missing = %d/%d, want 0/0 (section indexes excluded)", health.PublishableSourcePages, health.MissingPublicPages)
 	}
@@ -520,7 +520,7 @@ func TestBuildSiteHealthExplainsEightyContentPlusTwoLanguageIndexes(t *testing.T
 		t.Fatal(err)
 	}
 
-	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg, nil)
+	health := buildSiteHealth(context.Background(), idx, srcIdx, nil, cfg, nil, false)
 	if health.SourcePages != 82 || health.PublishableSourcePages != 80 || health.PublishableContentPages != 80 ||
 		health.SectionIndexPages != 2 || health.PublishedPages != 82 || health.MissingPublicPages != 0 ||
 		health.PublicOutputComplete == nil || !*health.PublicOutputComplete {
@@ -641,7 +641,7 @@ func TestValidationHelpers(t *testing.T) {
 	if !out.Success || out.Data.PagesChecked != 4 || len(out.Data.Pages) != 1 {
 		t.Fatalf("validatePagesWithIssues() = %#v", out)
 	}
-	health := buildSiteHealth(context.Background(), &site.Index{}, src, nil, config.Config{}, nil)
+	health := buildSiteHealth(context.Background(), &site.Index{}, src, nil, config.Config{}, nil, false)
 	if health.SourcePages != 4 || health.DraftPages != 1 {
 		t.Fatalf("buildSiteHealth() = %#v", health)
 	}
