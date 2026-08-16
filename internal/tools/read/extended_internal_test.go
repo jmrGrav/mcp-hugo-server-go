@@ -1144,6 +1144,36 @@ func TestOverfetchLimitPreventsUnderDeliveryWhenFilteringAfterTruncation(t *test
 	}
 }
 
+// TestFixScopeForAllFourOutcomes exercises fixScopeFor's decision table
+// directly (#1138 Part 2 advisor review): computeResponsiveSummary's own
+// end-to-end tests can only ever observe "unknown" in this repo's test
+// environment (no resolvable `hugo` binary/on-disk theme), which can't
+// distinguish "none" from "theme_level" from "page_level" — the exact
+// branches an agent actually reads fix_scope to choose between.
+func TestFixScopeForAllFourOutcomes(t *testing.T) {
+	yes, no := true, false
+	cases := []struct {
+		name        string
+		pagesAtRisk int
+		protection  *bool
+		want        string
+	}{
+		{"no pages at risk", 0, nil, "none"},
+		{"no pages at risk even with known protection", 0, &yes, "none"},
+		{"at risk, protection unknown", 3, nil, "unknown"},
+		{"at risk, theme does not protect tables", 3, &no, "theme_level"},
+		{"at risk, theme already protects tables", 3, &yes, "page_level"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := fixScopeFor(tc.pagesAtRisk, tc.protection)
+			if got != tc.want {
+				t.Fatalf("fixScopeFor(%d, %v) = %q, want %q", tc.pagesAtRisk, tc.protection, got, tc.want)
+			}
+		})
+	}
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {

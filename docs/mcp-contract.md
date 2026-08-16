@@ -1435,6 +1435,17 @@ page's rendered HTML.
   weight 0, `score` 100 when `pages_at_risk == 0` else 0, `issues` ==
   `pages_at_risk`.
 
+`fix_scope` describes table-overflow risk specifically — it is derived
+entirely from `table_overflow_protection`, a table-only theme-CSS signal,
+via a small pure decision table (`fixScopeFor`, unit-tested directly for
+all four outcomes since `table_overflow_protection` itself needs a
+resolvable `hugo` binary and an on-disk theme to exercise end-to-end).
+`pages_at_risk` is broader than that — it also counts code-block and image
+risk signals with no theme-constant remedy — so a page whose only signal
+was an oversized image or an unsafe code block does not necessarily need
+the fix `fix_scope` names. Per-page detail always comes from
+`inspect_rendered.responsive_checks`, not from this aggregate field.
+
 **Deliberately does NOT force `status`/`content_status` off
 healthy/healthy_with_advisories, and does NOT cap `score` at 99** — unlike
 `title_shape`/`broken_links`, which both carry weight 0 *and* force status.

@@ -222,6 +222,15 @@ type responsiveSummaryDTO struct {
 	// Hugo Module theme with no local checkout to scan — see
 	// TableOverflowProtection's own doc comment for why that case returns
 	// nil rather than a guessed false).
+	//
+	// FixScope describes table-overflow risk specifically — it is derived
+	// entirely from table_overflow_protection, a table-only theme-CSS
+	// signal. pages_at_risk itself is broader (also counts code-block and
+	// image risk signals with no theme-constant remedy), so a page whose
+	// only signal was an oversized image or an unsafe code block does not
+	// necessarily need the fix FixScope names; per-page detail always
+	// comes from inspect_rendered.responsive_checks, not from this
+	// aggregate field.
 	FixScope string `json:"fix_scope"`
 }
 
@@ -2243,6 +2252,15 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 // page's rendered HTML that can't be loaded/parsed is silently skipped
 // (best-effort, mirrors buildSiteHealth's other per-page loops), not
 // treated as at-risk.
+//
+// idx (the public rendered-content index) is used here regardless of
+// reader profile, the same posture inspect_rendered itself already has (no
+// reader-profile gate on the checks it runs against idx). This is safe
+// because idx is built from cfg.SiteRoot's actual rendered output — Hugo
+// itself never renders draft/unpublished content into that tree in the
+// first place, so idx.ContentPages() cannot contain anything a reader
+// token couldn't already fetch as a public URL. Unlike srcIdx (gated via
+// sourceIndexForProfile above), idx has no source-only population to leak.
 func computeResponsiveSummary(ctx context.Context, cfg config.Config, idx *site.Index) *responsiveSummaryDTO {
 	if idx == nil {
 		return nil
@@ -2257,18 +2275,41 @@ func computeResponsiveSummary(ctx context.Context, cfg config.Config, idx *site.
 			pagesAtRisk++
 		}
 	}
-	fixScope := "none"
+	var protection *bool
 	if pagesAtRisk > 0 {
-		switch protection := admin.TableOverflowProtection(ctx, cfg); {
-		case protection == nil:
-			fixScope = "unknown"
-		case !*protection:
-			fixScope = "theme_level"
-		default:
-			fixScope = "page_level"
-		}
+		// Only resolved when needed: fixScopeFor ignores this argument
+		// entirely when pagesAtRisk == 0, and resolving it always would
+		// spend an unconditional `hugo config` exec on every clean site.
+		protection = admin.TableOverflowProtection(ctx, cfg)
 	}
-	return &responsiveSummaryDTO{PagesAtRisk: pagesAtRisk, FixScope: fixScope}
+	return &responsiveSummaryDTO{PagesAtRisk: pagesAtRisk, FixScope: fixScopeFor(pagesAtRisk, protection)}
+}
+
+// fixScopeFor is a pure decision table, factored out of
+// computeResponsiveSummary so all four outcomes can be unit-tested without
+// a resolvable `hugo` binary or an on-disk theme. tableOverflowProtection
+// is only ever queried when pagesAtRisk > 0 — computeResponsiveSummary
+// evaluates it lazily for that reason; this function accepts the already-
+// resolved value so its own tests can supply either state directly.
+//
+// fix_scope describes table-overflow risk specifically (it is derived
+// entirely from table_overflow_protection, a table-only theme-CSS signal)
+// — it may not describe the right remedy for a page whose only signal was
+// an oversized image or an unsafe code block, since neither has a
+// theme-constant fix an agent could apply site-wide the way a table CSS
+// fix can. See responsiveSummaryDTO's own doc comment.
+func fixScopeFor(pagesAtRisk int, tableOverflowProtection *bool) string {
+	if pagesAtRisk == 0 {
+		return "none"
+	}
+	switch {
+	case tableOverflowProtection == nil:
+		return "unknown"
+	case !*tableOverflowProtection:
+		return "theme_level"
+	default:
+		return "page_level"
+	}
 }
 
 // isPageAtMobileLayoutRisk reduces one page's responsiveChecksDTO to a
