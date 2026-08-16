@@ -249,7 +249,7 @@ func Register(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, ch
 	RegisterHooks(s, cfg)
 	registerGenerateFeaturedImage(s, cfg)
 	RegisterSRI(s, cfg)
-	RegisterRuntimeStatus(s, cfg, srcIdx)
+	RegisterRuntimeStatusWithChangeSets(s, cfg, srcIdx, changeSets)
 	RegisterThemeStatus(s, cfg)
 	RegisterHugoUpgradeTools(s, cfg)
 }

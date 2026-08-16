@@ -10,6 +10,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
@@ -37,6 +38,15 @@ type getRuntimeStatusInput struct {
 	// tool expensive to poll. build_site already emits output_revision once
 	// per build; prefer that for the public tree when it's available.
 	IncludeRevisions bool `json:"include_revisions,omitempty"`
+	// ChangeSetID (#1142) selects which change-set data.publication_safety
+	// is reported for, resolved exactly the way every mutation tool
+	// resolves it (blank -> this caller's implicit default bucket, see
+	// changeset.DefaultID). Ignored (no error) when the shared change-set
+	// registry isn't wired at all, same as change_set_id on other tools
+	// when the feature is absent; an explicit id that doesn't resolve for
+	// this caller (unknown, or owned by someone else) is a normal
+	// invalid_params error, matching build_site's own resolution.
+	ChangeSetID string `json:"change_set_id,omitempty"`
 }
 
 type hugoRuntimeStatus struct {
@@ -122,6 +132,53 @@ type mutationJournalRuntimeStatus struct {
 	LastPrunedEntries int    `json:"last_pruned_entries"`
 }
 
+// currentChangeSetRuntimeStatus is the change-set publicationSafetyRuntimeStatus
+// resolved for this call — see computePublicationSafety's own doc comment
+// for how it's chosen.
+type currentChangeSetRuntimeStatus struct {
+	ID      string `json:"id"`
+	Changes int    `json:"changes"`
+}
+
+type otherChangeSetsRuntimeStatus struct {
+	Count   int `json:"count"`
+	Changes int `json:"changes"`
+}
+
+// publicationSafetyRuntimeStatus is #1142: it answers "can I publish right
+// now without risking someone else's in-flight work?" for one specific
+// change-set (CurrentChangeSet — resolved exactly the way build_site's own
+// `change_set_id` input resolves it, see getRuntimeStatusInput.ChangeSetID),
+// by attributing every currently-pending page (via
+// changeset.Registry.OwnerOfSourceKey, the same lookup #1140's build/publish
+// guard uses) to whichever change-set most recently touched it. Deliberately
+// separate from the existing top-level `publication_state` (a coarse
+// pending/clean/drift enum unrelated to change-set ownership) to avoid a
+// JSON key collision and because that field predates change-sets entirely.
+type publicationSafetyRuntimeStatus struct {
+	// UnpublishedChangesCount is CurrentChangeSet.Changes +
+	// OtherChangeSets.Changes + ExternalUnknownChanges — every pending page
+	// this registry knows about, regardless of owner. Not necessarily equal
+	// to the top-level data.unpublished_changes_count, which also folds in
+	// index-reconciliation signals (out-of-band drift, generated-asset
+	// drift) this change-set-scoped view doesn't consider.
+	UnpublishedChangesCount int                           `json:"unpublished_changes_count"`
+	ActiveChangeSets        int                           `json:"active_change_sets"`
+	CurrentChangeSet        currentChangeSetRuntimeStatus `json:"current_change_set"`
+	OtherChangeSets         otherChangeSetsRuntimeStatus  `json:"other_change_sets"`
+	// ExternalUnknownChanges counts pending pages no change-set this
+	// process has tracked a mutation for — direct filesystem/SSH edits, or
+	// edits made before this process last restarted (see
+	// changeset.Registry.OwnerOfSourceKey's own doc comment on this blind
+	// spot). Unlike guardForeignChangeSet, which allows these through
+	// (it cannot tell "untracked" apart from "genuinely nobody else's"),
+	// SafeToPublish here treats them as unsafe: this field exists purely to
+	// inform an agent, and "an untracked change might not be mine" is
+	// exactly the risk #1142 asks this surface to name.
+	ExternalUnknownChanges int  `json:"external_unknown_changes"`
+	SafeToPublish          bool `json:"safe_to_publish"`
+}
+
 type runtimeStatusData struct {
 	// ReleaseVersion — see the comment on toolcontract.ResponseMeta.ReleaseVersion.
 	// Named ServerVersion/server_version through v1.5.7; renamed (#563).
@@ -146,6 +203,7 @@ type runtimeStatusData struct {
 	ContentIndexShadow      *contentIndexShadowRuntimeStatus  `json:"content_index_shadow,omitempty"`
 	BuildReconciliation     *buildReconciliationRuntimeStatus `json:"build_reconciliation,omitempty"`
 	MutationJournal         *mutationJournalRuntimeStatus     `json:"mutation_journal,omitempty"`
+	PublicationSafety       *publicationSafetyRuntimeStatus   `json:"publication_safety,omitempty"`
 	Degraded                []string                          `json:"degraded,omitempty"`
 }
 
@@ -166,18 +224,26 @@ func containsString(values []string, want string) bool {
 
 // RegisterRuntimeStatus wires get_runtime_status (site.admin scope).
 func RegisterRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, publicIndexes ...*site.Index) {
-	registerRuntimeStatus(s, cfg, srcIdx, nil, publicIndexes...)
+	registerRuntimeStatus(s, cfg, srcIdx, nil, nil, publicIndexes...)
+}
+
+// RegisterRuntimeStatusWithChangeSets additionally wires the shared
+// changeset.Registry so `data.publication_safety` (#1142) can be reported;
+// used by admin.Register, which already threads the same registry into
+// build_site/publish_changes for #1140's guard.
+func RegisterRuntimeStatusWithChangeSets(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, changeSets *changeset.Registry, publicIndexes ...*site.Index) {
+	registerRuntimeStatus(s, cfg, srcIdx, nil, changeSets, publicIndexes...)
 }
 
 // RegisterRuntimeStatusWithDB is the production registration path when the
 // optional derived SQLite database is configured. It retains the public
 // RegisterRuntimeStatus signature for focused tool tests while allowing a
 // restarted process to report the most recently persisted build fact.
-func RegisterRuntimeStatusWithDB(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteDB *db.DB, publicIndexes ...*site.Index) {
-	registerRuntimeStatus(s, cfg, srcIdx, siteDB, publicIndexes...)
+func RegisterRuntimeStatusWithDB(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteDB *db.DB, changeSets *changeset.Registry, publicIndexes ...*site.Index) {
+	registerRuntimeStatus(s, cfg, srcIdx, siteDB, changeSets, publicIndexes...)
 }
 
-func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteDB *db.DB, publicIndexes ...*site.Index) {
+func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteDB *db.DB, changeSets *changeset.Registry, publicIndexes ...*site.Index) {
 	if s == nil {
 		return
 	}
@@ -201,8 +267,13 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only " +
 			"language/representation counts, counterpart gaps, and legacy mismatch facts; `build_reconciliation` reports aggregate source/public drift recomputed from filesystem fingerprints rather than volatile BuildPending flags. No page identity or body is exposed. When SQLite is configured, " +
 			"`mutation_journal` reports only aggregate retention facts; `last_pruned_entries` is the number removed by the most recent successful maintenance " +
-			"transaction. Read-only; does not expose secrets or arbitrary " +
-			"host inventory. Use this instead of inferring environment health from error messages on other tools.",
+			"transaction. When the shared change-set registry is wired (#1135/#1140), `publication_safety` (#1142) tells you whether a build_site/publish_changes call " +
+			"made right now with the same optional `change_set_id` (resolved identically — blank means your implicit default change-set) would be safe: " +
+			"`current_change_set` is that change-set's own pending work, `other_change_sets` is pending work known to belong to a different change-set (what would trip " +
+			"#1140's foreign_change_set_present guard), `external_unknown_changes` is pending pages no change-set this process has tracked (direct filesystem/SSH edits, " +
+			"or edits from before this process last restarted — a blind spot, not proof they're safe), and `safe_to_publish` is false if either of the latter two is " +
+			"nonzero. Read-only; resolving `change_set_id` never updates its last-used bookkeeping (unlike the mutating tools) so calling this repeatedly has no side " +
+			"effect. Does not expose secrets or arbitrary host inventory. Use this instead of inferring environment health from error messages on other tools.",
 		InputSchema:  tools.MustSchema[getRuntimeStatusInput](),
 		OutputSchema: tools.MustSchema[getRuntimeStatusOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -365,9 +436,86 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 		}
 		data.Site.OverdueTestContent = CollectStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours, time.Now())
 
+		if changeSets != nil && srcIdx != nil {
+			safety, err := computePublicationSafety(ctx, changeSets, srcIdx, in.ChangeSetID)
+			if err != nil {
+				return nil, getRuntimeStatusOutput{}, err
+			}
+			data.PublicationSafety = safety
+		}
+
 		meta := toolcontract.NewMeta(buildinfo.Version, time.Now())
 		return nil, getRuntimeStatusOutput{ToolResponse: toolcontract.Success(data, meta)}, nil
 	}))
+}
+
+// computePublicationSafety is #1142: attribute every currently-pending page
+// to whichever change-set most recently touched it (the same
+// changeset.Registry.OwnerOfSourceKey lookup #1140's build/publish guard
+// uses), then report whether a build_site/publish_changes call made right
+// now with this same requestedChangeSetID would be safe — i.e. would NOT
+// hit #1140's foreign_change_set_present guard — without an agent having to
+// attempt the call and parse the error.
+//
+// requestedChangeSetID is resolved via changeSets.Resolve exactly the way
+// build_site's own change_set_id input resolves it: blank becomes this
+// caller's implicit default bucket, and any other value must already be
+// owned by this caller or Resolve returns invalid_params. This is
+// deliberately the same resolution rule guardForeignChangeSet's own
+// acknowledgment set uses, so "am I safe to build with change_set_id=X"
+// here and "would build_site with change_set_id=X succeed" give the same
+// answer for the single-id case (the change_set_ids plural escape hatch is
+// intentionally not modeled here — this is one specific change-set's view).
+func computePublicationSafety(ctx context.Context, changeSets *changeset.Registry, srcIdx *hugosite.SourceIndex, requestedChangeSetID string) (*publicationSafetyRuntimeStatus, error) {
+	// Peek, not Resolve: get_runtime_status carries ReadOnlyHint:true and
+	// must not mutate change-set LastUsedAt bookkeeping merely by being
+	// asked about it.
+	current, err := changeSets.Peek(ctx, requestedChangeSetID)
+	if err != nil {
+		return nil, err
+	}
+
+	hugosite.ContentMu.RLock()
+	pending := srcIdx.PendingPages()
+	hugosite.ContentMu.RUnlock()
+
+	changesByOwner := make(map[string]int)
+	seen := make(map[string]bool)
+	external := 0
+	for _, p := range pending {
+		if seen[p.Slug] {
+			continue
+		}
+		seen[p.Slug] = true
+		ownerID, ok := changeSets.OwnerOfSourceKey(p.Slug)
+		if !ok {
+			external++
+			continue
+		}
+		changesByOwner[ownerID]++
+	}
+
+	result := &publicationSafetyRuntimeStatus{
+		CurrentChangeSet: currentChangeSetRuntimeStatus{ID: current, Changes: changesByOwner[current]},
+	}
+	ownerIDs := make([]string, 0, len(changesByOwner))
+	for id := range changesByOwner {
+		ownerIDs = append(ownerIDs, id)
+	}
+	sort.Strings(ownerIDs)
+	result.ActiveChangeSets = len(ownerIDs)
+
+	for _, id := range ownerIDs {
+		if id == current {
+			continue
+		}
+		result.OtherChangeSets.Count++
+		result.OtherChangeSets.Changes += changesByOwner[id]
+	}
+	result.ExternalUnknownChanges = external
+	result.UnpublishedChangesCount = result.CurrentChangeSet.Changes + result.OtherChangeSets.Changes + result.ExternalUnknownChanges
+	result.SafeToPublish = result.OtherChangeSets.Changes == 0 && result.ExternalUnknownChanges == 0
+	return result, nil
 }
 
 // probeHugo shells out to `hugo version` with a bounded environment and

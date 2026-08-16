@@ -172,7 +172,7 @@ func TestGetRuntimeStatusUsesPersistedPublicationManifestAfterRestart(t *testing
 	cfg.HugoRoot = t.TempDir()
 	cfg.SiteRoot = t.TempDir()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterRuntimeStatusWithDB(s, cfg, nil, d)
+	admin.RegisterRuntimeStatusWithDB(s, cfg, nil, d, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
 		t.Fatalf("server connect: %v", err)
@@ -216,7 +216,7 @@ func TestGetRuntimeStatusReportsAggregateContentShadowDiagnostics(t *testing.T) 
 	cfg.HugoRoot = t.TempDir()
 	cfg.SiteRoot = t.TempDir()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterRuntimeStatusWithDB(s, cfg, nil, d)
+	admin.RegisterRuntimeStatusWithDB(s, cfg, nil, d, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
 		t.Fatal(err)
@@ -279,7 +279,7 @@ func TestGetRuntimeStatusReportsDurableBuildReconciliationFacts(t *testing.T) {
 	cfg.HugoRoot = t.TempDir()
 	cfg.SiteRoot = t.TempDir()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterRuntimeStatusWithDB(s, cfg, srcIdx, d)
+	admin.RegisterRuntimeStatusWithDB(s, cfg, srcIdx, d, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
 		t.Fatal(err)
@@ -326,7 +326,7 @@ func TestGetRuntimeStatusExposesMutationJournalRetentionFacts(t *testing.T) {
 	cfg := config.Default()
 	cfg.HugoRoot, cfg.SiteRoot = t.TempDir(), t.TempDir()
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterRuntimeStatusWithDB(s, cfg, nil, d)
+	admin.RegisterRuntimeStatusWithDB(s, cfg, nil, d, nil)
 	t1, t2 := mcp.NewInMemoryTransports()
 	if _, err := s.Connect(context.Background(), t1, nil); err != nil {
 		t.Fatal(err)

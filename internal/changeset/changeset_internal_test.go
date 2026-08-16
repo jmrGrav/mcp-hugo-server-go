@@ -133,3 +133,54 @@ func TestOwnerOfSourceKeyReturnsMostRecentMutation(t *testing.T) {
 		t.Fatal("OwnerOfSourceKey(\"posts/never-touched\") = ok, want false — no mutation ever recorded")
 	}
 }
+
+// TestPeekDoesNotUpdateLastUsedAt is #1142's own regression: get_runtime_status
+// carries ReadOnlyHint:true, so its use of Peek to resolve an explicit
+// change_set_id must not mutate the registry's LastUsedAt bookkeeping the
+// way Resolve legitimately does for mutating tools. Proven by calling Peek,
+// then Create-ing a brand new change-set and using ITS Resolve call to
+// observe whether the earlier Peek left any trace: if Peek had accidentally
+// shared Resolve's mutating path, this test would still pass (Resolve
+// always updates on its own call) — so instead it directly inspects that
+// Peek returns the correct id without going through the touch codepath at
+// all, by asserting behavior is identical whether Peek is called zero or
+// many times before the one Resolve call that's expected to actually record
+// the touch.
+func TestPeekDoesNotUpdateLastUsedAt(t *testing.T) {
+	r := NewRegistry(nil)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	id, err := r.Create(caller.MutationKey(ctx), now)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	for i := 0; i < 5; i++ {
+		got, err := r.Peek(ctx, id)
+		if err != nil {
+			t.Fatalf("Peek(%q) error = %v", id, err)
+		}
+		if got != id {
+			t.Fatalf("Peek(%q) = %q, want %q", id, got, id)
+		}
+	}
+
+	r.mu.Lock()
+	lastUsedAfterPeeks := r.owners[id].LastUsedAt
+	r.mu.Unlock()
+	if !lastUsedAfterPeeks.Equal(now) {
+		t.Fatalf("LastUsedAt after 5 Peek calls = %v, want unchanged from Create's %v — Peek must not touch registry state", lastUsedAfterPeeks, now)
+	}
+
+	later := now.Add(time.Hour)
+	if _, err := r.Resolve(ctx, id, later); err != nil {
+		t.Fatalf("Resolve(%q) error = %v", id, err)
+	}
+	r.mu.Lock()
+	lastUsedAfterResolve := r.owners[id].LastUsedAt
+	r.mu.Unlock()
+	if !lastUsedAfterResolve.Equal(later) {
+		t.Fatalf("LastUsedAt after Resolve = %v, want %v — Resolve must still update it", lastUsedAfterResolve, later)
+	}
+}

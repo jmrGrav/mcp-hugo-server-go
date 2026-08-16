@@ -1001,7 +1001,7 @@ func buildPrivilegedScopedServer(scopeName string, core *serverCore, cfg config.
 	// registration keeps its compatibility signature for unit registrations,
 	// while the production server can reconcile source and public output after
 	// restarts instead of trusting volatile BuildPending flags (#1066).
-	admin.RegisterRuntimeStatusWithDB(server, cfg, core.srcIdx, core.siteDB, idx)
+	admin.RegisterRuntimeStatusWithDB(server, cfg, core.srcIdx, core.siteDB, core.changeSets, idx)
 	admin.RegisterVerifyPublication(server, idx, core.srcIdx, cfg)
 	admin.RegisterPublishChanges(server, idx, core.srcIdx, cfg, core.changeSets, postBuildCallbacks("publish_changes", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
