@@ -516,6 +516,28 @@ func newMCPToolHandler(
 	maxBody int64,
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// #1137: reject an unrecognized ?profile= outright, before any
+		// OAuth/scope handling. A typo'd profile silently falling through
+		// to an unfiltered (or wrongly narrowed) tool list would make this
+		// feature untrustworthy — same posture as the scope-denied
+		// rejection below, and independent of whether OAuth is even
+		// configured (an exposure profile is not an authorization check).
+		if profile := r.URL.Query().Get(exposureProfileQueryParam); profile != "" && !isKnownExposureProfile(profile) {
+			audit.Warn(audit.EventScopeDenied, "denied",
+				"reason", "unknown_exposure_profile",
+				"profile", profile,
+				"path", r.URL.Path,
+				"remote_addr", r.RemoteAddr,
+			)
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      nil,
+				"error":   map[string]any{"code": -32602, "message": fmt.Sprintf("unknown exposure profile %q: must be one of reader, editorial, advanced, admin", profile)},
+			})
+			return
+		}
 		callerScope := ""
 		if oauthSvc != nil {
 			bearerResult, ok := bearerResultFromContext(r.Context())
@@ -1050,6 +1072,40 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	adminServer := buildAdminScopedServer(core, cfg, idx, extensions, previews)
 	previewHandler := previews.HTTPHandler()
 
+	// #1137: exposure-profile-filtered variants of all three scope servers.
+	// The admin profile is not built separately — it is, by definition, the
+	// unfiltered set, i.e. exactly publicServer/writeServer/adminServer
+	// above (writeServer's own RemoveTools for the managed-Hugo-binary
+	// tools above is a scope boundary, unaffected by profile). Each of
+	// these is a genuinely separate *mcp.Server built via the same
+	// registration functions as the unfiltered servers, sharing the same
+	// underlying core.previews/core.siteDB/core.srcIdx/core.changeSets
+	// state (buildWriteScopedServer/buildAdminScopedServer both take
+	// `previews` from core, never allocate their own) — only the
+	// *mcp.Server's own tool-registration map differs per instance, so
+	// building nine of them here at startup costs nothing beyond map
+	// inserts, not nine copies of application state.
+	allToolNames := make([]string, 0, len(core.knownTools))
+	for name := range core.knownTools {
+		allToolNames = append(allToolNames, name)
+	}
+	exposureServers := make(map[string]*mcp.Server, 9)
+	for _, profile := range []string{ExposureProfileReader, ExposureProfileEditorial, ExposureProfileAdvanced} {
+		hide := toolsToHideForExposureProfile(allToolNames, profile)
+
+		p := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
+		p.RemoveTools(hide...)
+		exposureServers[exposureServerKey("", profile)] = p
+
+		w, _ := buildWriteScopedServer(core, cfg, idx, extensions)
+		w.RemoveTools(hide...)
+		exposureServers[exposureServerKey("write", profile)] = w
+
+		a := buildAdminScopedServer(core, cfg, idx, extensions, previews)
+		a.RemoveTools(hide...)
+		exposureServers[exposureServerKey("admin", profile)] = a
+	}
+
 	opts := &mcp.StreamableHTTPOptions{
 		DisableLocalhostProtection: true,
 		// Keep sessions alive for 24 h so long-running agent conversations
@@ -1065,7 +1121,18 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	streaming := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
 		scope, _ := r.Context().Value(oauth.CtxScope).(string)
 		rank := tools.ScopeRank(scope)
-		slog.Info("mcp: session created", "scope", scope, "rank", rank, "remote_addr", r.RemoteAddr)
+		// #1137: an unknown profile value was already rejected by
+		// newMCPToolHandler above (this callback has no error return), so
+		// here "" and ExposureProfileAdmin are the only values that mean
+		// "no additional narrowing" — both fall through to the existing
+		// scope-only selection.
+		profile := r.URL.Query().Get(exposureProfileQueryParam)
+		slog.Info("mcp: session created", "scope", scope, "rank", rank, "profile", profile, "remote_addr", r.RemoteAddr)
+		if profile != "" && profile != ExposureProfileAdmin {
+			if srv, ok := exposureServers[exposureServerKey(scopeNameForRank(rank), profile)]; ok {
+				return srv
+			}
+		}
 		if rank >= 2 {
 			return adminServer
 		}

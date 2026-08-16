@@ -1465,6 +1465,102 @@ so `get_site_health`'s aggregation can reuse `get_theme_status`'s exact
 theme-resolution and CSS-scanning logic rather than duplicating it — both
 call sites report identically for the same theme.
 
+### 6.22 Exposure Profiles: `?profile=` on the MCP Endpoint (#1137)
+
+#1137 was filed over agent-UX, not a security gap: with 69 tools registered
+and deliberate overlap between near-neighbors (`get_page` vs
+`get_page_markdown` vs `get_page_frontmatter` vs `get_page_for_edit`;
+`get_backlinks` vs `get_related_content` vs `suggest_links`), an agent
+choosing which tool to call gets harder as the catalog grows, even though
+every tool works correctly and every description already explains its own
+nuance. OAuth scope (`read`/`write`/`admin`) already partitions tools by
+*authorization*, but every scope tier registers its full read-tool surface
+regardless — a `write`-scope caller sees the same ~30+ read-open tools as
+an anonymous one, on top of the write tools.
+
+**What shipped**: an optional `?profile=` query parameter on the `/mcp`
+endpoint, read once at session `initialize` time (subsequent requests on
+the same `Mcp-Session-Id` reuse whatever `*mcp.Server` that selection
+returned). Four cumulative tiers, each a superset of the one before:
+
+- `reader` (~15 tools): read-only content discovery and health/link
+  checks — `get_page`, `list_pages`, `search_content`, `get_broken_links`,
+  `inspect_rendered`, `get_site_health`, and similar. No mutation
+  capability, no operational/publishing detail.
+- `editorial` (+~14): the day-to-day content workflow — create/update/
+  delete a page and its assets, preview before publishing, validate, and
+  publish (`create_page`, `update_page`, `upload_page_asset`,
+  `create_preview`, `diff_page`, `publish_changes`, `build_site`, etc.).
+- `advanced`: everything else except the four admin-only Hugo-binary
+  lifecycle tools — bundle/SRI/build/hooks/rollback operations and the
+  read-side tools not curated into `reader` (agent-context export,
+  revision history, structural/orphan-link analysis).
+- `admin`: the full, unfiltered catalog — identical to omitting `?profile=`
+  entirely.
+
+Omitting `?profile=` leaves every existing integration's tool list exactly
+as it was before this feature existed — this is purely additive/opt-in,
+verified directly (`TestExposureProfileOmittedLeavesDefaultToolListUnchanged`).
+
+**Profile narrows within scope, it never widens it.** `?profile=admin` on
+a `write`-scope token still yields the `write`-scope tool list (which
+already excludes the four admin-only tools at the OAuth boundary, not the
+profile boundary) — a profile can only ever remove tools a scope already
+grants, never add ones it doesn't
+(`TestExposureProfileComposesWithWriteScope`).
+
+**This is more enforcing than "just a discoverability filter."** The
+underlying mechanism is `(*mcp.Server).RemoveTools`, which deletes a tool
+from the exact map both `tools/list` and `CallTool` dispatch read from (see
+the go-sdk's `featureSet.remove`/`Server.callTool`) — a profile-hidden tool
+is not merely undiscovered, calling it directly returns an "unknown tool"
+error (`TestExposureProfileReaderHardBlocksCallNotJustListing`). A caller
+who wants the wider set reconnects with a different (or no) `profile`
+parameter — no new OAuth grant or token exchange required, since the
+underlying scope is unchanged. Document this plainly rather than repeating
+the issue's own "masks by default, doesn't remove the primitive" framing
+uncorrected: through any *one* connection, a hidden tool genuinely cannot
+be called.
+
+**An unrecognized `?profile=` value is rejected outright** (HTTP 400,
+JSON-RPC error code -32602) rather than silently falling through to an
+unfiltered or wrongly-narrowed list — a typo'd profile that quietly
+widened an agent's tool set (or narrowed it further than intended) would
+make the whole feature untrustworthy
+(`TestExposureProfileUnknownValueRejected`).
+
+**Deliberately out of scope for this PR**: the issue's alternative
+mechanism, selecting a profile at OAuth client-registration time, is not
+implemented — it would need a token-store/client-registry schema change,
+while the query parameter needs neither and covers the same need. The
+stdio transport (`NewStdio`, MCPB/local desktop use) is also unaffected:
+it is a single trusted local process with no per-request query string to
+read, and already gets the full privileged catalog unconditionally by
+design (see `NewStdio`'s own doc comment).
+
+**Distinct from, and orthogonal to, `site.AccessProfileReader`**: that is
+data-scoping *inside* a tool's own response (redacting source-only fields
+for a reader-scope caller), entirely independent of which tools are
+*registered* on the connection. An exposure profile and an OAuth scope's
+reader-mode data redaction can both apply to the same session without
+interacting — hence the distinct `ExposureProfile*` naming in
+`internal/server/exposure_profile.go`, chosen specifically so the two
+concepts are never confused at a call site.
+
+**Tier assignment** lives in `internal/server/exposure_profile.go`'s
+`toolExposureTier` table: `reader` and `editorial` are hand-curated (per
+the issue's own examples), the four `admin`-only tools are an explicit
+list mirroring `buildWriteScopedServer`'s existing `RemoveTools` call, and
+`advanced` is the implicit default for everything else — including any
+future tool with no explicit entry, so a new tool never breaks by being
+unassigned. `TestToolExposureTierCoversEveryRegisteredTool` is the
+completeness invariant: it fails if the table references a tool no longer
+in the registry (stale entry) or resolves any registered tool to an
+unrecognized tier — but, by design, it does NOT fail merely because a new
+tool defaults to `advanced` without a deliberate `reader`/`editorial`
+assignment; that judgment call is left to a human reviewing new tool
+additions, not to CI.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.
