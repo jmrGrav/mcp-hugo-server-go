@@ -1336,17 +1336,26 @@ CrowdSec, and multiple KVM VMs alongside this server).
 - **`inspect_rendered.responsive_checks`** (always present, purely
   additive — none of its fields affect `status`): per-page heuristics over
   the already-parsed rendered DOM.
-  - `tables`: `count`, `fixed_width` (hardcoded pixel width, not %/auto),
-    `responsive_wrapper` (an ancestor looks like it provides horizontal
-    scroll — `table-responsive`/`overflow-x`/etc. class or style
-    heuristics), `long_cell_risk` (a cell contains a 25+ character
-    unspaced token — a URL or file path — that can force table width
-    regardless of wrapping).
-  - `code_blocks`: `count`, `overflow_safe` (false only on an anti-pattern:
-    a `<pre>` with a fixed pixel width or explicit `white-space: nowrap`
-    and no width escape hatch — not a positive confirmation the theme's
-    CSS actually scrolls it, see `table_overflow_protection` below for
-    that theme-constant question).
+  - `tables`: `count` (excludes Hugo chroma's `lineNumbersInTable` output —
+    an `lntable`/`highlighttable`/`chroma`/`highlight` ancestor-or-self —
+    since counting those would fire `long_cell_risk` on ordinary code
+    lines instead of real content tables), `fixed_width` (hardcoded pixel
+    width via attribute or inline `width:` style; `max-width` does not
+    count), `responsive_wrapper` (an ancestor's class/style indicates an
+    actual horizontal-scroll container — `table-responsive`, `overflow-x:
+    auto|scroll`, etc.; a bare `overflow: hidden`/`class="overflow-hidden"`
+    does not count, since that clips content rather than scrolling it),
+    `long_cell_risk` (a cell contains a 25+ character unspaced token — a
+    URL or file path — that can force table width regardless of
+    wrapping).
+  - `code_blocks`: `count` (raw `<pre>` elements — under chroma's
+    `lineNumbersInTable` this can be up to 2x the logical code block
+    count, one `<pre>` for the line-number gutter and one for the code;
+    intentionally not deduplicated), `overflow_safe` (false only on an
+    anti-pattern: a `<pre>` with a fixed pixel width or a `nowrap` token in
+    its inline style and no width escape hatch — not a positive
+    confirmation the theme's CSS actually scrolls it, see
+    `table_overflow_protection` below for that theme-constant question).
   - `images`: `count`, `responsive` (false only when an `<img>` has a
     hardcoded pixel width over 400 with no `max-width` style or `srcset`
     escape hatch).

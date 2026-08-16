@@ -77,15 +77,21 @@ type inspectRenderedPageData struct {
 	Preview *previewDTO `json:"preview,omitempty"`
 }
 
-// responsiveTablesDTO: Count is every <table> found in the rendered
-// document. FixedWidth counts tables carrying a fixed pixel width (attribute
-// or inline style) rather than a percentage/auto width. ResponsiveWrapper
-// counts tables with an ancestor that looks like it provides horizontal
-// scroll (class/style heuristics — "table-responsive", "overflow-x", etc.).
-// LongCellRisk counts tables containing at least one cell with an
-// unbreakable token 25+ characters long (a URL, file path, or similarly
-// long unspaced string) that can force a table wider than its container
-// regardless of wrapping.
+// responsiveTablesDTO: Count is every content <table> found in the
+// rendered document — excluding Hugo chroma's `lineNumbersInTable` output
+// (an `lntable`/`highlighttable` wrapping every code block purely for
+// line-number alignment; without this exclusion `count`/`long_cell_risk`
+// would fire on ordinary code lines instead of real content tables).
+// FixedWidth counts tables carrying a fixed pixel width (attribute or
+// inline `width:` style) rather than a percentage/auto width — `max-width`
+// does not count. ResponsiveWrapper counts tables with an ancestor whose
+// class/style indicates an actual horizontal-scroll container (e.g.
+// `table-responsive`, `overflow-x: auto`) — a bare "overflow" match
+// (`overflow: hidden`, `class="overflow-hidden"`) does not count, since
+// that clips content rather than scrolling it. LongCellRisk counts tables
+// containing at least one cell with an unbreakable token 25+ characters
+// long (a URL, file path, or similarly long unspaced string) that can
+// force a table wider than its container regardless of wrapping.
 type responsiveTablesDTO struct {
 	Count             int `json:"count"`
 	FixedWidth        int `json:"fixed_width"`
@@ -93,12 +99,16 @@ type responsiveTablesDTO struct {
 	LongCellRisk      int `json:"long_cell_risk"`
 }
 
-// responsiveCodeBlocksDTO: Count is every <pre> element found. OverflowSafe
-// is false only when a code block itself carries a fixed pixel width or a
-// `nowrap` token in its inline style — an anti-pattern heuristic, not a
-// positive confirmation that the theme's own CSS provides overflow-x
-// scrolling (that theme-constant property is reported once by
-// get_theme_status, not recomputed per page here).
+// responsiveCodeBlocksDTO: Count is every raw <pre> element found — under
+// Hugo chroma's `lineNumbersInTable` output this can be up to 2x the number
+// of logical code blocks (a separate <pre> for the line-number gutter and
+// for the code itself), since this field intentionally makes no attempt to
+// deduplicate that structure. OverflowSafe is false only when a code block
+// itself carries a fixed pixel width or a `nowrap` token in its inline
+// style — an anti-pattern heuristic, not a positive confirmation that the
+// theme's own CSS provides overflow-x scrolling (that theme-constant
+// property is reported once by get_theme_status, not recomputed per page
+// here).
 type responsiveCodeBlocksDTO struct {
 	Count        int  `json:"count"`
 	OverflowSafe bool `json:"overflow_safe"`
