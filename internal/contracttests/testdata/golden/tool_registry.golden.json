@@ -3463,7 +3463,7 @@
   {
     "name": "get_theme_status",
     "required_scope": "write",
-    "description": "Report the active Hugo theme(s) or module imports, whether their on-disk source is present, and (for classic themes/ directory installs) the pinned Git commit and dirty/local-override state. Read-only — never installs, updates, or fetches theme code from a URL.",
+    "description": "Report the active Hugo theme(s) or module imports, whether their on-disk source is present, and (for classic themes/ directory installs) the pinned Git commit and dirty/local-override state. Also reports table_overflow_protection: whether theme CSS scrolls wide tables horizontally on narrow viewports (true/false/omitted-if-unknown, e.g. Hugo Module themes). Read-only — never installs, updates, or fetches theme code from a URL.",
     "input_schema": {
       "additionalProperties": false,
       "type": "object"
@@ -3473,6 +3473,7 @@
       "data.hugo.error:string",
       "data.hugo.version:string",
       "data.hugo:object:required",
+      "data.table_overflow_protection:unspecified",
       "data.themes:unspecified:required",
       "data.themes[].commit:string",
       "data.themes[].dirty:boolean:required",
@@ -3510,7 +3511,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "b5282796f079a850aba383e1eb7590cfdfa551870285844b87be8b5b3a329e9f"
+    "output_schema_sha256": "bde4e676b397b89aa78917180f41ffc3668ea0506a13a6a63236b7880ed8545a"
   },
   {
     "name": "inspect_preview",
@@ -3586,7 +3587,7 @@
   {
     "name": "inspect_rendered",
     "required_scope": "",
-    "description": "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `\u003cimg\u003e` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `\u003cimg\u003e` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered \u003clink\u003e tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+    "description": "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `\u003cimg\u003e` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `\u003cimg\u003e` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered \u003clink\u003e tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Also reports `responsive_checks` (#1138): static-analysis-only heuristics over the rendered DOM for mobile layout risk — wide/fixed-width tables, unwrapped tables with long unbreakable cell content, fixed-width code blocks, and oversized fixed-width images. No headless browser or real viewport rendering; see docs/mcp-contract.md §6.20. Purely additive, never affects `status`. The theme-constant question \"does this site's CSS scroll wide tables horizontally at all\" is answered once by get_theme_status's `table_overflow_protection`, not recomputed per page here. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -3623,6 +3624,18 @@
       "data.preview.frontmatter_valid:boolean:required",
       "data.preview.risks:unspecified:required",
       "data.preview:unspecified",
+      "data.responsive_checks.code_blocks.count:integer:required",
+      "data.responsive_checks.code_blocks.overflow_safe:boolean:required",
+      "data.responsive_checks.code_blocks:object:required",
+      "data.responsive_checks.images.count:integer:required",
+      "data.responsive_checks.images.responsive:boolean:required",
+      "data.responsive_checks.images:object:required",
+      "data.responsive_checks.tables.count:integer:required",
+      "data.responsive_checks.tables.fixed_width:integer:required",
+      "data.responsive_checks.tables.long_cell_risk:integer:required",
+      "data.responsive_checks.tables.responsive_wrapper:integer:required",
+      "data.responsive_checks.tables:object:required",
+      "data.responsive_checks:object:required",
       "data.slug:string:required",
       "data.state.build_state:string:required",
       "data.state.index_state:string:required",
@@ -3661,7 +3674,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "59f749a79e7f774410ea008d813b1ccf56f6cbccbce45ebadff5fe13d8c9755f"
+    "output_schema_sha256": "5c307341a70ee84aa9cd0615cd98ff4285fd05ce7155a34bf3c8408f0e301c1b"
   },
   {
     "name": "list_categories",

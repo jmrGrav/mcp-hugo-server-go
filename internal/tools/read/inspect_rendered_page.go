@@ -68,8 +68,71 @@ type inspectRenderedPageData struct {
 	State      site.LifecycleState `json:"state"`
 	Status     string              `json:"status"`
 	Checks     []renderCheckResult `json:"checks"`
+	// ResponsiveChecks is a static-analysis heuristic surface (#1138): no
+	// headless browser, no real viewport rendering (see docs/mcp-contract.md
+	// §6.20). Always present, purely additive — unlike Checks above, none of
+	// its fields influence Status.
+	ResponsiveChecks responsiveChecksDTO `json:"responsive_checks"`
 	// Preview is populated only when include_preview=true is requested.
 	Preview *previewDTO `json:"preview,omitempty"`
+}
+
+// responsiveTablesDTO: Count is every content <table> found in the
+// rendered document — excluding Hugo chroma's `lineNumbersInTable` output
+// (an `lntable`/`highlighttable` wrapping every code block purely for
+// line-number alignment; without this exclusion `count`/`long_cell_risk`
+// would fire on ordinary code lines instead of real content tables).
+// FixedWidth counts tables carrying a fixed pixel width (attribute or
+// inline `width:` style) rather than a percentage/auto width — `max-width`
+// does not count. ResponsiveWrapper counts tables with an ancestor whose
+// class/style indicates an actual horizontal-scroll container (e.g.
+// `table-responsive`, `overflow-x: auto`) — a bare "overflow" match
+// (`overflow: hidden`, `class="overflow-hidden"`) does not count, since
+// that clips content rather than scrolling it. LongCellRisk counts tables
+// containing at least one cell with an unbreakable token 25+ characters
+// long (a URL, file path, or similarly long unspaced string) that can
+// force a table wider than its container regardless of wrapping.
+type responsiveTablesDTO struct {
+	Count             int `json:"count"`
+	FixedWidth        int `json:"fixed_width"`
+	ResponsiveWrapper int `json:"responsive_wrapper"`
+	LongCellRisk      int `json:"long_cell_risk"`
+}
+
+// responsiveCodeBlocksDTO: Count is every raw <pre> element found — under
+// Hugo chroma's `lineNumbersInTable` output this can be up to 2x the number
+// of logical code blocks (a separate <pre> for the line-number gutter and
+// for the code itself), since this field intentionally makes no attempt to
+// deduplicate that structure. OverflowSafe is false only when a code block
+// itself carries a fixed pixel width or a `nowrap` token in its inline
+// style — an anti-pattern heuristic, not a positive confirmation that the
+// theme's own CSS provides overflow-x scrolling (that theme-constant
+// property is reported once by get_theme_status, not recomputed per page
+// here).
+type responsiveCodeBlocksDTO struct {
+	Count        int  `json:"count"`
+	OverflowSafe bool `json:"overflow_safe"`
+}
+
+// responsiveImagesDTO: Count is every <img> element found. Responsive is
+// false only when at least one image has a hardcoded pixel width over 400
+// and no responsive escape hatch (a `max-width` style or a `srcset`
+// attribute) — such an image cannot shrink to fit a narrow viewport.
+type responsiveImagesDTO struct {
+	Count      int  `json:"count"`
+	Responsive bool `json:"responsive"`
+}
+
+// responsiveChecksDTO reports structural risk signals from the rendered
+// DOM, not a verified rendering outcome — these are heuristics over static
+// HTML/inline styles, not a measurement of what a real browser would
+// actually paint at any viewport width. See docs/mcp-contract.md §6.20 for
+// the full scope statement and the theme-constant vs. per-page split with
+// get_theme_status.table_overflow_protection.
+type responsiveChecksDTO struct {
+	Tables     responsiveTablesDTO     `json:"tables"`
+	CodeBlocks responsiveCodeBlocksDTO `json:"code_blocks"`
+	Images     responsiveImagesDTO     `json:"images"`
 }
 
 type inspectRenderedPageOutput struct {
@@ -98,7 +161,7 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 	if s == nil {
 		return
 	}
-	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `<img>` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `<img>` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
+	addReadOnlyTool(s, "inspect_rendered", "Inspect rendered page", "Validate the rendered HTML/SEO/link surface of a single page from the current public build output: title, meta description, canonical URL, hreflang alternates, internal links, missing images, a dedicated `featured_image` check, and heuristic shortcode/render-error markers. For multilingual bundles, pass `lang` to select a translation explicitly; a bare slug that resolves among several translations returns an explicit warning. Complements validate_frontmatter (source-only) and get_broken_links (site-wide). The `featured_image` check (#818) is separate from the general `missing_images` check — `missing_images` treats every `<img>` uniformly and can't tell a broken hero image apart from a broken body image. `fail` means the configured `featuredImage` path doesn't resolve to a file in the built public output; `warn` covers non-broken but fixable issues (missing alt text on the rendered `<img>` referencing it — checked against both `src` and `data-src`, since lazy-loading theme markup can put the real URL in either — or an `og:image` meta tag that doesn't match); `pass` covers both \"configured and clean\" and \"no featuredImage set at all\" (nothing to check). All checks are local filesystem/DOM inspection only, never an outbound HTTP request to the page's own public URL. The `hreflang` check parses the rendered <link> tags directly, independent of attribute order/case, and flags a tag with an empty href as incomplete rather than accepting it; a `warn` here can still mean the page genuinely has no translations, or that the Hugo theme's template doesn't emit hreflang tags for translated pages at all — confirm the page-bundle actually has a translated sibling before treating a warn as a theme bug. Also reports `responsive_checks` (#1138): static-analysis-only heuristics over the rendered DOM for mobile layout risk — wide/fixed-width tables, unwrapped tables with long unbreakable cell content, fixed-width code blocks, and oversized fixed-width images. No headless browser or real viewport rendering; see docs/mcp-contract.md §6.20. Purely additive, never affects `status`. The theme-constant question \"does this site's CSS scroll wide tables horizontally at all\" is answered once by get_theme_status's `table_overflow_protection`, not recomputed per page here. Set `include_preview=true` for a combined pre-publish summary (`preview.diff_status`/`diff_summary` from the current git diff, `preview.broken_links_count` scoped to this page, `preview.frontmatter_valid`/`frontmatter_issues`, and an overall `preview.risks` list) instead of chaining diff_page + get_broken_links + validate_frontmatter separately — composes their existing logic, doesn't duplicate it; off by default, so this costs nothing unless requested (#435). Reader tool: on OAuth-enabled deployments, call it with a read Bearer token.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, in inspectRenderedPageInput) (*mcp.CallToolResult, inspectRenderedPageOutput, error) {
 			if idx == nil {
 				return nil, inspectRenderedPageOutput{}, fmt.Errorf("index not initialized")
@@ -170,13 +233,14 @@ func RegisterInspectRenderedPage(s *mcp.Server, idx *site.Index, srcIdx *hugosit
 			}
 
 			data := inspectRenderedPageData{
-				Slug:       page.Slug,
-				URL:        page.URL,
-				Lang:       page.Lang,
-				OutputPath: page.OutputPath,
-				State:      state,
-				Status:     overall,
-				Checks:     checks,
+				Slug:             page.Slug,
+				URL:              page.URL,
+				Lang:             page.Lang,
+				OutputPath:       page.OutputPath,
+				State:            state,
+				Status:           overall,
+				Checks:           checks,
+				ResponsiveChecks: computeResponsiveChecks(doc),
 			}
 			data.Preview = preview
 			out := newInspectRenderedPageOutput(data, time.Now().UTC())
@@ -697,6 +761,183 @@ func firstElementText(doc *html.Node, tag string) string {
 		return true
 	})
 	return text
+}
+
+var (
+	// inlineFixedWidthPxRe requires a word boundary (start-of-string or a
+	// preceding `;`/whitespace) before "width" so it does not match inside
+	// `max-width: 900px` — max-width is the responsive-friendly declaration,
+	// the opposite of what this regex exists to flag.
+	inlineFixedWidthPxRe = regexp.MustCompile(`(?i)(^|[;\s])width\s*:\s*[0-9]+px`)
+	longUnbreakableToken = regexp.MustCompile(`\S{25,}`)
+	// scrollWrapperClassRe/scrollWrapperStyleRe require the value to
+	// indicate an actual scroll container (overflow-x/overflow set to auto
+	// or scroll), not merely contain the substring "overflow" — a bare
+	// overflow:hidden or class="overflow-hidden" clips content instead of
+	// scrolling it and must not count as protection.
+	scrollWrapperClassRe = regexp.MustCompile(`overflow(-x)?-(auto|scroll)`)
+	scrollWrapperStyleRe = regexp.MustCompile(`overflow(-x)?\s*:\s*(auto|scroll)`)
+)
+
+// computeResponsiveChecks runs the #1138 static-analysis mobile-layout
+// heuristics over an already-parsed rendered document. See
+// responsiveChecksDTO's doc comment for what each field does and does not
+// mean.
+func computeResponsiveChecks(doc *html.Node) responsiveChecksDTO {
+	var tables responsiveTablesDTO
+	codeBlocks := 0
+	codeBlockUnsafe := false
+	images := 0
+	imageUnsafe := false
+
+	walkNodes(doc, func(n *html.Node) bool {
+		if n.Type != html.ElementNode {
+			return true
+		}
+		switch n.Data {
+		case "table":
+			if isChromaLineNumberTable(n) {
+				return true
+			}
+			tables.Count++
+			if elementHasFixedPixelWidth(n) {
+				tables.FixedWidth++
+			}
+			if tableHasResponsiveWrapper(n) {
+				tables.ResponsiveWrapper++
+			}
+			if tableHasLongUnbreakableCell(n) {
+				tables.LongCellRisk++
+			}
+		case "pre":
+			codeBlocks++
+			if elementHasFixedPixelWidth(n) || strings.Contains(strings.ToLower(htmlAttr(n, "style")), "nowrap") {
+				codeBlockUnsafe = true
+			}
+		case "img":
+			images++
+			if imageHasFixedOverlargeWidth(n) {
+				imageUnsafe = true
+			}
+		}
+		return true
+	})
+
+	return responsiveChecksDTO{
+		Tables:     tables,
+		CodeBlocks: responsiveCodeBlocksDTO{Count: codeBlocks, OverflowSafe: !codeBlockUnsafe},
+		Images:     responsiveImagesDTO{Count: images, Responsive: !imageUnsafe},
+	}
+}
+
+// elementHasFixedPixelWidth reports a hardcoded, non-percentage width via
+// either the legacy `width` attribute (a bare integer, per the HTML4 table/
+// img convention still emitted by some content pipelines) or an inline
+// `width: Npx` style declaration.
+func elementHasFixedPixelWidth(n *html.Node) bool {
+	if w := strings.TrimSpace(htmlAttr(n, "width")); w != "" && !strings.HasSuffix(w, "%") {
+		if _, err := strconv.Atoi(w); err == nil {
+			return true
+		}
+	}
+	return inlineFixedWidthPxRe.MatchString(htmlAttr(n, "style"))
+}
+
+// tableHasResponsiveWrapper walks table's ancestor chain looking for a
+// class or inline style suggesting horizontal-scroll wrapping — the common
+// theme idiom for making a wide table usable on a narrow viewport. Requires
+// the value to indicate scrolling specifically (auto/scroll), not merely
+// contain "overflow" — overflow:hidden clips content instead of scrolling
+// it and is not protection, despite being a very common ancestor class
+// (mobile-menu-open states, rounded-corner card clipping, Tailwind
+// utilities).
+func tableHasResponsiveWrapper(table *html.Node) bool {
+	for p := table.Parent; p != nil; p = p.Parent {
+		if p.Type != html.ElementNode {
+			continue
+		}
+		class := strings.ToLower(htmlAttr(p, "class"))
+		style := strings.ToLower(htmlAttr(p, "style"))
+		if strings.Contains(class, "table-responsive") || strings.Contains(class, "table-wrap") ||
+			strings.Contains(class, "scrollable") ||
+			scrollWrapperClassRe.MatchString(class) || scrollWrapperStyleRe.MatchString(style) {
+			return true
+		}
+	}
+	return false
+}
+
+// chromaTableSelfOrAncestorClasses are the class names Hugo's chroma
+// syntax highlighter emits when lineNumbersInTable is enabled, wrapping
+// every code block in a real <table> purely for line-number alignment.
+// Without this exclusion, tables.count would include every code block on
+// the page and long_cell_risk would fire on ordinary code lines >=25
+// characters — noise on exactly the content type this check is least
+// useful for.
+var chromaTableSelfOrAncestorClasses = map[string]bool{
+	"lntable": true, "highlighttable": true, "chroma": true, "highlight": true,
+}
+
+func isChromaLineNumberTable(table *html.Node) bool {
+	for n := table; n != nil; n = n.Parent {
+		if n.Type != html.ElementNode {
+			continue
+		}
+		for _, cls := range strings.Fields(strings.ToLower(htmlAttr(n, "class"))) {
+			if chromaTableSelfOrAncestorClasses[cls] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// tableHasLongUnbreakableCell reports whether any <td>/<th> under table
+// contains a single unspaced token 25+ characters long (a URL, file path,
+// or similarly long string) that can force the table wider than its
+// container even inside a wrapping element that only handles word-wrap.
+func tableHasLongUnbreakableCell(table *html.Node) bool {
+	found := false
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if n == nil || found {
+			return
+		}
+		if n.Type == html.ElementNode && (n.Data == "td" || n.Data == "th") {
+			for _, tok := range strings.Fields(renderTextContent(n)) {
+				if longUnbreakableToken.MatchString(tok) {
+					found = true
+					return
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil && !found; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(table)
+	return found
+}
+
+// imageHasFixedOverlargeWidth reports a hardcoded pixel width over 400 with
+// no responsive escape hatch (a `max-width` style or a `srcset` attribute
+// both indicate the theme/author already accounted for narrow viewports).
+func imageHasFixedOverlargeWidth(img *html.Node) bool {
+	if strings.Contains(strings.ToLower(htmlAttr(img, "style")), "max-width") {
+		return false
+	}
+	if strings.TrimSpace(htmlAttr(img, "srcset")) != "" {
+		return false
+	}
+	w := strings.TrimSpace(htmlAttr(img, "width"))
+	if w == "" || strings.HasSuffix(w, "%") {
+		return false
+	}
+	n, err := strconv.Atoi(w)
+	if err != nil {
+		return false
+	}
+	return n > 400
 }
 
 // renderTextContent concatenates all descendant text nodes of n, space

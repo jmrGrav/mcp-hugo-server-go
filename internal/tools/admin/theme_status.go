@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -36,6 +38,25 @@ type themeStatusData struct {
 		Version   string `json:"version,omitempty"`
 		Error     string `json:"error,omitempty"`
 	} `json:"hugo"`
+	// TableOverflowProtection reports whether the theme's own (unminified)
+	// CSS/Sass source contains a rule scoping a table selector to
+	// `overflow-x: auto|scroll` — the standard fix that lets a wide table
+	// scroll horizontally on a narrow viewport instead of breaking layout.
+	// This is a theme-constant property, computed once here rather than
+	// per-page in inspect_rendered (see #1138). Three states, biased toward
+	// the false negative over the false positive (a false "true" would hide
+	// a real overflow problem from an agent, the class of mistake #1136
+	// exists to prevent): true only when a table-scoped rule is found in an
+	// introspectable classic themes_dir theme; false when at least one such
+	// theme was inspected and none qualified; nil/omitted when no
+	// themes_dir theme could be inspected at all (Hugo Module themes are
+	// resolved through Hugo's own module cache, not a local checkout under
+	// HugoRoot, so their CSS cannot be read here — see themeStatusFor's own
+	// doc comment for the same module-introspection limit). Only the
+	// theme's own source tree is scanned, not site-level override CSS
+	// layered on top of it (e.g. assets/css/custom.css) — a known scope
+	// limit, not a bug.
+	TableOverflowProtection *bool `json:"table_overflow_protection,omitempty"`
 }
 
 type getThemeStatusOutput struct {
@@ -53,8 +74,10 @@ func RegisterThemeStatus(s *mcp.Server, cfg config.Config) {
 		Name:  "get_theme_status",
 		Title: "Get theme status",
 		Description: "Report the active Hugo theme(s) or module imports, whether their on-disk source is present, and " +
-			"(for classic themes/ directory installs) the pinned Git commit and dirty/local-override state. Read-only — " +
-			"never installs, updates, or fetches theme code from a URL.",
+			"(for classic themes/ directory installs) the pinned Git commit and dirty/local-override state. Also reports " +
+			"table_overflow_protection: whether theme CSS scrolls wide tables horizontally on narrow viewports " +
+			"(true/false/omitted-if-unknown, e.g. Hugo Module themes). Read-only — never installs, updates, or fetches " +
+			"theme code from a URL.",
 		InputSchema:  tools.MustSchema[getThemeStatusInput](),
 		OutputSchema: tools.MustSchema[getThemeStatusOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -78,6 +101,7 @@ func RegisterThemeStatus(s *mcp.Server, cfg config.Config) {
 		for _, name := range names {
 			data.Themes = append(data.Themes, themeStatusFor(ctx, cfg, name, source))
 		}
+		data.TableOverflowProtection = detectTableOverflowProtection(cfg, data.Themes)
 
 		meta := toolcontract.NewMeta(buildinfo.Version, time.Now())
 		return nil, getThemeStatusOutput{ToolResponse: toolcontract.Success(data, meta)}, nil
@@ -193,4 +217,99 @@ func themeStatusFor(ctx context.Context, cfg config.Config, name, source string)
 		info.Dirty = strings.TrimSpace(porcelain) != ""
 	}
 	return info
+}
+
+const (
+	cssScanMaxFiles     = 500
+	cssScanMaxTotalSize = 4 << 20 // 4 MiB
+	cssScanMaxFileSize  = 1 << 20 // 1 MiB per file
+)
+
+var (
+	cssBlockRe      = regexp.MustCompile(`(?s)([^{}]+)\{([^{}]*)\}`)
+	cssOverflowXRe  = regexp.MustCompile(`overflow-x\s*:\s*(auto|scroll)`)
+	cssStyleFileExt = map[string]bool{".css": true, ".scss": true, ".sass": true}
+)
+
+// detectTableOverflowProtection scans each classic themes_dir theme's own
+// CSS/Sass source for a rule whose selector contains "table" and whose body
+// sets overflow-x to auto or scroll — the standard horizontal-scroll fix for
+// wide tables on narrow viewports. See themeStatusData.TableOverflowProtection
+// for the three-state contract this returns.
+func detectTableOverflowProtection(cfg config.Config, themes []themeInfo) *bool {
+	inspected := false
+	for _, t := range themes {
+		if t.Source != "themes_dir" || !t.Present {
+			continue
+		}
+		themeDir := filepath.Join(cfg.HugoRoot, "themes", t.Name)
+		found, ok := scanThemeCSSForTableOverflowProtection(themeDir)
+		if !ok {
+			continue
+		}
+		inspected = true
+		if found {
+			return fileutil.BoolPtr(true)
+		}
+	}
+	if !inspected {
+		return nil
+	}
+	return fileutil.BoolPtr(false)
+}
+
+// scanThemeCSSForTableOverflowProtection walks themeDir (bounded by file
+// count and size) and returns (found, ok). ok is false only if no
+// stylesheet under themeDir could be read at all (e.g. the directory does
+// not exist) — a genuine "nothing to inspect" case, distinct from
+// "inspected, found nothing" (found=false, ok=true).
+func scanThemeCSSForTableOverflowProtection(themeDir string) (found bool, ok bool) {
+	filesSeen := 0
+	bytesSeen := 0
+	readAny := false
+
+	_ = filepath.Walk(themeDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil //nolint:nilerr // best-effort scan; skip unreadable entries
+		}
+		if found || filesSeen >= cssScanMaxFiles || bytesSeen >= cssScanMaxTotalSize {
+			if info.IsDir() && found {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if !cssStyleFileExt[strings.ToLower(filepath.Ext(path))] {
+			return nil
+		}
+		if info.Size() > cssScanMaxFileSize {
+			return nil
+		}
+		f, openErr := os.Open(path)
+		if openErr != nil {
+			return nil
+		}
+		defer f.Close()
+		content, readErr := io.ReadAll(io.LimitReader(f, cssScanMaxFileSize))
+		if readErr != nil {
+			return nil
+		}
+		filesSeen++
+		bytesSeen += len(content)
+		readAny = true
+
+		for _, m := range cssBlockRe.FindAllStringSubmatch(string(content), -1) {
+			selector := strings.ToLower(m[1])
+			body := m[2]
+			if strings.Contains(selector, "table") && cssOverflowXRe.MatchString(body) {
+				found = true
+				break
+			}
+		}
+		return nil
+	})
+
+	return found, readAny
 }
