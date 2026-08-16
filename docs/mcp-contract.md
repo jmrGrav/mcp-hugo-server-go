@@ -1268,6 +1268,59 @@ consider, and `publication_safety` deduplicates by slug (a page pending in
 both `en` and `fr` counts once) while the top-level field counts
 `PendingCount()`'s per-language rows.
 
+### 6.19 `rendered_seo_coverage`: `get_site_health` Never Aggregates Rendered/SEO Checks (#1136)
+
+#1136 was filed over a real trust gap: `get_site_health` could report
+`score: 100` / `status: healthy` while `inspect_rendered` found actual
+problems on live published pages — missing `<title>`, no canonical, no meta
+description, absent hreflang. Every check `get_site_health` computes today
+(frontmatter validation, taxonomy consistency, `title_shape`,
+`broken_links_count`) is source-document or link-graph based; none of them
+ever inspect the rendered HTML output. `score: 100` was never a claim about
+that surface, but nothing said so — an agent reading a clean score had no
+way to know a whole class of defect was never checked.
+
+**What shipped**: `data.rendered_seo_coverage` is always present on
+`get_site_health` with `aggregated: false`, `authoritative_tool:
+"inspect_rendered"`, and a `reason` code — an explicit, structured
+admission rather than a silent gap, present even on an otherwise-perfect
+100/healthy response. `bad_title_shape_pages`/`score_breakdown.title_shape`
+were verified (not just assumed) to already cover every indexed source
+document — draft pages and `_index` section pages included, not just
+`publishable_content_pages` — closing the literal "minimum acceptable"
+clause the issue specified.
+
+**What was evaluated and declined, and why**: aggregating
+`inspect_rendered`'s per-page checks into `get_site_health`'s score was the
+issue's primary ask. Two approaches were considered:
+
+1. **Live full-site scan on every `get_site_health` call.** Rejected on
+   the issue's own stated constraint — this tool is meant to be cheap
+   enough to call before every publish; re-parsing every published page's
+   rendered HTML on every call would violate that for any site of real
+   size.
+2. **Build-time SQLite cache, mirroring `broken_links_count`'s own
+   pattern** (populated during `PostBuildSync`, read cheaply by
+   `get_site_health`). This looked viable until `SyncPublicPage`'s actual
+   behavior was checked: it early-returns on a `content_hash` match, and
+   `hashPublicPage` (`internal/db/db.go`) hashes only
+   `title|summary|date|lang|url|tags|categories|body` — nothing derived
+   from the site's shared templates. A theme regression that drops the
+   canonical tag from every page's `<head>`, or breaks hreflang site-wide,
+   changes **zero** page hashes. A cache built on that hash would report
+   every page unchanged and never re-check it — silently stale through
+   exactly the failure class #1136 was filed over (a site-wide template
+   regression, not one bad page). Shipping that cache would have
+   reproduced the issue's own defect under a new field name.
+
+Both routes require either dropping the hash short-circuit entirely
+(re-reading and re-parsing every page's HTML on every build) or adding a
+template/theme fingerprint to the cache invalidation — real design work
+beyond this issue's scope. Until one of those lands, `inspect_rendered`
+remains the sole per-page authority for rendered/SEO checks;
+`get_site_health` names that fact explicitly on every call instead of
+implying coverage it doesn't have.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.

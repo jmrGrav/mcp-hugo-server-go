@@ -183,6 +183,67 @@ func TestBuildSiteHealthReportsBrokenLinksOnlyWhenDBPathConfigured(t *testing.T)
 	})
 }
 
+// TestBuildSiteHealthAlwaysDeclaresRenderedSEONotAggregated is #1136's
+// regression test: get_site_health must never let an agent read a clean
+// score and mistake it for coverage of rendered/SEO checks (missing
+// <title>, canonical, meta description, hreflang, unsafe/leaked URLs) that
+// this tool has never computed — those are inspect_rendered's own surface.
+// rendered_seo_coverage must be present with aggregated:false on every
+// call, on an otherwise perfectly healthy site, not just when something is
+// already wrong.
+func TestBuildSiteHealthAlwaysDeclaresRenderedSEONotAggregated(t *testing.T) {
+	health := buildSiteHealth(context.Background(), &site.Index{}, nil, nil, config.Config{}, nil)
+	if health.Score != 100 || health.Status != "healthy" {
+		t.Fatalf("baseline health = score=%d status=%q, want a clean 100/healthy so this test actually proves the field survives a perfect score", health.Score, health.Status)
+	}
+	if health.RenderedSEOCoverage == nil {
+		t.Fatal("rendered_seo_coverage is nil, want always present on get_site_health")
+	}
+	if health.RenderedSEOCoverage.Aggregated {
+		t.Fatal("rendered_seo_coverage.aggregated = true, want false — get_site_health does not compute rendered/SEO checks")
+	}
+	if health.RenderedSEOCoverage.AuthoritativeTool != "inspect_rendered" {
+		t.Fatalf("rendered_seo_coverage.authoritative_tool = %q, want inspect_rendered", health.RenderedSEOCoverage.AuthoritativeTool)
+	}
+}
+
+// TestBuildSiteHealthTitleShapeCoversDraftAndSectionIndexPages pins #1136's
+// "minimum acceptable" clause: bad_title_shape_pages (and by extension
+// score_breakdown.title_shape) must cover every indexed source document,
+// not just publishable_content_pages. buildSiteHealth's own loop already
+// walks srcIdx.ListPages(0, 0) with no draft/section-index filter — this
+// test proves that unconditionally, rather than leaving it as an
+// unverified reading of the loop, by including one draft page and one
+// _index.md section page, both with a URL-shaped title, neither of which
+// would ever appear in publishable_content_pages.
+func TestBuildSiteHealthTitleShapeCoversDraftAndSectionIndexPages(t *testing.T) {
+	src, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	src.Upsert(hugosite.SourcePage{
+		Slug: "posts/draft-corrupted", FilePath: "content/posts/draft-corrupted/index.md",
+		Title: "https://example.com/posts/draft-corrupted/", Draft: true,
+	})
+	src.Upsert(hugosite.SourcePage{
+		Slug: "posts", FilePath: "content/posts/_index.md",
+		Title: "https://example.com/posts/",
+	})
+
+	health := buildSiteHealth(context.Background(), &site.Index{}, src, nil, config.Config{}, nil)
+
+	want := map[string]bool{"posts/draft-corrupted": true, "posts": true}
+	got := map[string]bool{}
+	for _, slug := range health.BadTitleShapePages {
+		got[slug] = true
+	}
+	for slug := range want {
+		if !got[slug] {
+			t.Errorf("bad_title_shape_pages = %v, want it to include %q (a draft/section-index page is not exempt from this check)", health.BadTitleShapePages, slug)
+		}
+	}
+}
+
 func TestBuildSiteHealthSurfacesRuntimeDegraded(t *testing.T) {
 	buildstatus.ResetForTest()
 	defer buildstatus.ResetForTest()
