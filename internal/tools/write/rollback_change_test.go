@@ -582,7 +582,7 @@ func newReadWriteTestServer(t *testing.T, contentRoot string) (*mcp.ClientSessio
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	publicIdx := &site.Index{}
-	write.Register(s, pg, idx, cfg, nil, nil)
+	write.Register(s, pg, idx, cfg, nil, nil, nil)
 	read.Register(s, publicIdx, cfg, idx)
 	read.RegisterWithSourceIndex(s, publicIdx, idx, cfg)
 

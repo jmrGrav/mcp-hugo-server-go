@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
@@ -210,7 +211,7 @@ func findDuplicateAsset(dir string, data []byte) (string, error) {
 // registerUploadPageAsset registers upload_page_asset. Separate function
 // (mirrors registerListContentTypes's split from Register in the read
 // package) called from Register with the idempotency store it already owns.
-func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, mutationMu *sync.Mutex, mutationLimiters map[string]*rate.Limiter, changeSets *changeSetRegistry) {
+func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, mutationMu *sync.Mutex, mutationLimiters map[string]*rate.Limiter, changeSets *changeset.Registry) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "upload_page_asset",
 		Title: "Upload page asset",
@@ -265,7 +266,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
 		}
-		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiterAndInput(wrapErr(err, strings.TrimSpace(in.Filename)), strings.TrimSpace(in.Filename))
 		}
@@ -430,7 +431,7 @@ func registerUploadPageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				slog.Warn("upload_page_asset: could not persist idempotency result", "slug", slug, "error", err)
 			}
 		}
-		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "upload_page_asset", slug, "create", time.Now().UTC())
+		changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "upload_page_asset", slug, "create", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -648,7 +649,7 @@ func deleteAssetNotFoundErr(scope, filename, slug string) error {
 // delete_page's own destructive per-caller budget (deleteMu/deleteLimiters),
 // not upload_page_asset's create/update quota — deleting is the destructive
 // operation here, matching delete_page's own DestructiveHint.
-func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, deleteMu *sync.Mutex, deleteLimiters map[string]*rate.Limiter, changeSets *changeSetRegistry) {
+func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, idem *idempotencyStore, deleteMu *sync.Mutex, deleteLimiters map[string]*rate.Limiter, changeSets *changeset.Registry) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "delete_page_asset",
 		Title: "Delete page asset",
@@ -697,7 +698,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 		}
-		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 		}
@@ -944,7 +945,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 				slog.Warn("delete_page_asset: could not persist idempotency result", "slug", slug, "filename", filename, "error", err)
 			}
 		}
-		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_page_asset", slug, "delete", time.Now().UTC())
+		changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_page_asset", slug, "delete", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

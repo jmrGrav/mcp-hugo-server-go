@@ -298,9 +298,9 @@ func TestStableUint64HashDeterministic(t *testing.T) {
 }
 
 func TestRegisterNilServer(t *testing.T) {
-	Register(nil, config.Default(), nil)
-	RegisterSiteAdmin(nil, config.Default(), nil)
-	RegisterBuild(nil, config.Default(), nil)
+	Register(nil, config.Default(), nil, nil)
+	RegisterSiteAdmin(nil, config.Default(), nil, nil)
+	RegisterBuild(nil, config.Default(), nil, nil)
 	RegisterPreviewBuild(nil, config.Default())
 	RegisterHooks(nil, config.Default())
 	RegisterSRI(nil, config.Default())

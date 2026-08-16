@@ -50,7 +50,7 @@ func TestOrphanedGeneratedAssetRecommendedActionIsDirectlyExecutable(t *testing.
 	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	write.Register(s, pg, idx, cfg, nil, nil)
+	write.Register(s, pg, idx, cfg, nil, nil, nil)
 	admin.RegisterStorageHealth(s, cfg, idx, previewstore.New())
 
 	ctx := context.Background()

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
@@ -239,11 +240,11 @@ func newDryRunGenerateFeaturedImageOutput(data generateFeaturedImageData) genera
 // Register wires all admin tools (site.admin scope).
 // siteReload is an optional callback called after a successful build_site to
 // refresh the in-memory site index (resolves #212).
-func Register(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...PostBuildCallback) {
+func Register(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, changeSets *changeset.Registry, siteReload ...PostBuildCallback) {
 	if s == nil {
 		return
 	}
-	RegisterBuild(s, cfg, srcIdx, siteReload...)
+	RegisterBuild(s, cfg, srcIdx, changeSets, siteReload...)
 	RegisterPreviewBuild(s, cfg)
 	RegisterHooks(s, cfg)
 	registerGenerateFeaturedImage(s, cfg)
@@ -254,8 +255,8 @@ func Register(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, si
 }
 
 // RegisterSiteAdmin is an alias for Register kept for compatibility.
-func RegisterSiteAdmin(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, siteReload ...PostBuildCallback) {
-	Register(s, cfg, srcIdx, siteReload...)
+func RegisterSiteAdmin(s *mcp.Server, cfg config.Config, srcIdx *hugosite.SourceIndex, changeSets *changeset.Registry, siteReload ...PostBuildCallback) {
+	Register(s, cfg, srcIdx, changeSets, siteReload...)
 }
 
 // Defs returns tool definitions for all admin tools (used to build the global registry).

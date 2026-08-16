@@ -41,6 +41,19 @@ func TokenKey(ctx context.Context) string {
 	return ""
 }
 
+// MutationKey is Key with an explicit "unknown" fallback instead of "" —
+// the stable per-principal identity used to scope rate-limit quotas,
+// idempotency, and change-set ownership (#1135/#1140). Centralized here so
+// every package that needs this exact fallback (internal/tools/write,
+// internal/changeset, internal/tools/admin) shares one definition instead
+// of re-implementing the "" -> "unknown" substitution independently.
+func MutationKey(ctx context.Context) string {
+	if key := Key(ctx); key != "" {
+		return key
+	}
+	return "unknown"
+}
+
 // Source reports which context value Key actually resolved for this call —
 // "principal", "token", "ip", or "unknown" — so a diagnostic surface (e.g.
 // get_rate_limits' identity_source) can never drift from the precedence Key

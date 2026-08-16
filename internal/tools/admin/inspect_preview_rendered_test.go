@@ -38,7 +38,7 @@ func newPreviewInspectionServer(t *testing.T, cfg config.Config) (*mcp.ClientSes
 			t.Fatalf("NewSourceIndex(%q): %v", cfg.ContentRoot, err)
 		}
 	}
-	admin.Register(s, cfg, srcIdx)
+	admin.Register(s, cfg, srcIdx, nil)
 	admin.RegisterCreatePreview(s, cfg, store, "https://mcp.example.test")
 	admin.RegisterPreviewAccessTools(s, cfg, store, "https://mcp.example.test")
 	read.RegisterInspectPreviewRenderedPage(s, nil, srcIdx, cfg, store, "https://mcp.example.test")
@@ -427,7 +427,7 @@ func TestInspectPreviewRenderedAcceptsPreviewScopedLinksAssetsAndBenignPreloadOn
 	if err != nil {
 		t.Fatalf("NewSourceIndex(%q): %v", contentRoot, err)
 	}
-	admin.Register(s, cfg, srcIdx)
+	admin.Register(s, cfg, srcIdx, nil)
 	admin.RegisterCreatePreview(s, cfg, store, "https://mcp.example.test")
 	admin.RegisterPreviewAccessTools(s, cfg, store, "https://mcp.example.test")
 	read.RegisterInspectPreviewRenderedPage(s, idx, srcIdx, cfg, store, "https://mcp.example.test")

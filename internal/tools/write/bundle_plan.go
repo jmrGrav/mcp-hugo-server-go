@@ -55,6 +55,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
@@ -583,7 +584,7 @@ func registerBundleTools(
 	idem *idempotencyStore,
 	plans *bundlePlanStore,
 	snapshots *bundleSnapshotStore,
-	changeSets *changeSetRegistry,
+	changeSets *changeset.Registry,
 ) {
 	registerPlanBundleChange(s, pg, idx, cfg, siteIdx, plans)
 	registerApplyBundlePlan(s, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, plans, snapshots, changeSets)
@@ -721,7 +722,7 @@ func registerApplyBundlePlan(
 	idem *idempotencyStore,
 	plans *bundlePlanStore,
 	snapshots *bundleSnapshotStore,
-	changeSets *changeSetRegistry,
+	changeSets *changeset.Registry,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "apply_bundle_plan",
@@ -758,7 +759,7 @@ func registerApplyBundlePlan(
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(err)
 		}
-		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, applyBundlePlanOutput{}, wrapErrWithLimiter(err)
 		}
@@ -938,7 +939,7 @@ func registerApplyBundlePlan(
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("apply_bundle_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
 		}
-		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "apply_bundle_plan", entry.Slug, "update", time.Now().UTC())
+		changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "apply_bundle_plan", entry.Slug, "update", time.Now().UTC())
 		return nil, out, nil
 	}))
 }
@@ -954,7 +955,7 @@ func registerRollbackBundle(
 	mutationLimiters map[string]*rate.Limiter,
 	idem *idempotencyStore,
 	snapshots *bundleSnapshotStore,
-	changeSets *changeSetRegistry,
+	changeSets *changeset.Registry,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "rollback_bundle",
@@ -997,7 +998,7 @@ func registerRollbackBundle(
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(err)
 		}
-		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, rollbackBundleOutput{}, wrapErrWithLimiter(err)
 		}
@@ -1173,7 +1174,7 @@ func registerRollbackBundle(
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("rollback_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
-		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "rollback_bundle", in.Slug, "rollback", time.Now().UTC())
+		changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "rollback_bundle", in.Slug, "rollback", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

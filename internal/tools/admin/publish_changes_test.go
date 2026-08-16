@@ -24,7 +24,7 @@ func newPublishChangesServer(t *testing.T, cfg config.Config, srcIdx *hugosite.S
 		t.Fatalf("NewIndex() error = %v", err)
 	}
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterPublishChanges(s, idx, srcIdx, cfg, siteReload...)
+	admin.RegisterPublishChanges(s, idx, srcIdx, cfg, nil, siteReload...)
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

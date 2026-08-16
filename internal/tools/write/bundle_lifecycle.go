@@ -104,7 +104,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, bundleLifecycleOutput{}, wrap(err)
 		}
-		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, bundleLifecycleOutput{}, wrap(err)
 		}
@@ -348,7 +348,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("create_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
-		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "create_bundle", in.Slug, "create", time.Now().UTC())
+		rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "create_bundle", in.Slug, "create", time.Now().UTC())
 		return nil, out, nil
 	}))
 
@@ -363,7 +363,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, bundleLifecycleOutput{}, wrap(err)
 		}
-		resolvedChangeSetID, err := rt.changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, bundleLifecycleOutput{}, wrap(err)
 		}
@@ -553,7 +553,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("delete_bundle: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
-		rt.changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_bundle", in.Slug, "delete", time.Now().UTC())
+		rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_bundle", in.Slug, "delete", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

@@ -100,7 +100,7 @@ func TestBuildSiteCompletionCallbackReceivesDiskFingerprints(t *testing.T) {
 
 	var got admin.BuildCompletion
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil, admin.PostBuildCallback{
+	admin.RegisterBuild(s, cfg, nil, nil, admin.PostBuildCallback{
 		Name: "publication_manifest",
 		OnBuildComplete: func(completion admin.BuildCompletion) error {
 			got = completion
@@ -147,7 +147,7 @@ func TestBuildSiteRecordsRecoveryLifecycleAroundOutputSwap(t *testing.T) {
 	var events []string
 	var buildID string
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil, admin.PostBuildCallback{
+	admin.RegisterBuild(s, cfg, nil, nil, admin.PostBuildCallback{
 		Name: "recovery_journal",
 		OnBuildStart: func(progress admin.BuildProgress) error {
 			buildID = progress.BuildID
@@ -207,7 +207,7 @@ func TestBuildSiteRecoveryCommitsInstalledTreeAfterCallbackFailure(t *testing.T)
 
 	var states []string
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil,
+	admin.RegisterBuild(s, cfg, nil, nil,
 		admin.PostBuildCallback{
 			Name:            "recovery_journal",
 			OnBuildStart:    func(admin.BuildProgress) error { states = append(states, "in_progress"); return nil },
@@ -256,7 +256,7 @@ func TestBuildSiteMarksPartialSuccessWhenOnBuildCompleteCallbackFails(t *testing
 	cfg.SiteRoot = t.TempDir()
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil,
+	admin.RegisterBuild(s, cfg, nil, nil,
 		admin.PostBuildCallback{
 			Name:            "flaky_completion",
 			OnBuildComplete: func(admin.BuildCompletion) error { return errors.New("injected completion failure") },
@@ -306,7 +306,7 @@ func TestBuildSiteMarksPartialSuccessWhenOnOutputSwappedCallbackFails(t *testing
 	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil,
+	admin.RegisterBuild(s, cfg, nil, nil,
 		admin.PostBuildCallback{
 			Name:            "flaky_reload",
 			OnOutputSwapped: func(admin.BuildProgress) error { return errors.New("injected post-swap failure") },
@@ -617,7 +617,7 @@ func TestBuildSiteOnBuildPreparedFailureNeverRunsHugoAndReleasesLock(t *testing.
 	cfg.HugoRoot = t.TempDir()
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil, admin.PostBuildCallback{
+	admin.RegisterBuild(s, cfg, nil, nil, admin.PostBuildCallback{
 		Name: "recovery_journal",
 		OnBuildPrepared: func(admin.BuildProgress) ([]admin.BuildPageChange, error) {
 			return nil, errors.New("injected pre-hugo reconciliation failure")
@@ -655,7 +655,7 @@ func TestBuildSiteOnBuildPreparedFailureNeverRunsHugoAndReleasesLock(t *testing.
 	// The ContentMu lock must be released: a second, non-failing build_site
 	// call must succeed rather than hang or report build_in_progress.
 	s2 := mcp.NewServer(&mcp.Implementation{Name: "test2", Version: "0.1"}, nil)
-	admin.RegisterBuild(s2, cfg, nil)
+	admin.RegisterBuild(s2, cfg, nil, nil)
 	t3, t4 := mcp.NewInMemoryTransports()
 	if _, err := s2.Connect(context.Background(), t3, nil); err != nil {
 		t.Fatal(err)
@@ -685,7 +685,7 @@ func TestBuildSiteConcurrentReject(t *testing.T) {
 	cfg.HugoRoot = t.TempDir()
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil)
+	admin.RegisterBuild(s, cfg, nil, nil)
 
 	ctx := context.Background()
 	t1a, t2a := mcp.NewInMemoryTransports()
@@ -1219,7 +1219,7 @@ func TestBuildSiteCallbackTimeout(t *testing.T) {
 	}
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil,
+	admin.RegisterBuild(s, cfg, nil, nil,
 		admin.PostBuildCallback{Name: "slow", Fn: slowCallback},
 		admin.PostBuildCallback{Name: "sentinel", Fn: sentinelCallback},
 	)
@@ -1302,7 +1302,7 @@ func TestBuildSiteCallbackFailurePartialSuccess(t *testing.T) {
 	errCallback := func() error { return fmt.Errorf("index reload: connection refused") }
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	admin.RegisterBuild(s, cfg, nil, admin.PostBuildCallback{Name: "index_reload", Fn: errCallback})
+	admin.RegisterBuild(s, cfg, nil, nil, admin.PostBuildCallback{Name: "index_reload", Fn: errCallback})
 
 	ctx := context.Background()
 	t1, t2 := mcp.NewInMemoryTransports()

@@ -208,7 +208,7 @@ func TestBundleWouldBeFullyRemovedAfterDelete(t *testing.T) {
 }
 
 func TestRegisterNilServer(t *testing.T) {
-	Register(nil, nil, nil, config.Default(), nil)
+	Register(nil, nil, nil, config.Default(), nil, nil)
 }
 
 func TestNewWriteRegisterRuntimeUsesFirstSiteIndexAndConfiguresStores(t *testing.T) {
@@ -218,7 +218,7 @@ func TestNewWriteRegisterRuntimeUsesFirstSiteIndexAndConfiguresStores(t *testing
 	primary := &site.Index{}
 	secondary := &site.Index{}
 
-	rt := newWriteRegisterRuntime(cfg, nil, primary, secondary)
+	rt := newWriteRegisterRuntime(cfg, nil, nil, primary, secondary)
 
 	if rt.siteIdx != primary {
 		t.Fatalf("siteIdx = %p, want first site index %p", rt.siteIdx, primary)

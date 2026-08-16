@@ -1104,6 +1104,60 @@ by this issue alone; that guard is #1140, which depends on this primitive.
 `get_runtime_status`/`get_mutation_status` do not yet surface change-set
 state either — that's #1142.
 
+### 6.16 Foreign-Change-Set Guard on Build/Publish (#1140)
+
+`build_site` and `publish_changes` both accept the same optional
+`change_set_id` #1135 introduced for mutation tools. Because a Hugo build
+renders the entire content tree — there is no mechanism to build one
+change-set's pages and not another's — the guard is a pre-flight refusal,
+not selective publishing: if any page currently pending a build is known
+(to this same running server process) to belong to a change-set other than
+the one this call resolves to, the build is refused entirely with
+`foreign_change_set_present`, listing the offending page(s). This is the
+direct fix for the 2026-08-14 incident that motivated #1135/#1140: two
+agents sharing one OAuth principal, one bumping Hugo while the other
+concurrently edited `posts/csp-nonce`, corrupting it.
+
+Omitting `change_set_id` resolves to the caller's implicit per-principal
+default, matching every mutation tool's own omitted-`change_set_id`
+behavior — so two agents that never adopt `create_change_set` at all still
+share one bucket and are not distinguished from each other, exactly as
+before this feature existed. The guard only protects agents that have
+explicitly adopted separate `change_set_id`s, the same opt-in shape #1135
+established.
+
+The moment two or more change-sets genuinely have pending work at the same
+time — the normal state as soon as two agents are actually editing
+concurrently — a single `change_set_id` can never account for the other
+change-set's real pending page, and nothing but a full server restart
+clears that pending state otherwise. `change_set_ids` (plural) is the
+required escape hatch for this: pass every change-set with known pending
+work to acknowledge and build/publish them together. Without it this
+scenario would deadlock — neither side's single-change-set build could
+ever succeed.
+
+**What this guard does not do**, deliberately: it cannot tell "no
+change-set this process tracked ever touched this pending page" apart from
+"this page was edited outside the MCP server entirely" (a direct
+filesystem/SSH write) or "was edited by a change-set from before this
+process last restarted" — #1135's mutation-attribution record is
+in-memory-only and never rehydrates after a restart (see
+`internal/changeset.Registry`'s own doc comment). An unowned pending page
+is therefore always allowed through unguarded. This is **not** full
+external-source-drift detection; that needs the per-file fingerprinting
+#1141 adds. Until #1141 lands, `foreign_change_set_present` only fires for
+concurrent edits made by two change-sets both tracked live, within the same
+process uptime — the exact incident shape #1140 targets, not a general
+drift detector.
+
+It also inspects the same volatile `BuildPending` bookkeeping `build_site`
+itself only uses as a compatibility fallback: on a `db_path`-configured
+deployment, the build's actual included-page set is instead derived from
+on-disk source fingerprints compared against the latest completed build
+(see `build_site`'s own doc), which is not necessarily identical to the
+`BuildPending` set this guard inspected. #1141's revision guards are the
+intended place to close that gap.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.

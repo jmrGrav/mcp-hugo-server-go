@@ -728,7 +728,7 @@ func newWriteSession(t *testing.T, contentRoot string, cfg config.Config, siteId
 	srcIdx := mustSourceIndexFromRoot(t, contentRoot)
 	cfg.ContentRoot = contentRoot
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	toolswrite.Register(s, pg, srcIdx, cfg, nil, siteIdx)
+	toolswrite.Register(s, pg, srcIdx, cfg, nil, nil, siteIdx)
 	return connectClient(t, s)
 }
 

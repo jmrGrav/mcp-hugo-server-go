@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
@@ -266,7 +267,7 @@ func registerRollbackChange(
 	mutationLimiters map[string]*rate.Limiter,
 	idem *idempotencyStore,
 	snapshots *snapshotStore,
-	changeSets *changeSetRegistry,
+	changeSets *changeset.Registry,
 ) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "rollback_change",
@@ -327,7 +328,7 @@ func registerRollbackChange(
 		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
 		}
-		resolvedChangeSetID, err := changeSets.resolve(ctx, in.ChangeSetID, time.Now().UTC())
+		resolvedChangeSetID, err := changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
 		if err != nil {
 			return nil, rollbackChangeOutput{}, wrapErrWithLimiter(err)
 		}
@@ -582,7 +583,7 @@ func registerRollbackChange(
 		if err := recoveryOp.record(siteDB, "committed"); err != nil {
 			slog.Warn("rollback_change: could not commit recovery journal", "slug", in.Slug, "error", err)
 		}
-		changeSets.recordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "rollback_change", in.Slug, "rollback", time.Now().UTC())
+		changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "rollback_change", in.Slug, "rollback", time.Now().UTC())
 		return nil, out, nil
 	}))
 }

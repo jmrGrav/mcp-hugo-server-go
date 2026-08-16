@@ -16,6 +16,7 @@ import (
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/audit"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/cloudflare"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -463,6 +464,7 @@ func newScopedServer(
 	pg *security.PathGuard,
 	writeEnabled bool,
 	extensions []ScopeExtension,
+	changeSets *changeset.Registry,
 ) *mcp.Server {
 	s := mcp.NewServer(impl, serverOpts)
 	s.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, scopeName, knownTools))
@@ -473,7 +475,7 @@ func newScopedServer(
 		read.RegisterWithSourceIndex(s, idx, srcIdx, cfg, siteDB)
 	}
 	if (scopeName == "write" || scopeName == "admin") && writeEnabled {
-		toolswrite.Register(s, pg, srcIdx, cfg, siteDB, idx)
+		toolswrite.Register(s, pg, srcIdx, cfg, siteDB, changeSets, idx)
 	}
 	for _, ext := range extensions {
 		ext(scopeName, s)
@@ -883,6 +885,14 @@ type serverCore struct {
 	writeEnabled bool
 	siteDB       *db.DB
 	previews     *previewstore.Store
+	// changeSets is the one *changeset.Registry instance shared by every
+	// scoped server this core builds. It must be the same pointer given to
+	// both toolswrite.Register (which records mutations against it) and
+	// admin.Register/admin.RegisterPublishChanges (#1140, which reads it to
+	// guard build_site/publish_changes against foreign change-sets) — two
+	// independent registries would each see only their own package's
+	// mutations, since #1135's mutation record is in-memory-only.
+	changeSets *changeset.Registry
 }
 
 func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
@@ -954,6 +964,7 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 		writeEnabled: writeEnabled,
 		siteDB:       siteDB,
 		previews:     previews,
+		changeSets:   changeset.NewRegistry(siteDB),
 	}, nil
 }
 
@@ -984,15 +995,15 @@ func buildAdminScopedServer(core *serverCore, cfg config.Config, idx *site.Index
 }
 
 func buildPrivilegedScopedServer(scopeName string, core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension, previews *previewstore.Store) *mcp.Server {
-	server := newScopedServer(scopeName, core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions)
-	admin.Register(server, cfg, core.srcIdx, postBuildCallbacks("build_site", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
+	server := newScopedServer(scopeName, core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions, core.changeSets)
+	admin.Register(server, cfg, core.srcIdx, core.changeSets, postBuildCallbacks("build_site", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
 	// RegisterRuntimeStatus again with the live public index: the generic admin
 	// registration keeps its compatibility signature for unit registrations,
 	// while the production server can reconcile source and public output after
 	// restarts instead of trusting volatile BuildPending flags (#1066).
 	admin.RegisterRuntimeStatusWithDB(server, cfg, core.srcIdx, core.siteDB, idx)
 	admin.RegisterVerifyPublication(server, idx, core.srcIdx, cfg)
-	admin.RegisterPublishChanges(server, idx, core.srcIdx, cfg, postBuildCallbacks("publish_changes", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
+	admin.RegisterPublishChanges(server, idx, core.srcIdx, cfg, core.changeSets, postBuildCallbacks("publish_changes", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
 	previewBaseURL := strings.TrimRight(cfg.OAuth.Issuer, "/")
 	admin.RegisterCreatePreview(server, cfg, previews, previewBaseURL)
 	admin.RegisterPreviewAccessTools(server, cfg, previews, previewBaseURL)
@@ -1034,7 +1045,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	reg := buildRegistry()
 	scopePolicy := oauth.NewScopePolicy(reg)
 
-	publicServer := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions)
+	publicServer := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
 	writeServer, previews := buildWriteScopedServer(core, cfg, idx, extensions)
 	adminServer := buildAdminScopedServer(core, cfg, idx, extensions, previews)
 	previewHandler := previews.HTTPHandler()
