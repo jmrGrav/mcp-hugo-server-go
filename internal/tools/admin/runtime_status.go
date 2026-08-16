@@ -126,7 +126,18 @@ type buildReconciliationRuntimeStatus struct {
 	SourceOfTruth    string `json:"source_of_truth"`
 }
 
+// mutationJournalRuntimeStatus reports idempotent-replay journal retention
+// facts only — it never describes unpublished/pending work. See
+// ActiveEntries' own doc comment (#1165).
 type mutationJournalRuntimeStatus struct {
+	// ActiveEntries is the count of mutation results still retained for
+	// idempotent replay (RememberMutation), not the count of changes still
+	// pending publication — those are unrelated axes. An entry stays here
+	// until its retention window prunes it, regardless of whether the
+	// underlying page was later published, edited again, or deleted; a
+	// freshly-deployed, fully-published site can report a large nonzero
+	// ActiveEntries. For "how much unpublished work exists," read
+	// publication_safety/unpublished_changes_count instead (#1142).
 	ActiveEntries     int    `json:"active_entries"`
 	LastPrunedAt      string `json:"last_pruned_at,omitempty"`
 	LastPrunedEntries int    `json:"last_pruned_entries"`
@@ -281,7 +292,9 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only " +
 			"language/representation counts, counterpart gaps, and legacy mismatch facts; `build_reconciliation` reports aggregate source/public drift recomputed from filesystem fingerprints rather than volatile BuildPending flags. No page identity or body is exposed. When SQLite is configured, " +
 			"`mutation_journal` reports only aggregate retention facts; `last_pruned_entries` is the number removed by the most recent successful maintenance " +
-			"transaction. When the shared change-set registry is wired (#1135/#1140), `publication_safety` (#1142) previews whether a build_site/publish_changes call " +
+			"transaction. IMPORTANT (#1165): `mutation_journal.active_entries` counts results retained for idempotent replay, NOT changes still pending " +
+			"publication — a fully-published site can report a large nonzero `active_entries`. For unpublished work, read `publication_safety`/`unpublished_changes_count` " +
+			"instead. When the shared change-set registry is wired (#1135/#1140), `publication_safety` (#1142) previews whether a build_site/publish_changes call " +
 			"with the same optional `change_set_id` would trip the foreign_change_set_present guard: `safe_to_publish` is false if `other_change_sets` (a different " +
 			"change-set's pending work) or `external_unknown_changes` (pending pages no change-set this process has tracked — common right after a restart) is " +
 			"nonzero — note `external_unknown_changes` alone does NOT actually block build_site itself; confirm those changes are expected, then build (see " +
