@@ -188,6 +188,55 @@ func TestExposureProfileUnknownValueRejected(t *testing.T) {
 	}
 }
 
+// TestExposureProfileAdminScopeMaskedToolsDoesNotCountProfileHidden is the
+// verification proof for the one documented gap in exposure_profile.go's
+// toolExposureTier comment: an admin-scope caller connecting with
+// ?profile=advanced has 4 admin-tier tools hidden by the profile, but
+// masked_tools (scope-only, not profile-aware) reports nothing masked at
+// admin scope — the field is absent even though tools genuinely are
+// hidden through this connection. This is a known, documented limitation,
+// not a regression to fix here; this test exists so a future change that
+// silently "fixes" the masked_tools math without reading the doc comment
+// doesn't accidentally invalidate what §6.22 promises.
+func TestExposureProfileAdminScopeMaskedToolsDoesNotCountProfileHidden(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	srv := mustOAuthSQLiteServer(t, storePath)
+	const bearer = "admin-token-for-masked-tools-gap-test"
+	addBearerToken(t, storePath, bearer, "admin")
+
+	sessionID := initMCPSessionAtPath(t, srv, "/mcp?profile=advanced", bearer)
+
+	// stage_hugo_upgrade is admin-tier — hidden by the advanced profile —
+	// confirming this session really does have tools profile-hidden.
+	listBody := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	listReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(listBody))
+	listReq.Header.Set("Content-Type", "application/json")
+	listReq.Header.Set("Accept", "application/json, text/event-stream")
+	listReq.Header.Set("Mcp-Session-Id", sessionID)
+	listReq.Header.Set("Authorization", "Bearer "+bearer)
+	listRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(listRec, listReq)
+	names := toolsListNames(t, listRec.Body.String())
+	if containsExposureTool(names, "stage_hugo_upgrade") {
+		t.Fatalf("stage_hugo_upgrade should be hidden under profile=advanced; got %v", names)
+	}
+
+	callBody := []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_capabilities"}}`)
+	callReq := httptest.NewRequest(http.MethodPost, "/mcp", bytes.NewReader(callBody))
+	callReq.Header.Set("Content-Type", "application/json")
+	callReq.Header.Set("Accept", "application/json, text/event-stream")
+	callReq.Header.Set("Mcp-Session-Id", sessionID)
+	callReq.Header.Set("Authorization", "Bearer "+bearer)
+	callRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(callRec, callReq)
+	if callRec.Code != http.StatusOK {
+		t.Fatalf("get_capabilities call status = %d body = %q", callRec.Code, callRec.Body.String())
+	}
+	if bytes.Contains(callRec.Body.Bytes(), []byte(`"masked_tools"`)) {
+		t.Fatalf("documented gap did not reproduce: masked_tools was present even though this is the known scope-only-not-profile-aware case; body = %q", callRec.Body.String())
+	}
+}
+
 // TestExposureProfileUnknownValueRejectedWhenAuthenticated proves profile
 // validation runs on the OAuth-enabled path too, not just the no-OAuth one
 // TestExposureProfileUnknownValueRejected already covers: the bogus-profile

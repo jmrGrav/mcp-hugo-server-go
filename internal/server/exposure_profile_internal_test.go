@@ -112,11 +112,13 @@ func TestToolsToHideForExposureProfileUnknownToolDefaultsToAdvanced(t *testing.T
 
 // TestGetCapabilitiesStaysAboveEditorialTier guards the invariant
 // documented in toolExposureTier's own doc comment: get_capabilities'
-// masked_tools field is scope-only, not profile-aware, and that gap is
-// only safe because get_capabilities itself is unreachable at
-// reader/editorial profiles. If someone moves get_capabilities to a lower
-// tier without adding profile-awareness to maskedCapabilityTools, this
-// test fails loudly instead of letting the field silently under-report.
+// masked_tools field is scope-only, not profile-aware, and keeping
+// get_capabilities at advanced/admin tier keeps that gap bounded to one
+// documented cell (admin scope + ?profile=advanced, where masked_tools
+// under-reports) instead of every reader/editorial session. If someone
+// moves get_capabilities to a lower tier without adding profile-awareness
+// to maskedCapabilityTools, this test fails loudly instead of letting the
+// field silently under-report far more broadly.
 func TestGetCapabilitiesStaysAboveEditorialTier(t *testing.T) {
 	tier, ok := toolExposureTier["get_capabilities"]
 	if !ok {

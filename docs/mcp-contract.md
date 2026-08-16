@@ -1562,18 +1562,29 @@ assignment; that judgment call is left to a human reviewing new tool
 additions, not to CI.
 
 **Known limitation: `get_capabilities.masked_tools` does not account for
-exposure-profile filtering.** That field (§ see `internal/tools/anonymous/
-capabilities.go`) is computed purely from OAuth scope — it has no
-awareness of which profile the caller's session was filtered to. This is
-made structurally safe rather than merely documented-around:
-`get_capabilities` itself is `advanced`-tier, so it is unreachable at all
-under `reader`/`editorial` profiles (the caller literally cannot query a
-stale count), and at the `advanced` profile the additional tools it hides
-beyond scope masking are exactly the 4 `admin`-only tools scope-masking
-already counts — so the numbers agree by construction, not by luck.
-`TestGetCapabilitiesStaysAboveEditorialTier` guards this: it fails if
-`get_capabilities` is ever moved to `reader`/`editorial` without also
-making `maskedCapabilityTools` profile-aware.
+exposure-profile filtering.** That field (see
+`internal/tools/anonymous/capabilities.go`) is computed purely from OAuth
+scope — it has no awareness of which profile the caller's session was
+filtered to. `get_capabilities` is kept at `advanced` tier specifically to
+bound this gap to one documented cell rather than every profile: it is
+unreachable at all under `reader`/`editorial` (the caller literally cannot
+query a stale count there), and at `write`/`read` scope + `advanced`
+profile the counts happen to align (the tools the profile additionally
+hides there are exactly the 4 `admin`-only tools scope-masking already
+counts). **They do NOT align for an admin-scope caller on
+`?profile=advanced`**: scope masks nothing at admin
+(`maskedCapabilityTools` returns `nil` — "nothing masked"), while the
+profile still hides those same 4 admin-tier tools through that specific
+connection — `masked_tools` is absent even though tools are genuinely
+hidden.
+`TestExposureProfileAdminScopeMaskedToolsDoesNotCountProfileHidden`
+verifies this exact case reproduces as described, and
+`TestGetCapabilitiesStaysAboveEditorialTier` guards the tier placement
+that keeps the gap bounded to this one cell instead of widening it —
+neither claims the gap is fully closed. Making `maskedCapabilityTools`
+profile-aware (threading the profile through registration or request
+context) would close it properly; that is a larger change than this issue
+warrants and is left for a follow-up if the gap ever matters in practice.
 
 ## 7. New tools (v1.3.8+)
 
