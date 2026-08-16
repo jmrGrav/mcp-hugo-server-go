@@ -139,13 +139,27 @@ func rejectDangerousShortcodes(body string, blocked []string) error {
 	return nil
 }
 
-// rejectUnsafeText rejects null bytes and C0/C1 control characters other
-// than \n, \r, \t, per #380. Content is validated as UTF-8 by Go's JSON
-// decoding already (invalid UTF-8 in a JSON string fails to decode), so
-// this only needs to police the control-character range within otherwise
-// valid text — a null byte or raw control code has no legitimate place in
-// a Markdown body or frontmatter title and can corrupt downstream parsing
-// (YAML, HTML rendering) in ways that are hard to diagnose after the fact.
+// isBidiControlRune reports whether r is one of the Unicode bidirectional
+// control code points (#1158): the explicit embedding/override pair
+// LRE/RLE/PDF (U+202A-U+202C), the explicit override pair LRO/RLO (U+202D-
+// U+202E), and the isolate set LRI/RLI/FSI/PDI (U+2066-U+2069). These have
+// no legitimate place in a page title — they exist to change how following
+// text is displayed (e.g. RLO can make "gpj.exe" render as "exe.jpg"), which
+// is a known spoofing technique (bidi-override / "Trojan Source" attacks)
+// and title/list_pages output has no rendering context that would ever
+// justify one.
+func isBidiControlRune(r rune) bool {
+	return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
+}
+
+// rejectUnsafeText rejects null bytes, C0/C1 control characters other than
+// \n, \r, \t, and Unicode bidirectional control characters, per #380 and
+// #1158. Content is validated as UTF-8 by Go's JSON decoding already
+// (invalid UTF-8 in a JSON string fails to decode), so this only needs to
+// police the control-character range within otherwise valid text — a null
+// byte or raw control code has no legitimate place in a Markdown body or
+// frontmatter title and can corrupt downstream parsing (YAML, HTML
+// rendering) in ways that are hard to diagnose after the fact.
 func rejectUnsafeText(s string) error {
 	for _, r := range s {
 		if r == 0 {
@@ -156,6 +170,9 @@ func rejectUnsafeText(s string) error {
 		}
 		if r >= 0x7F && r <= 0x9F {
 			return fmt.Errorf("must not contain C1 control characters (found U+%04X)", r)
+		}
+		if isBidiControlRune(r) {
+			return fmt.Errorf("must not contain bidirectional control characters (found U+%04X)", r)
 		}
 	}
 	return nil
