@@ -1905,7 +1905,7 @@ func buildSiteHealth(ctx context.Context, idx *site.Index, srcIdx *hugosite.Sour
 		// explicit every single call, not just discoverable in prose.
 		RenderedSEOCoverage: &renderedSEOCoverageDTO{
 			Aggregated:        false,
-			Reason:            "rendered_html_checks_not_computed_here_see_inspect_rendered",
+			Reason:            "rendered_html_not_inspected",
 			AuthoritativeTool: "inspect_rendered",
 		},
 	}
