@@ -114,15 +114,19 @@ as compatibility aliases during v1.x; they are not the preferred contract for
 new integrations.
 
 - `create_page` - Publish page
+- `create_bundle` - Create multilingual bundle (atomically creates every translation passed in; every page is validated before any file is written, so a validation failure on any one translation leaves no partial bundle on disk; see #1038)
 - `update_page` - Update page (accepts optional `expected_bundle_revision` alongside `expected_revision` to additionally reject the write if a sibling translation or bundle-local asset changed since the caller last read the bundle; omitting it is a no-op — see #857)
 - `delete_page` - Delete page
 - `delete_page_asset` - Delete page asset
+- `delete_bundle` - Delete multilingual bundle (atomically deletes selected translations; all revisions are checked before the first unlink, so a failure leaves the bundle unchanged)
 - `upload_page_asset` - Upload page asset (write a new file into an existing leaf page bundle directory; allowed types png/jpg/jpeg/gif/webp/svg, content is sniffed against the declared extension for raster types and structurally validated for SVG, never overwrites — see #348, #571)
 - `get_mutation_status` - Get mutation status (idempotency-key lookup for a previous mutation's result)
 - `get_rate_limits` - Get rate limits (check remaining per-caller mutation quota before acting; never itself consumes quota)
+- `list_page_snapshots` - List page snapshots (caller-isolated, 24h-retained content snapshots produced by `apply_content_plan`/`update_page`/`rollback_change`, usable as `rollback_change`'s `to_revision`)
+- `create_change_set` - Create change-set (mints an opaque, caller-owned `change_set_id` accepted by every mutation tool and by `build_site`/`publish_changes`, for tracking/publishing separate units of work under a single shared OAuth principal; see #1135)
 - `plan_content_change` - Plan content change
 - `apply_content_plan` - Apply content plan
-- `rollback_change` - Rollback change (recoverable, not data-destroying — restores a prior revision of a single page)
+- `rollback_change` - Rollback change (recoverable, not data-destroying — restores a prior revision of a single page; `to_revision` accepts a `content_snapshot` from `list_page_snapshots` in addition to a Git commit from `list_page_revisions`)
 - `plan_bundle_change` - Plan bundle change (bundle-scoped analog of plan_content_change/apply_content_plan for atomic multi-translation edits; see #854)
 - `apply_bundle_plan` - Apply bundle plan (validates every translation before writing any; rolls back already-written files on a mid-apply failure — runtime, not crash, atomicity)
 - `rollback_bundle` - Rollback bundle (restores every translation touched by a previous apply_bundle_plan)

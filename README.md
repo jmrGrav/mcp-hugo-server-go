@@ -115,7 +115,7 @@ For a fresh article, the suggested call order is:
 
 1. `list_content_types` — confirm the content type and required front matter.
 2. `suggest_links(tags, categories, body)` — run against your draft tags/body *before* writing, to surface internal-linking candidates while the content is still easy to adjust (#623).
-3. `create_page` — write the page (`create_page`'s own description also cross-references `suggest_links` as a pre-write step).
+3. `create_page` — write the page (`create_page`'s own description also cross-references `suggest_links` as a pre-write step). If you're publishing every language translation of the article at once, use `create_bundle` instead — it writes every translation atomically, so a validation failure on any one leaves no partial bundle on disk (#1038).
 4. `verify_publication` — confirm the change actually went live after a build.
 
 ## Multi-page editorial changes
@@ -130,6 +130,10 @@ The recommended shape (#631):
 3. Once every page in the batch has been applied, call `publish_changes` **once** for the whole site.
 
 No new orchestration tool is needed for this — `apply_content_plan`'s existing per-page revision pinning and `rollback_change`'s per-page undo already compose into this pattern; a batch-level primitive would just be a wrapper around the same three calls.
+
+This is the pattern for a change spanning several *distinct* pages. For editing every language translation of the *same* page bundle together, use the bundle-scoped tools instead (`plan_bundle_change` → `apply_bundle_plan`, or `create_bundle`/`delete_bundle` for whole-bundle create/delete) — they validate every translation before writing any, so a single atomic apply replaces what would otherwise be several separately-racing `plan_content_change`/`apply_content_plan` calls against sibling files (#854).
+
+If several clients share the same OAuth principal and need their own in-flight batches tracked and published independently, call `create_change_set` once per batch and pass the returned `change_set_id` on every mutation and on `publish_changes` (#1135).
 
 ## Security model
 
@@ -208,15 +212,13 @@ gitleaks detect --no-banner --redact --source .
 
 ## Release flow
 
-Production promotion is intentionally split into three explicit stages:
+Production promotion is a single manual `workflow_dispatch` on `Deploy to Production`. Every run, release or not, refuses to proceed unless the target ref is reachable from (an ancestor of) `origin/main` — production deploys must target a real main commit.
 
 1. Merge to `main` and wait for `CI` to go green.
-2. Run `Deploy to Production` for the exact `main` commit you want live.
-3. Run `Release` only after production deployment succeeds. The release workflow refuses to publish unless:
-   - the requested ref resolves to the current `origin/main` HEAD;
-   - `CHANGELOG.md` contains the requested version;
-   - `README.md` still uses dynamic latest-release metadata;
-   - the target SHA already has a successful `production` deployment record.
+2. Run `Deploy to Production` for the exact ref you want live, with `release_version` left empty for an ad-hoc mainline deploy (e.g. a hotfix ahead of the next release) — this builds, tests, deploys, and smoke-tests, with no tag or GitHub release involved.
+3. To cut a real release instead, first merge the release-notes PR (the `CHANGELOG.md` entry and matching `npm/package.json`/`manifest.json` version bumps, plus `README.md` still using dynamic latest-release metadata rather than a hardcoded version — this workflow deliberately never writes that content itself), then run `Deploy to Production` again with `release_version` set (e.g. `v1.9.0`). It refuses to proceed unless all of that is already true on the target ref; once the deploy succeeds it tags, publishes the GitHub release, attaches binaries and the `.mcpb` bundle, and publishes to npm — one call produces a fully consistent release.
+
+A standalone `Release` workflow existed previously; it has since been absorbed into `Deploy to Production` (see the workflow's own header comment for the full rationale).
 
 ## Project lineage
 
