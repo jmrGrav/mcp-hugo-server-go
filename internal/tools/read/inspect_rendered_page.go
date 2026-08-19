@@ -116,8 +116,10 @@ type responsiveCodeBlocksDTO struct {
 
 // responsiveImagesDTO: Count is every <img> element found. Responsive is
 // false only when at least one image has a hardcoded pixel width over 400
-// and no responsive escape hatch (a `max-width` style or a `srcset`
-// attribute) — such an image cannot shrink to fit a narrow viewport.
+// and no responsive escape hatch (a `max-width` style, or a `srcset`/
+// `data-srcset` attribute — the latter covers lazy-load themes that defer
+// the real responsive set to `data-srcset` until JS swaps it in) — such an
+// image cannot shrink to fit a narrow viewport.
 type responsiveImagesDTO struct {
 	Count      int  `json:"count"`
 	Responsive bool `json:"responsive"`
@@ -939,11 +941,15 @@ func tableHasLongUnbreakableCell(table *html.Node) bool {
 // imageHasFixedOverlargeWidth reports a hardcoded pixel width over 400 with
 // no responsive escape hatch (a `max-width` style or a `srcset` attribute
 // both indicate the theme/author already accounted for narrow viewports).
+// `data-srcset` is checked alongside `srcset` because lazy-load themes
+// (e.g. LoveIt) defer the real responsive set to `data-srcset` and only
+// populate `srcset` after JS runs, so `src`/`srcset` alone see a
+// non-responsive placeholder even though the page is responsive.
 func imageHasFixedOverlargeWidth(img *html.Node) bool {
 	if strings.Contains(strings.ToLower(htmlAttr(img, "style")), "max-width") {
 		return false
 	}
-	if strings.TrimSpace(htmlAttr(img, "srcset")) != "" {
+	if strings.TrimSpace(htmlAttr(img, "srcset")) != "" || strings.TrimSpace(htmlAttr(img, "data-srcset")) != "" {
 		return false
 	}
 	w := strings.TrimSpace(htmlAttr(img, "width"))

@@ -1389,8 +1389,9 @@ CrowdSec, and multiple KVM VMs alongside this server).
     confirmation the theme's CSS actually scrolls it, see
     `table_overflow_protection` below for that theme-constant question).
   - `images`: `count`, `responsive` (false only when an `<img>` has a
-    hardcoded pixel width over 400 with no `max-width` style or `srcset`
-    escape hatch).
+    hardcoded pixel width over 400 with no `max-width` style or
+    `srcset`/`data-srcset` escape hatch — the latter covers lazy-load
+    themes that defer the real responsive set to `data-srcset`).
 - **`get_theme_status.table_overflow_protection`** (`bool` or omitted):
   whether the active theme's own CSS/Sass source contains a rule scoping a
   `table` selector to `overflow-x: auto|scroll` — the standard fix that
