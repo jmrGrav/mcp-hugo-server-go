@@ -793,6 +793,33 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 	}
 }
 
+// TestOversizedRequestBodyReturnsActionableError is a regression test for
+// #1190: a POST body over max_request_bytes previously fell into
+// io.LimitReader's silent truncation, so a caller sending e.g. an oversized
+// upload_page_asset content_base64 payload got a downstream JSON-parse
+// failure that never named the actual limit hit. It must now fail fast
+// with 413 and a message identifying max_request_bytes, before the
+// truncated body ever reaches JSON parsing/scope checks.
+func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
+	srv := mustOAuthServer(t) // config.Default() leaves max_request_bytes at its 1 MiB default
+	bearer := obtainBearerToken(t, srv)
+
+	oversized := bytes.Repeat([]byte("a"), (1<<20)+1024)
+	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_page_asset","arguments":{"content_base64":"` + string(oversized) + `"}}}`)
+	rec := doMCPCall(t, srv, bearer, payload)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body = %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "max_request_bytes") {
+		t.Fatalf("error body doesn't name max_request_bytes: %s", body)
+	}
+	if !strings.Contains(body, "asset_upload") {
+		t.Fatalf("error body doesn't point to get_capabilities.data.asset_upload for the actual reachable limit: %s", body)
+	}
+}
+
 // TestWriteTokenCannotInvokeAdminOnlyTools is #1069's remaining matrix gap:
 // existing coverage proves the four managed Hugo binary lifecycle tools
 // (stage_hugo_upgrade/activate_hugo/rollback_hugo/bootstrap_hugo) are

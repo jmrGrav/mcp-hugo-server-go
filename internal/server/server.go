@@ -596,9 +596,35 @@ func newMCPToolHandler(
 
 			// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
 			if r.Method == http.MethodPost {
-				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+				// Read one byte past maxBody so an oversized request can be
+				// told apart from one that lands exactly at the limit —
+				// io.LimitReader alone silently truncates either case,
+				// which previously left an oversized upload_page_asset call
+				// (or any other large tool call) failing downstream as an
+				// opaque JSON parse error instead of naming the actual
+				// limit it hit (#1190).
+				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 				if err != nil {
 					http.Error(w, "bad request", http.StatusBadRequest)
+					return
+				}
+				if int64(len(body)) > maxBody {
+					audit.Warn(audit.EventScopeDenied, "denied",
+						"scope", callerScope,
+						"reason", "request_too_large",
+						"path", r.URL.Path,
+						"remote_addr", r.RemoteAddr,
+					)
+					w.Header().Set("Content-Type", "application/json; charset=utf-8")
+					w.WriteHeader(http.StatusRequestEntityTooLarge)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      nil,
+						"error": map[string]any{
+							"code":    -32001,
+							"message": fmt.Sprintf("request body exceeds max_request_bytes (%d bytes) — see get_capabilities.data.asset_upload for the largest inline upload_page_asset payload this limit allows", maxBody),
+						},
+					})
 					return
 				}
 				if !scopePolicy.AllowRequest(body, callerScope) {

@@ -53,14 +53,62 @@ type capabilitiesRateLimits struct {
 }
 
 type capabilitiesLimits struct {
-	BodyMaxBytes           int                    `json:"body_max_bytes"`
-	TitleMaxRunes          int                    `json:"title_max_runes"`
-	AssetMaxBytes          int                    `json:"asset_max_bytes"`
-	MaxRequestBytes        int64                  `json:"max_request_bytes,omitempty"`
-	MaxResultItems         int                    `json:"max_result_items,omitempty"`
-	TestContentMaxTTLHours int                    `json:"test_content_max_ttl_hours"`
-	PreviewTTL             capabilitiesPreviewTTL `json:"preview_ttl"`
-	RateLimits             capabilitiesRateLimits `json:"rate_limits"`
+	BodyMaxBytes           int                     `json:"body_max_bytes"`
+	TitleMaxRunes          int                     `json:"title_max_runes"`
+	AssetMaxBytes          int                     `json:"asset_max_bytes"`
+	MaxRequestBytes        int64                   `json:"max_request_bytes,omitempty"`
+	MaxResultItems         int                     `json:"max_result_items,omitempty"`
+	TestContentMaxTTLHours int                     `json:"test_content_max_ttl_hours"`
+	PreviewTTL             capabilitiesPreviewTTL  `json:"preview_ttl"`
+	RateLimits             capabilitiesRateLimits  `json:"rate_limits"`
+	AssetUpload            capabilitiesAssetUpload `json:"asset_upload"`
+}
+
+// capabilitiesAssetUpload (#1190) reconciles asset_max_bytes and
+// max_request_bytes into the one number that actually matters for
+// upload_page_asset's only input mode today (content_base64 inline in the
+// tool-call JSON): the largest decoded file an agent can upload in a single
+// call. asset_max_bytes alone overstates what's reachable — base64 expands
+// the payload ~4/3, and it still has to fit inside max_request_bytes
+// alongside the rest of the tool-call envelope (slug, filename, other
+// params). recommended_inline_max_bytes is computed from the server's
+// actual configured max_request_bytes (not a hardcoded constant), so it
+// stays correct on any deployment that raised or lowered that limit.
+// There is deliberately no chunked-upload field yet — upload_page_asset has
+// no chunked mode; advertising one that doesn't exist would be worse than
+// the ambiguity this field fixes.
+type capabilitiesAssetUpload struct {
+	MaxAssetBytes             int `json:"max_asset_bytes"`
+	RecommendedInlineMaxBytes int `json:"recommended_inline_max_bytes"`
+}
+
+// requestEnvelopeOverheadBytes is a conservative reservation for everything
+// in an upload_page_asset tool-call JSON body besides content_base64 itself
+// (the JSON-RPC envelope, tool name, slug/filename/content_type params) —
+// deliberately generous so recommended_inline_max_bytes stays a safe
+// under-estimate rather than a value that can still hit max_request_bytes.
+const requestEnvelopeOverheadBytes = 2048
+
+// recommendedInlineAssetMaxBytes returns the largest decoded asset size an
+// agent can reliably send through upload_page_asset's inline content_base64
+// param in one call, given this server's actual configured
+// max_request_bytes — never more than assetMaxBytes itself.
+func recommendedInlineAssetMaxBytes(maxRequestBytes int64, assetMaxBytes int) int {
+	if maxRequestBytes <= 0 {
+		maxRequestBytes = 1 << 20
+	}
+	available := maxRequestBytes - requestEnvelopeOverheadBytes
+	if available <= 0 {
+		return 0
+	}
+	decoded := available * 3 / 4 // base64 encoding expands by 4/3
+	if decoded > int64(assetMaxBytes) {
+		decoded = int64(assetMaxBytes)
+	}
+	if decoded < 0 {
+		decoded = 0
+	}
+	return int(decoded)
 }
 
 // capabilitiesFeatures reports coarse availability of optional integrations
@@ -175,7 +223,8 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 	addReadOnlyTool(s, "get_capabilities", "Get capabilities",
 		"Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): "+
 			"`server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); "+
-			"`limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits); "+
+			"`limits` (body_max_bytes, title_max_runes, asset_max_bytes, test_content_max_ttl_hours, preview_ttl min/default/max seconds, per-caller mutation rate limits, `asset_upload`); "+
+			"`limits.asset_upload.recommended_inline_max_bytes` (#1190) is the actually-reachable ceiling for upload_page_asset's inline `content_base64` param — computed from this server's real `max_request_bytes` (base64 expands the payload ~4/3, and it still has to fit the tool-call envelope alongside `max_request_bytes`), which is always <= `asset_max_bytes` and often well below it; a file larger than this needs a different transfer path (there is no chunked-upload mode yet) before uploading in one call. "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
 			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool. "+
 			"`effective_scopes` names the caller's own scope (`read`, `write`, or `admin` — the three canonical scopes the server ever grants, #450/#1039/#1050) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools (or a write-scoped caller lacks the admin-only managed Hugo binary lifecycle tools), or `not_configured` when a write-scoped caller has write tools available but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `disabled_features[]` separately explains optional integrations disabled by configuration with reason `feature_disabled`; it never exposes secrets or paths. Note: `admin` is intentionally never advertised on the external OAuth-discovery surface (server card, `.well-known/oauth-protected-resource`) — only `read`/`write` appear there, since `admin` is an explicitly-approved administrator tier, not self-service; `effective_scopes` here is this tool's own in-session view of the caller's actual scope, not a mirror of that external discovery contract.",
@@ -210,6 +259,10 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 					MaxResultItems:         cfg.MaxResultItems,
 					TestContentMaxTTLHours: writepkg.TestContentMaxTTLHours(),
 					PreviewTTL:             capabilitiesPreviewTTL{MinSeconds: pMin, DefaultSeconds: pDef, MaxSeconds: pMax},
+					AssetUpload: capabilitiesAssetUpload{
+						MaxAssetBytes:             writepkg.AssetMaxBytes(),
+						RecommendedInlineMaxBytes: recommendedInlineAssetMaxBytes(cfg.MaxRequestBytes, writepkg.AssetMaxBytes()),
+					},
 					RateLimits: capabilitiesRateLimits{
 						CreateUpdateUploadPerMin: cfg.RateLimit.CreateUpdatePerMin,
 						DestructivePerMin:        cfg.RateLimit.DestructivePerMin,

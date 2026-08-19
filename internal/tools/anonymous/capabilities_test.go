@@ -195,6 +195,23 @@ func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
 	if got, want := int(limits["asset_max_bytes"].(float64)), writepkg.AssetMaxBytes(); got != want {
 		t.Errorf("asset_max_bytes = %d, want %d", got, want)
 	}
+	assetUpload, ok := limits["asset_upload"].(map[string]any)
+	if !ok {
+		t.Fatalf("limits.asset_upload missing/wrong type: %#v", limits["asset_upload"])
+	}
+	if got, want := int(assetUpload["max_asset_bytes"].(float64)), writepkg.AssetMaxBytes(); got != want {
+		t.Errorf("asset_upload.max_asset_bytes = %d, want %d", got, want)
+	}
+	// cfg.MaxRequestBytes is unset here (config.Default() sets 1 MiB), so
+	// the recommendation must land strictly below both max_request_bytes
+	// and asset_max_bytes — the exact contract gap #1190 reports.
+	recommended := int(assetUpload["recommended_inline_max_bytes"].(float64))
+	if recommended <= 0 || int64(recommended) >= cfg.MaxRequestBytes {
+		t.Errorf("asset_upload.recommended_inline_max_bytes = %d, want > 0 and < max_request_bytes (%d)", recommended, cfg.MaxRequestBytes)
+	}
+	if recommended >= writepkg.AssetMaxBytes() {
+		t.Errorf("asset_upload.recommended_inline_max_bytes = %d, want < asset_max_bytes (%d)", recommended, writepkg.AssetMaxBytes())
+	}
 	rl, ok := limits["rate_limits"].(map[string]any)
 	if !ok {
 		t.Fatalf("rate_limits missing: %#v", limits["rate_limits"])
