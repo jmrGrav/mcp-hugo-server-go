@@ -129,7 +129,7 @@ func (r *PageResolver) resolveSourceExact(sourceSlug, lang string) (*hugosite.So
 	if r == nil || r.srcIdx == nil || strings.TrimSpace(lang) == "" {
 		return nil, false
 	}
-	for _, c := range SourceSlugCandidates(sourceSlug) {
+	for _, c := range sourceSlugCandidatesForRequest(sourceSlug, lang) {
 		if p, ok := r.srcIdx.GetBySlugLang(c, lang); ok {
 			return p, true
 		}
@@ -141,7 +141,7 @@ func (r *PageResolver) resolveUnlabelledSource(sourceSlug string) (*hugosite.Sou
 	if r == nil || r.srcIdx == nil {
 		return nil, false
 	}
-	for _, c := range SourceSlugCandidates(sourceSlug) {
+	for _, c := range sourceSlugCandidatesForRequest(sourceSlug, "") {
 		if p, ok := r.srcIdx.GetDefaultBySlug(c); ok {
 			return p, true
 		}
@@ -242,7 +242,7 @@ func (r *PageResolver) resolveDefaultSource(sourceSlug string) (*hugosite.Source
 	if r == nil || r.srcIdx == nil {
 		return nil, false
 	}
-	candidates := SourceSlugCandidates(sourceSlug)
+	candidates := sourceSlugCandidatesForRequest(sourceSlug, r.cfg.DefaultLanguage)
 	if r.cfg.DefaultLanguage != "" {
 		for _, c := range candidates {
 			if p, ok := r.srcIdx.GetBySlugLang(c, r.cfg.DefaultLanguage); ok {
@@ -259,6 +259,35 @@ func (r *PageResolver) resolveDefaultSource(sourceSlug string) (*hugosite.Source
 		}
 	}
 	return nil, false
+}
+
+// sourceSlugCandidatesForRequest is SourceSlugCandidates, plus explicit
+// handling for the site root (sourceSlug == "" after trimming), which
+// SourceSlugCandidates itself always turns into zero candidates.
+//
+// hugosite.SlugFromRel keeps "_index"/"_index.<lang>" as a literal slug
+// segment for root "_index.md"/"_index.<lang>.md" source files — the same
+// fact trimIndexSlugSegment's doc comment relies on (#1174). But that
+// literal segment only carries the language suffix when the file *is*
+// explicitly labelled: an unlabelled "_index.md" gets the bare slug
+// "_index" (found via GetDefaultBySlug/GetBySlug), while an explicitly
+// labelled "_index.en.md" gets slug "_index.en" — NOT "_index" — with
+// Lang "en" parsed separately (found via GetBySlugLang("_index.en", "en")).
+// A bare "_index" candidate alone therefore resolves an unlabelled default
+// root page but silently misses every explicitly-labelled translation,
+// which is what left get_page_for_edit/check_ai_readiness unable to
+// resolve the site root for a labelled language while validate_site/
+// inspect_rendered (which don't route through PageResolver) kept working
+// (#1184, the public→source-direction counterpart to #1174's fix).
+func sourceSlugCandidatesForRequest(sourceSlug, lang string) []string {
+	if strings.Trim(sourceSlug, "/") != "" {
+		return SourceSlugCandidates(sourceSlug)
+	}
+	lang = strings.TrimSpace(lang)
+	if lang == "" {
+		return []string{"_index"}
+	}
+	return []string{"_index." + lang, "_index"}
 }
 
 // SourceSlugCandidates returns the slug lookup keys to try against the source

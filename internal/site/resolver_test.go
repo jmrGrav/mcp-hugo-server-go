@@ -459,6 +459,55 @@ func TestPageResolverImplicitDefaultLangBorrowsUnlabelledSource(t *testing.T) {
 	}
 }
 
+// TestPageResolverResolvesRootForEveryLabelledLanguage is a regression test
+// for #1184: get_page_for_edit/check_ai_readiness could not resolve the
+// site root ("/") to its source at all, even though validate_site/
+// inspect_rendered (which don't route through PageResolver) resolved it
+// fine. Root "_index.<lang>.md" files keep their language suffix baked
+// into the literal source slug ("_index.en", "_index.fr" — see
+// sourceSlugCandidatesForRequest's doc comment), so both the default and a
+// secondary explicitly-labelled language must resolve, not just the
+// unlabelled "_index.md" case.
+func TestPageResolverResolvesRootForEveryLabelledLanguage(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSourcePage(t, contentRoot, "_index.en.md", "---\ntitle: Home\n---\nEnglish home body\n")
+	writeSourcePage(t, contentRoot, "_index.fr.md", "---\ntitle: Accueil\n---\nCorps francais\n")
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+	idx := &Index{
+		entries: []entry{
+			{page: Page{Slug: "/", Lang: "en", Title: "Home"}},
+			{page: Page{Slug: "/fr/", Lang: "fr", Title: "Accueil"}},
+		},
+		bySlug: map[string]int{"/": 0, "/fr/": 1},
+		info:   map[string]string{},
+	}
+	resolver := NewPageResolver(idx, srcIdx, config.Config{ContentRoot: contentRoot, DefaultLanguage: "en"})
+
+	for _, tc := range []struct {
+		name     string
+		rawSlug  string
+		lang     string
+		wantBody string
+	}{
+		{name: "default language explicit", rawSlug: "/", lang: "en", wantBody: "English home body"},
+		{name: "secondary language explicit", rawSlug: "/", lang: "fr", wantBody: "Corps francais"},
+		{name: "default language implicit", rawSlug: "/", lang: "", wantBody: "English home body"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := resolver.ResolveWithLang(tc.rawSlug, tc.lang)
+			if !ok {
+				t.Fatalf("ResolveWithLang(%q, %q) not found", tc.rawSlug, tc.lang)
+			}
+			if got.Source == nil || got.Source.Body != tc.wantBody {
+				t.Fatalf("ResolveWithLang(%q, %q).Source = %#v, want body %q", tc.rawSlug, tc.lang, got.Source, tc.wantBody)
+			}
+		})
+	}
+}
+
 // TestPageResolverPairsDefaultLanguageAcrossRegionQualifiedHTMLLang is a
 // regression test for a real bug found live on production: a theme rendering
 // the SEO-preferred BCP-47 region-qualified form (<html lang="fr-FR">) for
