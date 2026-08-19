@@ -802,6 +802,7 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 // truncated body ever reaches JSON parsing/scope checks.
 func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
 	srv := mustOAuthServer(t) // config.Default() leaves max_request_bytes at its 1 MiB default
+	logBuf := withDefaultLogger(t)
 	bearer := obtainBearerToken(t, srv)
 
 	oversized := bytes.Repeat([]byte("a"), (1<<20)+1024)
@@ -817,6 +818,21 @@ func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
 	}
 	if !strings.Contains(body, "asset_upload") {
 		t.Fatalf("error body doesn't point to get_capabilities.data.asset_upload for the actual reachable limit: %s", body)
+	}
+	if !strings.Contains(body, `"code":-32002`) {
+		t.Fatalf("error.code must be distinct from scope_denied's -32001: %s", body)
+	}
+
+	// A body-size rejection is a transport condition, not an authorization
+	// failure — it must never be tagged event_type=scope_denied, since that
+	// event is a security signal operators alert on
+	// (TestScopeDeniedToolCallEmitsStructuredAuditLog covers its real use).
+	raw := logBuf.String()
+	if strings.Contains(raw, `"event_type":"scope_denied"`) {
+		t.Fatalf("oversized-body rejection must not be logged as scope_denied: %s", raw)
+	}
+	if !strings.Contains(raw, `"event_type":"request_rejected"`) {
+		t.Fatalf("missing event_type=request_rejected in audit log: %s", raw)
 	}
 }
 

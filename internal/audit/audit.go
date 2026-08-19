@@ -31,6 +31,12 @@ const (
 	EventMutation = "mutation"
 	// EventAdminOperation marks a site.admin tool call outcome.
 	EventAdminOperation = "admin_operation"
+	// EventRequestRejected marks a request rejected for a transport/
+	// protocol-level reason independent of the caller's identity or scope
+	// (e.g. a body exceeding max_request_bytes, #1190) — deliberately
+	// distinct from EventScopeDenied so a size/malformed-request rejection
+	// never inflates the scope-denial signal operators alert on.
+	EventRequestRejected = "request_rejected"
 )
 
 // Log emits one structured audit line at the given level. Callers must
