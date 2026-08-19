@@ -338,6 +338,7 @@ func scanMarkdown(md string) markdownStats {
 		stats             markdownStats
 		inFence           bool
 		fenceMarker       string
+		inHTMLComment     bool
 		currentSection    = "(lead)"
 		currentSectionLen int
 		paragraphLines    []string
@@ -380,6 +381,34 @@ func scanMarkdown(md string) markdownStats {
 			continue
 		}
 		if inFence {
+			continue
+		}
+
+		// HTML comments (e.g. `<!-- mermaid-source:base64... -->` marker
+		// comments embedding frozen diagram source, #1183) are internal
+		// bookkeeping, not editorial prose — excluded from paragraph/
+		// section/body-char accumulation entirely, the same way a fenced
+		// code block is skipped above. Handles both a whole comment on one
+		// line and a multi-line `<!--` ... `-->` block.
+		if inHTMLComment {
+			if strings.Contains(trimmed, "-->") {
+				inHTMLComment = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<!--") {
+			flushParagraph()
+			// Only enter block mode when this line has no closing "-->" of
+			// its own — a line like "<!-- marker --> Trailing prose." must
+			// not swallow every following line up to the next "-->" (or
+			// EOF), which would silently drop real headings/paragraphs
+			// past it. The trailing prose on that one line is still
+			// excluded from accumulation, an acceptable under-count for a
+			// pattern the issue itself only asks to be handled "at
+			// minimum" on a whole-line basis.
+			if !strings.Contains(trimmed, "-->") {
+				inHTMLComment = true
+			}
 			continue
 		}
 
