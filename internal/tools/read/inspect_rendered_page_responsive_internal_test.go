@@ -120,3 +120,14 @@ func TestComputeResponsiveChecksImageWithSrcsetIsResponsive(t *testing.T) {
 		t.Fatalf("Responsive = false, want true when the image has a srcset escape hatch")
 	}
 }
+
+// LoveIt (and similar themes) lazy-load images: the real responsive set
+// lives in data-srcset until JS swaps it into srcset, so data-srcset alone
+// must count as the same escape hatch (#1189).
+func TestComputeResponsiveChecksImageWithDataSrcsetIsResponsive(t *testing.T) {
+	doc := mustParseFragment(t, `<img class="lazyload" src="/svg/loading.min.svg" data-src="/x.webp" data-srcset="/x-400.webp 1x, /x-800.webp 2x" width="640" height="360">`)
+	got := computeResponsiveChecks(doc)
+	if !got.Images.Responsive {
+		t.Fatalf("Responsive = false, want true when the image has a data-srcset escape hatch (lazyload)")
+	}
+}
