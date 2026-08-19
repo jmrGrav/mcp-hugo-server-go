@@ -793,6 +793,74 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 	}
 }
 
+// TestOversizedRequestBodyReturnsActionableError is a regression test for
+// #1190: a POST body over max_request_bytes previously fell into
+// io.LimitReader's silent truncation, and the truncated JSON then failed
+// ScopePolicy.parse — so a caller sending e.g. an oversized
+// upload_page_asset content_base64 payload got a misleading 403
+// scope_denied/unknown_tool instead of an error naming the actual limit
+// hit. It must now fail fast with 413 and a message identifying
+// max_request_bytes, before the truncated body ever reaches the scope
+// check.
+func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
+	srv := mustOAuthServer(t) // config.Default() leaves max_request_bytes at its 1 MiB default
+	logBuf := withDefaultLogger(t)
+	bearer := obtainBearerToken(t, srv)
+
+	oversized := bytes.Repeat([]byte("a"), (1<<20)+1024)
+	payload := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_page_asset","arguments":{"content_base64":"` + string(oversized) + `"}}}`)
+	rec := doMCPCall(t, srv, bearer, payload)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body = %q", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "max_request_bytes") {
+		t.Fatalf("error body doesn't name max_request_bytes: %s", body)
+	}
+	if !strings.Contains(body, "asset_upload") {
+		t.Fatalf("error body doesn't point to get_capabilities.data.asset_upload for the actual reachable limit: %s", body)
+	}
+	if !strings.Contains(body, `"code":-32010`) {
+		t.Fatalf("error.code must be distinct from scope_denied's -32001: %s", body)
+	}
+
+	// A body-size rejection is a transport condition, not an authorization
+	// failure — it must never be tagged event_type=scope_denied, since that
+	// event is a security signal operators alert on
+	// (TestScopeDeniedToolCallEmitsStructuredAuditLog covers its real use).
+	raw := logBuf.String()
+	if strings.Contains(raw, `"event_type":"scope_denied"`) {
+		t.Fatalf("oversized-body rejection must not be logged as scope_denied: %s", raw)
+	}
+	if !strings.Contains(raw, `"event_type":"request_rejected"`) {
+		t.Fatalf("missing event_type=request_rejected in audit log: %s", raw)
+	}
+}
+
+// TestRequestBodyExactlyAtLimitIsNotRejected guards the off-by-one this
+// fix depends on: the size check reads one byte past maxBody specifically
+// so a body landing exactly on max_request_bytes is let through, not
+// caught by the same '>' that must reject anything larger. A future
+// '>' -> '>=' typo would 413 every request sitting exactly at the
+// configured limit, and nothing else would catch it.
+func TestRequestBodyExactlyAtLimitIsNotRejected(t *testing.T) {
+	srv := mustOAuthServer(t) // config.Default() leaves max_request_bytes at its 1 MiB default
+	bearer := obtainBearerToken(t, srv)
+
+	const maxRequestBytes = 1 << 20
+	suffix := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	payload := append(bytes.Repeat([]byte(" "), maxRequestBytes-len(suffix)), suffix...)
+	if len(payload) != maxRequestBytes {
+		t.Fatalf("test setup: payload length = %d, want exactly %d", len(payload), maxRequestBytes)
+	}
+
+	rec := doMCPCall(t, srv, bearer, payload)
+	if rec.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("a body exactly at max_request_bytes must not be rejected as too large: status = %d, body = %q", rec.Code, rec.Body.String())
+	}
+}
+
 // TestWriteTokenCannotInvokeAdminOnlyTools is #1069's remaining matrix gap:
 // existing coverage proves the four managed Hugo binary lifecycle tools
 // (stage_hugo_upgrade/activate_hugo/rollback_hugo/bootstrap_hugo) are

@@ -596,9 +596,46 @@ func newMCPToolHandler(
 
 			// Scope-based ACL applies only to POST (GET/DELETE have no JSON body)
 			if r.Method == http.MethodPost {
-				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+				// Read one byte past maxBody so an oversized request can be
+				// told apart from one that lands exactly at the limit —
+				// io.LimitReader alone silently truncates either case, and
+				// the truncated JSON then failed ScopePolicy.parse, which
+				// previously surfaced an oversized upload_page_asset call
+				// (or any other large tool call) as a 403 scope_denied/
+				// unknown_tool — a misleading permission-shaped error for
+				// what was actually a size problem, never naming
+				// max_request_bytes at all (#1190).
+				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 				if err != nil {
 					http.Error(w, "bad request", http.StatusBadRequest)
+					return
+				}
+				if int64(len(body)) > maxBody {
+					// EventRequestRejected, not EventScopeDenied: this is a
+					// transport-size condition independent of the caller's
+					// identity/scope, and must never inflate the
+					// scope-denial signal operators alert on. Code -32001 is
+					// already scope_denied's own JSON-RPC code (see below),
+					// and -32002 is claimed elsewhere (the MCP SDK's
+					// CodeResourceNotFound default) — -32010 gives this its
+					// own unambiguous code so a client reading error.code
+					// (not just the HTTP status) can tell the two apart.
+					audit.Warn(audit.EventRequestRejected, "rejected",
+						"scope", callerScope,
+						"reason", "request_too_large",
+						"path", r.URL.Path,
+						"remote_addr", r.RemoteAddr,
+					)
+					w.Header().Set("Content-Type", "application/json; charset=utf-8")
+					w.WriteHeader(http.StatusRequestEntityTooLarge)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"jsonrpc": "2.0",
+						"id":      nil,
+						"error": map[string]any{
+							"code":    -32010,
+							"message": fmt.Sprintf("request body exceeds max_request_bytes (%d bytes) — see get_capabilities.data.asset_upload for the largest inline upload_page_asset payload this limit allows", maxBody),
+						},
+					})
 					return
 				}
 				if !scopePolicy.AllowRequest(body, callerScope) {
