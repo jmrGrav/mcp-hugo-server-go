@@ -795,11 +795,13 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 
 // TestOversizedRequestBodyReturnsActionableError is a regression test for
 // #1190: a POST body over max_request_bytes previously fell into
-// io.LimitReader's silent truncation, so a caller sending e.g. an oversized
-// upload_page_asset content_base64 payload got a downstream JSON-parse
-// failure that never named the actual limit hit. It must now fail fast
-// with 413 and a message identifying max_request_bytes, before the
-// truncated body ever reaches JSON parsing/scope checks.
+// io.LimitReader's silent truncation, and the truncated JSON then failed
+// ScopePolicy.parse — so a caller sending e.g. an oversized
+// upload_page_asset content_base64 payload got a misleading 403
+// scope_denied/unknown_tool instead of an error naming the actual limit
+// hit. It must now fail fast with 413 and a message identifying
+// max_request_bytes, before the truncated body ever reaches the scope
+// check.
 func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
 	srv := mustOAuthServer(t) // config.Default() leaves max_request_bytes at its 1 MiB default
 	logBuf := withDefaultLogger(t)
@@ -833,6 +835,29 @@ func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
 	}
 	if !strings.Contains(raw, `"event_type":"request_rejected"`) {
 		t.Fatalf("missing event_type=request_rejected in audit log: %s", raw)
+	}
+}
+
+// TestRequestBodyExactlyAtLimitIsNotRejected guards the off-by-one this
+// fix depends on: the size check reads one byte past maxBody specifically
+// so a body landing exactly on max_request_bytes is let through, not
+// caught by the same '>' that must reject anything larger. A future
+// '>' -> '>=' typo would 413 every request sitting exactly at the
+// configured limit, and nothing else would catch it.
+func TestRequestBodyExactlyAtLimitIsNotRejected(t *testing.T) {
+	srv := mustOAuthServer(t) // config.Default() leaves max_request_bytes at its 1 MiB default
+	bearer := obtainBearerToken(t, srv)
+
+	const maxRequestBytes = 1 << 20
+	suffix := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	payload := append(bytes.Repeat([]byte(" "), maxRequestBytes-len(suffix)), suffix...)
+	if len(payload) != maxRequestBytes {
+		t.Fatalf("test setup: payload length = %d, want exactly %d", len(payload), maxRequestBytes)
+	}
+
+	rec := doMCPCall(t, srv, bearer, payload)
+	if rec.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("a body exactly at max_request_bytes must not be rejected as too large: status = %d, body = %q", rec.Code, rec.Body.String())
 	}
 }
 

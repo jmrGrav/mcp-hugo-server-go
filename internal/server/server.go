@@ -598,11 +598,13 @@ func newMCPToolHandler(
 			if r.Method == http.MethodPost {
 				// Read one byte past maxBody so an oversized request can be
 				// told apart from one that lands exactly at the limit —
-				// io.LimitReader alone silently truncates either case,
-				// which previously left an oversized upload_page_asset call
-				// (or any other large tool call) failing downstream as an
-				// opaque JSON parse error instead of naming the actual
-				// limit it hit (#1190).
+				// io.LimitReader alone silently truncates either case, and
+				// the truncated JSON then failed ScopePolicy.parse, which
+				// previously surfaced an oversized upload_page_asset call
+				// (or any other large tool call) as a 403 scope_denied/
+				// unknown_tool — a misleading permission-shaped error for
+				// what was actually a size problem, never naming
+				// max_request_bytes at all (#1190).
 				body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 				if err != nil {
 					http.Error(w, "bad request", http.StatusBadRequest)
