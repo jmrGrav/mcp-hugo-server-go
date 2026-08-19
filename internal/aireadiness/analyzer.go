@@ -140,7 +140,6 @@ var (
 	atxHeadingRE       = regexp.MustCompile(`^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$`)
 	markdownLinkRE     = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 	hugoRefShortcodeRE = regexp.MustCompile(`\{\{[%<]\s*(?:relref|ref)\b[^}]*[%>]\}\}`)
-	htmlCommentLineRE  = regexp.MustCompile(`^<!--.*-->$`)
 )
 
 func Analyze(doc Document) Report {
@@ -399,7 +398,15 @@ func scanMarkdown(md string) markdownStats {
 		}
 		if strings.HasPrefix(trimmed, "<!--") {
 			flushParagraph()
-			if !htmlCommentLineRE.MatchString(trimmed) {
+			// Only enter block mode when this line has no closing "-->" of
+			// its own — a line like "<!-- marker --> Trailing prose." must
+			// not swallow every following line up to the next "-->" (or
+			// EOF), which would silently drop real headings/paragraphs
+			// past it. The trailing prose on that one line is still
+			// excluded from accumulation, an acceptable under-count for a
+			// pattern the issue itself only asks to be handled "at
+			// minimum" on a whole-line basis.
+			if !strings.Contains(trimmed, "-->") {
 				inHTMLComment = true
 			}
 			continue

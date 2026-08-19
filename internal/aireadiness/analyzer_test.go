@@ -217,3 +217,22 @@ func TestAnalyzeIgnoresMultiLineHTMLComment(t *testing.T) {
 		t.Fatalf("paragraph_lengths status = %q, want %q (multi-line comment must not count as a paragraph)", got, StatusPass)
 	}
 }
+
+// TestAnalyzeHTMLCommentWithTrailingProseDoesNotSwallowRestOfDocument
+// guards against over-correcting #1183: a comment-and-prose line like
+// "<!-- marker --> Trailing prose." has its own closing "-->" and must not
+// be treated as an unterminated block-comment opener — doing so would drop
+// every following line (headings included) up to the next "-->" or EOF.
+func TestAnalyzeHTMLCommentWithTrailingProseDoesNotSwallowRestOfDocument(t *testing.T) {
+	md := "# Intro\n<!-- marker --> Trailing prose.\n## Second\n" + strings.Repeat("c", 100) + "\n"
+	report := Analyze(Document{
+		Title:    "Hello",
+		Date:     "2026-07-19",
+		Summary:  "summary",
+		Markdown: md,
+	})
+
+	if got := report.Checks.HeadingHierarchy.HeadingCount; got != 2 {
+		t.Fatalf("heading_count = %d, want 2 (## Second must still be seen)", got)
+	}
+}
