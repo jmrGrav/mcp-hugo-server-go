@@ -216,6 +216,19 @@ func TestAnalyzeIgnoresMultiLineHTMLComment(t *testing.T) {
 	if got := report.Checks.ParagraphLengths.Status; got != StatusPass {
 		t.Fatalf("paragraph_lengths status = %q, want %q (multi-line comment must not count as a paragraph)", got, StatusPass)
 	}
+
+	// A "## heading"-shaped line inside the comment block must not be
+	// picked up as a real heading — the comment path short-circuits before
+	// parseHeading, but assert it directly since a fake heading inside a
+	// block comment is exactly the kind of thing a naive line-by-line scan
+	// could still misparse.
+	fakeHeadingMD := "# Intro\n<!--\n## Fake heading\n-->\nActual short paragraph.\n"
+	fakeHeadingReport := Analyze(Document{
+		Title: "Hello", Date: "2026-07-19", Summary: "summary", Markdown: fakeHeadingMD,
+	})
+	if got := fakeHeadingReport.Checks.HeadingHierarchy.HeadingCount; got != 1 {
+		t.Fatalf("heading_count = %d, want 1 (the '## Fake heading' inside the comment block must not count)", got)
+	}
 }
 
 // TestAnalyzeHTMLCommentWithTrailingProseDoesNotSwallowRestOfDocument
