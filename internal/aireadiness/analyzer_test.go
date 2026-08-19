@@ -157,3 +157,63 @@ func TestAnalyzeIgnoresHeadingsInsideCodeFences(t *testing.T) {
 		t.Fatalf("heading_hierarchy status = %q, want %q", got, StatusPass)
 	}
 }
+
+// TestAnalyzeIgnoresHTMLCommentAsParagraphText is a regression test for
+// #1183: a long single-line HTML comment (e.g. a base64-encoded
+// mermaid-source marker) was previously accumulated as ordinary paragraph
+// text, producing a false-positive "paragraph exceeds threshold" warning
+// for internal bookkeeping that was never editorial content.
+func TestAnalyzeIgnoresHTMLCommentAsParagraphText(t *testing.T) {
+	comment := "<!-- mermaid-source:" + strings.Repeat("A", DefaultParagraphLengthThreshold+50) + " -->"
+	report := Analyze(Document{
+		Title:    "Hello",
+		Date:     "2026-07-19",
+		Summary:  "summary",
+		Markdown: "# Intro\n" + comment + "\nActual short paragraph.\n",
+	})
+
+	if got := report.Checks.ParagraphLengths.Status; got != StatusPass {
+		t.Fatalf("paragraph_lengths status = %q, want %q (comment must not count as a paragraph)", got, StatusPass)
+	}
+	if len(report.Checks.ParagraphLengths.OffendingParagraphs) != 0 {
+		t.Fatalf("offending_paragraphs = %d, want 0", len(report.Checks.ParagraphLengths.OffendingParagraphs))
+	}
+}
+
+// TestAnalyzeExcludesHTMLCommentFromBodyCharacters covers the other half of
+// #1183's report: an HTML comment must not inflate body_characters/
+// section-length accumulation either, not just paragraph_lengths.
+func TestAnalyzeExcludesHTMLCommentFromBodyCharacters(t *testing.T) {
+	prose := "Short body text."
+	withoutComment := Analyze(Document{
+		Title: "Hello", Date: "2026-07-19", Summary: "summary",
+		Markdown: "# Intro\n" + prose + "\n",
+	})
+	comment := "<!-- mermaid-source:" + strings.Repeat("A", 500) + " -->"
+	withComment := Analyze(Document{
+		Title: "Hello", Date: "2026-07-19", Summary: "summary",
+		Markdown: "# Intro\n" + comment + "\n" + prose + "\n",
+	})
+
+	got := withComment.Checks.InternalLinkDensity.BodyCharacters
+	want := withoutComment.Checks.InternalLinkDensity.BodyCharacters
+	if got != want {
+		t.Fatalf("body_characters with HTML comment = %d, want %d (same as without the comment)", got, want)
+	}
+}
+
+// TestAnalyzeIgnoresMultiLineHTMLComment covers a <!-- ... --> block split
+// across lines, not just the single-line case #1183 reported.
+func TestAnalyzeIgnoresMultiLineHTMLComment(t *testing.T) {
+	md := "# Intro\n<!--\n" + strings.Repeat("A", DefaultParagraphLengthThreshold+50) + "\n-->\nActual short paragraph.\n"
+	report := Analyze(Document{
+		Title:    "Hello",
+		Date:     "2026-07-19",
+		Summary:  "summary",
+		Markdown: md,
+	})
+
+	if got := report.Checks.ParagraphLengths.Status; got != StatusPass {
+		t.Fatalf("paragraph_lengths status = %q, want %q (multi-line comment must not count as a paragraph)", got, StatusPass)
+	}
+}

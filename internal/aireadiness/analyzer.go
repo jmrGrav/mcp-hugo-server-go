@@ -140,6 +140,7 @@ var (
 	atxHeadingRE       = regexp.MustCompile(`^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$`)
 	markdownLinkRE     = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 	hugoRefShortcodeRE = regexp.MustCompile(`\{\{[%<]\s*(?:relref|ref)\b[^}]*[%>]\}\}`)
+	htmlCommentLineRE  = regexp.MustCompile(`^<!--.*-->$`)
 )
 
 func Analyze(doc Document) Report {
@@ -338,6 +339,7 @@ func scanMarkdown(md string) markdownStats {
 		stats             markdownStats
 		inFence           bool
 		fenceMarker       string
+		inHTMLComment     bool
 		currentSection    = "(lead)"
 		currentSectionLen int
 		paragraphLines    []string
@@ -380,6 +382,26 @@ func scanMarkdown(md string) markdownStats {
 			continue
 		}
 		if inFence {
+			continue
+		}
+
+		// HTML comments (e.g. `<!-- mermaid-source:base64... -->` marker
+		// comments embedding frozen diagram source, #1183) are internal
+		// bookkeeping, not editorial prose — excluded from paragraph/
+		// section/body-char accumulation entirely, the same way a fenced
+		// code block is skipped above. Handles both a whole comment on one
+		// line and a multi-line `<!--` ... `-->` block.
+		if inHTMLComment {
+			if strings.Contains(trimmed, "-->") {
+				inHTMLComment = false
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "<!--") {
+			flushParagraph()
+			if !htmlCommentLineRE.MatchString(trimmed) {
+				inHTMLComment = true
+			}
 			continue
 		}
 
