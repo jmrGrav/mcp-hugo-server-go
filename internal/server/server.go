@@ -612,11 +612,12 @@ func newMCPToolHandler(
 					// EventRequestRejected, not EventScopeDenied: this is a
 					// transport-size condition independent of the caller's
 					// identity/scope, and must never inflate the
-					// scope-denial signal operators alert on. Code -32001
-					// is already scope_denied's own JSON-RPC code (see
-					// below) — this needs its own so a client reading
-					// error.code (not just the HTTP status) can tell the
-					// two apart.
+					// scope-denial signal operators alert on. Code -32001 is
+					// already scope_denied's own JSON-RPC code (see below),
+					// and -32002 is claimed elsewhere (the MCP SDK's
+					// CodeResourceNotFound default) — -32010 gives this its
+					// own unambiguous code so a client reading error.code
+					// (not just the HTTP status) can tell the two apart.
 					audit.Warn(audit.EventRequestRejected, "rejected",
 						"scope", callerScope,
 						"reason", "request_too_large",
@@ -629,7 +630,7 @@ func newMCPToolHandler(
 						"jsonrpc": "2.0",
 						"id":      nil,
 						"error": map[string]any{
-							"code":    -32002,
+							"code":    -32010,
 							"message": fmt.Sprintf("request body exceeds max_request_bytes (%d bytes) — see get_capabilities.data.asset_upload for the largest inline upload_page_asset payload this limit allows", maxBody),
 						},
 					})

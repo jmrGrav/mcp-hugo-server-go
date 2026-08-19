@@ -819,7 +819,7 @@ func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
 	if !strings.Contains(body, "asset_upload") {
 		t.Fatalf("error body doesn't point to get_capabilities.data.asset_upload for the actual reachable limit: %s", body)
 	}
-	if !strings.Contains(body, `"code":-32002`) {
+	if !strings.Contains(body, `"code":-32010`) {
 		t.Fatalf("error.code must be distinct from scope_denied's -32001: %s", body)
 	}
 

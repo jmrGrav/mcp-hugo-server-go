@@ -28,8 +28,9 @@ have to reverse-engineer free-text messages to build alerts.
 Audit events are emitted through two log lines, not one — `event_type` is
 the field that unifies them, not `msg`:
 
-- `auth_rejected`, `scope_denied`, and `operator_milestone` are emitted as
-  their own `"msg":"audit"` line by `internal/audit`.
+- `auth_rejected`, `scope_denied`, `request_rejected`, and
+  `operator_milestone` are emitted as their own `"msg":"audit"` line by
+  `internal/audit`.
 - `mutation` and `admin_operation` are tagged onto the existing per-call
   `"msg":"tool_call"` line (see `internal/observability`) rather than a
   duplicate log entry, since one line per tool call is already emitted for
@@ -41,7 +42,7 @@ of which line it's attached to, carries:
 
 | Field | Meaning |
 | --- | --- |
-| `event_type` | One of the five values below. Always present. |
+| `event_type` | One of the six values below. Always present. |
 | `result` | Outcome, e.g. `"denied"`, `"success"`, `"claim_approved"`, `"revision_conflict"`. Always present on every `event_type`-tagged line, including `mutation`/`admin_operation` (there it mirrors `result_class`: `"success"`, `"tool_error"`, `"protocol_error"`). |
 | (event-specific attrs) | See below — never a raw bearer token, never an absolute host filesystem path. |
 
@@ -58,6 +59,13 @@ of which line it's attached to, carries:
   ordinary `tool_error` (a tool ran and failed on its own terms) — an
   operator alerting on repeated `scope_denied` events is looking for a
   misconfigured or probing client, not a broken tool.
+- **`request_rejected`** — a request was rejected for a transport/
+  protocol-level reason independent of the caller's identity or scope, e.g.
+  a POST body exceeding the configured `max_request_bytes` (returns HTTP
+  413, JSON-RPC code `-32010`). Deliberately distinct from `scope_denied`:
+  the caller may hold a perfectly valid token at the right scope, so
+  counting this toward the scope-denial signal would give a false read on
+  "misconfigured or probing client."
 - **`operator_milestone`** — reader self-registration and the
   operator-approval claim flow: `pending_operator_claim` (anonymous
   registration awaiting approval), `reader_self_registered` (auto-approved
