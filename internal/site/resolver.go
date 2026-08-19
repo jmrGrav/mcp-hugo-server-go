@@ -279,11 +279,31 @@ func (r *PageResolver) resolveDefaultSource(sourceSlug string) (*hugosite.Source
 // resolve the site root for a labelled language while validate_site/
 // inspect_rendered (which don't route through PageResolver) kept working
 // (#1184, the public→source-direction counterpart to #1174's fix).
+//
+// A trimmed sourceSlug that exactly equals the requested language code
+// (e.g. sourceSlug "fr" for a "/fr/" request) is the same root case in
+// disguise: languagePrefixFromSlug/stripLanguagePrefix require at least two
+// path segments before they'll treat a leading segment as a language
+// prefix (a single segment is ambiguous with an ordinary content slug that
+// happens to match a configured language code), so normalizeResolverSlugs
+// never strips it down to "" the way it does for e.g. "/fr/posts/". The
+// homepage candidates are appended as a fallback in that case, after any
+// real page literally slugged that way, rather than replacing the normal
+// candidate list outright.
 func sourceSlugCandidatesForRequest(sourceSlug, lang string) []string {
-	if strings.Trim(sourceSlug, "/") != "" {
-		return SourceSlugCandidates(sourceSlug)
-	}
+	trimmed := strings.Trim(sourceSlug, "/")
 	lang = strings.TrimSpace(lang)
+	if trimmed == "" {
+		return rootIndexCandidates(lang)
+	}
+	candidates := SourceSlugCandidates(sourceSlug)
+	if lang != "" && trimmed == lang {
+		candidates = append(candidates, rootIndexCandidates(lang)...)
+	}
+	return candidates
+}
+
+func rootIndexCandidates(lang string) []string {
 	if lang == "" {
 		return []string{"_index"}
 	}

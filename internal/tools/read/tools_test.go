@@ -2092,6 +2092,116 @@ func newSourceOnlyBilingualDefaultLangReadSession(t *testing.T) (*mcp.ClientSess
 	return newTestClientWithCfg(t, idx, cfg, srcIdx)
 }
 
+// newRootMultilingualReadSession builds a two-language site whose homepage
+// ("/" default-language English, "/fr/" secondary-language French) has both
+// a rendered public page and an explicitly-labelled source file
+// ("_index.en.md"/"_index.fr.md") for every language — the #1184 root cause
+// only reproduces when every language is explicitly labelled, since an
+// unlabelled "_index.md" resolves via a different, already-working code
+// path (GetDefaultBySlug/byDefault).
+func newRootMultilingualReadSession(t *testing.T) (*mcp.ClientSession, func()) {
+	t.Helper()
+	htmlDir := t.TempDir()
+	writeHTML := func(rel, lang, body string) {
+		t.Helper()
+		full := filepath.Join(htmlDir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		html := `<!DOCTYPE html><html lang="` + lang + `"><head>
+<link rel="canonical" href="https://example.test/` + rel[:len(rel)-len("index.html")] + `">
+<meta property="og:title" content="Home ` + lang + `">
+</head><body><main>` + body + `</main></body></html>`
+		if err := os.WriteFile(full, []byte(html), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeHTML("index.html", "en", "English public home")
+	writeHTML(filepath.Join("fr", "index.html"), "fr", "French public home")
+
+	cfg := config.Default()
+	cfg.SiteRoot = htmlDir
+	cfg.SiteURL = "https://example.test"
+	cfg.SiteName = "example.test"
+	cfg.DefaultLanguage = "en"
+	cfg.MaxIndexEntries = 1000
+	cfg.RejectSymlinks = true
+	cfg.RejectHiddenPath = true
+	idx, err := site.NewIndex(cfg)
+	if err != nil {
+		t.Fatalf("NewIndex: %v", err)
+	}
+
+	contentRoot := t.TempDir()
+	writeSource := func(rel, body string) {
+		t.Helper()
+		full := filepath.Join(contentRoot, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	writeSource("_index.en.md", "---\ntitle: Home\n---\nEnglish home body.\n")
+	writeSource("_index.fr.md", "---\ntitle: Accueil\n---\nCorps francais.\n")
+
+	srcIdx, err := hugosite.NewSourceIndex(contentRoot)
+	if err != nil {
+		t.Fatalf("NewSourceIndex: %v", err)
+	}
+	cfg.ContentRoot = contentRoot
+	return newTestClientWithCfg(t, idx, cfg, srcIdx)
+}
+
+// TestRootMultilingualToolsAgreeOnSourceResolution is the cross-tool
+// regression test #1184 asked for: get_page_for_edit and check_ai_readiness
+// previously couldn't resolve the site root ("/") to its source at all
+// (content_not_found), while validate_site/inspect_rendered (which don't
+// route through PageResolver) resolved it fine. Exercises both the default
+// and a secondary explicitly-labelled language, and both the bare "/" slug
+// and its "/fr/" language-prefixed form.
+func TestRootMultilingualToolsAgreeOnSourceResolution(t *testing.T) {
+	session, done := newRootMultilingualReadSession(t)
+	defer done()
+
+	for _, tc := range []struct {
+		name     string
+		slug     string
+		lang     string
+		wantBody string
+	}{
+		{name: "default lang bare slug", slug: "/", lang: "", wantBody: "English home body."},
+		{name: "default lang explicit", slug: "/", lang: "en", wantBody: "English home body."},
+		{name: "secondary lang prefixed slug", slug: "/fr/", lang: "", wantBody: "Corps francais."},
+		{name: "secondary lang explicit", slug: "/", lang: "fr", wantBody: "Corps francais."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := map[string]any{"slug": tc.slug}
+			if tc.lang != "" {
+				args["lang"] = tc.lang
+			}
+
+			editRes := callTool(t, session, "get_page_for_edit", args)
+			if editRes.IsError {
+				t.Fatalf("get_page_for_edit(%v) returned error: %v", args, editRes.Content)
+			}
+			m := decodeContent(t, editRes)
+			page, _ := m["page"].(map[string]any)
+			md, _ := page["markdown"].(string)
+			if !strings.Contains(md, tc.wantBody) {
+				t.Fatalf("get_page_for_edit(%v).page.markdown = %q, want to contain %q", args, md, tc.wantBody)
+			}
+
+			readinessRes := callTool(t, session, "check_ai_readiness", args)
+			if readinessRes.IsError {
+				raw, _ := json.Marshal(readinessRes.Content)
+				t.Fatalf("check_ai_readiness(%v) returned error: %s", args, raw)
+			}
+		})
+	}
+}
+
 func newEditorialGraphSession(t *testing.T) (*mcp.ClientSession, func()) {
 	t.Helper()
 	htmlDir := t.TempDir()

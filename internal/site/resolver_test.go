@@ -495,6 +495,8 @@ func TestPageResolverResolvesRootForEveryLabelledLanguage(t *testing.T) {
 		{name: "default language explicit", rawSlug: "/", lang: "en", wantBody: "English home body"},
 		{name: "secondary language explicit", rawSlug: "/", lang: "fr", wantBody: "Corps francais"},
 		{name: "default language implicit", rawSlug: "/", lang: "", wantBody: "English home body"},
+		{name: "secondary language via prefixed URL", rawSlug: "/fr/", lang: "fr", wantBody: "Corps francais"},
+		{name: "secondary language prefixed URL implicit", rawSlug: "/fr/", lang: "", wantBody: "Corps francais"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, ok := resolver.ResolveWithLang(tc.rawSlug, tc.lang)
