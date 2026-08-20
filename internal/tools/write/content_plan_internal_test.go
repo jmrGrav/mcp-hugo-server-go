@@ -3,7 +3,33 @@ package write
 import (
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestFrontmatterTimeParsesKnownLayoutsAndFallsBack(t *testing.T) {
+	fixed := time.Date(2026, 3, 5, 10, 30, 0, 0, time.UTC)
+	if got := frontmatterTime(fixed); !got.Equal(fixed) {
+		t.Fatalf("frontmatterTime(time.Time) = %v, want %v unchanged", got, fixed)
+	}
+	if got := frontmatterTime(""); !got.IsZero() {
+		t.Fatalf("frontmatterTime(\"\") = %v, want zero time", got)
+	}
+	if got := frontmatterTime("2026-03-05T10:30:00Z"); got.IsZero() || got.Year() != 2026 {
+		t.Fatalf("frontmatterTime(RFC3339) = %v, want a parsed 2026 date", got)
+	}
+	if got := frontmatterTime("2026-03-05T10:30:00"); got.IsZero() || got.Year() != 2026 {
+		t.Fatalf("frontmatterTime(no-offset layout) = %v, want a parsed 2026 date", got)
+	}
+	if got := frontmatterTime("2026-03-05"); got.IsZero() || got.Year() != 2026 {
+		t.Fatalf("frontmatterTime(date-only layout) = %v, want a parsed 2026 date", got)
+	}
+	if got := frontmatterTime("not a date"); !got.IsZero() {
+		t.Fatalf("frontmatterTime(unparseable string) = %v, want zero time", got)
+	}
+	if got := frontmatterTime(42); !got.IsZero() {
+		t.Fatalf("frontmatterTime(unsupported type) = %v, want zero time", got)
+	}
+}
 
 func TestParseFrontmatterHelpers(t *testing.T) {
 	raw := []byte("---\ntitle: Demo\ntags:\n  - alpha\ncategories:\n  - beta\n---\n\nBody here.\n")

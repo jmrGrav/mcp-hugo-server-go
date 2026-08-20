@@ -118,6 +118,46 @@ func TestLoadConfigClampsNonPositiveMutationRateLimits(t *testing.T) {
 	}
 }
 
+// clampPreviewLimits (#871) is a DoS guard: a zeroed/negative config value
+// must never be read as "unlimited" for either the per-caller preview count
+// or the global preview-disk cap, or a misconfiguration reintroduces the
+// unbounded preview-accumulation/disk-exhaustion risk create_preview's caps
+// exist to prevent. Mirrors TestLoadConfigClampsNonPositiveMutationRateLimits.
+func TestLoadConfigClampsNonPositivePreviewLimits(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("preview_max_per_caller: 0\npreview_max_disk_bytes: -1\n")
+	f.Close()
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PreviewMaxPerCaller != config.DefaultPreviewMaxPerCaller {
+		t.Fatalf("want preview_max_per_caller clamped to default %d, got %d", config.DefaultPreviewMaxPerCaller, cfg.PreviewMaxPerCaller)
+	}
+	if cfg.PreviewMaxDiskBytes != config.DefaultPreviewMaxDiskBytes {
+		t.Fatalf("want preview_max_disk_bytes clamped to default %d, got %d", config.DefaultPreviewMaxDiskBytes, cfg.PreviewMaxDiskBytes)
+	}
+}
+
+// A positive, deliberately-configured value must pass through unclamped —
+// the guard is against non-positive misconfiguration only, not a general
+// override of operator intent.
+func TestLoadConfigPreservesPositivePreviewLimits(t *testing.T) {
+	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
+	f.WriteString("preview_max_per_caller: 3\npreview_max_disk_bytes: 1048576\n")
+	f.Close()
+	cfg, err := config.Load(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PreviewMaxPerCaller != 3 {
+		t.Fatalf("want preview_max_per_caller preserved at 3, got %d", cfg.PreviewMaxPerCaller)
+	}
+	if cfg.PreviewMaxDiskBytes != 1048576 {
+		t.Fatalf("want preview_max_disk_bytes preserved at 1048576, got %d", cfg.PreviewMaxDiskBytes)
+	}
+}
+
 func TestLoadConfigGitBaseline(t *testing.T) {
 	f, _ := os.CreateTemp(t.TempDir(), "config*.yaml")
 	f.WriteString("git_baseline:\n  mode: configured\n  repo_path: /srv/hugo-arleo.eu\n  branch: release\n  remote: backup\n")
