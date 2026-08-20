@@ -1608,6 +1608,16 @@ profile-aware (threading the profile through registration or request
 context) would close it properly; that is a larger change than this issue
 warrants and is left for a follow-up if the gap ever matters in practice.
 
+**`get_capabilities.data.tool_catalog` (#1175) has the same limitation, for
+the same reason.** `visible_count`/`tool_names_revision` are computed from
+`tools.Registry.ForScope` — OAuth-scope-only, no exposure-profile
+awareness — so a profiled session (`?profile=reader`/`editorial`/`advanced`)
+can see fewer tools via `tools/list` than `visible_count` reports, the same
+one-cell gap `masked_tools` has (bounded the same way: `get_capabilities`
+itself is unreachable below `advanced` tier). `TestToolCatalogVisibleCountMatchesActualToolsList`
+verifies the field matches real `tools/list` output at unfiltered
+write/admin scope; it does not cover the profiled case.
+
 ### 6.23 `rendered_seo_summary`: Closing #1136's Cache-Invalidation Gap (#1151)
 
 §6.19 above left two options on the table for aggregating `inspect_rendered`
