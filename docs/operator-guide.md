@@ -460,6 +460,27 @@ state rather than broadening filesystem permissions silently.
 
 ### Known Pitfalls
 
+#### ChatGPT Plus completes OAuth and `initialize` but exposes no actions
+
+As of 2026-08-20, a real ChatGPT Plus custom connector can complete discovery,
+DCR or static OAuth registration, PKCE, token exchange, and authenticated MCP
+`initialize`, yet stop before `notifications/initialized` and `tools/list`.
+The ChatGPT UI then shows no available actions. Do not rotate credentials,
+loosen redirect validation, expand scopes, or roll back the server solely for
+this symptom: it reproduced with read-only (`?profile=reader`), write, and
+admin clients and with v1.8.8, v1.9.0, v1.9.1, and v1.9.2. MCPJam completed the
+same flow against the same deployment and loaded 32 tools, proving that the
+server-side OAuth and MCP path works.
+
+OpenAI's documentation is currently inconsistent. The
+[developer-mode guide](https://developers.openai.com/api/docs/guides/developer-mode)
+lists Plus among eligible plans, while the
+[Help Center availability article](https://help.openai.com/fr-fr/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
+reserves full MCP for Business/Enterprise/Edu, describes Pro as read/fetch
+only, and omits Plus. Treat ChatGPT availability as plan- and client-controlled
+external state, and check `docs/client-compatibility.md` before attributing the
+failure to this server. Pro read/fetch was not tested in this incident.
+
 #### `generate_hero_image` returns `write_error` after first deploy
 
 The service unit's `ReadWritePaths` list usually covers `content/`, `resources/`, and
