@@ -187,6 +187,15 @@ func openSiteDB(cfg config.Config, idx *site.Index, srcIdx *hugosite.SourceIndex
 	if err := siteDB.ReconcileBrokenLinksAgainstStaticFiles(); err != nil {
 		slog.Warn("server: reconcile broken links against static files failed", "error", err)
 	}
+	// #1186: catch up any page whose cached rendered_issues_count predates
+	// a config-only reclassification (e.g. a newly-declared
+	// technical_verification_slugs entry) — see the doc comment on
+	// ReconcileRenderedIssuesAgainstIndex for why syncPublicPage's own
+	// hash-gate can't do this on its own for a page whose content never
+	// changes.
+	if err := siteDB.ReconcileRenderedIssuesAgainstIndex(idx); err != nil {
+		slog.Warn("server: reconcile rendered issues against classification failed", "error", err)
+	}
 	resolvedMutations, sourceChanged := prepareMutationRecovery(cfg, siteDB)
 	if sourceChanged && srcIdx != nil {
 		if err := srcIdx.Reload(cfg.ContentRoot); err != nil {

@@ -40,28 +40,44 @@ type Config struct {
 	// operator-supplied set: the server has no other way to distinguish "not
 	// configured" from "configured but has no content yet" (the latter must
 	// still be accepted, or the first page of every new language deadlocks).
-	ConfiguredLanguages []string          `yaml:"configured_languages"`
-	Transport           string            `yaml:"transport"`
-	HTTPBindAddr        string            `yaml:"http_bind_addr"`
-	HTTPBindPort        int               `yaml:"http_bind_port"`
-	StreamingEnabled    bool              `yaml:"streaming_enabled"`
-	MaxIndexEntries     int               `yaml:"max_index_entries"`
-	MaxResultItems      int               `yaml:"max_result_items"`
-	MaxRequestBytes     int64             `yaml:"max_request_bytes"`
-	RejectSymlinks      bool              `yaml:"reject_symlinks"`
-	RejectHiddenPath    bool              `yaml:"reject_hidden_paths"`
-	ImageGenURL         string            `yaml:"image_gen_url"`
-	ImageGenKey         string            `yaml:"image_gen_key"`
-	BuildTimeoutSeconds int               `yaml:"build_timeout_seconds"`
-	PostBuildHooks      []string          `yaml:"post_build_hooks"`
-	TaxonomyAliases     map[string]string `yaml:"taxonomy_aliases"`
-	SecurityContact     string            `yaml:"security_contact"`
-	DBPath              string            `yaml:"db_path"`
-	Cloudflare          CloudflareConfig  `yaml:"cloudflare"`
-	IndexNow            IndexNowConfig    `yaml:"indexnow"`
-	GoogleIndex         GoogleIndexConfig `yaml:"google_indexing"`
-	OAuth               OAuthConfig       `yaml:"oauth"`
-	RateLimit           RateLimitConfig   `yaml:"rate_limit"`
+	ConfiguredLanguages []string `yaml:"configured_languages"`
+	Transport           string   `yaml:"transport"`
+	HTTPBindAddr        string   `yaml:"http_bind_addr"`
+	HTTPBindPort        int      `yaml:"http_bind_port"`
+	StreamingEnabled    bool     `yaml:"streaming_enabled"`
+	MaxIndexEntries     int      `yaml:"max_index_entries"`
+	MaxResultItems      int      `yaml:"max_result_items"`
+	MaxRequestBytes     int64    `yaml:"max_request_bytes"`
+	RejectSymlinks      bool     `yaml:"reject_symlinks"`
+	RejectHiddenPath    bool     `yaml:"reject_hidden_paths"`
+	// TechnicalVerificationSlugs (#1186) is an explicit, operator-declared
+	// allowlist of single-segment root slugs (e.g. "abuseipdb-verification"
+	// for static/abuseipdb-verification.html) that are third-party
+	// domain-ownership-verification artifacts rather than content pages —
+	// the same category robots.txt/security.txt already get, but those are
+	// hardcoded because their names are fixed by spec while a verification
+	// token's filename is assigned by the third party and varies per site.
+	// Deliberately opt-in and never inferred from the slug/filename itself
+	// (e.g. matching on "verification"): a legitimate content page that
+	// happens to share a naming pattern must never be silently
+	// reclassified. Listed slugs are excluded from IsContent() (so they
+	// stop being counted as content pages missing a title/meta/canonical in
+	// rendered_seo_summary and friends) but remain fully visible to
+	// list_pages/validate_site and are still scanned for render-safety —
+	// this only changes SEO-content bucketing, nothing else.
+	TechnicalVerificationSlugs []string          `yaml:"technical_verification_slugs"`
+	ImageGenURL                string            `yaml:"image_gen_url"`
+	ImageGenKey                string            `yaml:"image_gen_key"`
+	BuildTimeoutSeconds        int               `yaml:"build_timeout_seconds"`
+	PostBuildHooks             []string          `yaml:"post_build_hooks"`
+	TaxonomyAliases            map[string]string `yaml:"taxonomy_aliases"`
+	SecurityContact            string            `yaml:"security_contact"`
+	DBPath                     string            `yaml:"db_path"`
+	Cloudflare                 CloudflareConfig  `yaml:"cloudflare"`
+	IndexNow                   IndexNowConfig    `yaml:"indexnow"`
+	GoogleIndex                GoogleIndexConfig `yaml:"google_indexing"`
+	OAuth                      OAuthConfig       `yaml:"oauth"`
+	RateLimit                  RateLimitConfig   `yaml:"rate_limit"`
 	// IdempotencyTTLSeconds (#616) is the retention window for the
 	// idempotency-key store backing create_page/update_page/delete_page/
 	// upload_page_asset/delete_page_asset and the get_mutation_status lookup

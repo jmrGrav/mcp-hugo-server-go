@@ -70,6 +70,12 @@ Configuration is stored in YAML format. The following table lists all available 
 | `reject_symlinks` | boolean | `true` | Reject requests for symlinked content (security). |
 | `reject_hidden_paths` | boolean | `true` | Reject requests for paths starting with `.` |
 
+### Content Classification
+
+| Field | Type | Default | Purpose |
+|-------|------|---------|---------|
+| `technical_verification_slugs` | list of strings | (empty) | Root-level page slugs (e.g. `abuseipdb-verification` for a `static/abuseipdb-verification.html` domain-ownership-verification file) to classify as technical rather than content, excluding them from `rendered_seo_summary`/content-SEO checks — the same bucket `robots.txt`/`security.txt` already get. Never inferred from the filename/slug itself; a page must be explicitly listed here to be excluded, and it remains fully visible in `list_pages`/`validate_site` and is still scanned for render-safety. |
+
 ### Image Generation
 
 | Field | Type | Default | Purpose |

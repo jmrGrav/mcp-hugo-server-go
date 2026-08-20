@@ -35,6 +35,14 @@ type Index struct {
 	blCache           backlinkCache
 	builtAt           time.Time
 	staleCache        staleCache
+	// verificationSlugs is cfg.TechnicalVerificationSlugs (#1186), captured
+	// at construction time so NewClassifier(idx) and idx.Classifier() apply
+	// it without needing cfg threaded through separately. Per-instance
+	// rather than a package-level setting specifically so two indexes built
+	// from different configs (e.g. a test constructing Index{} directly, or
+	// two indexes with different config in the same process) never share or
+	// clobber each other's allowlist.
+	verificationSlugs map[string]struct{}
 }
 
 // staleCache memoizes StaleAgainstDisk's result for staleCheckInterval so a
@@ -79,6 +87,7 @@ func (idx *Index) Reload(cfg config.Config) error {
 	idx.categories = fresh.categories
 	idx.info = fresh.info
 	idx.contentClassifier = fresh.contentClassifier
+	idx.verificationSlugs = fresh.verificationSlugs
 	idx.builtAt = fresh.builtAt
 	idx.mu.Unlock()
 	idx.blCache.invalidate()
@@ -236,14 +245,16 @@ func (idx *Index) computeStaleAgainstDisk(cfg config.Config) (stale bool, newest
 }
 
 func NewIndex(cfg config.Config) (*Index, error) {
+	verificationSlugs := normalizeVerificationSlugs(cfg.TechnicalVerificationSlugs)
 	builtAt := time.Now()
 	root := strings.TrimSpace(cfg.SiteRoot)
 	if root == "" {
 		return &Index{
-			bySlug:     map[string]int{},
-			aliasSlugs: map[string]string{},
-			info:       map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": cfg.DefaultLanguage},
-			builtAt:    builtAt,
+			bySlug:            map[string]int{},
+			aliasSlugs:        map[string]string{},
+			info:              map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": cfg.DefaultLanguage},
+			builtAt:           builtAt,
+			verificationSlugs: verificationSlugs,
 		}, nil
 	}
 
@@ -263,10 +274,11 @@ func NewIndex(cfg config.Config) (*Index, error) {
 	}
 
 	idx := &Index{
-		bySlug:     map[string]int{},
-		aliasSlugs: map[string]string{},
-		info:       map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": defaultLang},
-		builtAt:    builtAt,
+		bySlug:            map[string]int{},
+		aliasSlugs:        map[string]string{},
+		info:              map[string]string{"name": cfg.SiteName, "url": cfg.SiteURL, "lang": defaultLang},
+		builtAt:           builtAt,
+		verificationSlugs: verificationSlugs,
 	}
 
 	tagSet := map[string]struct{}{}
