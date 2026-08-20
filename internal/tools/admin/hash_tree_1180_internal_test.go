@@ -74,3 +74,69 @@ func TestHashTreeIgnoresAuditLogGrowth(t *testing.T) {
 		t.Fatalf("hashTree did not detect a genuine content change")
 	}
 }
+
+// TestHashTreeIgnoresChunkedUploadStaging is #1196's analog of the
+// .mcp-audit.log exclusion above: internal/tools/write's chunked-upload
+// staging files (.upload-<id>.part) live directly inside a bundle
+// directory under ContentRoot for up to 15 minutes while a commit is in
+// flight, or longer if the upload is abandoned before the startup sweep
+// clears it. Without excluding them, hashTree would report false content
+// drift for the same reason .mcp-audit.log did before #1180 — a staging
+// file appearing, growing across chunks, and disappearing again is never a
+// real content change.
+func TestHashTreeIgnoresChunkedUploadStaging(t *testing.T) {
+	root := t.TempDir()
+	bundleDir := filepath.Join(root, "posts", "example")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "index.md"), []byte("---\ntitle: A\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := hashTree(root)
+	if err != nil {
+		t.Fatalf("hashTree (before): %v", err)
+	}
+
+	staging := filepath.Join(bundleDir, ".upload-upload_deadbeef.part")
+	if err := os.WriteFile(staging, []byte("partial chunk bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	duringUpload, err := hashTree(root)
+	if err != nil {
+		t.Fatalf("hashTree (during upload): %v", err)
+	}
+	if before != duringUpload {
+		t.Fatalf("hashTree changed while a chunked-upload staging file was present: before=%q during=%q", before, duringUpload)
+	}
+
+	// Simulate more chunks arriving (the file growing) — still a no-op.
+	if err := os.WriteFile(staging, []byte("partial chunk bytes plus more chunks"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	grown, err := hashTree(root)
+	if err != nil {
+		t.Fatalf("hashTree (staging grown): %v", err)
+	}
+	if before != grown {
+		t.Fatalf("hashTree changed as the staging file grew: before=%q grown=%q", before, grown)
+	}
+
+	// Commit (rename to the real asset name) must be visible — the
+	// exclusion is prefix-scoped to ".upload-", not a blanket dot-file
+	// skip, so a real committed asset is never hidden by it.
+	if err := os.Remove(staging); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "hero.png"), []byte("partial chunk bytes plus more chunks"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := hashTree(root)
+	if err != nil {
+		t.Fatalf("hashTree (after commit): %v", err)
+	}
+	if committed == before {
+		t.Fatalf("hashTree did not detect the committed asset")
+	}
+}

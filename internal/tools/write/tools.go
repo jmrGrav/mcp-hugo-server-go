@@ -757,6 +757,9 @@ func Register(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, 
 	registerDeletePageTool(s, pg, idx, cfg, siteDB, rt)
 	registerUploadPageAsset(s, pg, idx, cfg, rt.idem, &rt.mutationMu, rt.mutationLimiters, rt.changeSets)
 	registerDeletePageAsset(s, pg, idx, cfg, rt.idem, &rt.deleteMu, rt.deleteLimiters, rt.changeSets)
+	registerBeginPageAssetUpload(s, pg, idx, cfg, &rt.mutationMu, rt.mutationLimiters, rt.chunkedUploads)
+	registerUploadPageAssetChunk(s, rt.chunkedUploads)
+	registerCommitPageAssetUpload(s, pg, idx, cfg, rt.idem, &rt.mutationMu, rt.mutationLimiters, rt.changeSets, rt.chunkedUploads)
 	registerGetMutationStatus(s, rt.idem)
 	registerGetRateLimits(s, cfg, &rt.mutationMu, rt.mutationLimiters, &rt.deleteMu, rt.deleteLimiters)
 }
@@ -773,12 +776,23 @@ type writeRegisterRuntime struct {
 	bundlePlans      *bundlePlanStore
 	bundleSnapshots  *bundleSnapshotStore
 	changeSets       *changeset.Registry
+	chunkedUploads   *chunkedUploadStore
 }
 
 func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, changeSets *changeset.Registry, siteIdxs ...*site.Index) *writeRegisterRuntime {
 	var siteIdx *site.Index
 	if len(siteIdxs) > 0 {
 		siteIdx = siteIdxs[0]
+	}
+	// #1196: a fresh in-memory chunkedUploadStore always starts empty, so
+	// any .upload-*.part staging file already on disk under ContentRoot at
+	// this point is orphaned residue from a previous process life — sweep
+	// it before any new upload can begin. Best-effort: a sweep failure
+	// (unreadable directory, etc.) never blocks server startup.
+	if removed, err := sweepOrphanedUploadStaging(cfg.ContentRoot); err != nil {
+		slog.Warn("write.Register: orphaned upload-staging sweep failed", "error", err)
+	} else if removed > 0 {
+		slog.Info("write.Register: removed orphaned upload-staging files", "count", removed)
 	}
 	return &writeRegisterRuntime{
 		siteIdx:          siteIdx,
@@ -790,6 +804,7 @@ func newWriteRegisterRuntime(cfg config.Config, siteDB *db.DB, changeSets *chang
 		bundlePlans:      newBundlePlanStore(planTTL, planMaxEntries, siteDB),
 		bundleSnapshots:  newBundleSnapshotStore(snapshotTTL, snapshotMaxEntries, siteDB),
 		changeSets:       changeSets,
+		chunkedUploads:   newChunkedUploadStore(chunkedUploadTTL),
 	}
 }
 
@@ -2524,6 +2539,9 @@ func Defs() []tools.ToolDef {
 		{Name: "delete_page", RequiredScope: "write"},
 		{Name: "upload_page_asset", RequiredScope: "write"},
 		{Name: "delete_page_asset", RequiredScope: "write"},
+		{Name: "begin_asset_upload", RequiredScope: "write"},
+		{Name: "upload_asset_chunk", RequiredScope: "write"},
+		{Name: "commit_asset_upload", RequiredScope: "write"},
 		{Name: "get_mutation_status", RequiredScope: "write"},
 		{Name: "get_rate_limits", RequiredScope: "write"},
 		{Name: "plan_content_change", RequiredScope: ""},

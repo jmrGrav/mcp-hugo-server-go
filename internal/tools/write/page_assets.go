@@ -223,6 +223,18 @@ func findDuplicateAsset(dir string, data []byte) (string, error) {
 		if strings.HasPrefix(name, "index.") && strings.HasSuffix(name, ".md") {
 			continue
 		}
+		// Dot-prefixed names are never a legitimate duplicate candidate on
+		// either upload_page_asset or commit_asset_upload: assetFilenamePattern
+		// already guarantees no committed asset can start with ".", and
+		// #1196's chunked-upload staging files (.upload-<id>.part) live
+		// inside this same directory while a commit is in flight — without
+		// this skip, a chunked commit's own not-yet-renamed staging file
+		// (same bytes, same size, same hash as what's about to be
+		// committed) would match itself and leak its internal filename out
+		// as data.duplicate_of.
+		if strings.HasPrefix(name, ".") {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil || info.Size() != wantSize {
 			continue
