@@ -520,14 +520,17 @@ var hashTreeExcludedNames = map[string]bool{
 // hashTreeExcludedPrefix skips any file whose name starts with this prefix,
 // for names that vary per-instance (so an exact-name map in
 // hashTreeExcludedNames can't cover them) and are never site content.
-// ".upload-<upload_id>.part" (internal/tools/write's uploadStagingPrefix/
-// uploadStagingSuffix — mirrored here as a literal rather than imported,
-// since internal/tools/write already imports internal/tools/admin) is
-// #1196's chunked-upload staging file: it lives inside a live bundle
-// directory for up to 15 minutes while a commit is in flight, or longer if
-// abandoned until the startup sweep clears it, and would otherwise shift
-// source_revision the exact same way .mcp-audit.log did before #1180.
-const hashTreeExcludedPrefix = ".upload-"
+// fileutil.UploadStagingPrefix (".upload-<upload_id>.part", #1196's
+// chunked-upload staging file) is the only current case: it lives inside a
+// live bundle directory for up to 15 minutes while a commit is in flight,
+// or longer if abandoned until the startup sweep clears it, and would
+// otherwise shift source_revision the exact same way .mcp-audit.log did
+// before #1180. Sourced from fileutil rather than internal/tools/write
+// directly — write already imports admin, so admin importing write back
+// would cycle; fileutil is the shared low-level package both sides can
+// reference instead of duplicating the literal (see fileutil's own doc
+// comment on UploadStagingPrefix).
+const hashTreeExcludedPrefix = fileutil.UploadStagingPrefix
 
 func hashTree(root string) (string, error) {
 	h := sha256.New()

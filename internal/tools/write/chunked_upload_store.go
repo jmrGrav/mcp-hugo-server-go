@@ -44,6 +44,7 @@ import (
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 )
 
 // chunkedUploadTTL bounds how long an incomplete upload's staging file and
@@ -59,9 +60,14 @@ const chunkedUploadTTL = 15 * time.Minute
 // against cumulative received bytes on every chunk.
 const recommendedChunkBytes = 512 << 10 // 512 KiB
 
+// uploadStagingPrefix/uploadStagingSuffix are fileutil.UploadStagingPrefix/
+// Suffix — see that package's doc comment for why the constant lives there
+// instead of being duplicated as a separate literal in each of this
+// package and internal/tools/admin (whose hashTree must exclude the same
+// staging files from source_revision, #1180).
 const (
-	uploadStagingPrefix = ".upload-"
-	uploadStagingSuffix = ".part"
+	uploadStagingPrefix = fileutil.UploadStagingPrefix
+	uploadStagingSuffix = fileutil.UploadStagingSuffix
 )
 
 // uploadStagingName returns the dot-prefixed staging filename for uploadID

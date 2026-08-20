@@ -244,6 +244,23 @@ func TestChunkedUploadStoreCommitConsumeLeavesNoStagingFileBehind(t *testing.T) 
 	}
 }
 
+// TestUploadStagingNameNeverMatchesAssetFilenamePattern guards the "a
+// staging file can never collide with or be mistaken for a committed
+// asset" claim documented throughout this feature (chunked_upload_store.go,
+// findDuplicateAsset, fileutil.UploadStagingPrefix): assetFilenamePattern
+// must reject every name uploadStagingName can ever produce, since it
+// rejects any leading ".". If that pattern (or the staging prefix) ever
+// changed to allow an overlap, a committed asset could shadow — or be
+// shadowed by — an in-flight upload's staging file in the same directory.
+func TestUploadStagingNameNeverMatchesAssetFilenamePattern(t *testing.T) {
+	for _, id := range []string{"upload_deadbeef", "upload_" + strings.Repeat("a", 32), "upload_0"} {
+		name := uploadStagingName(id)
+		if assetFilenamePattern.MatchString(name) {
+			t.Fatalf("assetFilenamePattern unexpectedly matched a staging filename %q — this would let a committed asset collide with an in-flight upload's staging file", name)
+		}
+	}
+}
+
 func TestSweepOrphanedUploadStagingRemovesStrayPartFiles(t *testing.T) {
 	root := t.TempDir()
 	bundleDir := filepath.Join(root, "posts", "example")
