@@ -502,11 +502,29 @@ func currentUserForLog() string {
 	return u.Username
 }
 
+// hashTreeExcludedNames are files hashTree skips even though they live
+// inside the tree it walks. ".mcp-audit.log" (written by delete_page/
+// delete_page_asset directly under ContentRoot) is MCP-internal bookkeeping,
+// not site content: it grows on every mutation, including ones a caller
+// later reverses, so a create->modify->delete round-trip that leaves every
+// *.md source page byte-identical to baseline still left new lines appended
+// to this log — making hashTree's result (source_revision/public_revision)
+// falsely report content drift after a true no-op cycle (#1180). Excluding
+// it here keeps source_revision deterministic over the site's actual page
+// content, matching what publish_changes/build_site treat as the source of
+// truth for drift detection.
+var hashTreeExcludedNames = map[string]bool{
+	".mcp-audit.log": true,
+}
+
 func hashTree(root string) (string, error) {
 	h := sha256.New()
 	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if hashTreeExcludedNames[info.Name()] {
+			return nil
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
