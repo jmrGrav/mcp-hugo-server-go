@@ -47,6 +47,9 @@ type createBundleInput struct {
 	IdempotencyKey string            `json:"idempotency_key,omitempty"`
 	// ChangeSetID (#1135) — see createPageInput's field of the same name.
 	ChangeSetID string `json:"change_set_id,omitempty"`
+	// NormalizeTaxonomyCasing (#1191) — see createPageInput's field of the
+	// same name; applies per-page, scoped to that page's own `lang`.
+	NormalizeTaxonomyCasing bool `json:"normalize_taxonomy_casing,omitempty"`
 }
 
 type deleteBundleInput struct {
@@ -66,6 +69,11 @@ type bundleLifecycleData struct {
 	DryRun               bool              `json:"dry_run,omitempty"`
 	Revisions            map[string]string `json:"revisions,omitempty"`
 	TestContentExpiresAt map[string]string `json:"test_content_expires_at,omitempty"`
+	// TaxonomyCasingNormalized/TaxonomyCasingAmbiguous (#1191) — see the
+	// identical fields on createPageData, aggregated across every page in
+	// this bundle rather than scoped to a single page.
+	TaxonomyCasingNormalized []taxonomyCasingChangeDTO  `json:"taxonomy_casing_normalized,omitempty"`
+	TaxonomyCasingAmbiguous  []taxonomyCasingSkippedDTO `json:"taxonomy_casing_ambiguous,omitempty"`
 }
 
 type bundleLifecycleOutput struct {
@@ -93,7 +101,7 @@ func bundleLangFile(dir, lang string) (string, error) {
 }
 
 func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) {
-	mcp.AddTool(s, &mcp.Tool{Name: "create_bundle", Title: "Create multilingual bundle", Description: "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. Each page may set `draft`, `description`, `featured_image`, and the same explicit `test_content: {ttl_hours?, owner?}` safety marker as create_page; test_content forces draft:true for that translation and returns its effective expiry in `data.test_content_expires_at`. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").", InputSchema: tools.MustSchema[createBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
+	mcp.AddTool(s, &mcp.Tool{Name: "create_bundle", Title: "Create multilingual bundle", Description: "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. Each page may set `draft`, `description`, `featured_image`, and the same explicit `test_content: {ttl_hours?, owner?}` safety marker as create_page; test_content forces draft:true for that translation and returns its effective expiry in `data.test_content_expires_at`. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\"). Set `normalize_taxonomy_casing: true` (default off, #1191) to rewrite each page's submitted tags/categories that only differ in casing from a single existing spelling elsewhere in the index to that existing spelling, the same create_page/update_page behavior (#589) — applied per page, scoped to that page's own `lang` (a term is matched against existing forms in that language only, #604/#677); rewrites across every page are reported together in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it in that page's language is reported in `data.taxonomy_casing_ambiguous` instead.", InputSchema: tools.MustSchema[createBundleInput](), OutputSchema: tools.MustSchema[bundleLifecycleOutput](), Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: fileutil.BoolPtr(false)}}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createBundleInput) (*mcp.CallToolResult, bundleLifecycleOutput, error) {
 		in.Slug = normalizeInputSlug(in.Slug)
 		wrap := func(e error) error {
 			return toolcontract.WithRequestContext(e, toolcontract.RequestContext{Slug: in.Slug})
@@ -128,6 +136,8 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			page          bundlePageInput
 		}, 0, len(in.Pages))
 		langs := make([]string, 0, len(in.Pages))
+		var taxonomyNormalized []taxonomyCasingChangeDTO
+		var taxonomyAmbiguous []taxonomyCasingSkippedDTO
 		for _, p := range in.Pages {
 			lang, e := validateLangParam(p.Lang)
 			if e != nil {
@@ -170,6 +180,17 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 			}
 			if e = validateTaxonomyTerms("category", p.Categories); e != nil {
 				return nil, bundleLifecycleOutput{}, wrap(e)
+			}
+			// normalize_taxonomy_casing (#1191) — see the identical logic
+			// in create_page (tools.go), scoped per-page to that page's own
+			// resolved lang, matching #1191's cross-lingual bundle use case.
+			if in.NormalizeTaxonomyCasing {
+				var tagChanges, catChanges []taxonomyCasingChangeDTO
+				var tagSkipped, catSkipped []taxonomyCasingSkippedDTO
+				p.Tags, tagChanges, tagSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "tag"), "tag", lang, p.Tags)
+				p.Categories, catChanges, catSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "category"), "category", lang, p.Categories)
+				taxonomyNormalized = append(taxonomyNormalized, append(tagChanges, catChanges...)...)
+				taxonomyAmbiguous = append(taxonomyAmbiguous, append(tagSkipped, catSkipped...)...)
 			}
 			content, expiresAt := buildBundleFrontmatter(p)
 			if e = validateFrontmatterRoundTrip(content); e != nil {
@@ -255,7 +276,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 					expires[f.page.Lang] = f.expiresAt
 				}
 			}
-			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "would_create", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true, TestContentExpiresAt: expires}), nil
+			return nil, bundleLifecycleSuccess(bundleLifecycleData{Status: "would_create", Slug: canonicalPublicSlug(in.Slug), Languages: langs, DryRun: true, TestContentExpiresAt: expires, TaxonomyCasingNormalized: taxonomyNormalized, TaxonomyCasingAmbiguous: taxonomyAmbiguous}), nil
 		}
 		createLimiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, mutationCallerKey(ctx), cfg.RateLimit.CreateUpdatePerMin)
 		if !createLimiter.Allow() {
@@ -336,7 +357,7 @@ func registerBundleLifecycleTools(s *mcp.Server, pg *security.PathGuard, idx *hu
 				}
 			}
 		}
-		out := bundleLifecycleSuccess(bundleLifecycleData{Status: "created", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs, TestContentExpiresAt: expires})
+		out := bundleLifecycleSuccess(bundleLifecycleData{Status: "created", Slug: canonicalPublicSlug(in.Slug), Languages: langs, Revisions: revs, TestContentExpiresAt: expires, TaxonomyCasingNormalized: taxonomyNormalized, TaxonomyCasingAmbiguous: taxonomyAmbiguous})
 		if err := recoveryOp.stageResult(siteDB, out); err != nil {
 			return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
 		}
