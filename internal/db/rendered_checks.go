@@ -200,6 +200,74 @@ func (d *DB) reconcileRenderedChecksScope() error {
 	return tx.Commit()
 }
 
+// ReconcileRenderedIssuesAgainstIndex clears rendered_issues_count for any
+// published page idx's *current, live* classifier reports as non-content
+// (technical/taxonomy/section/pagination) but whose row still carries a
+// cached issues count from before it was reclassified that way — the
+// concrete case (#1186) being an operator adding a new entry to
+// config.TechnicalVerificationSlugs for a page that already has a cached
+// FAIL. syncPublicPage's hash-gate ("if existing == hash { return nil }")
+// means a page whose own content never changes — the common case for a
+// verification-token file — never revisits rendered_issues_count on its
+// own, so a config-only change would otherwise leave a stale FAIL count in
+// rendered_seo_summary forever. Unlike reconcileRenderedChecksScope (a
+// one-time, schema-version-gated migration keyed to a classifier with no
+// config awareness), this is unconditional and idempotent — cheap to call
+// on every startup — and uses idx.Classifier(), which #1186 wired up to
+// reflect the operator's current config, so it naturally stays correct as
+// that config changes over time without needing its own version bump.
+func (d *DB) ReconcileRenderedIssuesAgainstIndex(idx *site.Index) error {
+	if idx == nil {
+		return nil
+	}
+	classifier := idx.Classifier()
+
+	rows, err := d.db.Query(`SELECT id, slug FROM pages WHERE published = 1 AND rendered_issues_count IS NOT NULL`)
+	if err != nil {
+		return err
+	}
+	type checkedRow struct {
+		id   int64
+		slug string
+	}
+	var toClear []checkedRow
+	for rows.Next() {
+		var r checkedRow
+		if err := rows.Scan(&r.id, &r.slug); err != nil {
+			rows.Close()
+			return err
+		}
+		if !classifier.IsContent(site.Page{Slug: r.slug}) {
+			toClear = append(toClear, r)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(toClear) == 0 {
+		return nil
+	}
+
+	tx, err := d.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	for _, r := range toClear {
+		if _, err := tx.Exec(
+			`UPDATE pages SET rendered_issues_count = NULL, rendered_checked_at = '' WHERE id = ?`,
+			r.id,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // RenderedIssuesSummary reports how many published pages have a cached
 // rendered-checks result (checked) and how many of those have at least one
 // failing check (withIssues), for get_site_health's opt-in aggregation
