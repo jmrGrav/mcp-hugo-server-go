@@ -82,6 +82,50 @@ func TestCreatePageNormalizesTagCasingToExistingForm(t *testing.T) {
 	}
 }
 
+// TestCreateBundleNormalizesTaxonomyCasingPerPageLang is a regression test
+// for #1191: create_bundle previously had no normalize_taxonomy_casing
+// support at all. Seeds an existing "JavaScript" casing in each of two
+// languages, submits "javascript" for both translations in one
+// create_bundle call, and confirms each page independently normalizes
+// against its own language's existing forms (not cross-language), with
+// results aggregated into a single data.taxonomy_casing_normalized list.
+func TestCreateBundleNormalizesTaxonomyCasingPerPageLang(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeSeedPage(t, contentRoot, "posts/existing", "en", []string{"JavaScript"}, nil)
+	writeSeedPage(t, contentRoot, "posts/existing", "fr", []string{"JavaScript"}, nil)
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "create_bundle", map[string]any{
+		"slug": "posts/new-bundle",
+		"pages": []any{
+			map[string]any{"lang": "en", "title": "New EN", "body": "Body", "tags": []any{"javascript"}},
+			map[string]any{"lang": "fr", "title": "New FR", "body": "Corps", "tags": []any{"javascript"}},
+		},
+		"normalize_taxonomy_casing": true,
+	})
+	if res.IsError {
+		t.Fatalf("create_bundle failed: %s", marshalContent(t, res))
+	}
+	data := decodeWriteData(t, res)
+
+	normalized, ok := data["taxonomy_casing_normalized"].([]any)
+	if !ok || len(normalized) != 2 {
+		t.Fatalf("data.taxonomy_casing_normalized = %#v, want 2 entries (one per page)", data["taxonomy_casing_normalized"])
+	}
+
+	for _, lang := range []string{"en", "fr"} {
+		raw, err := os.ReadFile(filepath.Join(contentRoot, "posts", "new-bundle", "index."+lang+".md"))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", lang, err)
+		}
+		if !strings.Contains(string(raw), "JavaScript") || strings.Contains(string(raw), "- javascript") {
+			t.Fatalf("written %s page did not adopt existing casing:\n%s", lang, raw)
+		}
+	}
+}
+
 // TestCreatePageDoesNotNormalizeCasingByDefault confirms
 // normalize_taxonomy_casing is opt-in: omitting it (the default) writes the
 // tag exactly as submitted even when a differently-cased existing form is

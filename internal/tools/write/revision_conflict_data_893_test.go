@@ -102,3 +102,55 @@ func TestUpdatePageBundleConflictIncludesCurrentBundleRevision(t *testing.T) {
 		t.Fatalf("data.current_bundle_revision = %v, want %v", got, wantBundleRev)
 	}
 }
+
+// TestUpdatePageSuccessIncludesBundleRevisionChainableToNextUpdate is a
+// regression test for #1192: update_page's success response previously had
+// no bundle_revision at all, so a caller updating several translations in
+// sequence had to call get_page_for_edit between every update_page just to
+// read a fresh token for the next call's expected_bundle_revision. Confirms
+// the field is present, matches contentmodel.BundleRevision computed
+// directly, and can be fed straight into a second update_page call on the
+// sibling translation without any intervening read.
+func TestUpdatePageSuccessIncludesBundleRevisionChainableToNextUpdate(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBilingualBundle(t, contentRoot, "posts/example")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	dir := filepath.Join(contentRoot, "posts/example")
+	enRevision := currentRevision(t, filepath.Join(dir, "index.en.md"))
+
+	res := callTool(t, session, "update_page", map[string]any{
+		"slug":              "posts/example",
+		"lang":              "en",
+		"body":              "Updated EN body.",
+		"expected_revision": enRevision,
+	})
+	if res.IsError {
+		t.Fatalf("update_page (en) failed: %s", marshalContent(t, res))
+	}
+	data := decodeWriteData(t, res)
+	gotBundleRev, _ := data["bundle_revision"].(string)
+	wantBundleRev, err := contentmodel.BundleRevision(dir)
+	if err != nil {
+		t.Fatalf("BundleRevision: %v", err)
+	}
+	if gotBundleRev == "" || gotBundleRev != wantBundleRev {
+		t.Fatalf("data.bundle_revision = %q, want %q", gotBundleRev, wantBundleRev)
+	}
+
+	// Chain straight into a second update_page on the sibling translation,
+	// using the bundle_revision just returned — no get_page_for_edit call
+	// in between.
+	frRevision := currentRevision(t, filepath.Join(dir, "index.fr.md"))
+	chained := callTool(t, session, "update_page", map[string]any{
+		"slug":                     "posts/example",
+		"lang":                     "fr",
+		"body":                     "Corps FR mis a jour.",
+		"expected_revision":        frRevision,
+		"expected_bundle_revision": gotBundleRev,
+	})
+	if chained.IsError {
+		t.Fatalf("chained update_page (fr) using returned bundle_revision failed: %s", marshalContent(t, chained))
+	}
+}

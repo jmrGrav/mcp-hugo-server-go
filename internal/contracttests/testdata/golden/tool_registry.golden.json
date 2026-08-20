@@ -621,7 +621,7 @@
   {
     "name": "create_bundle",
     "required_scope": "write",
-    "description": "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. Each page may set `draft`, `description`, `featured_image`, and the same explicit `test_content: {ttl_hours?, owner?}` safety marker as create_page; test_content forces draft:true for that translation and returns its effective expiry in `data.test_content_expires_at`. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\").",
+    "description": "Atomically create all translations of a new Hugo page bundle. Every page is validated before any file is written; a failure leaves no partial bundle. Each page may set `draft`, `description`, `featured_image`, and the same explicit `test_content: {ttl_hours?, owner?}` safety marker as create_page; test_content forces draft:true for that translation and returns its effective expiry in `data.test_content_expires_at`. dry_run previews the files without writing. Repeating the same non-dry-run request normally fails once any translation exists, but callers may provide `idempotency_key` to safely replay the exact same create attempt after a timeout or uncertain delivery — recoverable afterward via get_mutation_status(tool=\"create_bundle\"). Set `normalize_taxonomy_casing: true` (default off, #1191) to rewrite each page's submitted tags/categories that only differ in casing from a single existing spelling elsewhere in the index to that existing spelling, the same create_page/update_page behavior (#589) — applied per page, scoped to that page's own `lang` (a term is matched against existing forms in that language only, #604/#677); rewrites across every page are reported together in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it in that page's language is reported in `data.taxonomy_casing_ambiguous` instead.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -633,6 +633,9 @@
         },
         "idempotency_key": {
           "type": "string"
+        },
+        "normalize_taxonomy_casing": {
+          "type": "boolean"
         },
         "pages": {
           "items": {
@@ -730,6 +733,13 @@
       "data.revisions:object",
       "data.slug:string:required",
       "data.status:string:required",
+      "data.taxonomy_casing_ambiguous:unspecified",
+      "data.taxonomy_casing_ambiguous[].term:string:required",
+      "data.taxonomy_casing_ambiguous[].type:string:required",
+      "data.taxonomy_casing_normalized:unspecified",
+      "data.taxonomy_casing_normalized[].from:string:required",
+      "data.taxonomy_casing_normalized[].to:string:required",
+      "data.taxonomy_casing_normalized[].type:string:required",
       "data.test_content_expires_at:object",
       "data:object:required",
       "errors:unspecified:required",
@@ -765,7 +775,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "ece06183f4aaebadf6a299cfeac4b793ee1fb36fdf21d487d8bb2fcd9803aed7"
+    "output_schema_sha256": "fb2e454b3077e1c905694cab1ae16528838ab38a79f4afe59506af3d64db58b7"
   },
   {
     "name": "create_change_set",
@@ -1063,6 +1073,13 @@
       "data.revisions:object",
       "data.slug:string:required",
       "data.status:string:required",
+      "data.taxonomy_casing_ambiguous:unspecified",
+      "data.taxonomy_casing_ambiguous[].term:string:required",
+      "data.taxonomy_casing_ambiguous[].type:string:required",
+      "data.taxonomy_casing_normalized:unspecified",
+      "data.taxonomy_casing_normalized[].from:string:required",
+      "data.taxonomy_casing_normalized[].to:string:required",
+      "data.taxonomy_casing_normalized[].type:string:required",
       "data.test_content_expires_at:object",
       "data:object:required",
       "errors:unspecified:required",
@@ -1098,7 +1115,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "ece06183f4aaebadf6a299cfeac4b793ee1fb36fdf21d487d8bb2fcd9803aed7"
+    "output_schema_sha256": "fb2e454b3077e1c905694cab1ae16528838ab38a79f4afe59506af3d64db58b7"
   },
   {
     "name": "delete_page",
@@ -5422,7 +5439,7 @@
   {
     "name": "update_page",
     "required_scope": "write",
-    "description": "Update an existing Hugo content page while preserving unspecified front matter fields. Use title/body to revise content. Use tags/categories/draft/description/featured_image to update front matter fields. `data.changed` (#860) is an explicit no-op signal: it is `false` when the resulting content is byte-identical to what was already on disk (the call succeeded but changed nothing) and `true` when the page was actually modified — present on both `dry_run` and real writes, so a caller never has to diff revisions itself to tell a no-op apart from a real edit. `featured_image` sets the theme's `featuredImage` frontmatter key to a local public path — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); sending `featured_image:\"\"` explicitly clears that frontmatter key, while omitting the field leaves it unchanged (#825, #835). `tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan; the `revision_conflict` error's `data.current_revision` carries the fresh revision so you can retry immediately without an extra read (#893). Optionally, on a page bundle (content/\u003cslug\u003e/), also pass `expected_bundle_revision` (the `bundle_revision` from a prior get_page_for_edit) to additionally guard against a *sibling* translation or bundle-local asset changing since you read the bundle — a stale value fails with `bundle_conflict`, distinct from `revision_conflict` so a caller passing both tokens can tell which one tripped; that error's `data.current_bundle_revision` likewise carries the fresh bundle revision for immediate retry (#893); omitting it is fully backward-compatible and leaves behavior unchanged (#857). Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` (including on `dry_run`) if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
+    "description": "Update an existing Hugo content page while preserving unspecified front matter fields. Use title/body to revise content. Use tags/categories/draft/description/featured_image to update front matter fields. `data.changed` (#860) is an explicit no-op signal: it is `false` when the resulting content is byte-identical to what was already on disk (the call succeeded but changed nothing) and `true` when the page was actually modified — present on both `dry_run` and real writes, so a caller never has to diff revisions itself to tell a no-op apart from a real edit. `featured_image` sets the theme's `featuredImage` frontmatter key to a local public path — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); sending `featured_image:\"\"` explicitly clears that frontmatter key, while omitting the field leaves it unchanged (#825, #835). `tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). For bilingual sites, provide lang (e.g. \"fr\", \"en\") to target the correct language file; omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan; the `revision_conflict` error's `data.current_revision` carries the fresh revision so you can retry immediately without an extra read (#893). Optionally, on a page bundle (content/\u003cslug\u003e/), also pass `expected_bundle_revision` (the `bundle_revision` from a prior get_page_for_edit) to additionally guard against a *sibling* translation or bundle-local asset changing since you read the bundle — a stale value fails with `bundle_conflict`, distinct from `revision_conflict` so a caller passing both tokens can tell which one tripped; that error's `data.current_bundle_revision` likewise carries the fresh bundle revision for immediate retry (#893); omitting it is fully backward-compatible and leaves behavior unchanged (#857). Every success response (dry_run included) also carries `data.bundle_revision` (#1192) — the fresh whole-bundle token for this page's bundle directory, mirroring get_page_for_edit's field of the same name — so a caller updating several translations in sequence can chain straight into the next update_page's `expected_bundle_revision` without a separate get_page_for_edit round-trip just to read a fresh token; omitted (not empty-string) for a leaf page that isn't part of a bundle directory. A `bundle_conflict`/`revision_conflict` failure still reports the fresh token as `data.current_bundle_revision` (#893) instead, not `bundle_revision`. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. `body` is rejected with `invalid_params` (including on `dry_run`) if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). `rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
@@ -5499,6 +5516,7 @@
       "type": "object"
     },
     "output_schema_fields": [
+      "data.bundle_revision:string",
       "data.categories_delta.added:unspecified",
       "data.categories_delta.removed:unspecified",
       "data.categories_delta.unchanged:unspecified",
@@ -5576,7 +5594,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "d8e98324cadf7b9519ec4b681b3a9329626ce28a69c25306365cdd9e19775399"
+    "output_schema_sha256": "d4db8756eda34a7556ae1ba4ff888eede2faf80edb707bbb0b5bfb68d5272f6b"
   },
   {
     "name": "upload_page_asset",

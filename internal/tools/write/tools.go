@@ -185,6 +185,16 @@ type updatePageData struct {
 	RevisionKind string               `json:"revision_kind,omitempty"`
 	State        *site.LifecycleState `json:"state,omitempty"`
 	RateLimit    *rateLimitBucket     `json:"rate_limit,omitempty"`
+	// BundleRevision (#1192) mirrors get_page_for_edit's field of the same
+	// name (#857): the optimistic-concurrency token for the WHOLE bundle
+	// directory this page belongs to, freshly recomputed after this write
+	// (or, on dry_run, reflecting the current on-disk state this call
+	// previewed against). Lets a caller chain a second update_page call on
+	// a sibling translation (via expected_bundle_revision) without a
+	// separate get_page_for_edit round-trip just to read a fresh token.
+	// Omitted (not empty-string) when this page isn't part of a bundle
+	// directory (leaf `<slug>.md`), same as get_page_for_edit.
+	BundleRevision string `json:"bundle_revision,omitempty"`
 	// TaxonomyCasingNormalized lists tags/categories rewritten to match a
 	// casing already present elsewhere in the index (#589), populated only
 	// when the caller opted in via normalize_taxonomy_casing. Present only
@@ -1109,7 +1119,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			"omitting lang on a page with multiple language files returns an ambiguous_language error listing available langs. " +
 			"Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page); " +
 			"a missing value fails with `invalid_params` and a stale value fails with `revision_conflict`, telling the agent to re-read and replan; the `revision_conflict` error's `data.current_revision` carries the fresh revision so you can retry immediately without an extra read (#893). " +
-			"Optionally, on a page bundle (content/<slug>/), also pass `expected_bundle_revision` (the `bundle_revision` from a prior get_page_for_edit) to additionally guard against a *sibling* translation or bundle-local asset changing since you read the bundle — a stale value fails with `bundle_conflict`, distinct from `revision_conflict` so a caller passing both tokens can tell which one tripped; that error's `data.current_bundle_revision` likewise carries the fresh bundle revision for immediate retry (#893); omitting it is fully backward-compatible and leaves behavior unchanged (#857). " +
+			"Optionally, on a page bundle (content/<slug>/), also pass `expected_bundle_revision` (the `bundle_revision` from a prior get_page_for_edit) to additionally guard against a *sibling* translation or bundle-local asset changing since you read the bundle — a stale value fails with `bundle_conflict`, distinct from `revision_conflict` so a caller passing both tokens can tell which one tripped; that error's `data.current_bundle_revision` likewise carries the fresh bundle revision for immediate retry (#893); omitting it is fully backward-compatible and leaves behavior unchanged (#857). Every success response (dry_run included) also carries `data.bundle_revision` (#1192) — the fresh whole-bundle token for this page's bundle directory, mirroring get_page_for_edit's field of the same name — so a caller updating several translations in sequence can chain straight into the next update_page's `expected_bundle_revision` without a separate get_page_for_edit round-trip just to read a fresh token; omitted (not empty-string) for a leaf page that isn't part of a bundle directory. A `bundle_conflict`/`revision_conflict` failure still reports the fresh token as `data.current_bundle_revision` (#893) instead, not `bundle_revision`. " +
 			"Callers may provide `idempotency_key` to safely replay the exact same non-dry-run update after a timeout or uncertain delivery. " +
 			"Successful non-dry-run responses include a `state` object that tells agents whether the source changed ahead of the public build/index state. " +
 			"If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). " +
@@ -1382,6 +1392,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			diff := simpleDiff(diffLabel, string(raw), content)
 			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 			dryRunChanged := content != string(raw)
+			dryRunBundleRevision, _ := contentmodel.BundleRevision(filepath.Dir(filePath))
 			dryRunStatus := "unchanged"
 			if dryRunChanged {
 				dryRunStatus = "would_update"
@@ -1400,6 +1411,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 				TagsDelta:                tagsDelta,
 				CategoriesDelta:          categoriesDelta,
+				BundleRevision:           dryRunBundleRevision,
 			}, rateLimitRemaining(limiter)), nil
 		}
 
@@ -1525,6 +1537,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 
 		state := updatePageState(rt.siteIdx != nil, hadPublic)
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+		bundleRevision, _ := contentmodel.BundleRevision(filepath.Dir(filePath))
 		out := newUpdatePageOutput(updatePageData{
 			Status:                   status,
 			Slug:                     canonicalPublicSlug(in.Slug),
@@ -1541,6 +1554,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
 			TagsDelta:                tagsDelta,
 			CategoriesDelta:          categoriesDelta,
+			BundleRevision:           bundleRevision,
 		}, rateLimitRemaining(limiter))
 		if err := recoveryOp.stageResult(siteDB, out); err != nil {
 			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
