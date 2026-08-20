@@ -13,6 +13,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Diff coverage (below) needs the PR's base commit, which a
+          # shallow checkout won't have.
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
@@ -55,6 +59,11 @@ jobs:
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | tr -d '%')
           echo "Coverage: ${COVERAGE}%"
           awk -v cov="$COVERAGE" 'BEGIN { if (cov + 0 < 85) { print "Coverage " cov "% is below 85%"; exit 1 } }'
+      - name: Diff coverage gate (PR-changed lines)
+        if: github.event_name == 'pull_request'
+        run: |
+          git diff --unified=0 "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" -- '*.go' > diff.txt
+          go run ./cmd/check-diff-coverage -profile coverage.out -diff diff.txt -min 85
       - name: Generate coverage badge payload
         run: |
           set -euo pipefail
