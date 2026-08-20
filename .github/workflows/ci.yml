@@ -62,14 +62,23 @@ jobs:
       - name: Diff coverage gate (PR-changed lines)
         if: github.event_name == 'pull_request'
         run: |
-          # Diff against the merge-base, not base.sha directly: base.sha is
-          # the base branch's tip at last sync, so on a long-lived PR that
-          # hasn't rebased, diffing straight against it would pull in
-          # unrelated commits merged to main afterward as "changed lines" and
-          # fail the gate for reasons unrelated to this PR. merge-base
-          # matches what GitHub's own "Files changed" tab compares against.
-          MERGE_BASE=$(git merge-base "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}")
-          git diff --unified=0 "$MERGE_BASE" "${{ github.event.pull_request.head.sha }}" -- '*.go' > diff.txt
+          # actions/checkout on a pull_request event checks out
+          # refs/pull/N/merge (the merge commit) by default, not head.sha —
+          # that's the tree coverage.out was actually built from. The diff's
+          # right-hand side must therefore be HEAD, not head.sha, or the
+          # changed-line set and the profile's statement blocks are keyed to
+          # different trees and in-scope selection becomes arbitrary.
+          #
+          # The left-hand side is merge-base(base.sha, HEAD) rather than
+          # base.sha directly: base.sha is the base branch's tip at last
+          # sync, so on a long-lived PR that hasn't rebased, diffing straight
+          # against it would pull in unrelated commits merged to main
+          # afterward as "changed lines." merge-base matches what GitHub's
+          # own "Files changed" tab compares against, and is a no-op here
+          # when checkout used the merge ref (base.sha is already HEAD's
+          # ancestor in that case).
+          MERGE_BASE=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          git diff --unified=0 "$MERGE_BASE" HEAD -- '*.go' > diff.txt
           go run ./cmd/check-diff-coverage -profile coverage.out -diff diff.txt -min 85
       - name: Generate coverage badge payload
         run: |
