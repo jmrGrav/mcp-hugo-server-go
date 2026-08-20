@@ -236,6 +236,7 @@ func (idx *Index) computeStaleAgainstDisk(cfg config.Config) (stale bool, newest
 }
 
 func NewIndex(cfg config.Config) (*Index, error) {
+	SetTechnicalVerificationSlugs(cfg.TechnicalVerificationSlugs)
 	builtAt := time.Now()
 	root := strings.TrimSpace(cfg.SiteRoot)
 	if root == "" {

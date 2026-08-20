@@ -3,7 +3,53 @@ package site
 import (
 	"strconv"
 	"strings"
+	"sync"
 )
+
+// technicalVerificationSlugs is an operator-declared allowlist of
+// single-segment root slugs (#1186) treated as third-party
+// domain-ownership-verification artifacts rather than content pages — the
+// same bucket robots.txt/security.txt already get, but those are hardcoded
+// because their names are spec-fixed while a verification token's filename
+// is assigned by the third party and varies per deployment. Package-level
+// because ContentClassifier is constructed fresh at many call sites across
+// several packages with no config plumbed through; SetTechnicalVerificationSlugs
+// is called once at startup from the operator's config.TechnicalVerificationSlugs,
+// mirroring how a deploy-level setting like config.RejectSymlinks is read
+// once and then applies uniformly. Never set from anything other than
+// explicit operator config — no filename/slug heuristic is ever applied
+// here, by design (see #1186: this is deliberately opt-in, not inferred).
+var (
+	technicalVerificationSlugsMu sync.RWMutex
+	technicalVerificationSlugs   map[string]struct{}
+)
+
+// SetTechnicalVerificationSlugs installs the operator-declared allowlist of
+// technical-verification slugs. Intended to be called once at process
+// startup before any ContentClassifier is built; safe to call again (e.g.
+// in tests) since it replaces the set atomically under a lock.
+func SetTechnicalVerificationSlugs(slugs []string) {
+	set := make(map[string]struct{}, len(slugs))
+	for _, s := range slugs {
+		s = strings.Trim(strings.TrimSpace(s), "/")
+		if s != "" {
+			set[s] = struct{}{}
+		}
+	}
+	technicalVerificationSlugsMu.Lock()
+	technicalVerificationSlugs = set
+	technicalVerificationSlugsMu.Unlock()
+}
+
+func isOperatorDeclaredTechnicalSlug(slug string) bool {
+	technicalVerificationSlugsMu.RLock()
+	defer technicalVerificationSlugsMu.RUnlock()
+	if len(technicalVerificationSlugs) == 0 {
+		return false
+	}
+	_, ok := technicalVerificationSlugs[slug]
+	return ok
+}
 
 type PageKind int8
 
@@ -263,7 +309,7 @@ func isTechnicalSlugParts(parts []string) bool {
 		"404.html", "404", "500.html", "500":
 		return true
 	default:
-		return false
+		return isOperatorDeclaredTechnicalSlug(parts[0])
 	}
 }
 
