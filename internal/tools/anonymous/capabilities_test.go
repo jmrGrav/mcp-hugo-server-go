@@ -160,6 +160,98 @@ func TestGetCapabilitiesMaskedToolsReportsNotConfiguredWithoutContentRoot(t *tes
 
 // TestGetCapabilitiesReportsLimitsAndFeatureFlags is the #859 contract test:
 // get_capabilities must expose the hard limits (from the write tools' own
+// TestGetCapabilitiesToolCatalogCountsGrowWithScope is a regression test
+// for #1175: tool_catalog.visible_count must strictly increase as scope
+// widens (public < write < admin, with content_root configured so write/
+// admin tools actually register), and tool_names_revision must be a
+// deterministic, differently-valued hash at each scope — the whole point
+// of the field is that a client comparing its own loaded tool count/hash
+// against this can detect a stale discovery snapshot.
+func TestGetCapabilitiesToolCatalogCountsGrowWithScope(t *testing.T) {
+	idx := mustTestIndex(t)
+	cfg := config.Default()
+	cfg.ContentRoot = filepath.Join("..", "..", "..", "testdata", "fixtures", "content")
+
+	toolCatalog := func(scopeName string) (count int, revision string) {
+		session, done := newTestClientWithScope(t, idx, cfg, scopeName)
+		defer done()
+		res := callTool(t, session, "get_capabilities", map[string]any{})
+		if res.IsError {
+			t.Fatalf("get_capabilities(%q) failed: %#v", scopeName, res)
+		}
+		data := decodeContent(t, res)
+		tc, ok := data["tool_catalog"].(map[string]any)
+		if !ok {
+			t.Fatalf("get_capabilities(%q): tool_catalog missing/wrong type: %#v", scopeName, data["tool_catalog"])
+		}
+		c, _ := tc["visible_count"].(float64)
+		rev, _ := tc["tool_names_revision"].(string)
+		return int(c), rev
+	}
+
+	publicCount, publicRev := toolCatalog("")
+	writeCount, writeRev := toolCatalog("write")
+	adminCount, adminRev := toolCatalog("admin")
+
+	if publicCount == 0 {
+		t.Fatal("public tier visible_count = 0, want > 0")
+	}
+	if writeCount <= publicCount {
+		t.Fatalf("write visible_count = %d, want > public visible_count %d", writeCount, publicCount)
+	}
+	if adminCount <= writeCount {
+		t.Fatalf("admin visible_count = %d, want > write visible_count %d (the 4 admin-gated Hugo lifecycle tools)", adminCount, writeCount)
+	}
+	// The admin-write gap is exactly the 4 managed Hugo binary lifecycle
+	// tools masked_tools already names for a write-tier caller.
+	if got := adminCount - writeCount; got != 4 {
+		t.Fatalf("admin visible_count - write visible_count = %d, want 4", got)
+	}
+
+	for _, rev := range []string{publicRev, writeRev, adminRev} {
+		if !strings.HasPrefix(rev, "sha256:") || len(rev) <= len("sha256:") {
+			t.Fatalf("tool_names_revision = %q, want a non-empty sha256:... value", rev)
+		}
+	}
+	if publicRev == writeRev || writeRev == adminRev || publicRev == adminRev {
+		t.Fatalf("tool_names_revision must differ across scopes with different tool sets: public=%q write=%q admin=%q", publicRev, writeRev, adminRev)
+	}
+
+	// Determinism: calling again at the same scope must return the same
+	// count/hash (no non-determinism from, e.g., map iteration order).
+	repeatCount, repeatRev := toolCatalog("write")
+	if repeatCount != writeCount || repeatRev != writeRev {
+		t.Fatalf("tool_catalog not deterministic across calls: first (%d, %q), second (%d, %q)", writeCount, writeRev, repeatCount, repeatRev)
+	}
+}
+
+// TestGetCapabilitiesToolCatalogWithoutContentRootMatchesReadScope is the
+// "write tier but no content_root" case (mirrors
+// TestGetCapabilitiesMaskedToolsReportsNotConfiguredWithoutContentRoot):
+// write/admin tools never registered, so tool_catalog must report the same
+// visible_count/tool_names_revision a plain read-scope caller sees, not an
+// inflated count for tools that don't actually exist on this deployment.
+func TestGetCapabilitiesToolCatalogWithoutContentRootMatchesReadScope(t *testing.T) {
+	idx := mustTestIndex(t)
+
+	readSession, readDone := newTestClientWithScope(t, idx, config.Default(), "")
+	defer readDone()
+	readRes := callTool(t, readSession, "get_capabilities", map[string]any{})
+	readTC := decodeContent(t, readRes)["tool_catalog"].(map[string]any)
+
+	writeSession, writeDone := newTestClientWithScope(t, idx, config.Default(), "write")
+	defer writeDone()
+	writeRes := callTool(t, writeSession, "get_capabilities", map[string]any{})
+	writeTC := decodeContent(t, writeRes)["tool_catalog"].(map[string]any)
+
+	if readTC["visible_count"] != writeTC["visible_count"] {
+		t.Fatalf("visible_count without content_root: read=%v write=%v, want equal", readTC["visible_count"], writeTC["visible_count"])
+	}
+	if readTC["tool_names_revision"] != writeTC["tool_names_revision"] {
+		t.Fatalf("tool_names_revision without content_root: read=%v write=%v, want equal", readTC["tool_names_revision"], writeTC["tool_names_revision"])
+	}
+}
+
 // source of truth, so the two can't drift) and coarse feature flags, and
 // must NOT leak sensitive config (secrets, hook command strings, host paths).
 func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {

@@ -802,6 +802,56 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 // hit. It must now fail fast with 413 and a message identifying
 // max_request_bytes, before the truncated body ever reaches the scope
 // check.
+// TestToolCatalogVisibleCountMatchesActualToolsList is a regression test
+// for #1175's own diagnostic to be trustworthy: get_capabilities.data.
+// tool_catalog.visible_count is computed from a package-level tools.Registry
+// reconstruction (internal/tools/anonymous.visibleToolCatalog), separate
+// from the actual per-scope *mcp.Server built here — a drift between the
+// two (e.g. a tool registered outside any Defs() function, or a Defs()
+// entry for a tool that never actually registers) would make the
+// stale-discovery detector itself unreliable, firing false mismatches on
+// every healthy session. Compares visible_count directly against a real
+// tools/list call on the same session, for both write and admin scope
+// (the two scopes where extra registration functions beyond the base
+// anonymous/read/write packages run).
+func TestToolCatalogVisibleCountMatchesActualToolsList(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "tokens.db")
+	srv := mustOAuthSQLiteServer(t, storePath)
+
+	for _, scope := range []string{"write", "admin"} {
+		t.Run(scope, func(t *testing.T) {
+			bearer := "tool-catalog-" + scope + "-token"
+			addBearerToken(t, storePath, bearer, scope)
+
+			names := doMCPToolsListAtPath(t, srv, "/mcp", bearer)
+
+			rec := doMCPCall(t, srv, bearer, []byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_capabilities"}}`))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("get_capabilities status = %d body = %q", rec.Code, rec.Body.String())
+			}
+			payload := rec.Body.String()
+			if i := strings.Index(payload, "{"); i > 0 {
+				payload = payload[i:]
+			}
+			var rpc struct {
+				Result struct {
+					StructuredContent map[string]any `json:"structuredContent"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal([]byte(payload), &rpc); err != nil {
+				t.Fatalf("unmarshal get_capabilities response: %v\nbody=%q", err, rec.Body.String())
+			}
+			data, _ := rpc.Result.StructuredContent["data"].(map[string]any)
+			toolCatalog, _ := data["tool_catalog"].(map[string]any)
+			visibleCount, _ := toolCatalog["visible_count"].(float64)
+
+			if int(visibleCount) != len(names) {
+				t.Fatalf("tool_catalog.visible_count = %d, want %d (actual tools/list count for scope %q); tools/list names = %v", int(visibleCount), len(names), scope, names)
+			}
+		})
+	}
+}
+
 func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
 	srv := mustOAuthServer(t) // config.Default() leaves max_request_bytes at its 1 MiB default
 	logBuf := withDefaultLogger(t)

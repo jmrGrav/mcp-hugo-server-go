@@ -2,6 +2,8 @@ package anonymous
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"sort"
 	"strings"
 	"time"
@@ -12,7 +14,9 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	adminpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
+	readpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
 	writepkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/write"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -136,9 +140,76 @@ type getCapabilitiesData struct {
 	Server              capabilitiesServer            `json:"server"`
 	Languages           capabilitiesLanguages         `json:"languages"`
 	Limits              capabilitiesLimits            `json:"limits"`
+	ToolCatalog         capabilitiesToolCatalog       `json:"tool_catalog"`
 	AllowedImageFormats []string                      `json:"allowed_image_formats"`
 	BlockedShortcodes   []string                      `json:"blocked_shortcodes"`
 	Features            capabilitiesFeatures          `json:"features"`
+}
+
+// capabilitiesToolCatalog (#1175) lets an agent detect a stale client-side
+// MCP tool-schema cache: compare visible_count/tool_names_revision against
+// what its own connector actually loaded (its tools/list result). A
+// mismatch means the client is looking at a stale discovery snapshot, not
+// that the server is misconfigured — the concrete case #1175 was filed
+// over: two MCP clients against the same server commit disagreed on the
+// registered tool set, and neither had a way to detect that on its own.
+//
+// Scope-only, like masked_tools: this does NOT account for exposure-profile
+// session narrowing (?profile=, #1137) — a profiled session's actual
+// tools/list can be a subset of visible_count. Same documented gap
+// masked_tools already has (see
+// TestExposureProfileAdminScopeMaskedToolsDoesNotCountProfileHidden).
+//
+// tool_names_revision hashes sorted tool NAMES only, not descriptions or
+// input schemas — it moves when a tool is added or removed, but NOT when
+// an existing tool's schema gains/loses a field (e.g. #1175's own
+// include_responsive_summary example). Named for exactly what it covers
+// rather than "catalog_revision" or similar, which would overpromise
+// schema-level staleness detection this doesn't do.
+type capabilitiesToolCatalog struct {
+	VisibleCount  int    `json:"visible_count"`
+	NamesRevision string `json:"tool_names_revision"`
+}
+
+// visibleToolCatalog computes capabilitiesToolCatalog from the same
+// tools.Registry.ForScope machinery the access-model contract tests
+// verify against actual per-scope tool registration — the authoritative
+// source for "which tool names does this scope see," independent of this
+// package's own registerGetCapabilities closure (which has no way to
+// introspect the mcp.Server it's registered on).
+func visibleToolCatalog(scopeName string, writeEnabled bool) capabilitiesToolCatalog {
+	reg := tools.NewRegistry()
+	for _, d := range Defs() {
+		reg.Register(d)
+	}
+	for _, d := range readpkg.Defs() {
+		reg.Register(d)
+	}
+	if writeEnabled {
+		for _, d := range writepkg.Defs() {
+			reg.Register(d)
+		}
+		for _, d := range adminpkg.Defs() {
+			reg.Register(d)
+		}
+	}
+
+	defs := reg.ForScope(fallbackEffectiveScope(scopeName))
+	names := make([]string, 0, len(defs))
+	for _, d := range defs {
+		names = append(names, d.Name)
+	}
+	sort.Strings(names)
+
+	h := sha256.New()
+	for _, n := range names {
+		h.Write([]byte(n))
+		h.Write([]byte{0})
+	}
+	return capabilitiesToolCatalog{
+		VisibleCount:  len(names),
+		NamesRevision: "sha256:" + hex.EncodeToString(h.Sum(nil)),
+	}
 }
 
 type capabilitiesMaskedTools struct {
@@ -227,7 +298,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			"`limits.asset_upload.recommended_inline_max_bytes` (#1190) is the actually-reachable ceiling for upload_page_asset's inline `content_base64` param — computed from this server's real `max_request_bytes` (base64 expands the payload ~4/3, and it still has to fit the tool-call envelope alongside `max_request_bytes`), which is always <= `asset_max_bytes` and often well below it; a file larger than this needs a different transfer path (there is no chunked-upload mode yet) before uploading in one call. "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
 			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool. "+
-			"`effective_scopes` names the caller's own scope (`read`, `write`, or `admin` — the three canonical scopes the server ever grants, #450/#1039/#1050) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools (or a write-scoped caller lacks the admin-only managed Hugo binary lifecycle tools), or `not_configured` when a write-scoped caller has write tools available but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `disabled_features[]` separately explains optional integrations disabled by configuration with reason `feature_disabled`; it never exposes secrets or paths. Note: `admin` is intentionally never advertised on the external OAuth-discovery surface (server card, `.well-known/oauth-protected-resource`) — only `read`/`write` appear there, since `admin` is an explicitly-approved administrator tier, not self-service; `effective_scopes` here is this tool's own in-session view of the caller's actual scope, not a mirror of that external discovery contract.",
+			"`effective_scopes` names the caller's own scope (`read`, `write`, or `admin` — the three canonical scopes the server ever grants, #450/#1039/#1050) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools (or a write-scoped caller lacks the admin-only managed Hugo binary lifecycle tools), or `not_configured` when a write-scoped caller has write tools available but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `disabled_features[]` separately explains optional integrations disabled by configuration with reason `feature_disabled`; it never exposes secrets or paths. `tool_catalog` (#1175) is a stale-discovery detector: `visible_count`/`tool_names_revision` (a sha256 over this caller's scope-visible tool names, sorted) let an agent compare what its own MCP client actually loaded against what this server currently registers for it — a mismatch means the client's tool-schema cache is stale, not that the server is misconfigured (the concrete case #1175 was filed over: two MCP clients against the same server commit disagreed on the registered tool set). Scope-only like `masked_tools` — does not account for exposure-profile session narrowing (`?profile=`, #1137). `tool_names_revision` hashes tool names only, not descriptions/input schemas, so it does not move when an existing tool's schema alone changes (only when a tool is added or removed) — read it as a name-catalog fingerprint, not a full-schema one. Note: `admin` is intentionally never advertised on the external OAuth-discovery surface (server card, `.well-known/oauth-protected-resource`) — only `read`/`write` appear there, since `admin` is an explicitly-approved administrator tier, not self-service; `effective_scopes` here is this tool's own in-session view of the caller's actual scope, not a mirror of that external discovery contract.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
 			pMin, pDef, pMax := adminpkg.PreviewTTLBoundsSeconds()
 			localHeroGenerationAvailable := strings.TrimSpace(cfg.HugoRoot) != ""
@@ -240,6 +311,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				EffectiveScopes:  effectiveCapabilityScopes(ctx, scopeName),
 				MaskedTools:      maskedCapabilityTools(ctx, scopeName, writeEnabled),
 				DisabledFeatures: disabledCapabilityFeatures(cfg),
+				ToolCatalog:      visibleToolCatalog(scopeName, writeEnabled),
 				Server: capabilitiesServer{
 					ReleaseVersion: buildinfo.Version,
 					Commit:         buildinfo.Commit,

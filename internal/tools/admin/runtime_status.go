@@ -107,10 +107,16 @@ type lastBuildRuntimeStatus struct {
 }
 
 type contentIndexShadowRuntimeStatus struct {
-	SchemaVersion       int            `json:"schema_version"`
-	TotalRows           int            `json:"total_rows"`
-	SourceRows          int            `json:"source_rows"`
-	PublicRows          int            `json:"public_rows"`
+	SchemaVersion int `json:"schema_version"`
+	TotalRows     int `json:"total_rows"`
+	SourceRows    int `json:"source_rows"`
+	PublicRows    int `json:"public_rows"`
+	// MissingCounterparts (#1181) counts rows lacking a source<->public
+	// counterpart for the same source_key+lang — a publication-state gap
+	// (drafts, unpublished, test_content), NOT a missing-translation gap.
+	// A bilingual site with a lot of disposable test_content can show a
+	// large ratio here and still be a healthy, fully-paired bilingual
+	// site; this field says nothing about language pairing on its own.
 	MissingCounterparts int            `json:"missing_counterparts"`
 	LegacyMismatches    int            `json:"legacy_mismatches"`
 	MismatchDigest      string         `json:"mismatch_digest,omitempty"`
@@ -290,7 +296,7 @@ func registerRuntimeStatus(s *mcp.Server, cfg config.Config, srcIdx *hugosite.So
 			"`pending_mcp_changes`, `out_of_band_source_drift`, `generated_asset_drift`, and `none`; `publication_state` " +
 			"is `pending`, `source_drift_only`, `generated_asset_drift`, or `clean` so Git worktree dirtiness is not confused with incomplete public output. `process_started_at` " +
 			"and `last_build_persistence` make restart behavior explicit. When SQLite shadow migration is active, `content_index_shadow` reports aggregate-only " +
-			"language/representation counts, counterpart gaps, and legacy mismatch facts; `build_reconciliation` reports aggregate source/public drift recomputed from filesystem fingerprints rather than volatile BuildPending flags. No page identity or body is exposed. When SQLite is configured, " +
+			"language/representation counts, counterpart gaps, and legacy mismatch facts. `content_index_shadow.missing_counterparts` (#1181) counts rows lacking a source<->public counterpart for the same source_key+lang — a publication-state gap (drafts, unpublished, test_content) — NOT a missing-translation/bilingual-pairing gap; a bilingual site with disposable test_content can show a large value here and still be fully paired across languages. `build_reconciliation` reports aggregate source/public drift recomputed from filesystem fingerprints rather than volatile BuildPending flags. No page identity or body is exposed. When SQLite is configured, " +
 			"`mutation_journal` reports only aggregate retention facts; `last_pruned_entries` is the number removed by the most recent successful maintenance " +
 			"transaction. IMPORTANT (#1165): `mutation_journal.active_entries` counts results retained for idempotent replay, NOT changes still pending " +
 			"publication — a fully-published site can report a large nonzero `active_entries`. For unpublished work, read `publication_safety`/`unpublished_changes_count` " +
