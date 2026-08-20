@@ -3,32 +3,19 @@ package site
 import (
 	"strconv"
 	"strings"
-	"sync"
 )
 
-// technicalVerificationSlugs is an operator-declared allowlist of
-// single-segment root slugs (#1186) treated as third-party
-// domain-ownership-verification artifacts rather than content pages — the
-// same bucket robots.txt/security.txt already get, but those are hardcoded
-// because their names are spec-fixed while a verification token's filename
-// is assigned by the third party and varies per deployment. Package-level
-// because ContentClassifier is constructed fresh at many call sites across
-// several packages with no config plumbed through; SetTechnicalVerificationSlugs
-// is called once at startup from the operator's config.TechnicalVerificationSlugs,
-// mirroring how a deploy-level setting like config.RejectSymlinks is read
-// once and then applies uniformly. Never set from anything other than
-// explicit operator config — no filename/slug heuristic is ever applied
-// here, by design (see #1186: this is deliberately opt-in, not inferred).
-var (
-	technicalVerificationSlugsMu sync.RWMutex
-	technicalVerificationSlugs   map[string]struct{}
-)
-
-// SetTechnicalVerificationSlugs installs the operator-declared allowlist of
-// technical-verification slugs. Intended to be called once at process
-// startup before any ContentClassifier is built; safe to call again (e.g.
-// in tests) since it replaces the set atomically under a lock.
-func SetTechnicalVerificationSlugs(slugs []string) {
+// normalizeVerificationSlugs converts an operator-declared list of
+// technical-verification slugs (#1186 — e.g. "abuseipdb-verification" for a
+// static/abuseipdb-verification.html domain-ownership-verification file)
+// into the set ContentClassifier consults. Deliberately never derived from
+// anything but this explicit, operator-supplied list — no filename/slug
+// heuristic is ever applied, so a legitimate content page sharing a naming
+// pattern is never silently reclassified.
+func normalizeVerificationSlugs(slugs []string) map[string]struct{} {
+	if len(slugs) == 0 {
+		return nil
+	}
 	set := make(map[string]struct{}, len(slugs))
 	for _, s := range slugs {
 		s = strings.Trim(strings.TrimSpace(s), "/")
@@ -36,19 +23,7 @@ func SetTechnicalVerificationSlugs(slugs []string) {
 			set[s] = struct{}{}
 		}
 	}
-	technicalVerificationSlugsMu.Lock()
-	technicalVerificationSlugs = set
-	technicalVerificationSlugsMu.Unlock()
-}
-
-func isOperatorDeclaredTechnicalSlug(slug string) bool {
-	technicalVerificationSlugsMu.RLock()
-	defer technicalVerificationSlugsMu.RUnlock()
-	if len(technicalVerificationSlugs) == 0 {
-		return false
-	}
-	_, ok := technicalVerificationSlugs[slug]
-	return ok
+	return set
 }
 
 type PageKind int8
@@ -64,8 +39,9 @@ const (
 )
 
 type ContentClassifier struct {
-	sectionRoots  map[string]struct{}
-	taxonomyRoots map[string]struct{}
+	sectionRoots      map[string]struct{}
+	taxonomyRoots     map[string]struct{}
+	verificationSlugs map[string]struct{}
 }
 
 type PageKindCounts struct {
@@ -75,21 +51,38 @@ type PageKindCounts struct {
 	OtherDocuments int
 }
 
+// NewClassifier builds a classifier from idx's current pages. When idx was
+// built via NewIndex(cfg), its operator-declared
+// cfg.TechnicalVerificationSlugs (#1186) travel with it automatically — idx
+// caches its own verification-slug set at construction time specifically so
+// this constructor (and idx.Classifier(), which calls it) never needs cfg
+// threaded through separately.
 func NewClassifier(idx *Index) *ContentClassifier {
 	var pages []Page
+	var verificationSlugs map[string]struct{}
 	if idx != nil {
 		pages = make([]Page, 0, len(idx.entries))
 		for _, e := range idx.entries {
 			pages = append(pages, e.page)
 		}
+		verificationSlugs = idx.verificationSlugs
 	}
-	return NewClassifierFromPages(pages)
+	return newClassifierFromPages(pages, verificationSlugs)
 }
 
+// NewClassifierFromPages builds a classifier from an explicit page list with
+// no operator-declared verification-slug allowlist (see NewClassifier for
+// the config-aware constructor). Callers that need #1186's verification-slug
+// exclusion and have an *Index available should prefer NewClassifier(idx).
 func NewClassifierFromPages(pages []Page) *ContentClassifier {
+	return newClassifierFromPages(pages, nil)
+}
+
+func newClassifierFromPages(pages []Page, verificationSlugs map[string]struct{}) *ContentClassifier {
 	c := &ContentClassifier{
-		sectionRoots:  map[string]struct{}{},
-		taxonomyRoots: map[string]struct{}{},
+		sectionRoots:      map[string]struct{}{},
+		taxonomyRoots:     map[string]struct{}{},
+		verificationSlugs: verificationSlugs,
 	}
 	for _, root := range []string{"tags", "categories", "series"} {
 		c.taxonomyRoots[root] = struct{}{}
@@ -126,14 +119,14 @@ func (c *ContentClassifier) Classify(p Page) PageKind {
 		return KindHome
 	}
 	parts = stripLanguagePrefix(parts)
-	if isTechnicalSlugParts(parts) {
+	if c == nil {
+		c = NewClassifier(nil)
+	}
+	if isTechnicalSlugParts(parts, c.verificationSlugs) {
 		return KindTechnical
 	}
 	if isPaginationParts(parts) {
 		return KindPagination
-	}
-	if c == nil {
-		c = NewClassifier(nil)
 	}
 	if _, ok := c.taxonomyRoots[parts[0]]; ok {
 		return KindTaxonomy
@@ -294,7 +287,7 @@ func looksLikeLanguageCode(v string) bool {
 	return true
 }
 
-func isTechnicalSlugParts(parts []string) bool {
+func isTechnicalSlugParts(parts []string, verificationSlugs map[string]struct{}) bool {
 	if len(parts) == 0 {
 		return false
 	}
@@ -309,7 +302,8 @@ func isTechnicalSlugParts(parts []string) bool {
 		"404.html", "404", "500.html", "500":
 		return true
 	default:
-		return isOperatorDeclaredTechnicalSlug(parts[0])
+		_, ok := verificationSlugs[parts[0]]
+		return ok
 	}
 }
 
