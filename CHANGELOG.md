@@ -2,6 +2,34 @@
 
 All notable changes to this project are documented here.
 
+## [v1.9.2] - 2026-08-20
+
+Full triage sweep of the v1.9.2 backlog (12 issues from external live audits and real editorial usage), a coverage-margin push, a new per-PR diff-coverage CI gate, and a docs/wiki freshness pass.
+
+### Feat
+- **Chunked page-asset upload protocol** (#1196): `begin_asset_upload`/`upload_asset_chunk`/`commit_asset_upload` let a caller upload assets past `upload_page_asset`'s practical inline-base64 ceiling, up to the full 10MiB `asset_max_bytes`, in ordered chunks with idempotent-replay-safe retries. Shares the exact same validation gate (`validateAssetBytes`) as `upload_page_asset` — never a separate, potentially weaker path.
+- **`create_bundle` exposes `normalize_taxonomy_casing`** (#1191), matching `create_page`/`update_page`'s existing behavior — applied per page, scoped to each page's own `lang`.
+- **`update_page` returns a fresh `bundle_revision` on every success** (#1192), not just on `bundle_conflict` errors — lets a caller updating several translations in sequence chain straight into the next `update_page`'s `expected_bundle_revision` without an intervening `get_page_for_edit` read.
+- **`get_capabilities` exposes a tool-catalog fingerprint/count** (#1175) so an agent can detect a stale client-side MCP tool-list cache, and `content_index_shadow.missing_counterparts`'s description is clarified (#1181).
+- **`technical_verification_slugs` config** (#1186): an opt-in, operator-declared allowlist excludes third-party domain-verification files (e.g. `abuseipdb-verification.html`) from content-SEO checks, without ever inferring this from the filename itself. Includes a startup reconciliation pass that retroactively clears any stale cached FAIL for a page newly classified this way.
+
+### Fix
+- **`rendered_seo_summary.pages_with_issues`/`inspect_rendered.responsive_checks.images` false positives** (#1185, #1189): the FAIL-only counter's description was ambiguous against WARN-level findings, and LoveIt theme's `data-srcset` lazyload attribute wasn't recognized as a responsive escape hatch.
+- **`get_page_for_edit`/`check_ai_readiness` didn't resolve a root multilingual page** that `validate_site`/`inspect_rendered` already handled correctly (#1184) — `PageResolver` now resolves the site root for every explicitly-labelled language, not just the default.
+- **`check_ai_readiness` counted HTML comments as paragraph text** (#1183) — base64 mermaid-source metadata embedded in HTML comments triggered false-positive long-paragraph warnings.
+- **`asset_max_bytes`/`max_request_bytes` contract was inconsistent**, and an oversized asset upload's `413` didn't say what to actually do about it (#1190) — now an honest, actionable contract shared with the new chunked-upload tools.
+- **`source_revision`/`public_revision` shifted on `.mcp-audit.log` growth alone** (#1180), with no real content change — excluded from the hash, along with in-flight chunked-upload staging files (`.upload-*.part`), so a caller-held revision token no longer goes stale for no reason.
+
+### CI
+- **New per-PR diff-coverage gate** (85% minimum on lines/functions a PR actually adds or modifies), independent of and in addition to the existing 85% aggregate gate — a single under-tested PR can no longer erode the floor by balancing against already-well-covered files elsewhere in the tree. Root cause: a prior PR (#1204, chunked uploads) merged with a red aggregate-coverage check (84.9%) that local verification hadn't caught before merge, since it never ran the exact CI coverage command.
+- Aggregate `./internal/...` coverage raised from 84.9% back to 85.8%, targeting genuinely security/stability-relevant branches (OAuth redirect-URI guard, plan single-use enforcement, crash-recovery reconciliation, DB/SQLite open-error paths) rather than chasing the number for its own sake.
+
+### Chore
+- Bumped 11 Go dependencies behind latest, including `modernc.org/sqlite` (v1.51.0 → v1.57.0).
+
+### Docs
+- Fixed real drift found during a full wiki freshness pass: several pages still described the pre-#1039/#1050 two-tier (`read`/`write`) scope model rather than the current three-tier (`read`/`write`/`admin`) model — including one genuinely security-relevant inaccuracy (which of the four managed-Hugo-upgrade tools actually require `admin` vs `write`, verified directly against `Defs()`). Also resynced the wiki's `Release-Checklist` page, which had drifted from `docs/release-checklist.md`, the doc it explicitly claims to defer to.
+
 ## [v1.9.1] - 2026-08-16
 
 Follow-up fixes from post-deploy live audits of v1.9.0 (two independent AI agents, "sol"/ChatGPT and Sonnet).
