@@ -62,7 +62,14 @@ jobs:
       - name: Diff coverage gate (PR-changed lines)
         if: github.event_name == 'pull_request'
         run: |
-          git diff --unified=0 "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" -- '*.go' > diff.txt
+          # Diff against the merge-base, not base.sha directly: base.sha is
+          # the base branch's tip at last sync, so on a long-lived PR that
+          # hasn't rebased, diffing straight against it would pull in
+          # unrelated commits merged to main afterward as "changed lines" and
+          # fail the gate for reasons unrelated to this PR. merge-base
+          # matches what GitHub's own "Files changed" tab compares against.
+          MERGE_BASE=$(git merge-base "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}")
+          git diff --unified=0 "$MERGE_BASE" "${{ github.event.pull_request.head.sha }}" -- '*.go' > diff.txt
           go run ./cmd/check-diff-coverage -profile coverage.out -diff diff.txt -min 85
       - name: Generate coverage badge payload
         run: |
