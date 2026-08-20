@@ -21,6 +21,25 @@ Canonical unified MCP server for Hugo sites.
 
 Public endpoint: `https://mcp.arleo.eu/mcp`
 
+> **ChatGPT compatibility notice (2026-08-20):** the remote server remains
+> MCP/OAuth interoperable, but ChatGPT Plus currently stops after a successful
+> OAuth exchange and `initialize` response without sending
+> `notifications/initialized` or `tools/list`; no actions appear in ChatGPT.
+> This was reproduced with read-only, write, and admin grants and unchanged
+> binaries from v1.8.8 through v1.9.2, while MCPJam completed the same DCR +
+> PKCE + MCP flow and loaded 32 tools. ChatGPT remains in the compatibility
+> matrix because other eligible plans may still work; the incident is scoped to
+> the tested Plus account. OpenAI's
+> current documentation is also inconsistent: the
+> [developer guide](https://developers.openai.com/api/docs/guides/developer-mode)
+> lists Plus as eligible for full developer-mode MCP, while the
+> [Help Center](https://help.openai.com/fr-fr/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
+> reserves full MCP to Business/Enterprise/Edu, gives Pro read/fetch-only
+> access, and does not list Plus. See the
+> [client compatibility matrix](docs/client-compatibility.md#chatgpt) for the
+> evidence and current status. This is a ChatGPT plan/client availability
+> warning, not a server-side protocol failure.
+
 This MCP is far more than a remote Markdown editor for [Hugo](https://gohugo.io): it's an intelligent content-management interface. It gives AI agents structured understanding and safe operations on a Hugo site. Example site using this MCP: [www.arleo.eu](https://www.arleo.eu).
 
 Ce MCP est bien plus qu'un éditeur à distance de Markdown pour [Hugo](https://gohugo.io) : il est une interface de gestion intelligente du contenu. Il donne aux agents IA une compréhension structurée et des opérations sûres sur un site Hugo. Exemple de site utilisant ce MCP : [www.arleo.eu](https://www.arleo.eu).

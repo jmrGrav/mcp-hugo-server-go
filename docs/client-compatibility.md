@@ -1,13 +1,18 @@
 # MCP Client Compatibility Matrix
 
-Tested against `https://mcp.arleo.eu` (v1.3.0). Each client is tested for: discovery, OAuth flow, anonymous tool access, and scoped tool access.
+Tested against `https://mcp.arleo.eu`. Each client is tested for discovery,
+OAuth flow, authenticated MCP initialization, and scoped tool access. Live
+client claims are dated because provider-side eligibility and behavior can
+change without a server release.
 
 ## Summary
 
 | Client | Discovery | OAuth | Anonymous tools | Write/Admin tools | Notes |
 |---|---|---|---|---|---|
 | Claude.ai (custom connector) | ✅ | ✅ | ✅ 9 tools | ✅ admin tools confirmed | Stateful HTTP transport; v1.3.0 ContentClassifier fixes correct taxonomy noise |
-| ChatGPT (custom connector) | ✅ | ✅ | ✅ | ✅ write-scope tools visible | Stateful transport; spinner on first connect is cosmetic |
+| ChatGPT (custom connector) | ✅ | ✅ | Plan-dependent | Plan-dependent | Compatible client; current availability depends on the ChatGPT plan. See the dated Plus result below. |
+| ChatGPT Plus (tested account) | ✅ | ✅ | ❌ no `tools/list` | ❌ unavailable | As of 2026-08-20, this Plus account stops after successful `initialize`. Pro and organization plans were not tested in this incident. |
+| MCPJam (ChatGPT client profile) | ✅ | ✅ DCR + PKCE | ✅ 32 tools | N/A (DCR clamped to `read`) | Same server/time-window control completed the handshake with 0 warnings and 0 errors |
 | MCP Inspector | ✅ | N/A | ✅ | N/A | Works with no auth |
 | Cursor | Not tested | Not tested | Not tested | Not tested | Planned |
 | VS Code Copilot | Not tested | Not tested | Not tested | Not tested | Planned |
@@ -29,9 +34,32 @@ Tested against `https://mcp.arleo.eu` (v1.3.0). Each client is tested for: disco
 
 - **Connector type:** Custom GPT action / MCP connector
 - **Discovery:** OAuth auth server metadata read correctly
-- **OAuth:** Completes with read/write scope; writes `update_page`, `validate_frontmatter` visible
-- **Known quirk:** Spinner + reconnect prompt on first connection (cosmetic, not a failure)
-- **Status:** ✅ functional
+- **OAuth:** DCR/static registration, authorization-code exchange, PKCE S256,
+  access token, refresh token, and authenticated `initialize` all succeed
+- **Failure boundary:** after the server returns HTTP 200, a valid
+  `Mcp-Session-Id`, and a complete MCP `initialize` result, ChatGPT sends no
+  `notifications/initialized`, `tools/list`, or `tools/call`
+- **Reproduction:** identical with `read` only (`?profile=reader`, no
+  write/admin tools registered), `write`, and `admin`; static and fresh DCR
+  clients; rotated secrets; and real deployments of v1.8.8, v1.9.0, v1.9.1,
+  and v1.9.2. The same unchanged binary completed a real ChatGPT tool call on
+  2026-08-17 and failed from 2026-08-20 onward.
+- **Control:** MCPJam completed the same discovery + DCR + PKCE + MCP sequence
+  against v1.9.2 in the same investigation window, sent the post-initialize
+  requests, and loaded 32 read tools. Claude.ai also remains functional.
+- **Plan/documentation warning:** the affected account is ChatGPT **Plus**, not
+  Pro. OpenAI's [developer guide](https://developers.openai.com/api/docs/guides/developer-mode)
+  currently says developer-mode MCP is available to Pro, Plus, Business,
+  Enterprise, and Education. OpenAI's
+  [Help Center](https://help.openai.com/fr-fr/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)
+  instead says full MCP is limited to Business/Enterprise/Edu, Pro may connect
+  read/fetch MCPs, and does not list Plus. Those official pages contradict one
+  another as of 2026-08-20.
+- **Status:** ChatGPT remains a supported MCP client, but it is ❌ not currently
+  usable from the tested ChatGPT Plus account.
+  This does not prove that Pro read/fetch is broken because no Pro account was
+  tested. Keep plan-specific results dated and re-test them end to end through
+  `tools/list` and a representative tool call.
 
 ### MCP Inspector
 
