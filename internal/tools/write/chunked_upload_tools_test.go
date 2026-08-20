@@ -91,6 +91,14 @@ func TestChunkedUploadEndToEndSuccess(t *testing.T) {
 	if commitData["content_type"] != "image/webp" {
 		t.Fatalf("commit data.content_type = %v, want image/webp", commitData["content_type"])
 	}
+	// findDuplicateAsset must never match the upload's own not-yet-renamed
+	// staging file (.upload-<id>.part, still present in the bundle dir at
+	// the moment the duplicate scan runs, same bytes/size/hash as what's
+	// about to be committed) — that would leak an internal filename out as
+	// a bogus duplicate_of.
+	if got := commitData["duplicate_of"]; got != nil && got != "" {
+		t.Fatalf("commit reported duplicate_of = %v, want none (must not match its own staging file)", got)
+	}
 
 	written, err := os.ReadFile(filepath.Join(contentRoot, "posts", "article", "hero.webp"))
 	if err != nil {

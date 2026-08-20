@@ -517,13 +517,25 @@ var hashTreeExcludedNames = map[string]bool{
 	".mcp-audit.log": true,
 }
 
+// hashTreeExcludedPrefix skips any file whose name starts with this prefix,
+// for names that vary per-instance (so an exact-name map in
+// hashTreeExcludedNames can't cover them) and are never site content.
+// ".upload-<upload_id>.part" (internal/tools/write's uploadStagingPrefix/
+// uploadStagingSuffix — mirrored here as a literal rather than imported,
+// since internal/tools/write already imports internal/tools/admin) is
+// #1196's chunked-upload staging file: it lives inside a live bundle
+// directory for up to 15 minutes while a commit is in flight, or longer if
+// abandoned until the startup sweep clears it, and would otherwise shift
+// source_revision the exact same way .mcp-audit.log did before #1180.
+const hashTreeExcludedPrefix = ".upload-"
+
 func hashTree(root string) (string, error) {
 	h := sha256.New()
 	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if hashTreeExcludedNames[info.Name()] {
+		if hashTreeExcludedNames[info.Name()] || strings.HasPrefix(info.Name(), hashTreeExcludedPrefix) {
 			return nil
 		}
 		rel, err := filepath.Rel(root, path)
