@@ -110,15 +110,13 @@ func validateAssetFilename(name string) (clean, ext, wantMIME string, err error)
 	return clean, ext, wantMIME, nil
 }
 
-// decodeAndValidateAssetContent decodes base64 asset content, enforces the
-// size cap on the decoded bytes, and confirms it matches the extension the
-// caller declared. Callers must never trust a caller-supplied content-type;
-// for binary image types, only the sniffed bytes decide the MIME type. For
-// ext == ".svg" (#571), byte-sniffing doesn't apply — Go's
-// http.DetectContentType has no SVG signature — so validateSVGContent's
-// strict structural allowlist is the actual "is this really SVG, and is it
-// safe" check instead.
-func decodeAndValidateAssetContent(b64, ext, wantMIME string) ([]byte, error) {
+// decodeAssetBase64 decodes base64 asset content, rejecting an empty or
+// absurdly oversized encoded payload before allocating a decode buffer. It
+// performs no content validation — see validateAssetBytes for that — so a
+// future chunked-upload commit path that assembles bytes from disk instead
+// of a base64 field can skip this step and go straight to validateAssetBytes
+// on the same raw bytes, without a parallel/divergent validator.
+func decodeAssetBase64(b64 string) ([]byte, error) {
 	if strings.TrimSpace(b64) == "" {
 		return nil, fmt.Errorf("invalid_params: content_base64 must not be empty")
 	}
@@ -130,17 +128,34 @@ func decodeAndValidateAssetContent(b64, ext, wantMIME string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid_params: content_base64 is not valid base64")
 	}
+	return data, nil
+}
+
+// validateAssetBytes enforces the size cap on decoded asset bytes and
+// confirms they match the extension the caller declared. Callers must never
+// trust a caller-supplied content-type; for binary image types, only the
+// sniffed bytes decide the MIME type. For ext == ".svg" (#571),
+// byte-sniffing doesn't apply — Go's http.DetectContentType has no SVG
+// signature — so validateSVGContent's strict structural allowlist is the
+// actual "is this really SVG, and is it safe" check instead.
+//
+// This is the single validation gate shared by every asset-write path
+// regardless of how the bytes arrived (inline base64 today, assembled
+// chunked-upload bytes in the future, per #1196's explicit requirement that
+// a chunked commit route through the same checks as upload_page_asset
+// rather than a second, divergently-maintained validator).
+func validateAssetBytes(data []byte, ext, wantMIME string) error {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("invalid_params: decoded asset content is empty")
+		return fmt.Errorf("invalid_params: decoded asset content is empty")
 	}
 	if len(data) > maxAssetBytes {
-		return nil, fmt.Errorf("invalid_params: decoded asset content exceeds %d bytes", maxAssetBytes)
+		return fmt.Errorf("invalid_params: decoded asset content exceeds %d bytes", maxAssetBytes)
 	}
 	if ext == ".svg" {
 		if err := validateSVGContent(data); err != nil {
-			return nil, fmt.Errorf("invalid_params: %w", err)
+			return fmt.Errorf("invalid_params: %w", err)
 		}
-		return data, nil
+		return nil
 	}
 	sniffLen := len(data)
 	if sniffLen > 512 {
@@ -149,7 +164,22 @@ func decodeAndValidateAssetContent(b64, ext, wantMIME string) ([]byte, error) {
 	sniffed := http.DetectContentType(data[:sniffLen])
 	base, _, _ := strings.Cut(sniffed, ";")
 	if strings.TrimSpace(base) != wantMIME {
-		return nil, fmt.Errorf("invalid_params: filename/content_base64 mismatch: uploaded content does not match declared extension %q (sniffed %q)", ext, sniffed)
+		return fmt.Errorf("invalid_params: filename/content_base64 mismatch: uploaded content does not match declared extension %q (sniffed %q)", ext, sniffed)
+	}
+	return nil
+}
+
+// decodeAndValidateAssetContent decodes base64 asset content and runs it
+// through validateAssetBytes. Thin composition kept for upload_page_asset's
+// existing call site; see decodeAssetBase64/validateAssetBytes for the split
+// steps a chunked-upload commit path can reuse independently.
+func decodeAndValidateAssetContent(b64, ext, wantMIME string) ([]byte, error) {
+	data, err := decodeAssetBase64(b64)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateAssetBytes(data, ext, wantMIME); err != nil {
+		return nil, err
 	}
 	return data, nil
 }
