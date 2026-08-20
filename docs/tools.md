@@ -120,6 +120,9 @@ new integrations.
 - `delete_page_asset` - Delete page asset
 - `delete_bundle` - Delete multilingual bundle (atomically deletes selected translations; all revisions are checked before the first unlink, so a failure leaves the bundle unchanged)
 - `upload_page_asset` - Upload page asset (write a new file into an existing leaf page bundle directory; allowed types png/jpg/jpeg/gif/webp/svg, content is sniffed against the declared extension for raster types and structurally validated for SVG, never overwrites — see #348, #571)
+- `begin_asset_upload` - Begin chunked page asset upload (starts a chunked upload for assets past `upload_page_asset`'s practical inline-base64 ceiling, up to the full 10MiB `asset_max_bytes`; validates `size_bytes` against the limit immediately, before any bytes transfer — see #1196)
+- `upload_asset_chunk` - Upload a chunk of a page asset (strictly ordered by `offset`; an identical retried chunk is a safe no-op, a conflicting one at an already-received offset fails `chunk_conflict`; charges no rate-limit quota — see #1196)
+- `commit_asset_upload` - Commit a chunked page asset upload (assembles and validates the staged bytes through the same check `upload_page_asset` uses — MIME sniff or the strict SVG structural parser — never a separate path; see #1196, #1202)
 - `get_mutation_status` - Get mutation status (idempotency-key lookup for a previous mutation's result)
 - `get_rate_limits` - Get rate limits (check remaining per-caller mutation quota before acting; never itself consumes quota)
 - `list_page_snapshots` - List page snapshots (caller-isolated, 24h-retained content snapshots produced by `apply_content_plan`/`update_page`/`rollback_change`, usable as `rollback_change`'s `to_revision`)

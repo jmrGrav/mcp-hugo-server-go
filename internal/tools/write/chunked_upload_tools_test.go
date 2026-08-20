@@ -110,6 +110,53 @@ func TestChunkedUploadEndToEndSuccess(t *testing.T) {
 	}
 }
 
+// TestChunkedUploadDryRunCommitReportsAlreadyExists confirms a dry-run
+// commit checks the destination filename before reporting would_create —
+// matching upload_page_asset's own dry-run, which stats its destination
+// path above the dry_run branch. An earlier version of commit_asset_upload
+// only did this check inside the real-write path (after the dry_run early
+// return), so a dry-run against an already-taken filename misleadingly
+// reported would_create instead of already_exists.
+func TestChunkedUploadDryRunCommitReportsAlreadyExists(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	// Take the destination filename first via the ordinary inline path.
+	taken := callTool(t, session, "upload_page_asset", map[string]any{
+		"slug": "posts/article", "filename": "hero.webp", "content_base64": b64(fakeWebP(600)),
+	})
+	if taken.IsError {
+		t.Fatalf("upload_page_asset setup failed: %s", marshalContent(t, taken))
+	}
+
+	payload := fakeWebP(600)
+	beginRes := callTool(t, session, "begin_asset_upload", map[string]any{
+		"slug": "posts/article", "filename": "hero.webp", "size_bytes": len(payload),
+	})
+	if beginRes.IsError {
+		t.Fatalf("begin_asset_upload error: %s", marshalContent(t, beginRes))
+	}
+	uploadID := decodeWriteData(t, beginRes)["upload_id"].(string)
+	chunkRes := callTool(t, session, "upload_asset_chunk", map[string]any{
+		"upload_id": uploadID, "offset": 0, "content_base64": b64(payload),
+	})
+	if chunkRes.IsError {
+		t.Fatalf("upload_asset_chunk error: %s", marshalContent(t, chunkRes))
+	}
+
+	dryRunRes := callTool(t, session, "commit_asset_upload", map[string]any{
+		"upload_id": uploadID, "dry_run": true,
+	})
+	if !dryRunRes.IsError {
+		t.Fatalf("dry-run commit against an already-taken filename should fail with already_exists, got success: %s", marshalContent(t, dryRunRes))
+	}
+	if raw := marshalContent(t, dryRunRes); !strings.Contains(raw, "already_exists") {
+		t.Fatalf("error should be already_exists, got: %s", raw)
+	}
+}
+
 func TestChunkedUploadRejectsWrongSha256AtCommit(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeBundle(t, contentRoot, "posts/article")

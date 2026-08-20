@@ -190,38 +190,43 @@ const (
 // current end of the upload, and does not match any already-received
 // chunk's start) is rejected as out_of_order.
 func (s *chunkedUploadStore) appendChunk(id, callerKey string, offset int64, data []byte, now time.Time) (result chunkResult, nextOffset int64, err error) {
+	// The lock is held across the staging-file write, not just the map
+	// checks: releasing it in between (as an earlier version of this
+	// function did) opens a window where two overlapping calls for the
+	// same offset (e.g. a client retry racing the original after a
+	// timeout — exactly the case chunkIdempotentReplay exists to handle)
+	// both pass the offset==ReceivedBytes check before either has
+	// incremented it, both append their bytes, and ReceivedBytes ends up
+	// double-counted — corrupting the staging file and making the upload
+	// unrecoverable (commit then fails incomplete_upload forever). A
+	// single chunk write is bounded by recommendedChunkBytes, so
+	// serializing it under this mutex is not a meaningful throughput
+	// concern.
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.pruneExpiredLocked(now)
 	entry, ok := s.entries[id]
 	if !ok {
-		s.mu.Unlock()
 		return 0, 0, fmt.Errorf("not_found: upload_id %q not found or expired", id)
 	}
 	if entry.CallerKey != callerKey {
-		s.mu.Unlock()
 		return 0, 0, fmt.Errorf("not_found: upload_id %q not found or expired", id)
 	}
 
 	if rec, seen := entry.Chunks[offset]; seen {
-		s.mu.Unlock()
 		if rec.Length == int64(len(data)) && rec.Sha256 == contentmodel.SourceRevisionBytes(data) {
 			return chunkIdempotentReplay, entry.ReceivedBytes, nil
 		}
 		return 0, 0, fmt.Errorf("chunk_conflict: a different chunk was already received at offset %d; upload_asset_chunk is not overwrite-capable — start a new upload if the source data changed", offset)
 	}
 	if offset != entry.ReceivedBytes {
-		nb := entry.ReceivedBytes
-		s.mu.Unlock()
-		return 0, 0, fmt.Errorf("out_of_order: expected offset %d, got %d; chunks must be uploaded strictly in order starting from next_offset", nb, offset)
+		return 0, 0, fmt.Errorf("out_of_order: expected offset %d, got %d; chunks must be uploaded strictly in order starting from next_offset", entry.ReceivedBytes, offset)
 	}
 	if entry.ReceivedBytes+int64(len(data)) > entry.SizeBytes {
-		s.mu.Unlock()
 		return 0, 0, fmt.Errorf("invalid_params: chunk would push received bytes (%d) past the declared size_bytes (%d) for this upload", entry.ReceivedBytes+int64(len(data)), entry.SizeBytes)
 	}
-	stagingPath := entry.StagingPath
-	s.mu.Unlock()
 
-	f, ferr := os.OpenFile(stagingPath, os.O_APPEND|os.O_WRONLY, 0o600)
+	f, ferr := os.OpenFile(entry.StagingPath, os.O_APPEND|os.O_WRONLY, 0o600)
 	if ferr != nil {
 		return 0, 0, fmt.Errorf("write_error: failed to open upload staging file")
 	}
@@ -231,14 +236,6 @@ func (s *chunkedUploadStore) appendChunk(id, callerKey string, offset int64, dat
 		return 0, 0, fmt.Errorf("write_error: failed to write chunk to upload staging file")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Re-fetch: the entry could have expired and been pruned by a
-	// concurrent call while the file write above was in flight (unlocked).
-	entry, ok = s.entries[id]
-	if !ok {
-		return 0, 0, fmt.Errorf("not_found: upload_id %q not found or expired", id)
-	}
 	entry.Chunks[offset] = chunkRecord{Length: int64(len(data)), Sha256: contentmodel.SourceRevisionBytes(data)}
 	entry.ReceivedBytes += int64(len(data))
 	return chunkAccepted, entry.ReceivedBytes, nil

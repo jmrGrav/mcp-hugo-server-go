@@ -382,6 +382,21 @@ func registerCommitPageAssetUpload(s *mcp.Server, pg *security.PathGuard, idx *h
 		}
 
 		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filepath.Join(entry.Dir, entry.Filename))
+		destPath, err := pg.SafeJoin(filepath.Join(entry.Slug, entry.Filename))
+		if err != nil {
+			slog.Warn("commit_asset_upload: path validation failed", "slug", entry.Slug, "error", err)
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+		}
+		// Checked before the dry_run branch, matching upload_page_asset's own
+		// ordering: a dry-run must report already_exists rather than a
+		// misleading would_create when the destination filename is already
+		// taken.
+		if _, statErr := os.Stat(destPath); statErr == nil {
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: asset already exists at %q", entry.Filename))
+		} else if !os.IsNotExist(statErr) {
+			slog.Error("commit_asset_upload: stat failed", "slug", entry.Slug, "filename", entry.Filename, "error", statErr)
+			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to inspect destination path"))
+		}
 		if in.DryRun {
 			return nil, newUploadPageAssetOutput(uploadPageAssetData{
 				Status:      "would_create",
@@ -419,15 +434,13 @@ func registerCommitPageAssetUpload(s *mcp.Server, pg *security.PathGuard, idx *h
 			uploads.abandon(uploadID, isolationKey, now)
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(err)
 		}
-		destPath, err := pg.SafeJoin(filepath.Join(entry.Slug, entry.Filename))
-		if err != nil {
-			slog.Warn("commit_asset_upload: path validation failed", "slug", entry.Slug, "error", err)
-			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
-		}
 		if err := pg.RevalidateForWrite(destPath); err != nil {
 			slog.Warn("commit_asset_upload: symlink-swap detected before write", "slug", entry.Slug, "error", err)
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
 		}
+		// Re-check under the lock: the pre-lock stat above is race-free but
+		// not authoritative — a concurrent commit_asset_upload/upload_page_asset
+		// could have created the destination between that check and here.
 		if _, statErr := os.Stat(destPath); statErr == nil {
 			return nil, uploadPageAssetOutput{}, wrapErrWithLimiter(fmt.Errorf("already_exists: asset already exists at %q", entry.Filename))
 		} else if !os.IsNotExist(statErr) {

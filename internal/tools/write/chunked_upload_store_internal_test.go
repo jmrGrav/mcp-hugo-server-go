@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -47,6 +48,69 @@ func TestChunkedUploadStoreIdempotentChunkReplayIsNoop(t *testing.T) {
 	}
 	if string(staged) != string(data) {
 		t.Fatalf("staging file = %q, want %q (replay must not duplicate bytes)", staged, data)
+	}
+}
+
+// TestChunkedUploadStoreOverlappingRetryDoesNotDoubleAppend reproduces the
+// TOCTOU window an earlier version of appendChunk had: it released the
+// store lock before writing to the staging file and re-acquired it after,
+// so two calls for the same offset that overlap in that window could both
+// pass the offset==ReceivedBytes check before either had incremented it —
+// exactly what a client retrying a chunk after a timeout (the case
+// chunkIdempotentReplay exists to serve) would do if its first attempt was
+// merely slow, not actually lost. Both appends would land in the staging
+// file and ReceivedBytes would overshoot SizeBytes, permanently breaking
+// the upload (commit then fails incomplete_upload forever). Run with
+// -race to also confirm no data race, though the double-append itself is a
+// logical race -race cannot detect on its own (every map access here is
+// properly mutex-guarded).
+func TestChunkedUploadStoreOverlappingRetryDoesNotDoubleAppend(t *testing.T) {
+	dir := t.TempDir()
+	store := newChunkedUploadStore(chunkedUploadTTL)
+	now := time.Now().UTC()
+	data := []byte("0123456789")
+	id, entry, err := store.begin("caller-a", "posts/example", dir, "hero.png", ".png", "image/png", "", int64(len(data)), now)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	results := make([]chunkResult, 2)
+	errs := make([]error, 2)
+	for i := range 2 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], _, errs[i] = store.appendChunk(id, "caller-a", 0, data, now)
+		}(i)
+	}
+	wg.Wait()
+
+	successes, replays := 0, 0
+	for i := range 2 {
+		if errs[i] != nil {
+			t.Fatalf("appendChunk goroutine %d: unexpected error %v", i, errs[i])
+		}
+		switch results[i] {
+		case chunkAccepted:
+			successes++
+		case chunkIdempotentReplay:
+			replays++
+		}
+	}
+	if successes != 1 || replays != 1 {
+		t.Fatalf("expected exactly one accepted and one idempotent-replay result, got successes=%d replays=%d", successes, replays)
+	}
+
+	staged, err := os.ReadFile(entry.StagingPath)
+	if err != nil {
+		t.Fatalf("read staging file: %v", err)
+	}
+	if string(staged) != string(data) {
+		t.Fatalf("staging file = %q (len %d), want %q (len %d) — chunk was double-appended", staged, len(staged), data, len(data))
+	}
+	if entry.ReceivedBytes != int64(len(data)) {
+		t.Fatalf("entry.ReceivedBytes = %d, want %d", entry.ReceivedBytes, len(data))
 	}
 }
 
