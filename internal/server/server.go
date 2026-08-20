@@ -500,6 +500,7 @@ func newScopedServer(
 	logger *slog.Logger,
 	metrics *observability.Metrics,
 	knownTools map[string]bool,
+	reg *tools.Registry,
 	idx *site.Index,
 	cfg config.Config,
 	srcIdx *hugosite.SourceIndex,
@@ -511,6 +512,7 @@ func newScopedServer(
 ) *mcp.Server {
 	s := mcp.NewServer(impl, serverOpts)
 	s.AddReceivingMiddleware(observability.NewToolCallMiddleware(logger, metrics, scopeName, knownTools))
+	s.AddReceivingMiddleware(toolSecuritySchemesMiddleware(reg))
 	registerSharedResources(s)
 	anonymous.Register(s, idx, cfg, scopeName, srcIdx)
 	read.Register(s, idx, cfg, srcIdx)
@@ -997,6 +999,7 @@ type serverCore struct {
 	logger       *slog.Logger
 	metrics      *observability.Metrics
 	knownTools   map[string]bool
+	registry     *tools.Registry
 	pg           *security.PathGuard
 	srcIdx       *hugosite.SourceIndex
 	writeEnabled bool
@@ -1076,6 +1079,7 @@ func buildServerCore(cfg config.Config, idx *site.Index) (*serverCore, error) {
 		logger:       logger,
 		metrics:      metrics,
 		knownTools:   knownTools,
+		registry:     reg,
 		pg:           pg,
 		srcIdx:       srcIdx,
 		writeEnabled: writeEnabled,
@@ -1112,7 +1116,7 @@ func buildAdminScopedServer(core *serverCore, cfg config.Config, idx *site.Index
 }
 
 func buildPrivilegedScopedServer(scopeName string, core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension, previews *previewstore.Store) *mcp.Server {
-	server := newScopedServer(scopeName, core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions, core.changeSets)
+	server := newScopedServer(scopeName, core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, core.registry, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions, core.changeSets)
 	admin.Register(server, cfg, core.srcIdx, core.changeSets, postBuildCallbacks("build_site", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
 	// RegisterRuntimeStatus again with the live public index: the generic admin
 	// registration keeps its compatibility signature for unit registrations,
@@ -1162,7 +1166,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	reg := buildRegistry()
 	scopePolicy := oauth.NewScopePolicy(reg)
 
-	publicServer := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
+	publicServer := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, core.registry, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
 	writeServer, previews := buildWriteScopedServer(core, cfg, idx, extensions)
 	adminServer := buildAdminScopedServer(core, cfg, idx, extensions, previews)
 	previewHandler := previews.HTTPHandler()
@@ -1204,7 +1208,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 		case "admin":
 			srv = buildAdminScopedServer(core, cfg, idx, extensions, previews)
 		default:
-			srv = newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
+			srv = newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, core.registry, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
 		}
 		srv.RemoveTools(toolsToHideForExposureProfile(allToolNames, profile)...)
 		exposureServers[key] = srv
