@@ -533,7 +533,7 @@ func (s *Service) exchangeRefreshToken(clientID, clientSecret, refreshToken stri
 		ExpiresIn:        s.cfg.AccessTokenTTLSeconds,
 		RefreshToken:     refreshTokenNext,
 		RefreshExpiresIn: s.cfg.RefreshTokenTTLSeconds,
-		Scope:            CanonicalScope(scope),
+		Scope:            expandScopeForResponse(scope),
 	}, nil
 }
 
@@ -560,7 +560,7 @@ func (s *Service) issueBearerPair(clientID, scope string) (*TokenResponse, error
 		ExpiresIn:        s.cfg.AccessTokenTTLSeconds,
 		RefreshToken:     refreshToken,
 		RefreshExpiresIn: s.cfg.RefreshTokenTTLSeconds,
-		Scope:            scope,
+		Scope:            expandScopeForResponse(scope),
 	}, nil
 }
 

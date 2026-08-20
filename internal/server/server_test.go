@@ -1796,8 +1796,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "admin" {
-		t.Fatalf("token scope = %q want admin", tokenResp.Scope)
+	if tokenResp.Scope != "read write admin" {
+		t.Fatalf("token scope = %q want \"read write admin\"", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
@@ -1899,8 +1899,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "admin" {
-		t.Fatalf("token scope = %q want admin", tokenResp.Scope)
+	if tokenResp.Scope != "read write admin" {
+		t.Fatalf("token scope = %q want \"read write admin\"", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
@@ -2075,8 +2075,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "admin" {
-		t.Fatalf("token scope = %q want admin (system.admin compatibility alias)", tokenResp.Scope)
+	if tokenResp.Scope != "read write admin" {
+		t.Fatalf("token scope = %q want \"read write admin\" (system.admin compatibility alias)", tokenResp.Scope)
 	}
 }
 
@@ -2154,8 +2154,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "write" {
-		t.Fatalf("token scope = %q want write", tokenResp.Scope)
+	if tokenResp.Scope != "read write" {
+		t.Fatalf("token scope = %q want \"read write\"", tokenResp.Scope)
 	}
 
 	names := doMCPToolsList(t, srv, tokenResp.AccessToken)
@@ -2331,8 +2331,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp); err != nil {
 		t.Fatalf("decode token: %v", err)
 	}
-	if tokenResp.Scope != "admin" {
-		t.Fatalf("token scope = %q want admin", tokenResp.Scope)
+	if tokenResp.Scope != "read write admin" {
+		t.Fatalf("token scope = %q want \"read write admin\"", tokenResp.Scope)
 	}
 
 	cases := []struct {

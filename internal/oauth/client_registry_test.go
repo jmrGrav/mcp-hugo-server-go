@@ -92,8 +92,8 @@ clients:
 	if err := json.Unmarshal(tokenRec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode token response: %v", err)
 	}
-	if resp.Scope != "admin" {
-		t.Fatalf("scope = %q want admin", resp.Scope)
+	if resp.Scope != "read write admin" {
+		t.Fatalf("scope = %q want \"read write admin\"", resp.Scope)
 	}
 }
 

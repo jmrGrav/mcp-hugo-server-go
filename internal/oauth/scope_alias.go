@@ -34,3 +34,33 @@ func IsLegacyScope(scope string) bool {
 		return CanonicalScope(scope) != scope
 	}
 }
+
+// expandScopeForResponse renders scope's tiered grant as the full space-
+// delimited set of canonical scope tokens it implies, for the OAuth token
+// response body only (RFC 6749 §3.3's "scope" response parameter) — never
+// for anything that gets persisted or re-checked. "write" implies "read" in
+// this server's rank model (see tools.ScopeRank), but requestedScope()
+// collapses a multi-token request like "content.read content.write" down
+// to the single highest-rank grant before it's ever stored, so the token
+// response echoed back only "write". Some OAuth clients (observed:
+// ChatGPT's custom-connector UI) compare the granted scope string against
+// every token they originally requested and flag a false "not all
+// permissions granted" warning when a subsumed token like "read" is absent
+// from the response, even though the higher tier already covers it.
+// Expanding the *response* string to list every implied tier fixes that
+// display mismatch without touching what's stored: AddAccessToken/
+// AddRefreshToken are always called with the original single-token scope,
+// and verification (ScopeRank, an exact-match switch) never sees this
+// expanded form — it only ever reads back what was actually persisted.
+func expandScopeForResponse(scope string) string {
+	switch CanonicalScope(scope) {
+	case "write":
+		return "read write"
+	case "admin":
+		return "read write admin"
+	case "read":
+		return "read"
+	default:
+		return scope
+	}
+}

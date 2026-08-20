@@ -322,8 +322,11 @@ func TestPreRegisteredClientStillGetsWriteDirectly(t *testing.T) {
 		Scope       string `json:"scope"`
 	}
 	_ = json.Unmarshal(tokenRec.Body.Bytes(), &tokenResp)
-	if tokenResp.Scope != "write" {
-		t.Errorf("token scope = %q want \"write\"", tokenResp.Scope)
+	// The response scope is expanded to list every tier "write" implies
+	// (see expandScopeForResponse) — display-only. What actually gets
+	// persisted and enforced (checked below) stays the single-token form.
+	if tokenResp.Scope != "read write" {
+		t.Errorf("token scope = %q want \"read write\"", tokenResp.Scope)
 	}
 	scope, ok := store.ValidateAccessToken(oauth.HashToken(tokenResp.AccessToken))
 	if !ok {
