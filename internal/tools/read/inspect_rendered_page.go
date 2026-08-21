@@ -142,7 +142,11 @@ type inspectRenderedPageOutput struct {
 }
 
 func newInspectRenderedPageOutput(data inspectRenderedPageData, now time.Time) inspectRenderedPageOutput {
-	return inspectRenderedPageOutput{ToolResponse: successEnvelope(data, now)}
+	// Checks[].Detail embeds fragments of the site's actual rendered HTML
+	// (canonical URLs, featuredImage paths, title length derived from the
+	// real title text) — rendered-output-derived, not raw source, hence
+	// the distinct "rendered" tag (see docs/mcp-contract.md §6.27).
+	return inspectRenderedPageOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteRenderedPublicUntrusted)}
 }
 
 // hugoRenderErrorRe matches known Hugo render/shortcode failure signatures

@@ -914,7 +914,7 @@ func newGetPageFrontmatterOutput(data getPageFrontmatterData, now time.Time) get
 }
 
 func newGetRelatedContentOutput(data getRelatedContentData, now time.Time) getRelatedContentOutput {
-	return getRelatedContentOutput{ToolResponse: successEnvelope(data, now)}
+	return getRelatedContentOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
 }
 
 func newBuildAgentContextOutput(data buildAgentContextData, warnings []string, now time.Time) buildAgentContextOutput {

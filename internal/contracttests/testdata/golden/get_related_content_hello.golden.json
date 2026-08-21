@@ -38,6 +38,7 @@
   "meta": {
     "build_channel": "main",
     "commit": "0123456789ab",
+    "content_provenance": "site_source_untrusted",
     "release_version": "test-server-version",
     "schema_version": "v2.0.0"
   },
