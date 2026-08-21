@@ -1925,6 +1925,23 @@ repository's own `tool_registry.golden.json`, which reflects a
 write-enabled, extension-free reference build) is not evidence of
 tampering by itself.
 
+**This digest carries the same exposure-profile blind spot
+`tool_names_revision` already documents (`?profile=`, #1137,
+[§6.22](#6-22-exposure-profiles-profile-on-the-mcp-endpoint-1137)), for a
+related but distinct reason.** It fingerprints the deployment's full
+admin-scope superset — the same value regardless of which scope or
+profile answered the `get_capabilities` call — not the narrowed
+`tools/list` a profiled session actually receives. Two consequences: a
+tool hidden from a profile by `RemoveTools` can still move the digest if
+its description or schema changes elsewhere in the superset (a false
+alarm for a client that expected the digest to describe only its own
+visible tool set), and an operator narrowing which tools a profile
+exposes does *not* move the digest at all, even though that session's
+real `tools/list` result genuinely changed. A client that needs to
+detect tampering within its own profile-narrowed view cannot rely on
+this field for that; it answers "has anything in the deployment's full
+tool surface changed," not "has anything I can see changed."
+
 The field is `omitempty` and simply absent until
 `SetToolRegistryDigest` has been called — every unit test in this
 repository that builds a bare `*mcp.Server` directly via
