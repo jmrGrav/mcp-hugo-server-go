@@ -2,7 +2,9 @@ package write
 
 import (
 	"context"
+	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
@@ -10,6 +12,22 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// maxDeclaredUntrustedNoteRunes bounds declared_untrusted_note (#1226) —
+// free text, unlike idempotency_key/title elsewhere in this package, but
+// still a caller-controlled string persisted to SQLite indefinitely (no
+// TTL, unlike plan/preview stores). Matches maxTitleRunes's order of
+// magnitude (validation.go): generous enough for a real explanatory note,
+// bounded enough that this self-report field can't become an unbounded
+// storage sink.
+const maxDeclaredUntrustedNoteRunes = 2000
+
+func validateDeclaredUntrustedNote(note string) error {
+	if n := utf8.RuneCountInString(note); n > maxDeclaredUntrustedNoteRunes {
+		return fmt.Errorf("invalid_params: declared_untrusted_note exceeds %d characters (got %d)", maxDeclaredUntrustedNoteRunes, n)
+	}
+	return nil
+}
 
 type createChangeSetInput struct {
 	// DeclaredUntrustedDerivation and DeclaredUntrustedNote (#1226) are an
@@ -82,6 +100,9 @@ func registerCreateChangeSet(s *mcp.Server, changeSets *changeset.Registry) {
 			OpenWorldHint:   fileutil.BoolPtr(false),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in createChangeSetInput) (*mcp.CallToolResult, createChangeSetOutput, error) {
+		if err := validateDeclaredUntrustedNote(in.DeclaredUntrustedNote); err != nil {
+			return nil, createChangeSetOutput{}, err
+		}
 		principalID := mutationCallerKey(ctx)
 		id, err := changeSets.Create(principalID, time.Now().UTC())
 		if err != nil {

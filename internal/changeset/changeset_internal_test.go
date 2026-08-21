@@ -145,6 +145,20 @@ func TestDeclaredUntrustedDerivationDefaultsFalseAndRoundTrips(t *testing.T) {
 	}
 }
 
+// TestSetDeclaredUntrustedDerivationOnUnknownIDIsNoOp covers the footgun
+// guard in SetDeclaredUntrustedDerivation: calling it against an id this
+// registry never minted (or already forgot) must not create a bogus
+// zero-PrincipalID owner entry — DeclaredUntrustedDerivation for that id
+// must keep reading false/"" afterward, exactly as it did before the call.
+func TestSetDeclaredUntrustedDerivationOnUnknownIDIsNoOp(t *testing.T) {
+	r := NewRegistry(nil)
+	r.SetDeclaredUntrustedDerivation("cs_never_created", true, "should not stick")
+	declared, note := r.DeclaredUntrustedDerivation("cs_never_created")
+	if declared || note != "" {
+		t.Fatalf("DeclaredUntrustedDerivation(unknown id) after a no-op Set = (%v, %q), want (false, \"\")", declared, note)
+	}
+}
+
 // TestDeclaredUntrustedDerivationRehydratesAfterRestart mirrors
 // TestResolveRehydratesOwnershipAfterRestart: a declaration made before a
 // simulated process restart (a fresh Registry over the same persistent DB)

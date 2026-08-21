@@ -3235,7 +3235,6 @@
       "data.publication_safety.active_change_sets:integer:required",
       "data.publication_safety.current_change_set.changes:integer:required",
       "data.publication_safety.current_change_set.declared_untrusted_derivation:boolean",
-      "data.publication_safety.current_change_set.declared_untrusted_note:string",
       "data.publication_safety.current_change_set.id:string:required",
       "data.publication_safety.current_change_set:object:required",
       "data.publication_safety.external_unknown_changes:integer:required",
@@ -3293,7 +3292,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "59074059702a2608190a4c24170ca01985b31d2098e2320e8208c132080e0cd6"
+    "output_schema_sha256": "3df2c756a00023826564f057861deccb57c4057c261649765cecd84d58b984b1"
   },
   {
     "name": "get_site_health",

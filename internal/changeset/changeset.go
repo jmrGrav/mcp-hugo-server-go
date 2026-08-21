@@ -147,7 +147,16 @@ func (r *Registry) Create(principalID string, now time.Time) (string, error) {
 // declarations while doing nothing against a dishonest omission).
 func (r *Registry) SetDeclaredUntrustedDerivation(changeSetID string, declared bool, note string) {
 	r.mu.Lock()
-	o := r.owners[changeSetID]
+	o, ok := r.owners[changeSetID]
+	if !ok {
+		// Guards against creating a bogus zero-PrincipalID owner entry for
+		// an id this registry never minted — unreachable today (the only
+		// caller, registerCreateChangeSet, always passes the id it just
+		// received from Create), kept as a footgun guard rather than
+		// trusted call-site discipline alone.
+		r.mu.Unlock()
+		return
+	}
 	o.DeclaredUntrustedDerivation = declared
 	o.DeclaredUntrustedNote = note
 	r.owners[changeSetID] = o

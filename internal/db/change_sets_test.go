@@ -1,6 +1,7 @@
 package db_test
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -171,6 +172,66 @@ func TestRecordChangeSetMutationAndListInOrder(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("ListChangeSetMutations (empty) = %d entries, want 0", len(empty))
+	}
+}
+
+// TestOpenMigratesPreExistingChangeSetsTableWithoutDeclaredColumns is
+// #1226's migration-safety coverage: db.Open must not fail against a
+// production DB file created before this feature shipped, whose
+// change_sets table has only the original four columns (id, principal_id,
+// created_at, last_used_at) — the exact shape createTables' own
+// CREATE TABLE IF NOT EXISTS leaves untouched on an existing file, so
+// migrateChangeSetDeclaredUntrustedSchema's addColumnIfMissing ALTER TABLE
+// path is the only thing that can add the two new columns. A failure here
+// means the server does not boot on any deployment with change-set history
+// predating #1226 — this must never depend on "ALTER TABLE ADD COLUMN
+// NOT NULL DEFAULT is legal SQLite" going untested.
+func TestOpenMigratesPreExistingChangeSetsTableWithoutDeclaredColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pre-1226.sqlite")
+
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := raw.Exec(`CREATE TABLE change_sets (
+		id TEXT PRIMARY KEY, principal_id TEXT NOT NULL,
+		created_at TEXT NOT NULL, last_used_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("create pre-#1226 change_sets table: %v", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := raw.Exec(`INSERT INTO change_sets(id, principal_id, created_at, last_used_at) VALUES(?,?,?,?)`,
+		"cs_pre_migration", "principal-a", now, now); err != nil {
+		t.Fatalf("seed pre-#1226 row: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw handle: %v", err)
+	}
+
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open on a pre-#1226 change_sets table must not fail: %v", err)
+	}
+	defer d.Close()
+
+	principal, declared, note, found, err := d.GetChangeSetOwner("cs_pre_migration")
+	if err != nil {
+		t.Fatalf("GetChangeSetOwner after migration: %v", err)
+	}
+	if !found || principal != "principal-a" {
+		t.Fatalf("GetChangeSetOwner = (%q, found=%v), want (principal-a, true) — pre-existing row lost", principal, found)
+	}
+	if declared || note != "" {
+		t.Fatalf("GetChangeSetOwner (migrated row) = (declared=%v, note=%q), want (false, \"\") — new columns must default safely for pre-existing rows", declared, note)
+	}
+
+	// The migrated table must also accept new writes through the normal path.
+	if err := d.SetChangeSetDeclaredUntrustedDerivation("cs_pre_migration", true, "post-migration write"); err != nil {
+		t.Fatalf("SetChangeSetDeclaredUntrustedDerivation after migration: %v", err)
+	}
+	_, declared, note, _, err = d.GetChangeSetOwner("cs_pre_migration")
+	if err != nil || !declared || note != "post-migration write" {
+		t.Fatalf("post-migration write did not round-trip: declared=%v note=%q err=%v", declared, note, err)
 	}
 }
 

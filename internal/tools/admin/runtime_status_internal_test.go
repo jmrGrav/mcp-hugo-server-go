@@ -106,11 +106,15 @@ func TestComputePublicationSafetyExternalUnknownIsUnsafe(t *testing.T) {
 // TestComputePublicationSafetySurfacesDeclaredUntrustedDerivationWithoutGating
 // is #1226's direct coverage: a self-declared untrusted-derivation flag on
 // the current change-set must surface verbatim in
-// CurrentChangeSet.DeclaredUntrustedDerivation/DeclaredUntrustedNote, and
-// — the load-bearing half of this test — must have zero effect on
-// SafeToPublish. Gating publish safety on a self-report an injected agent
-// could simply omit would only punish honest declarations; see
-// SECURITY.md and docs/mcp-contract.md §6.27.
+// CurrentChangeSet.DeclaredUntrustedDerivation, and — the load-bearing
+// half of this test — must have zero effect on SafeToPublish. Gating
+// publish safety on a self-report an injected agent could simply omit
+// would only punish honest declarations; see SECURITY.md and
+// docs/mcp-contract.md §6.27. The free-text note is deliberately NOT
+// asserted here — it is intentionally excluded from this surface (see
+// currentChangeSetRuntimeStatus's own doc comment: replaying arbitrary
+// caller-supplied text through an admin-scope response with no
+// content_provenance tagging would reopen the exact gap #1223 closed).
 func TestComputePublicationSafetySurfacesDeclaredUntrustedDerivationWithoutGating(t *testing.T) {
 	srcIdx, err := hugosite.NewSourceIndex(t.TempDir())
 	if err != nil {
@@ -134,9 +138,6 @@ func TestComputePublicationSafetySurfacesDeclaredUntrustedDerivationWithoutGatin
 	if !result.CurrentChangeSet.DeclaredUntrustedDerivation {
 		t.Fatal("CurrentChangeSet.DeclaredUntrustedDerivation = false, want true")
 	}
-	if result.CurrentChangeSet.DeclaredUntrustedNote != "drafted from a search_content result" {
-		t.Fatalf("CurrentChangeSet.DeclaredUntrustedNote = %q, want %q", result.CurrentChangeSet.DeclaredUntrustedNote, "drafted from a search_content result")
-	}
 	if !result.SafeToPublish {
 		t.Fatal("SafeToPublish = false solely due to a declared-untrusted-derivation flag with no other pending work — this field must never gate on the declaration")
 	}
@@ -151,8 +152,8 @@ func TestComputePublicationSafetySurfacesDeclaredUntrustedDerivationWithoutGatin
 	if err != nil {
 		t.Fatalf("computePublicationSafety() (undeclared) error = %v", err)
 	}
-	if resultOther.CurrentChangeSet.DeclaredUntrustedDerivation || resultOther.CurrentChangeSet.DeclaredUntrustedNote != "" {
-		t.Fatalf("undeclared change-set reported (%v, %q), want (false, \"\")", resultOther.CurrentChangeSet.DeclaredUntrustedDerivation, resultOther.CurrentChangeSet.DeclaredUntrustedNote)
+	if resultOther.CurrentChangeSet.DeclaredUntrustedDerivation {
+		t.Fatalf("undeclared change-set reported DeclaredUntrustedDerivation=true, want false")
 	}
 }
 
