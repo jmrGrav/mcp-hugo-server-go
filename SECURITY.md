@@ -111,3 +111,22 @@ and, for destructive/publish actions, on independent review before
 publication — this server does not yet provide a signed human-confirmation
 mechanism for that; see the project's open issues for status.
 
+### Tool poisoning / rug pulls
+
+A related but distinct threat: not injected *content*, but the *tool
+registry itself* being edited after a client already reviewed and trusted
+it — a tool's description or input/output schema silently rewritten
+between a client's connections, without its name ever changing, so a
+static allowlist-by-name never notices. `get_capabilities.data.tool_catalog
+.tool_registry_digest` (§6.28, #1225) exists for this: a `sha256:<hex>`
+fingerprint over every tool's `{name, description, input_schema,
+output_schema}` across this deployment's full admin-scope tool surface,
+computed once at server startup from a real `tools/list` round-trip
+(`internal/toolregistry`). It is a trust-on-first-use value scoped to one
+specific deployment, not a universal constant — see §6.28 for exactly what
+a client should and should not conclude from a mismatch. Like
+`content_provenance`, this is a signal for the calling client to pin and
+compare; this server does not itself refuse to serve a tool whose
+description changed, since a legitimate deployment (a version upgrade, an
+operator-authored extension) changes tool descriptions too.
+

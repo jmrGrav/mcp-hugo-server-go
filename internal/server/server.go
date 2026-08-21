@@ -31,6 +31,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/storage"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolregistry"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/anonymous"
@@ -1111,6 +1112,32 @@ func buildAdminScopedServer(core *serverCore, cfg config.Config, idx *site.Index
 	return buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, previews)
 }
 
+// publishToolRegistryDigest computes the #1225 tool-registry digest from
+// adminServer — the admin-scope server is always the full superset (no
+// RemoveTools is ever applied to it, unlike buildWriteScopedServer) — and
+// publishes it for get_capabilities to report via
+// anonymous.SetToolRegistryDigest. Called once, synchronously, right after
+// the admin server is fully assembled and before New()/NewStdio() return
+// their server to the caller, so it is populated before any real request can
+// reach get_capabilities. A digest failure (never observed in practice: it
+// only requires a working in-memory MCP round-trip against a server that was
+// just proven to construct successfully) logs and leaves the field
+// unpublished rather than failing server startup — the digest is a
+// client-side tamper-detection aid, not a correctness dependency.
+func publishToolRegistryDigest(logger *slog.Logger, adminServer *mcp.Server) {
+	snapshots, err := toolregistry.FromServer(context.Background(), adminServer)
+	if err != nil {
+		logger.Warn("server: tool registry digest snapshot failed", "error", err)
+		return
+	}
+	digest, err := toolregistry.Digest(snapshots)
+	if err != nil {
+		logger.Warn("server: tool registry digest computation failed", "error", err)
+		return
+	}
+	anonymous.SetToolRegistryDigest(digest)
+}
+
 func buildPrivilegedScopedServer(scopeName string, core *serverCore, cfg config.Config, idx *site.Index, extensions []ScopeExtension, previews *previewstore.Store) *mcp.Server {
 	server := newScopedServer(scopeName, core.impl, core.serverOpts, core.logger, core.metrics, core.knownTools, idx, cfg, core.srcIdx, core.siteDB, core.pg, core.writeEnabled, extensions, core.changeSets)
 	admin.Register(server, cfg, core.srcIdx, core.changeSets, postBuildCallbacks("build_site", core.logger, cfg, idx, core.srcIdx, core.siteDB)...)
@@ -1144,7 +1171,9 @@ func NewStdio(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) 
 	}
 	// Stdio is a trusted local operator transport; expose the full privileged
 	// catalog, including admin-gated Hugo lifecycle tools.
-	return buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, core.previews), nil
+	srv := buildPrivilegedScopedServer("admin", core, cfg, idx, extensions, core.previews)
+	publishToolRegistryDigest(core.logger, srv)
+	return srv, nil
 }
 
 func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Server, error) {
@@ -1165,6 +1194,7 @@ func New(cfg config.Config, idx *site.Index, extensions ...ScopeExtension) (*Ser
 	publicServer := newScopedServer("", core.impl, core.serverOpts, logger, metrics, core.knownTools, idx, cfg, srcIdx, siteDB, pg, writeEnabled, extensions, core.changeSets)
 	writeServer, previews := buildWriteScopedServer(core, cfg, idx, extensions)
 	adminServer := buildAdminScopedServer(core, cfg, idx, extensions, previews)
+	publishToolRegistryDigest(logger, adminServer)
 	previewHandler := previews.HTTPHandler()
 
 	// #1137: exposure-profile-filtered variants of all three scope servers,

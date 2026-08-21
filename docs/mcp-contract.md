@@ -1878,6 +1878,93 @@ boundary and asserting the tag actually lands in the envelope. Neither
 test can verify the client-side consuming rule above — that half of the
 defense lives outside this repository.
 
+### 6.28. `get_capabilities.data.tool_catalog.tool_registry_digest`: Tool-Poisoning / Rug-Pull Detection (#1225)
+
+`tool_names_revision` (#1175, [§6.22](#6-22-exposure-profiles-profile-on-the-mcp-endpoint-1137))
+only hashes tool *names*, sorted — it detects a tool being added or
+removed, but not an existing tool's description or input/output schema
+being silently edited after a client already approved it. That gap is
+exactly the "rug pull" / tool-poisoning attack: a tool that looked safe
+when a human or agent reviewed and approved it gets its description
+rewritten later (e.g. to embed hidden instructions, or to widen what a
+parameter accepts) without the tool's name ever changing, so a client
+that only pins names never notices.
+
+`tool_catalog.tool_registry_digest` closes that gap: a `sha256:<hex>`
+fingerprint (`internal/toolregistry.Digest`) over the sorted
+`{name, description, input_schema, output_schema}` of every tool
+published by this **deployment's admin-scope server** — the full
+superset `buildAdminScopedServer` produces, which never has
+`RemoveTools` applied to it, regardless of which scope actually answered
+the `get_capabilities` call. `internal/server.New`/`NewStdio` compute it
+once, synchronously, right after the admin-scope `*mcp.Server` is fully
+assembled (`internal/server/server.go`'s `publishToolRegistryDigest`),
+via an in-memory MCP round-trip against that server
+(`toolregistry.FromServer` connects a real client and calls
+`tools/list`, so the digest reflects exactly what a real MCP client
+observes — not a raw internal registration list that could silently
+diverge from it), and publish it through
+`anonymous.SetToolRegistryDigest` for every scope's `get_capabilities`
+handler to read at call time.
+
+**This is a per-deployment trust-on-first-use value, not a value
+comparable across deployments or pinned to a release.** `newScopedServer`
+only registers write/admin tools when `writeEnabled` (content_root
+configured), and `internal/server.ScopeExtension` lets an embedder
+register arbitrary additional tools — so a read-only deployment, or one
+carrying extensions, legitimately produces a different digest than
+another deployment running the identical server binary. The correct
+client pattern is: pin the digest observed from one specific,
+already-trusted deployment on first connect, and compare on every
+reconnect to that same deployment. A mismatch there means that
+deployment's published tool set changed — a version upgrade, a
+config/extension change, or a tampered/compromised server — and is worth
+surfacing to a human before continuing to trust that tool's description.
+A mismatch against a digest from a *different* deployment (e.g. the
+repository's own `tool_registry.golden.json`, which reflects a
+write-enabled, extension-free reference build) is not evidence of
+tampering by itself.
+
+**This digest carries the same exposure-profile blind spot
+`tool_names_revision` already documents (`?profile=`, #1137,
+[§6.22](#6-22-exposure-profiles-profile-on-the-mcp-endpoint-1137)), for a
+related but distinct reason.** It fingerprints the deployment's full
+admin-scope superset — the same value regardless of which scope or
+profile answered the `get_capabilities` call — not the narrowed
+`tools/list` a profiled session actually receives. Two consequences: a
+tool hidden from a profile by `RemoveTools` can still move the digest if
+its description or schema changes elsewhere in the superset (a false
+alarm for a client that expected the digest to describe only its own
+visible tool set), and an operator narrowing which tools a profile
+exposes does *not* move the digest at all, even though that session's
+real `tools/list` result genuinely changed. A client that needs to
+detect tampering within its own profile-narrowed view cannot rely on
+this field for that; it answers "has anything in the deployment's full
+tool surface changed," not "has anything I can see changed."
+
+The field is `omitempty` and simply absent until
+`SetToolRegistryDigest` has been called — every unit test in this
+repository that builds a bare `*mcp.Server` directly via
+`anonymous.Register` (bypassing `internal/server.New`/`NewStdio`) never
+publishes a digest, and `get_capabilities` correctly omits the field
+rather than reporting a misleading zero-value hash
+(`TestGetCapabilitiesToolRegistryDigestOmittedByDefault`,
+`internal/tools/anonymous/capabilities_test.go`).
+`TestToolRegistryDigestPublishedThroughServerNew` and
+`TestToolRegistryDigestSameAcrossScopes`
+(`internal/server/tool_registry_digest_test.go`) cover the real
+end-to-end wiring: a server built through `server.New` publishes a
+non-empty digest, and it is identical whether a write-scope or
+admin-scope caller asks — proving the value reflects the deployment's
+full superset, not the asking caller's own narrower view.
+`internal/toolregistry`'s own tests
+(`internal/toolregistry/digest_test.go`) pin the two properties that
+make the digest meaningful: it is stable across tool *registration*
+order (fingerprints the published contract, not registration
+sequencing), and it *changes* when an existing tool's description is
+edited with no name/count change — the exact rug-pull scenario
+`tool_names_revision` alone cannot see.
+
 ## 7. New tools (v1.3.8+)
 
 New tools added in v1.3.8 use the **structured envelope** by default.

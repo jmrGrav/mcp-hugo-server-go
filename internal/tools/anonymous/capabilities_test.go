@@ -252,6 +252,48 @@ func TestGetCapabilitiesToolCatalogWithoutContentRootMatchesReadScope(t *testing
 	}
 }
 
+// TestGetCapabilitiesToolRegistryDigestOmittedByDefault is #1225's baseline:
+// a server built the way every other test in this file builds one (via
+// anonymous.Register directly, never going through
+// internal/server.New/NewStdio) never calls SetToolRegistryDigest, so
+// tool_catalog.tool_registry_digest must be omitted (omitempty) rather than
+// reported as a misleading empty/zero value.
+func TestGetCapabilitiesToolRegistryDigestOmittedByDefault(t *testing.T) {
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithScope(t, idx, config.Default(), "")
+	defer done()
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	tc := decodeContent(t, res)["tool_catalog"].(map[string]any)
+	if _, present := tc["tool_registry_digest"]; present {
+		t.Fatalf("tool_catalog carries tool_registry_digest before SetToolRegistryDigest was ever called: %#v", tc)
+	}
+}
+
+// TestGetCapabilitiesToolRegistryDigestReportedAfterPublish is #1225's
+// publish path: once internal/server (simulated here directly, since this
+// package cannot import internal/server) calls SetToolRegistryDigest, every
+// subsequent get_capabilities call — regardless of scope — reports it
+// verbatim under tool_catalog.tool_registry_digest.
+func TestGetCapabilitiesToolRegistryDigestReportedAfterPublish(t *testing.T) {
+	t.Cleanup(func() { anonymous.SetToolRegistryDigest("") })
+	anonymous.SetToolRegistryDigest("sha256:deadbeef")
+
+	idx := mustTestIndex(t)
+	session, done := newTestClientWithScope(t, idx, config.Default(), "")
+	defer done()
+	res := callTool(t, session, "get_capabilities", map[string]any{})
+	if res.IsError {
+		t.Fatalf("get_capabilities failed: %#v", res)
+	}
+	tc := decodeContent(t, res)["tool_catalog"].(map[string]any)
+	if got := tc["tool_registry_digest"]; got != "sha256:deadbeef" {
+		t.Fatalf("tool_catalog.tool_registry_digest = %v, want %q", got, "sha256:deadbeef")
+	}
+}
+
 // source of truth, so the two can't drift) and coarse feature flags, and
 // must NOT leak sensitive config (secrets, hook command strings, host paths).
 func TestGetCapabilitiesReportsLimitsAndFeatureFlags(t *testing.T) {
