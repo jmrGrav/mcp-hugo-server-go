@@ -39,7 +39,10 @@ type planPageOutput struct {
 }
 
 func newPlanPageOutput(data planPageData, now time.Time) planPageOutput {
-	return planPageOutput{ToolResponse: successEnvelope(data, now)}
+	// SuggestedLinks carries link-suggestion title/anchor text pulled from
+	// site source (linkSuggestionDTO), the same site-authored-text surface
+	// suggest_links tags — see docs/mcp-contract.md §6.27.
+	return planPageOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
 }
 
 // RegisterPlanPage registers plan_page (#622): a pre-writing scaffold that

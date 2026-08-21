@@ -128,6 +128,7 @@ func TestInspectRenderedPageCleanPagePassesAllChecks(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("inspect_rendered returned error: %v", res.Content[0].(*mcp.TextContent).Text)
 	}
+	assertEnvelopeContentProvenance(t, res, "site_rendered_public_untrusted")
 	data := decodeContent(t, res)
 	if got := data["status"]; got != "ok" {
 		t.Fatalf("status = %v, want ok; checks = %v", got, data["checks"])

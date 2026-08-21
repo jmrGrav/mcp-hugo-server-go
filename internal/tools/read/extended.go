@@ -1787,8 +1787,15 @@ func newContentEnvelope(data contentEnvelopeData, now time.Time) contentEnvelope
 	return contentEnvelope{ToolResponse: successEnvelope(data, now)}
 }
 
+// newSearchContentEnvelope, newBrokenLinkOutput, newGetBacklinksOutput, and
+// newSuggestInternalLinksOutput all tag content_provenance="site_source_untrusted"
+// (see foundation.go) — their payloads surface page titles/snippets/link
+// text pulled from site source content, the same indirect-prompt-injection
+// surface get_page_markdown/get_page_frontmatter/diff_page already tag.
+// Kept consistent across every read-scope tool that echoes site content so
+// a client can trust the absence of the tag, not just its presence.
 func newSearchContentEnvelope(data searchContentData, now time.Time) searchContentEnvelope {
-	return searchContentEnvelope{ToolResponse: successEnvelope(data, now)}
+	return searchContentEnvelope{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
 }
 
 func newValidateOutput(data validateOutputData, now time.Time) validateOutput {
@@ -1796,15 +1803,15 @@ func newValidateOutput(data validateOutputData, now time.Time) validateOutput {
 }
 
 func newBrokenLinkOutput(data brokenLinkData, now time.Time) brokenLinkOutput {
-	return brokenLinkOutput{ToolResponse: successEnvelope(data, now)}
+	return brokenLinkOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
 }
 
 func newGetBacklinksOutput(data getBacklinksData, now time.Time) getBacklinksOutput {
-	return getBacklinksOutput{ToolResponse: successEnvelope(data, now)}
+	return getBacklinksOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
 }
 
 func newSuggestInternalLinksOutput(data suggestInternalLinksData, now time.Time) suggestInternalLinksOutput {
-	return suggestInternalLinksOutput{ToolResponse: successEnvelope(data, now)}
+	return suggestInternalLinksOutput{ToolResponse: successEnvelopeWithContentProvenance(data, now, contentProvenanceSiteSourceUntrusted)}
 }
 
 func effectiveSort(in searchContentInput) string {

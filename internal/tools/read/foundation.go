@@ -31,6 +31,13 @@ func successEnvelope[T any](data T, now time.Time) toolcontract.ToolResponse[T] 
 
 const contentProvenanceSiteSourceUntrusted = "site_source_untrusted"
 
+// contentProvenanceSiteRenderedPublicUntrusted marks a payload built from
+// the site's rendered public HTML output (as opposed to raw source) —
+// still site-authored, still untrusted, distinct only in which build
+// stage produced the text. Mirrors the anonymous-scope tools' own
+// "site_rendered_public_untrusted" literal (internal/tools/anonymous/tools.go).
+const contentProvenanceSiteRenderedPublicUntrusted = "site_rendered_public_untrusted"
+
 func successEnvelopeWithContentProvenance[T any](data T, now time.Time, provenance string) toolcontract.ToolResponse[T] {
 	meta := toolcontract.NewMeta(buildinfo.Version, now)
 	meta.ContentProvenance = provenance
