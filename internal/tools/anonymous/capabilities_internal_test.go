@@ -2,40 +2,41 @@ package anonymous
 
 import (
 	"context"
-	"sync"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// TestToolRegistryDigestForServerReturnsEmptyOnConnectFailure exercises
-// toolRegistryDigestForServer's error path directly: internal/toolregistry's
+// TestToolRegistryDigestCacheRetriesAfterAFailedAttempt exercises
+// toolRegistryDigestCache's error path directly: internal/toolregistry's
 // own tests already prove FromServer surfaces a Connect error (a canceled
 // context fails the in-memory client.Connect handshake); this test proves
-// the caller-facing contract on top of that — a failed snapshot logs and
-// leaves cached empty rather than panicking or caching a zero-value digest
-// that would later be reported as if it were real.
-func TestToolRegistryDigestForServerReturnsEmptyOnConnectFailure(t *testing.T) {
+// the caller-facing contract on top of that — a failed attempt logs and
+// returns empty WITHOUT latching, so the next call (once ctx is no longer
+// canceled) gets a fresh, real attempt rather than a permanently-disabled
+// field for this server's whole remaining lifetime. Only a SUCCESSFUL
+// computation may latch — a sync.Once-based cache would fail this test,
+// since it can only ever attempt once regardless of outcome.
+func TestToolRegistryDigestCacheRetriesAfterAFailedAttempt(t *testing.T) {
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
-	ctx, cancel := context.WithCancel(context.Background())
+	var cache toolRegistryDigestCache
+
+	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
-
-	var once sync.Once
-	var cached string
-	got := toolRegistryDigestForServer(ctx, s, &once, &cached)
-	if got != "" {
-		t.Fatalf("toolRegistryDigestForServer with a canceled context = %q, want empty", got)
-	}
-	if cached != "" {
-		t.Fatalf("cached = %q after a failed snapshot, want empty", cached)
+	if got := cache.get(canceledCtx, s); got != "" {
+		t.Fatalf("cache.get with a canceled context = %q, want empty", got)
 	}
 
-	// once.Do fires exactly once per (once, cached) pair — a second call
-	// sharing the same pair, even with a live context, must still return
-	// the cached (empty, from the failed attempt) result rather than
-	// retrying, proving the cache is per-server-lifetime, not per-success.
-	if got2 := toolRegistryDigestForServer(context.Background(), s, &once, &cached); got2 != "" {
-		t.Fatalf("second call recomputed instead of honoring the cached (empty) result from sync.Once: %q", got2)
+	got := cache.get(context.Background(), s)
+	if !strings.HasPrefix(got, "sha256:") || len(got) <= len("sha256:") {
+		t.Fatalf("cache.get with a live context after a prior failure = %q, want a real sha256:... digest (the failed attempt must not have latched)", got)
+	}
+
+	// A successful result DOES latch: a second live call must return the
+	// identical cached value, not recompute.
+	if got2 := cache.get(context.Background(), s); got2 != got {
+		t.Fatalf("cache.get after a successful computation = %q, want the cached %q", got2, got)
 	}
 }
 

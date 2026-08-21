@@ -172,7 +172,7 @@ type getCapabilitiesData struct {
 //
 // RegistryDigest (#1225) does NOT share tool_names_revision's
 // exposure-profile blind spot: it is computed from THIS session's own
-// *mcp.Server (see toolRegistryDigestForServer), the same object
+// *mcp.Server (see toolRegistryDigestCache), the same object
 // ?profile=/RemoveTools (#1137) narrows before any session ever reaches
 // it, so a tool hidden from this session is genuinely absent from the
 // digest, and RemoveTools-ing a profile genuinely moves it.
@@ -182,7 +182,7 @@ type capabilitiesToolCatalog struct {
 	RegistryDigest string `json:"tool_registry_digest,omitempty"`
 }
 
-// toolRegistryDigestForServer computes and caches the #1225 tool-registry
+// toolRegistryDigestCache computes and caches the #1225 tool-registry
 // digest for one specific *mcp.Server instance, via a real in-memory
 // tools/list round-trip against s (internal/toolregistry.FromServer) —
 // not a second internal registration list that could silently diverge
@@ -209,34 +209,51 @@ type capabilitiesToolCatalog struct {
 // under -race with two live sessions calling get_capabilities
 // concurrently.
 //
-// once/cached are owned by exactly one registerGetCapabilities closure
-// (one per constructed server), so caching here is safe: by the time any
-// handler actually runs, that server's full construction — including any
-// later RemoveTools — has already completed (registerGetCapabilities
-// itself only ever runs during construction, never concurrently with a
-// live request).
-func toolRegistryDigestForServer(ctx context.Context, s *mcp.Server, once *sync.Once, cached *string) string {
-	once.Do(func() {
-		snapshots, err := toolregistry.FromServer(ctx, s)
-		if err != nil {
-			slog.Warn("get_capabilities: tool registry digest snapshot failed", "error", err)
-			return
-		}
-		digest, err := toolregistry.Digest(snapshots)
-		if err != nil {
-			slog.Warn("get_capabilities: tool registry digest computation failed", "error", err)
-			return
-		}
-		*cached = digest
-	})
-	return *cached
+// A cache instance is owned by exactly one registerGetCapabilities
+// closure (one per constructed server), so caching here is safe: by the
+// time any handler actually runs, that server's full construction —
+// including any later RemoveTools — has already completed
+// (registerGetCapabilities itself only ever runs during construction,
+// never concurrently with a live request).
+//
+// Only a SUCCESSFUL computation is latched. A transient failure (e.g. the
+// calling client disconnects mid-request on this session's very first
+// get_capabilities call, canceling ctx before the in-memory round-trip
+// finishes) must not permanently disable the field for this server's
+// entire remaining lifetime — the next caller gets a fresh attempt, not a
+// silently-and-forever-omitted field with no way to tell "this
+// deployment doesn't support the digest" from "one early call happened
+// to fail."
+type toolRegistryDigestCache struct {
+	mu     sync.Mutex
+	digest string
+}
+
+func (c *toolRegistryDigestCache) get(ctx context.Context, s *mcp.Server) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.digest != "" {
+		return c.digest
+	}
+	snapshots, err := toolregistry.FromServer(ctx, s)
+	if err != nil {
+		slog.Warn("get_capabilities: tool registry digest snapshot failed", "error", err)
+		return ""
+	}
+	digest, err := toolregistry.Digest(snapshots)
+	if err != nil {
+		slog.Warn("get_capabilities: tool registry digest computation failed", "error", err)
+		return ""
+	}
+	c.digest = digest
+	return c.digest
 }
 
 // visibleToolCatalog computes capabilitiesToolCatalog from the same
 // tools.Registry.ForScope machinery the access-model contract tests
 // verify against actual per-scope tool registration — the authoritative
 // source for "which tool names does this scope see." registryDigest is
-// computed separately (toolRegistryDigestForServer) since it needs the
+// computed separately (toolRegistryDigestCache) since it needs the
 // real *mcp.Server, which this scope/writeEnabled-only reconstruction
 // deliberately avoids depending on.
 func visibleToolCatalog(scopeName string, writeEnabled bool, registryDigest string) capabilitiesToolCatalog {
@@ -354,8 +371,7 @@ func availableLanguages(idx *site.Index, srcIdx *hugosite.SourceIndex, defaultLa
 }
 
 func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, scopeName string, writeEnabled bool) {
-	var digestOnce sync.Once
-	var digestCached string
+	var digestCache toolRegistryDigestCache
 	addReadOnlyTool(s, "get_capabilities", "Get capabilities",
 		"Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): "+
 			"`server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); "+
@@ -376,7 +392,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				EffectiveScopes:  effectiveCapabilityScopes(ctx, scopeName),
 				MaskedTools:      maskedCapabilityTools(ctx, scopeName, writeEnabled),
 				DisabledFeatures: disabledCapabilityFeatures(cfg),
-				ToolCatalog:      visibleToolCatalog(scopeName, writeEnabled, toolRegistryDigestForServer(ctx, s, &digestOnce, &digestCached)),
+				ToolCatalog:      visibleToolCatalog(scopeName, writeEnabled, digestCache.get(ctx, s)),
 				Server: capabilitiesServer{
 					ReleaseVersion: buildinfo.Version,
 					Commit:         buildinfo.Commit,

@@ -1901,7 +1901,11 @@ that session's `get_capabilities` handler runs, via a real in-memory
 connects a real client, so the digest reflects exactly what a real MCP
 client observes — not a raw internal registration list that could
 silently diverge from it), and caches it for the lifetime of that
-`*mcp.Server` object behind a closure-local `sync.Once`.
+`*mcp.Server` object behind a closure-local cache — a successful
+computation latches permanently, but a failed attempt (e.g. the calling
+client disconnects mid-request on this session's very first
+`get_capabilities` call) does not, so the next caller gets a fresh
+attempt rather than a silently-and-permanently-omitted field.
 
 Because the introspected object is the exact same `*mcp.Server` that
 `buildWriteScopedServer`'s and `buildExposureServer`'s (`?profile=`,
@@ -1909,12 +1913,7 @@ Because the introspected object is the exact same `*mcp.Server` that
 `RemoveTools` calls already narrowed *before* any session ever reaches a
 handler on it, this digest has none of `tool_names_revision`'s
 exposure-profile blind spot: a tool hidden by scope or profile is
-genuinely absent from it, and narrowing a profile genuinely moves it. An
-earlier version of this field (merged, then replaced before any tagged
-release included it) computed the digest once at startup from a
-separately-built admin-scope superset server, reported identically to
-every scope and profile regardless of what that session could actually
-see; the design here is what actually ships.
+genuinely absent from it, and narrowing a profile genuinely moves it.
 
 **This is a per-session trust-on-first-use value, not a value comparable
 across sessions with a different scope or profile, or pinned to a
