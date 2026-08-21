@@ -252,45 +252,85 @@ func TestGetCapabilitiesToolCatalogWithoutContentRootMatchesReadScope(t *testing
 	}
 }
 
-// TestGetCapabilitiesToolRegistryDigestOmittedByDefault is #1225's baseline:
-// a server built the way every other test in this file builds one (via
-// anonymous.Register directly, never going through
-// internal/server.New/NewStdio) never calls SetToolRegistryDigest, so
-// tool_catalog.tool_registry_digest must be omitted (omitempty) rather than
-// reported as a misleading empty/zero value.
-func TestGetCapabilitiesToolRegistryDigestOmittedByDefault(t *testing.T) {
+// TestGetCapabilitiesToolRegistryDigestWellFormedAndStable is #1225's
+// baseline: get_capabilities computes tool_registry_digest live from this
+// session's own *mcp.Server (toolRegistryDigestForServer), so it is always
+// present — no separate publish step to omit — and, since it is cached
+// per-server via a closure-local sync.Once, two calls on the SAME session
+// must return the identical value (proves the cache, not just that a
+// digest happens to compute the same thing twice).
+func TestGetCapabilitiesToolRegistryDigestWellFormedAndStable(t *testing.T) {
 	idx := mustTestIndex(t)
 	session, done := newTestClientWithScope(t, idx, config.Default(), "")
 	defer done()
-	res := callTool(t, session, "get_capabilities", map[string]any{})
-	if res.IsError {
-		t.Fatalf("get_capabilities failed: %#v", res)
+
+	digest := func() string {
+		res := callTool(t, session, "get_capabilities", map[string]any{})
+		if res.IsError {
+			t.Fatalf("get_capabilities failed: %#v", res)
+		}
+		tc := decodeContent(t, res)["tool_catalog"].(map[string]any)
+		d, _ := tc["tool_registry_digest"].(string)
+		return d
 	}
-	tc := decodeContent(t, res)["tool_catalog"].(map[string]any)
-	if _, present := tc["tool_registry_digest"]; present {
-		t.Fatalf("tool_catalog carries tool_registry_digest before SetToolRegistryDigest was ever called: %#v", tc)
+
+	first := digest()
+	if !strings.HasPrefix(first, "sha256:") || len(first) <= len("sha256:") {
+		t.Fatalf("tool_registry_digest = %q, want a non-empty sha256:... value", first)
+	}
+	if second := digest(); second != first {
+		t.Fatalf("tool_registry_digest changed across calls on the same session: %q then %q", first, second)
 	}
 }
 
-// TestGetCapabilitiesToolRegistryDigestReportedAfterPublish is #1225's
-// publish path: once internal/server (simulated here directly, since this
-// package cannot import internal/server) calls SetToolRegistryDigest, every
-// subsequent get_capabilities call — regardless of scope — reports it
-// verbatim under tool_catalog.tool_registry_digest.
-func TestGetCapabilitiesToolRegistryDigestReportedAfterPublish(t *testing.T) {
-	t.Cleanup(func() { anonymous.SetToolRegistryDigest("") })
-	anonymous.SetToolRegistryDigest("sha256:deadbeef")
-
+// TestGetCapabilitiesToolRegistryDigestReflectsThisServersActualTools is the
+// #1225 redesign's core property (fixed after the original admin-superset
+// design was found to hide exposure-profile drift, see
+// docs/mcp-contract.md §6.28): the digest is computed from THIS session's
+// own *mcp.Server, not a separately-reconstructed registry list — so a
+// server carrying one extra registered tool gets a different digest than
+// an otherwise-identical server without it. The genuinely-different-scope
+// case (public vs write, with real write/admin tools registered) is
+// covered end-to-end in internal/server (TestToolRegistryDigestDiffersByScope,
+// TestToolRegistryDigestDiffersByExposureProfile) — this package's own test
+// helpers only ever register anonymous.Register's tools regardless of the
+// scopeName string passed to newTestClientWithScope, so scope alone can't
+// exercise this property here.
+func TestGetCapabilitiesToolRegistryDigestReflectsThisServersActualTools(t *testing.T) {
 	idx := mustTestIndex(t)
-	session, done := newTestClientWithScope(t, idx, config.Default(), "")
-	defer done()
-	res := callTool(t, session, "get_capabilities", map[string]any{})
-	if res.IsError {
-		t.Fatalf("get_capabilities failed: %#v", res)
+
+	baseSession, baseDone := newTestClientWithScope(t, idx, config.Default(), "")
+	defer baseDone()
+	baseRes := callTool(t, baseSession, "get_capabilities", map[string]any{})
+	baseTC := decodeContent(t, baseRes)["tool_catalog"].(map[string]any)
+	baseDigest, _ := baseTC["tool_registry_digest"].(string)
+
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	anonymous.Register(s, idx, config.Default(), "")
+	mcp.AddTool(s, &mcp.Tool{Name: "extra_test_only_tool", Description: "not a real product tool, exists only to change this server's tool set"},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, struct{ X string }, error) {
+			return nil, struct{ X string }{"ok"}, nil
+		})
+	ctx := context.Background()
+	et1, et2 := mcp.NewInMemoryTransports()
+	if _, err := s.Connect(ctx, et1, nil); err != nil {
+		t.Fatalf("server connect: %v", err)
 	}
-	tc := decodeContent(t, res)["tool_catalog"].(map[string]any)
-	if got := tc["tool_registry_digest"]; got != "sha256:deadbeef" {
-		t.Fatalf("tool_catalog.tool_registry_digest = %v, want %q", got, "sha256:deadbeef")
+	extraClient := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "0.1"}, nil)
+	extraSession, err := extraClient.Connect(ctx, et2, nil)
+	if err != nil {
+		t.Fatalf("client connect: %v", err)
+	}
+	defer func() { _ = extraSession.Close() }()
+	extraRes := callTool(t, extraSession, "get_capabilities", map[string]any{})
+	extraTC := decodeContent(t, extraRes)["tool_catalog"].(map[string]any)
+	extraDigest, _ := extraTC["tool_registry_digest"].(string)
+
+	if baseDigest == "" || extraDigest == "" {
+		t.Fatalf("tool_registry_digest is empty: base=%q extra=%q", baseDigest, extraDigest)
+	}
+	if baseDigest == extraDigest {
+		t.Fatalf("tool_registry_digest unchanged after registering an extra tool on this exact *mcp.Server: both %q", baseDigest)
 	}
 }
 

@@ -4,9 +4,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"sort"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
@@ -15,6 +16,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolregistry"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	adminpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	readpkg "github.com/jmrGrav/mcp-hugo-server-go/internal/tools/read"
@@ -168,85 +170,93 @@ type getCapabilitiesData struct {
 // rather than "catalog_revision" or similar, which would overpromise
 // schema-level staleness detection this doesn't do.
 //
-// RegistryDigest (#1225) carries the SAME exposure-profile blind spot as
-// tool_names_revision above, for a different reason: it fingerprints the
-// deployment's full admin-scope superset regardless of which scope or
-// profile answered the call, rather than this session's own narrowed
-// tools/list. Two consequences follow directly from that: (1) a tool
-// hidden from this session by ?profile= can still move the digest if its
-// description/schema changes elsewhere in the superset — a false alarm for
-// a client that expected the digest to describe only what it can see; and
-// (2) an operator narrowing which tools a profile exposes does NOT move
-// the digest at all, even though what this session's tools/list returns
-// genuinely changed. A client relying on this value to detect tampering in
-// its OWN narrowed tool set needs a profile-aware digest this field does
-// not provide; see docs/mcp-contract.md §6.28 for the full caveat.
+// RegistryDigest (#1225) does NOT share tool_names_revision's
+// exposure-profile blind spot: it is computed from THIS session's own
+// *mcp.Server (see toolRegistryDigestCache), the same object
+// ?profile=/RemoveTools (#1137) narrows before any session ever reaches
+// it, so a tool hidden from this session is genuinely absent from the
+// digest, and RemoveTools-ing a profile genuinely moves it.
 type capabilitiesToolCatalog struct {
 	VisibleCount   int    `json:"visible_count"`
 	NamesRevision  string `json:"tool_names_revision"`
 	RegistryDigest string `json:"tool_registry_digest,omitempty"`
 }
 
-// toolRegistryDigest holds the process-wide tool-registry digest (#1225): a
-// sha256 over the FULL admin-scope tool surface's name/description/input
-// schema/output schema, computed once by internal/server after the
-// admin-scope *mcp.Server is fully assembled (see
-// internal/toolregistry.FromServer/Digest) and published here via
-// SetToolRegistryDigest. It is deliberately NOT computed inside this
-// package: doing so would mean re-registering every tool package a second
-// time purely to hash it, which is exactly the "two composition lists that
-// can silently diverge" trap a digest meant to catch drift must not itself
-// have. Tests and callers that build a server without ever calling
-// SetToolRegistryDigest simply never populate it — get_capabilities omits
-// the field (omitempty) rather than reporting a misleading zero-value
-// digest.
+// toolRegistryDigestCache computes and caches the #1225 tool-registry
+// digest for one specific *mcp.Server instance, via a real in-memory
+// tools/list round-trip against s (internal/toolregistry.FromServer) —
+// not a second internal registration list that could silently diverge
+// from what a real client sees.
 //
-// This is a trust-on-first-use value scoped to ONE running deployment, not a
-// value comparable across deployments or pinned to a release: newScopedServer
-// only registers write/admin tools when writeEnabled, and
-// internal/server.ScopeExtension lets an embedder add arbitrary tools, so a
-// read-only or extension-carrying deployment legitimately produces a
-// different digest than another deployment of the same server version. A
-// client should pin the digest it observed from a specific, already-trusted
-// deployment and compare on reconnect — a mismatch means that deployment's
-// published tool set changed (a version upgrade, a config change, or a
-// tampered/compromised server), not that something is universally wrong.
-var toolRegistryDigest atomic.Pointer[string]
-
-// SetToolRegistryDigest publishes digest for get_capabilities to report. Safe
-// to call from any goroutine; intended to be called at most once per process,
-// after the deployment's admin-scope server has been fully assembled. State
-// is process-wide and last-writer-wins: a test process that constructs more
-// than one internal/server.New/NewStdio server (this repo's own test suite
-// does, hundreds of times) will see whichever call happened most recently,
-// not one value per server instance. That's fine for production (one server
-// per process) and for the tests this package ships today (which only check
-// for a well-formed sha256:... prefix or its absence, never a specific
-// value) — but a future test asserting an exact digest, or asserting
-// absence, must not run concurrently with another server construction in
-// the same process.
-func SetToolRegistryDigest(digest string) {
-	toolRegistryDigest.Store(&digest)
+// Computing this INSIDE a running tool handler (rather than once at
+// startup against a separately-built admin superset, this field's
+// original #1225 design) is what makes it exposure-profile-correct:
+// exposure-profile narrowing (buildExposureServer's RemoveTools,
+// internal/server/server.go, #1137) and write-scope's own
+// RemoveTools("stage_hugo_upgrade", ...) both mutate this exact *mcp.Server
+// object before any session ever reaches a handler on it, so introspecting
+// s here sees precisely what THIS session's own tools/list already
+// reflects — the same guarantee tool_names_revision above does not have.
+//
+// Reentrancy: s.Connect (inside FromServer) is called from within a
+// handler already executing on a session of s. This is safe because the
+// go-sdk's Server.callTool looks up and releases the tool registry lock
+// before invoking the handler (github.com/modelcontextprotocol/go-sdk
+// mcp/server.go's callTool: s.getServerTool locks/unlocks, then calls
+// st.handler outside the lock) — no lock held across handler execution
+// for Connect to contend with.
+// TestGetCapabilitiesDigestConcurrentCallsDoNotDeadlock exercises this
+// under -race with two live sessions calling get_capabilities
+// concurrently.
+//
+// A cache instance is owned by exactly one registerGetCapabilities
+// closure (one per constructed server), so caching here is safe: by the
+// time any handler actually runs, that server's full construction —
+// including any later RemoveTools — has already completed
+// (registerGetCapabilities itself only ever runs during construction,
+// never concurrently with a live request).
+//
+// Only a SUCCESSFUL computation is latched. A transient failure (e.g. the
+// calling client disconnects mid-request on this session's very first
+// get_capabilities call, canceling ctx before the in-memory round-trip
+// finishes) must not permanently disable the field for this server's
+// entire remaining lifetime — the next caller gets a fresh attempt, not a
+// silently-and-forever-omitted field with no way to tell "this
+// deployment doesn't support the digest" from "one early call happened
+// to fail."
+type toolRegistryDigestCache struct {
+	mu     sync.Mutex
+	digest string
 }
 
-// currentToolRegistryDigest returns the digest published via
-// SetToolRegistryDigest, or "" if it was never called (e.g. most unit tests,
-// which build a bare *mcp.Server directly rather than going through
-// internal/server.New/NewStdio).
-func currentToolRegistryDigest() string {
-	if p := toolRegistryDigest.Load(); p != nil {
-		return *p
+func (c *toolRegistryDigestCache) get(ctx context.Context, s *mcp.Server) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.digest != "" {
+		return c.digest
 	}
-	return ""
+	snapshots, err := toolregistry.FromServer(ctx, s)
+	if err != nil {
+		slog.Warn("get_capabilities: tool registry digest snapshot failed", "error", err)
+		return ""
+	}
+	digest, err := toolregistry.Digest(snapshots)
+	if err != nil {
+		slog.Warn("get_capabilities: tool registry digest computation failed", "error", err)
+		return ""
+	}
+	c.digest = digest
+	return c.digest
 }
 
 // visibleToolCatalog computes capabilitiesToolCatalog from the same
 // tools.Registry.ForScope machinery the access-model contract tests
 // verify against actual per-scope tool registration — the authoritative
-// source for "which tool names does this scope see," independent of this
-// package's own registerGetCapabilities closure (which has no way to
-// introspect the mcp.Server it's registered on).
-func visibleToolCatalog(scopeName string, writeEnabled bool) capabilitiesToolCatalog {
+// source for "which tool names does this scope see." registryDigest is
+// computed separately (toolRegistryDigestCache) since it needs the
+// real *mcp.Server, which this scope/writeEnabled-only reconstruction
+// deliberately avoids depending on.
+func visibleToolCatalog(scopeName string, writeEnabled bool, registryDigest string) capabilitiesToolCatalog {
 	reg := tools.NewRegistry()
 	for _, d := range Defs() {
 		reg.Register(d)
@@ -278,7 +288,7 @@ func visibleToolCatalog(scopeName string, writeEnabled bool) capabilitiesToolCat
 	return capabilitiesToolCatalog{
 		VisibleCount:   len(names),
 		NamesRevision:  "sha256:" + hex.EncodeToString(h.Sum(nil)),
-		RegistryDigest: currentToolRegistryDigest(),
+		RegistryDigest: registryDigest,
 	}
 }
 
@@ -361,6 +371,7 @@ func availableLanguages(idx *site.Index, srcIdx *hugosite.SourceIndex, defaultLa
 }
 
 func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.SourceIndex, cfg config.Config, scopeName string, writeEnabled bool) {
+	var digestCache toolRegistryDigestCache
 	addReadOnlyTool(s, "get_capabilities", "Get capabilities",
 		"Return this server's machine-readable runtime capabilities and hard limits in one structured surface, so an agent can plan deterministically instead of scraping tool descriptions or probing limits by triggering failures (#859): "+
 			"`server` (release version, commit, build channel, schema version); `languages` (default, `mode` = `configured` when the operator has set configured_languages and `observed` otherwise, plus the authoritative/observed set accordingly, #899); "+
@@ -368,7 +379,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			"`limits.asset_upload.recommended_inline_max_bytes` (#1190) is the actually-reachable ceiling for upload_page_asset's inline `content_base64` param — computed from this server's real `max_request_bytes` (base64 expands the payload ~4/3, and it still has to fit the tool-call envelope alongside `max_request_bytes`), which is always <= `asset_max_bytes` and often well below it; a file larger than this needs a different transfer path (there is no chunked-upload mode yet) before uploading in one call. "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
 			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool. "+
-			"`effective_scopes` names the caller's own scope (`read`, `write`, or `admin` — the three canonical scopes the server ever grants, #450/#1039/#1050) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools (or a write-scoped caller lacks the admin-only managed Hugo binary lifecycle tools), or `not_configured` when a write-scoped caller has write tools available but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `disabled_features[]` separately explains optional integrations disabled by configuration with reason `feature_disabled`; it never exposes secrets or paths. `tool_catalog` (#1175) is a stale-discovery detector: `visible_count`/`tool_names_revision` (a sha256 over this caller's scope-visible tool names, sorted) let an agent compare what its own MCP client actually loaded against what this server currently registers for it — a mismatch means the client's tool-schema cache is stale, not that the server is misconfigured (the concrete case #1175 was filed over: two MCP clients against the same server commit disagreed on the registered tool set). Scope-only like `masked_tools` — does not account for exposure-profile session narrowing (`?profile=`, #1137). `tool_names_revision` hashes tool names only, not descriptions/input schemas, so it does not move when an existing tool's schema alone changes (only when a tool is added or removed) — read it as a name-catalog fingerprint, not a full-schema one. `tool_registry_digest` (#1225, omitted when unavailable) closes that gap for tool-poisoning / rug-pull detection: a sha256 over name+description+input schema+output schema across this DEPLOYMENT's full admin-scope tool surface (the superset, not narrowed to this caller's own scope), so a client can pin the digest from a deployment it already trusts and detect any later edit to any tool's description or schema on reconnect, not just an added/removed tool. It is deployment-scoped, not release-scoped: a read-only or extension-carrying deployment legitimately differs from another deployment of the same server version, so a mismatch against a value observed from a DIFFERENT deployment is not evidence of tampering — only a mismatch against a value previously observed from the SAME deployment is. It also carries the same exposure-profile blind spot as `tool_names_revision` (`?profile=`, #1137): it fingerprints the deployment's full admin-scope superset, not this session's own narrowed tools/list, so a tool hidden by a profile can still move the digest, and an operator narrowing a profile does not move it at all — see docs/mcp-contract.md §6.28. Note: `admin` is intentionally never advertised on the external OAuth-discovery surface (server card, `.well-known/oauth-protected-resource`) — only `read`/`write` appear there, since `admin` is an explicitly-approved administrator tier, not self-service; `effective_scopes` here is this tool's own in-session view of the caller's actual scope, not a mirror of that external discovery contract.",
+			"`effective_scopes` names the caller's own scope (`read`, `write`, or `admin` — the three canonical scopes the server ever grants, #450/#1039/#1050) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools (or a write-scoped caller lacks the admin-only managed Hugo binary lifecycle tools), or `not_configured` when a write-scoped caller has write tools available but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `disabled_features[]` separately explains optional integrations disabled by configuration with reason `feature_disabled`; it never exposes secrets or paths. `tool_catalog` (#1175) is a stale-discovery detector: `visible_count`/`tool_names_revision` (a sha256 over this caller's scope-visible tool names, sorted) let an agent compare what its own MCP client actually loaded against what this server currently registers for it — a mismatch means the client's tool-schema cache is stale, not that the server is misconfigured (the concrete case #1175 was filed over: two MCP clients against the same server commit disagreed on the registered tool set). Scope-only like `masked_tools` — does not account for exposure-profile session narrowing (`?profile=`, #1137). `tool_names_revision` hashes tool names only, not descriptions/input schemas, so it does not move when an existing tool's schema alone changes (only when a tool is added or removed) — read it as a name-catalog fingerprint, not a full-schema one. `tool_registry_digest` (#1225, omitted when unavailable) closes that gap for tool-poisoning / rug-pull detection: a sha256 over name+description+input schema+output schema across every tool THIS SESSION can see — computed from the same tools/list surface exposure profiles (`?profile=`, #1137) and scope already narrowed, unlike `tool_names_revision`, so a profile-hidden tool never moves it and a profile change always does. A client should pin the digest observed from a specific, already-trusted deployment+scope+profile combination and compare on reconnect to that same combination — a mismatch means that connection's published tool set changed (a version upgrade, a config/profile change, or a tampered/compromised server), not that something is universally wrong; a mismatch against a value observed under a DIFFERENT scope or profile is expected and not evidence of tampering. See docs/mcp-contract.md §6.28. Note: `admin` is intentionally never advertised on the external OAuth-discovery surface (server card, `.well-known/oauth-protected-resource`) — only `read`/`write` appear there, since `admin` is an explicitly-approved administrator tier, not self-service; `effective_scopes` here is this tool's own in-session view of the caller's actual scope, not a mirror of that external discovery contract.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
 			pMin, pDef, pMax := adminpkg.PreviewTTLBoundsSeconds()
 			localHeroGenerationAvailable := strings.TrimSpace(cfg.HugoRoot) != ""
@@ -381,7 +392,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 				EffectiveScopes:  effectiveCapabilityScopes(ctx, scopeName),
 				MaskedTools:      maskedCapabilityTools(ctx, scopeName, writeEnabled),
 				DisabledFeatures: disabledCapabilityFeatures(cfg),
-				ToolCatalog:      visibleToolCatalog(scopeName, writeEnabled),
+				ToolCatalog:      visibleToolCatalog(scopeName, writeEnabled, digestCache.get(ctx, s)),
 				Server: capabilitiesServer{
 					ReleaseVersion: buildinfo.Version,
 					Commit:         buildinfo.Commit,
