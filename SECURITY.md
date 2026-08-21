@@ -111,6 +111,19 @@ and, for destructive/publish actions, on independent review before
 publication — this server does not yet provide a signed human-confirmation
 mechanism for that; see the project's open issues for status.
 
+One narrow, opt-in mitigation exists for the single most irreversible
+destructive action: `delete_page`, on a deployment with
+`require_delete_confirmation:true` configured (off by default), rejects a
+non-dry-run delete of a real (non-`test_content`) page unless the caller
+explicitly passes `confirm_delete_of_published_page:true`. This is
+self-declared and unverifiable — the same honesty as
+`declared_untrusted_derivation` above — the server cannot confirm a human
+actually approved anything, only that the caller made a distinct,
+named decision to delete rather than doing so incidentally. It exists to
+give the calling agent's own system prompt/guardrails a deliberate hook to
+obtain real confirmation before setting it, not to be a security boundary
+on its own.
+
 ### Tool poisoning / rug pulls
 
 A related but distinct threat: not injected *content*, but the *tool

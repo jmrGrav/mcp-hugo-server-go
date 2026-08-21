@@ -41,6 +41,9 @@ type testServerOpts struct {
 	// mutation tool call in the test session behaves as if dry_run: true
 	// were passed, regardless of what the test actually sends.
 	ForceDryRunAll bool
+	// RequireDeleteConfirmation, when true, sets cfg.RequireDeleteConfirmation
+	// so delete_page's confirm_delete_of_published_page gate is exercised.
+	RequireDeleteConfirmation bool
 	// ConfiguredLanguages, when non-nil, overrides cfg.ConfiguredLanguages
 	// (#899) so tests can exercise create_page's authoritative lang-reject
 	// path without needing a full config.Load fixture.
@@ -72,6 +75,7 @@ func newTestServer(t *testing.T, contentRoot string, opts ...testServerOpts) (*m
 		cfg.RateLimit = *o.RateLimit
 	}
 	cfg.ForceDryRunAll = o.ForceDryRunAll
+	cfg.RequireDeleteConfirmation = o.RequireDeleteConfirmation
 	if o.ConfiguredLanguages != nil {
 		cfg.ConfiguredLanguages = o.ConfiguredLanguages
 	}

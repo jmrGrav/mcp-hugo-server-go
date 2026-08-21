@@ -303,6 +303,10 @@ type deletePageInput struct {
 	// It is advisory metadata only: delete_page never infers identity or
 	// authorization from it, and it does not alter rate limits or privileges.
 	Owner string `json:"owner,omitempty"`
+	// ConfirmDeleteOfPublishedPage is checked only when the deployment has
+	// require_delete_confirmation:true configured (config.Config); ignored
+	// otherwise. See that config field's doc comment for the full rationale.
+	ConfirmDeleteOfPublishedPage bool `json:"confirm_delete_of_published_page,omitempty"`
 }
 
 type deletePageBacklinkDTO struct {
@@ -1591,7 +1595,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. Optional `owner` is advisory metadata only: it can be echoed into disposable test-content frontmatter via create_page's `test_content: {owner}` and later used for filtering or audit correlation, but delete_page never derives identity, authorization, or quota treatment from that string.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. Optional `owner` is advisory metadata only: it can be echoed into disposable test-content frontmatter via create_page's `test_content: {owner}` and later used for filtering or audit correlation, but delete_page never derives identity, authorization, or quota treatment from that string. On a deployment with `require_delete_confirmation:true` configured (off by default), a non-dry-run delete of a real page (one with a source file that is not marked `test_content`) additionally requires `confirm_delete_of_published_page:true`, on top of `expected_revision` — the revision requirement forces a prior read, this forces a distinct, named destructive-intent decision; the response is `invalid_params` if omitted. Self-declared and unverifiable, like `create_change_set`'s `declared_untrusted_derivation`: the server cannot confirm a human approved anything, only that the caller explicitly asserted intent. A `test_content` page, or one with no source file, is exempt regardless of this setting.",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -1811,6 +1815,29 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		}
 		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
+		}
+
+		// require_delete_confirmation (config.Config, opt-in, default off):
+		// a real (non-test_content) page with a source file must carry an
+		// explicit confirm_delete_of_published_page:true, on top of the
+		// expected_revision requirement above. expected_revision forces a
+		// prior read; this forces a distinct, named destructive-intent
+		// decision the calling agent's own system prompt/guardrails can
+		// hook a real human confirmation onto. Scoped to
+		// resolvedSource.SourcePath != "" — the same boundary
+		// expected_revision's own requirement already draws — since a
+		// source-less page has no frontmatter to check for the
+		// test_content exemption. Checked before Allow() so a rejected,
+		// unconfirmed call never consumes the destructive-action quota.
+		if cfg.RequireDeleteConfirmation && resolvedSource.SourcePath != "" && !in.ConfirmDeleteOfPublishedPage {
+			fm, fmErr := hugosite.ParseFrontmatterFile(resolvedSource.SourcePath)
+			if fmErr != nil {
+				slog.Warn("delete_page: could not read frontmatter to check test_content exemption; failing closed (treating as a real page)", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", fmErr)
+			}
+			isTestContent := fmErr == nil && frontmatterBool(fm["test_content"])
+			if !isTestContent {
+				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: this deployment requires confirm_delete_of_published_page:true to delete a real (non-test_content) page; set it explicitly to confirm this destructive action"))
+			}
 		}
 
 		// #887: Allow() fires here — after not_found and the missing-guard
