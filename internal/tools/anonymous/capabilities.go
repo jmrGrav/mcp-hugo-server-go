@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
@@ -167,8 +168,53 @@ type getCapabilitiesData struct {
 // rather than "catalog_revision" or similar, which would overpromise
 // schema-level staleness detection this doesn't do.
 type capabilitiesToolCatalog struct {
-	VisibleCount  int    `json:"visible_count"`
-	NamesRevision string `json:"tool_names_revision"`
+	VisibleCount   int    `json:"visible_count"`
+	NamesRevision  string `json:"tool_names_revision"`
+	RegistryDigest string `json:"tool_registry_digest,omitempty"`
+}
+
+// toolRegistryDigest holds the process-wide tool-registry digest (#1225): a
+// sha256 over the FULL admin-scope tool surface's name/description/input
+// schema/output schema, computed once by internal/server after the
+// admin-scope *mcp.Server is fully assembled (see
+// internal/toolregistry.FromServer/Digest) and published here via
+// SetToolRegistryDigest. It is deliberately NOT computed inside this
+// package: doing so would mean re-registering every tool package a second
+// time purely to hash it, which is exactly the "two composition lists that
+// can silently diverge" trap a digest meant to catch drift must not itself
+// have. Tests and callers that build a server without ever calling
+// SetToolRegistryDigest simply never populate it — get_capabilities omits
+// the field (omitempty) rather than reporting a misleading zero-value
+// digest.
+//
+// This is a trust-on-first-use value scoped to ONE running deployment, not a
+// value comparable across deployments or pinned to a release: newScopedServer
+// only registers write/admin tools when writeEnabled, and
+// internal/server.ScopeExtension lets an embedder add arbitrary tools, so a
+// read-only or extension-carrying deployment legitimately produces a
+// different digest than another deployment of the same server version. A
+// client should pin the digest it observed from a specific, already-trusted
+// deployment and compare on reconnect — a mismatch means that deployment's
+// published tool set changed (a version upgrade, a config change, or a
+// tampered/compromised server), not that something is universally wrong.
+var toolRegistryDigest atomic.Pointer[string]
+
+// SetToolRegistryDigest publishes digest for get_capabilities to report. Safe
+// to call from any goroutine; intended to be called at most once per process,
+// after the deployment's admin-scope server has been fully assembled.
+func SetToolRegistryDigest(digest string) {
+	toolRegistryDigest.Store(&digest)
+}
+
+// currentToolRegistryDigest returns the digest published via
+// SetToolRegistryDigest, or "" if it was never called (e.g. most unit tests,
+// which build a bare *mcp.Server directly rather than going through
+// internal/server.New/NewStdio).
+func currentToolRegistryDigest() string {
+	if p := toolRegistryDigest.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 // visibleToolCatalog computes capabilitiesToolCatalog from the same
@@ -207,8 +253,9 @@ func visibleToolCatalog(scopeName string, writeEnabled bool) capabilitiesToolCat
 		h.Write([]byte{0})
 	}
 	return capabilitiesToolCatalog{
-		VisibleCount:  len(names),
-		NamesRevision: "sha256:" + hex.EncodeToString(h.Sum(nil)),
+		VisibleCount:   len(names),
+		NamesRevision:  "sha256:" + hex.EncodeToString(h.Sum(nil)),
+		RegistryDigest: currentToolRegistryDigest(),
 	}
 }
 
@@ -298,7 +345,7 @@ func registerGetCapabilities(s *mcp.Server, idx *site.Index, srcIdx *hugosite.So
 			"`limits.asset_upload.recommended_inline_max_bytes` (#1190) is the actually-reachable ceiling for upload_page_asset's inline `content_base64` param — computed from this server's real `max_request_bytes` (base64 expands the payload ~4/3, and it still has to fit the tool-call envelope alongside `max_request_bytes`), which is always <= `asset_max_bytes` and often well below it; a file larger than this needs a different transfer path (there is no chunked-upload mode yet) before uploading in one call. "+
 			"`allowed_image_formats` for upload_page_asset; `blocked_shortcodes` the write tools reject; and `features` — coarse availability flags for optional integrations (overall image generation plus its local/external sub-modes, post-build hooks, OAuth, Cloudflare purge, IndexNow, Google indexing, git baseline). "+
 			"`features` reports only booleans/counts, never secrets, hook command strings, or host paths. No additional business scope is required beyond the read/anonymous-tier permission; on OAuth-enabled deployments, a Bearer token is still required for every `/mcp` call, including this tool. "+
-			"`effective_scopes` names the caller's own scope (`read`, `write`, or `admin` — the three canonical scopes the server ever grants, #450/#1039/#1050) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools (or a write-scoped caller lacks the admin-only managed Hugo binary lifecycle tools), or `not_configured` when a write-scoped caller has write tools available but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `disabled_features[]` separately explains optional integrations disabled by configuration with reason `feature_disabled`; it never exposes secrets or paths. `tool_catalog` (#1175) is a stale-discovery detector: `visible_count`/`tool_names_revision` (a sha256 over this caller's scope-visible tool names, sorted) let an agent compare what its own MCP client actually loaded against what this server currently registers for it — a mismatch means the client's tool-schema cache is stale, not that the server is misconfigured (the concrete case #1175 was filed over: two MCP clients against the same server commit disagreed on the registered tool set). Scope-only like `masked_tools` — does not account for exposure-profile session narrowing (`?profile=`, #1137). `tool_names_revision` hashes tool names only, not descriptions/input schemas, so it does not move when an existing tool's schema alone changes (only when a tool is added or removed) — read it as a name-catalog fingerprint, not a full-schema one. Note: `admin` is intentionally never advertised on the external OAuth-discovery surface (server card, `.well-known/oauth-protected-resource`) — only `read`/`write` appear there, since `admin` is an explicitly-approved administrator tier, not self-service; `effective_scopes` here is this tool's own in-session view of the caller's actual scope, not a mirror of that external discovery contract.",
+			"`effective_scopes` names the caller's own scope (`read`, `write`, or `admin` — the three canonical scopes the server ever grants, #450/#1039/#1050) so an agent can tell what it's authorized for without probing; `masked_tools` (omitted entirely when nothing is masked) reports the count of tools NOT visible to this caller with `reason` — `missing_scope` when a read-scoped caller lacks the write tools (or a write-scoped caller lacks the admin-only managed Hugo binary lifecycle tools), or `not_configured` when a write-scoped caller has write tools available but the deployment has no content_root so they never registered — and `required_scopes` naming what would unlock them. `disabled_features[]` separately explains optional integrations disabled by configuration with reason `feature_disabled`; it never exposes secrets or paths. `tool_catalog` (#1175) is a stale-discovery detector: `visible_count`/`tool_names_revision` (a sha256 over this caller's scope-visible tool names, sorted) let an agent compare what its own MCP client actually loaded against what this server currently registers for it — a mismatch means the client's tool-schema cache is stale, not that the server is misconfigured (the concrete case #1175 was filed over: two MCP clients against the same server commit disagreed on the registered tool set). Scope-only like `masked_tools` — does not account for exposure-profile session narrowing (`?profile=`, #1137). `tool_names_revision` hashes tool names only, not descriptions/input schemas, so it does not move when an existing tool's schema alone changes (only when a tool is added or removed) — read it as a name-catalog fingerprint, not a full-schema one. `tool_registry_digest` (#1225, omitted when unavailable) closes that gap for tool-poisoning / rug-pull detection: a sha256 over name+description+input schema+output schema across this DEPLOYMENT's full admin-scope tool surface (the superset, not narrowed to this caller's own scope), so a client can pin the digest from a deployment it already trusts and detect any later edit to any tool's description or schema on reconnect, not just an added/removed tool. It is deployment-scoped, not release-scoped: a read-only or extension-carrying deployment legitimately differs from another deployment of the same server version, so a mismatch against a value observed from a DIFFERENT deployment is not evidence of tampering — only a mismatch against a value previously observed from the SAME deployment is. Note: `admin` is intentionally never advertised on the external OAuth-discovery surface (server card, `.well-known/oauth-protected-resource`) — only `read`/`write` appear there, since `admin` is an explicitly-approved administrator tier, not self-service; `effective_scopes` here is this tool's own in-session view of the caller's actual scope, not a mirror of that external discovery contract.",
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ getCapabilitiesInput) (*mcp.CallToolResult, getCapabilitiesOutput, error) {
 			pMin, pDef, pMax := adminpkg.PreviewTTLBoundsSeconds()
 			localHeroGenerationAvailable := strings.TrimSpace(cfg.HugoRoot) != ""
