@@ -2,6 +2,7 @@ package write_test
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
@@ -186,5 +187,32 @@ func TestCreateChangeSetDeclaredUntrustedDerivationRoundTrips(t *testing.T) {
 	ordinaryData := decodeWriteData(t, resOrdinary)
 	if _, present := ordinaryData["declared_untrusted_derivation"]; present {
 		t.Fatalf("ordinary create_change_set response carries declared_untrusted_derivation, want omitted: %#v", ordinaryData)
+	}
+}
+
+// TestCreateChangeSetRejectsOverlongDeclaredUntrustedNote pins the
+// maxDeclaredUntrustedNoteRunes rejection to the field it actually
+// validates — asserting only res.IsError would also pass if the cap were
+// silently dropped and some unrelated validation happened to fire first,
+// the same failure mode
+// TestAdversarialMaliciousFeaturedImageRejectedAtToolBoundary guards
+// against for featured_image. No change-set may be minted by a rejected
+// call: create_change_set must validate before calling changeSets.Create,
+// not after.
+func TestCreateChangeSetRejectsOverlongDeclaredUntrustedNote(t *testing.T) {
+	contentRoot := t.TempDir()
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	overlong := strings.Repeat("a", 2001)
+	res := callTool(t, session, "create_change_set", map[string]any{
+		"declared_untrusted_derivation": true,
+		"declared_untrusted_note":       overlong,
+	})
+	if !res.IsError {
+		t.Fatalf("create_change_set with a %d-rune declared_untrusted_note succeeded, want rejection: %s", len(overlong), marshalContent(t, res))
+	}
+	if body := marshalContent(t, res); !strings.Contains(body, "declared_untrusted_note") {
+		t.Fatalf("create_change_set rejected the payload, but not via declared_untrusted_note validation: %s", body)
 	}
 }
