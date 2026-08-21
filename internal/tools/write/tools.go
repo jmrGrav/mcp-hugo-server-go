@@ -1831,6 +1831,9 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		// unconfirmed call never consumes the destructive-action quota.
 		if cfg.RequireDeleteConfirmation && resolvedSource.SourcePath != "" && !in.ConfirmDeleteOfPublishedPage {
 			fm, fmErr := hugosite.ParseFrontmatterFile(resolvedSource.SourcePath)
+			if fmErr != nil {
+				slog.Warn("delete_page: could not read frontmatter to check test_content exemption; failing closed (treating as a real page)", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", fmErr)
+			}
 			isTestContent := fmErr == nil && frontmatterBool(fm["test_content"])
 			if !isTestContent {
 				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: this deployment requires confirm_delete_of_published_page:true to delete a real (non-test_content) page; set it explicitly to confirm this destructive action"))
