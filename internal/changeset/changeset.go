@@ -60,6 +60,12 @@ type owner struct {
 	PrincipalID string
 	CreatedAt   time.Time
 	LastUsedAt  time.Time
+	// DeclaredUntrustedDerivation and DeclaredUntrustedNote are a caller
+	// self-report (see Registry.SetDeclaredUntrustedDerivation) — never
+	// verified by this registry, never a basis for gating any tool's
+	// behavior.
+	DeclaredUntrustedDerivation bool
+	DeclaredUntrustedNote       string
 }
 
 // Registry tracks which principal owns each explicit change_set_id and
@@ -126,6 +132,48 @@ func (r *Registry) Create(principalID string, now time.Time) (string, error) {
 	return id, nil
 }
 
+// SetDeclaredUntrustedDerivation records changeSetID's self-reported
+// untrusted-derivation state, set at most once at creation time by
+// registerCreateChangeSet's handler. This is a caller self-report, not
+// something this registry (or anything else server-side) verifies: the
+// server never sees what informed the arguments of a later
+// create_page/update_page call, so an agent that already decided to act on
+// injected content can simply omit this declaration. Its sole purpose is
+// audit visibility — surfaced read-only via
+// get_runtime_status.data.publication_safety.current_change_set (§6.18,
+// §6.27) for a human or downstream tooling to see before publishing. MUST
+// NOT be used to gate any tool's behavior (see docs/mcp-contract.md §6.27
+// and SECURITY.md for why: gating on a self-report only punishes honest
+// declarations while doing nothing against a dishonest omission).
+func (r *Registry) SetDeclaredUntrustedDerivation(changeSetID string, declared bool, note string) {
+	r.mu.Lock()
+	o := r.owners[changeSetID]
+	o.DeclaredUntrustedDerivation = declared
+	o.DeclaredUntrustedNote = note
+	r.owners[changeSetID] = o
+	r.mu.Unlock()
+	if r.persistent != nil {
+		if err := r.persistent.SetChangeSetDeclaredUntrustedDerivation(changeSetID, declared, note); err != nil {
+			slog.Warn("create_change_set: could not persist declared-untrusted-derivation", "change_set_id", changeSetID, "error", err)
+		}
+	}
+}
+
+// DeclaredUntrustedDerivation returns changeSetID's self-reported
+// untrusted-derivation state (false, "" if never declared, or if
+// changeSetID is unknown to this process — e.g. an implicit per-principal
+// default bucket, which was never created via create_change_set and so
+// can never carry a declaration).
+func (r *Registry) DeclaredUntrustedDerivation(changeSetID string) (declared bool, note string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	o, ok := r.owners[changeSetID]
+	if !ok {
+		return false, ""
+	}
+	return o.DeclaredUntrustedDerivation, o.DeclaredUntrustedNote
+}
+
 // Resolve validates a caller-supplied change_set_id, or — if requested is
 // blank — returns the implicit stable per-principal default (see
 // DefaultID) so callers that never adopt this parameter are unaffected. A
@@ -176,12 +224,12 @@ func (r *Registry) checkOwnership(ctx context.Context, requested string) (string
 	o, ok := r.owners[requested]
 	r.mu.Unlock()
 	if !ok && r.persistent != nil {
-		persistedPrincipal, found, err := r.persistent.GetChangeSetOwner(requested)
+		persistedPrincipal, declared, note, found, err := r.persistent.GetChangeSetOwner(requested)
 		if err != nil {
 			return "", fmt.Errorf("internal_error: failed to look up change_set_id")
 		}
 		if found {
-			o = owner{PrincipalID: persistedPrincipal}
+			o = owner{PrincipalID: persistedPrincipal, DeclaredUntrustedDerivation: declared, DeclaredUntrustedNote: note}
 			ok = true
 			r.mu.Lock()
 			r.owners[requested] = o

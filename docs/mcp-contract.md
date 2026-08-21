@@ -1107,6 +1107,12 @@ by this issue alone; that guard is #1140, which depends on this primitive.
 `get_runtime_status`/`get_mutation_status` do not yet surface change-set
 state either — that's #1142.
 
+`create_change_set` additionally accepts an optional
+`declared_untrusted_derivation`/`declared_untrusted_note` self-report
+(#1226) — see §6.27 for what it means and, critically, what it does not
+mean (a caller self-report this server cannot verify, never a gate on any
+tool's behavior).
+
 ### 6.16 Foreign-Change-Set Guard on Build/Publish (#1140)
 
 `build_site` and `publish_changes` both accept the same optional
@@ -1229,7 +1235,11 @@ change-set most recently touched it (the same `OwnerOfSourceKey` lookup
 the guard itself uses), then bucketed relative to the resolved id:
 
 - `current_change_set.changes` — pending pages this specific change-set's
-  own edits produced.
+  own edits produced. `current_change_set.declared_untrusted_derivation`/
+  `.declared_untrusted_note` (#1226) echo this change-set's self-reported
+  untrusted-derivation state (§6.27) — present here purely for a human
+  reviewer's or downstream tooling's visibility before publishing; never
+  factored into `safe_to_publish` below.
 - `other_change_sets.count`/`.changes` — pending pages known to belong to
   a *different* change-set. Nonzero here is exactly what would make
   `build_site`/`publish_changes` with this same `change_set_id` fail with

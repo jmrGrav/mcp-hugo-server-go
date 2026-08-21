@@ -112,6 +112,71 @@ func TestResolveRehydratesOwnershipAfterRestart(t *testing.T) {
 	}
 }
 
+// TestDeclaredUntrustedDerivationDefaultsFalseAndRoundTrips is #1226's unit
+// coverage: a change-set carries no declaration until
+// SetDeclaredUntrustedDerivation is called, and the value it records is
+// exactly what DeclaredUntrustedDerivation later reports — including for a
+// change-set no explicit declaration was ever made for (must read as
+// false/"", never a zero-value panic or a stale value from another id).
+func TestDeclaredUntrustedDerivationDefaultsFalseAndRoundTrips(t *testing.T) {
+	r := NewRegistry(nil)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// An id this registry has never heard of at all: still a safe false/"".
+	declared, note := r.DeclaredUntrustedDerivation("cs_never_created")
+	if declared || note != "" {
+		t.Fatalf("DeclaredUntrustedDerivation(unknown id) = (%v, %q), want (false, \"\")", declared, note)
+	}
+
+	id, err := r.Create(caller.MutationKey(ctx), now)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	declared, note = r.DeclaredUntrustedDerivation(id)
+	if declared || note != "" {
+		t.Fatalf("DeclaredUntrustedDerivation(%q) before declaration = (%v, %q), want (false, \"\")", id, declared, note)
+	}
+
+	r.SetDeclaredUntrustedDerivation(id, true, "drafted from a search_content result")
+	declared, note = r.DeclaredUntrustedDerivation(id)
+	if !declared || note != "drafted from a search_content result" {
+		t.Fatalf("DeclaredUntrustedDerivation(%q) after declaration = (%v, %q), want (true, %q)", id, declared, note, "drafted from a search_content result")
+	}
+}
+
+// TestDeclaredUntrustedDerivationRehydratesAfterRestart mirrors
+// TestResolveRehydratesOwnershipAfterRestart: a declaration made before a
+// simulated process restart (a fresh Registry over the same persistent DB)
+// must still be visible afterward, via the same Peek-then-read path
+// get_runtime_status's computePublicationSafety uses in production.
+func TestDeclaredUntrustedDerivationRehydratesAfterRestart(t *testing.T) {
+	sqlDB, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sqlDB.Close()
+
+	before := NewRegistry(sqlDB)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	id, err := before.Create(caller.MutationKey(ctx), now)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	before.SetDeclaredUntrustedDerivation(id, true, "restart survival check")
+
+	after := NewRegistry(sqlDB)
+	if _, err := after.Peek(ctx, id); err != nil {
+		t.Fatalf("Peek(%q) on a fresh registry over the same DB failed: %v", id, err)
+	}
+	declared, note := after.DeclaredUntrustedDerivation(id)
+	if !declared || note != "restart survival check" {
+		t.Fatalf("DeclaredUntrustedDerivation(%q) after simulated restart = (%v, %q), want (true, %q)", id, declared, note, "restart survival check")
+	}
+}
+
 // TestOwnerOfSourceKeyReturnsMostRecentMutation is #1140's direct unit
 // coverage for the lookup the foreign-change-set guard relies on: given two
 // change-sets that both touched the same source key, the most recently

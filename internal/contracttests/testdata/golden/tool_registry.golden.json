@@ -941,13 +941,23 @@
   {
     "name": "create_change_set",
     "required_scope": "write",
-    "description": "Mint a new opaque change_set_id, owned by the calling principal, to pass as the optional change_set_id parameter on create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change/apply_bundle_plan/rollback_bundle/create_bundle/delete_bundle, and (#1140) on build_site/publish_changes to scope which change-set's pending pages you intend to publish. Use this when two or more clients might share the same OAuth token/principal (a realistic single-operator deployment shape) and each needs its own mutations tracked and published separately — call this once per logical unit of work and reuse the returned id across every mutation in that unit; omitting change_set_id on a mutation call falls back to a stable implicit per-principal default, matching this server's behavior before this tool existed. The id is opaque and durable (usable again after a reconnect) but is not itself a secret; it is validated to belong to the calling principal on every use, never accepted from another principal.",
+    "description": "Mint a new opaque change_set_id, owned by the calling principal, to pass as the optional change_set_id parameter on create_page/update_page/delete_page/upload_page_asset/delete_page_asset/apply_content_plan/rollback_change/apply_bundle_plan/rollback_bundle/create_bundle/delete_bundle, and (#1140) on build_site/publish_changes to scope which change-set's pending pages you intend to publish. Use this when two or more clients might share the same OAuth token/principal (a realistic single-operator deployment shape) and each needs its own mutations tracked and published separately — call this once per logical unit of work and reuse the returned id across every mutation in that unit; omitting change_set_id on a mutation call falls back to a stable implicit per-principal default, matching this server's behavior before this tool existed. The id is opaque and durable (usable again after a reconnect) but is not itself a secret; it is validated to belong to the calling principal on every use, never accepted from another principal. Optional declared_untrusted_derivation/declared_untrusted_note (#1226): set declared_untrusted_derivation=true when the editing session you're about to start under this change-set derives from content you read that was tagged content_provenance=\"site_source_untrusted\" or \"site_rendered_public_untrusted\" (docs/mcp-contract.md §6.27) — e.g. you're drafting a page based on something you found via search_content or get_page_markdown. This is a self-report only: this server cannot verify it (it never sees what informed the arguments of your later create_page/update_page calls), and no tool's behavior is gated on it. Its sole purpose is audit visibility, surfaced read-only via get_runtime_status.data.publication_safety.current_change_set for a human reviewer or downstream tooling to see before publishing. Omit both fields for ordinary use.",
     "input_schema": {
       "additionalProperties": false,
+      "properties": {
+        "declared_untrusted_derivation": {
+          "type": "boolean"
+        },
+        "declared_untrusted_note": {
+          "type": "string"
+        }
+      },
       "type": "object"
     },
     "output_schema_fields": [
       "data.change_set_id:string:required",
+      "data.declared_untrusted_derivation:boolean",
+      "data.declared_untrusted_note:string",
       "data:object:required",
       "errors:unspecified:required",
       "errors[].build_id:string",
@@ -978,7 +988,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "00e102dbb3870fdb9f08582059b75655ca76104e070212b56d1461308b159ca1"
+    "output_schema_sha256": "2d2b71d67eb75154ee14135166fe5c302c1ebe12c404333133f3be1827b3b2e8"
   },
   {
     "name": "create_page",
@@ -3224,6 +3234,8 @@
       "data.process_started_at:string:required",
       "data.publication_safety.active_change_sets:integer:required",
       "data.publication_safety.current_change_set.changes:integer:required",
+      "data.publication_safety.current_change_set.declared_untrusted_derivation:boolean",
+      "data.publication_safety.current_change_set.declared_untrusted_note:string",
       "data.publication_safety.current_change_set.id:string:required",
       "data.publication_safety.current_change_set:object:required",
       "data.publication_safety.external_unknown_changes:integer:required",
@@ -3281,7 +3293,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "f88a40a0e155779bba7362234eaad5e43071a02bbbcddb7f4f2e96398a27cf7c"
+    "output_schema_sha256": "59074059702a2608190a4c24170ca01985b31d2098e2320e8208c132080e0cd6"
   },
   {
     "name": "get_site_health",

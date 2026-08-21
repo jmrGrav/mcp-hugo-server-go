@@ -42,7 +42,7 @@ func TestCreateChangeSetPersistsAndIsIdempotent(t *testing.T) {
 	if err := d.CreateChangeSet("cs_1", "principal-a", now); err != nil {
 		t.Fatalf("CreateChangeSet: %v", err)
 	}
-	owner, found, err := d.GetChangeSetOwner("cs_1")
+	owner, _, _, found, err := d.GetChangeSetOwner("cs_1")
 	if err != nil {
 		t.Fatalf("GetChangeSetOwner: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestCreateChangeSetPersistsAndIsIdempotent(t *testing.T) {
 	if err := d.CreateChangeSet("cs_1", "principal-b", now.Add(time.Minute)); err != nil {
 		t.Fatalf("CreateChangeSet (retry): %v", err)
 	}
-	owner, found, err = d.GetChangeSetOwner("cs_1")
+	owner, _, _, found, err = d.GetChangeSetOwner("cs_1")
 	if err != nil {
 		t.Fatalf("GetChangeSetOwner (after retry): %v", err)
 	}
@@ -77,7 +77,7 @@ func TestCreateChangeSetRequiresIDAndPrincipal(t *testing.T) {
 
 func TestGetChangeSetOwnerReturnsGenuineDBError(t *testing.T) {
 	d := closedTestDB(t)
-	_, found, err := d.GetChangeSetOwner("cs_1")
+	_, _, _, found, err := d.GetChangeSetOwner("cs_1")
 	if err == nil {
 		t.Fatal("expected a genuine DB error from a closed connection, got nil")
 	}
@@ -96,7 +96,7 @@ func TestListChangeSetMutationsReturnsGenuineDBError(t *testing.T) {
 
 func TestGetChangeSetOwnerNotFound(t *testing.T) {
 	d := openTestDB(t)
-	owner, found, err := d.GetChangeSetOwner("cs_does_not_exist")
+	owner, _, _, found, err := d.GetChangeSetOwner("cs_does_not_exist")
 	if err != nil {
 		t.Fatalf("GetChangeSetOwner: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestTouchChangeSetUpdatesLastUsedAt(t *testing.T) {
 		t.Fatalf("TouchChangeSet: %v", err)
 	}
 	// The owner must be unaffected by touch.
-	owner, found, err := d.GetChangeSetOwner("cs_touch")
+	owner, _, _, found, err := d.GetChangeSetOwner("cs_touch")
 	if err != nil || !found || owner != "principal-a" {
 		t.Fatalf("GetChangeSetOwner after touch = (%q, %v, %v), want (principal-a, true, nil)", owner, found, err)
 	}
@@ -171,6 +171,35 @@ func TestRecordChangeSetMutationAndListInOrder(t *testing.T) {
 	}
 	if len(empty) != 0 {
 		t.Fatalf("ListChangeSetMutations (empty) = %d entries, want 0", len(empty))
+	}
+}
+
+func TestSetChangeSetDeclaredUntrustedDerivationPersistsAndDefaultsFalse(t *testing.T) {
+	d := openTestDB(t)
+	now := time.Now().UTC()
+	if err := d.CreateChangeSet("cs_declared", "principal-a", now); err != nil {
+		t.Fatalf("CreateChangeSet: %v", err)
+	}
+
+	// Default, before any declaration: false/"" — a change-set created
+	// without opting in must not spuriously read as untrusted-derived.
+	_, declared, note, found, err := d.GetChangeSetOwner("cs_declared")
+	if err != nil || !found {
+		t.Fatalf("GetChangeSetOwner (before declaration): found=%v err=%v", found, err)
+	}
+	if declared || note != "" {
+		t.Fatalf("GetChangeSetOwner (before declaration) = (declared=%v, note=%q), want (false, \"\")", declared, note)
+	}
+
+	if err := d.SetChangeSetDeclaredUntrustedDerivation("cs_declared", true, "drafted from a search_content result"); err != nil {
+		t.Fatalf("SetChangeSetDeclaredUntrustedDerivation: %v", err)
+	}
+	_, declared, note, found, err = d.GetChangeSetOwner("cs_declared")
+	if err != nil || !found {
+		t.Fatalf("GetChangeSetOwner (after declaration): found=%v err=%v", found, err)
+	}
+	if !declared || note != "drafted from a search_content result" {
+		t.Fatalf("GetChangeSetOwner (after declaration) = (declared=%v, note=%q), want (true, \"drafted from a search_content result\")", declared, note)
 	}
 }
 

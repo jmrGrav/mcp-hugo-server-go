@@ -162,7 +162,25 @@ func Open(path string) (*DB, error) {
 		_ = sqlDB.Close()
 		return nil, fmt.Errorf("db: reconcile rendered checks scope: %w", err)
 	}
+	if err := d.migrateChangeSetDeclaredUntrustedSchema(); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("db: migrate change-set declared-untrusted-derivation schema: %w", err)
+	}
 	return d, nil
+}
+
+// migrateChangeSetDeclaredUntrustedSchema adds the self-declared
+// untrusted-derivation columns to a pre-existing change_sets table (a fresh
+// DB already gets them from createTables; this covers a DB file created
+// before #1226). See docs/mcp-contract.md §6.27 and SECURITY.md for what
+// this field means and, critically, does not mean — it is a caller
+// self-report for audit purposes, never a value this server verifies or
+// gates behavior on.
+func (d *DB) migrateChangeSetDeclaredUntrustedSchema() error {
+	if err := addColumnIfMissing(d.db, "change_sets", "declared_untrusted_derivation", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return addColumnIfMissing(d.db, "change_sets", "declared_untrusted_note", "TEXT NOT NULL DEFAULT ''")
 }
 
 // linksIgnorePolicySchemaVersion identifies this reconciliation pass in
@@ -422,7 +440,9 @@ func (d *DB) createTables() error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS change_sets (
 			id TEXT PRIMARY KEY, principal_id TEXT NOT NULL,
-			created_at TEXT NOT NULL, last_used_at TEXT NOT NULL
+			created_at TEXT NOT NULL, last_used_at TEXT NOT NULL,
+			declared_untrusted_derivation INTEGER NOT NULL DEFAULT 0,
+			declared_untrusted_note TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE TABLE IF NOT EXISTS change_set_mutations (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -744,18 +764,33 @@ func (d *DB) CreateChangeSet(id, principalID string, now time.Time) error {
 	return err
 }
 
-// GetChangeSetOwner looks up which principal created change_set_id id, for
-// restoring ownership after a process restart (the in-memory registry is
-// otherwise the sole source of truth while the process is up).
-func (d *DB) GetChangeSetOwner(id string) (principalID string, found bool, err error) {
-	err = d.db.QueryRow(`SELECT principal_id FROM change_sets WHERE id=?`, id).Scan(&principalID)
+// GetChangeSetOwner looks up which principal created change_set_id id, and
+// its self-declared untrusted-derivation state (see
+// SetChangeSetDeclaredUntrustedDerivation), for restoring ownership after a
+// process restart (the in-memory registry is otherwise the sole source of
+// truth while the process is up).
+func (d *DB) GetChangeSetOwner(id string) (principalID string, declaredUntrustedDerivation bool, declaredUntrustedNote string, found bool, err error) {
+	err = d.db.QueryRow(`SELECT principal_id, declared_untrusted_derivation, declared_untrusted_note FROM change_sets WHERE id=?`, id).
+		Scan(&principalID, &declaredUntrustedDerivation, &declaredUntrustedNote)
 	if err == sql.ErrNoRows {
-		return "", false, nil
+		return "", false, "", false, nil
 	}
 	if err != nil {
-		return "", false, err
+		return "", false, "", false, err
 	}
-	return principalID, true, nil
+	return principalID, declaredUntrustedDerivation, declaredUntrustedNote, true, nil
+}
+
+// SetChangeSetDeclaredUntrustedDerivation records a caller's self-report
+// that the editing session behind change_set_id id derives from content it
+// read that was tagged content_provenance="site_source_untrusted" or
+// "site_rendered_public_untrusted" (see docs/mcp-contract.md §6.27). This
+// is unverifiable by the server — it never sees what informed the
+// arguments of a later create_page/update_page call — so it is an audit
+// signal only. Callers MUST NOT gate any tool's behavior on this value.
+func (d *DB) SetChangeSetDeclaredUntrustedDerivation(id string, declared bool, note string) error {
+	_, err := d.db.Exec(`UPDATE change_sets SET declared_untrusted_derivation=?, declared_untrusted_note=? WHERE id=?`, declared, note, id)
+	return err
 }
 
 // TouchChangeSet updates a change-set's last-used timestamp. Best-effort

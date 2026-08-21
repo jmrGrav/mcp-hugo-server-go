@@ -155,6 +155,13 @@ type mutationJournalRuntimeStatus struct {
 type currentChangeSetRuntimeStatus struct {
 	ID      string `json:"id"`
 	Changes int    `json:"changes"`
+	// DeclaredUntrustedDerivation/DeclaredUntrustedNote (#1226) surface
+	// this change-set's self-reported untrusted-derivation state, set
+	// optionally at create_change_set time. Unverified by this server —
+	// an audit signal only, never a basis for SafeToPublish below. See
+	// docs/mcp-contract.md §6.27.
+	DeclaredUntrustedDerivation bool   `json:"declared_untrusted_derivation,omitempty"`
+	DeclaredUntrustedNote       string `json:"declared_untrusted_note,omitempty"`
 }
 
 type otherChangeSetsRuntimeStatus struct {
@@ -577,8 +584,14 @@ func computePublicationSafety(ctx context.Context, changeSets *changeset.Registr
 		changesByOwner[ownerID]++
 	}
 
+	declared, declaredNote := changeSets.DeclaredUntrustedDerivation(current)
 	result := &publicationSafetyRuntimeStatus{
-		CurrentChangeSet: currentChangeSetRuntimeStatus{ID: current, Changes: changesByOwner[current]},
+		CurrentChangeSet: currentChangeSetRuntimeStatus{
+			ID:                          current,
+			Changes:                     changesByOwner[current],
+			DeclaredUntrustedDerivation: declared,
+			DeclaredUntrustedNote:       declaredNote,
+		},
 	}
 	ownerIDs := make([]string, 0, len(changesByOwner))
 	for id := range changesByOwner {
