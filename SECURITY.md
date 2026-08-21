@@ -120,13 +120,15 @@ between a client's connections, without its name ever changing, so a
 static allowlist-by-name never notices. `get_capabilities.data.tool_catalog
 .tool_registry_digest` (§6.28, #1225) exists for this: a `sha256:<hex>`
 fingerprint over every tool's `{name, description, input_schema,
-output_schema}` across this deployment's full admin-scope tool surface,
-computed once at server startup from a real `tools/list` round-trip
-(`internal/toolregistry`). It is a trust-on-first-use value scoped to one
-specific deployment, not a universal constant — see §6.28 for exactly what
-a client should and should not conclude from a mismatch. Like
-`content_provenance`, this is a signal for the calling client to pin and
-compare; this server does not itself refuse to serve a tool whose
-description changed, since a legitimate deployment (a version upgrade, an
-operator-authored extension) changes tool descriptions too.
+output_schema}` **that this specific session can see**, computed the
+first time that session calls `get_capabilities` from a real `tools/list`
+round-trip against its own `*mcp.Server` (`internal/toolregistry`) —
+already narrowed by OAuth scope and any `?profile=` (#1137) before the
+digest is computed, so it is trust-on-first-use per (deployment, scope,
+profile), not per deployment alone; see §6.28 for exactly what a client
+should and should not conclude from a mismatch. Like `content_provenance`,
+this is a signal for the calling client to pin and compare; this server
+does not itself refuse to serve a tool whose description changed, since a
+legitimate deployment (a version upgrade, an operator-authored extension)
+changes tool descriptions too.
 

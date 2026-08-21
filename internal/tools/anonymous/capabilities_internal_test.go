@@ -1,6 +1,43 @@
 package anonymous
 
-import "testing"
+import (
+	"context"
+	"sync"
+	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// TestToolRegistryDigestForServerReturnsEmptyOnConnectFailure exercises
+// toolRegistryDigestForServer's error path directly: internal/toolregistry's
+// own tests already prove FromServer surfaces a Connect error (a canceled
+// context fails the in-memory client.Connect handshake); this test proves
+// the caller-facing contract on top of that — a failed snapshot logs and
+// leaves cached empty rather than panicking or caching a zero-value digest
+// that would later be reported as if it were real.
+func TestToolRegistryDigestForServerReturnsEmptyOnConnectFailure(t *testing.T) {
+	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var once sync.Once
+	var cached string
+	got := toolRegistryDigestForServer(ctx, s, &once, &cached)
+	if got != "" {
+		t.Fatalf("toolRegistryDigestForServer with a canceled context = %q, want empty", got)
+	}
+	if cached != "" {
+		t.Fatalf("cached = %q after a failed snapshot, want empty", cached)
+	}
+
+	// once.Do fires exactly once per (once, cached) pair — a second call
+	// sharing the same pair, even with a live context, must still return
+	// the cached (empty, from the failed attempt) result rather than
+	// retrying, proving the cache is per-server-lifetime, not per-success.
+	if got2 := toolRegistryDigestForServer(context.Background(), s, &once, &cached); got2 != "" {
+		t.Fatalf("second call recomputed instead of honoring the cached (empty) result from sync.Once: %q", got2)
+	}
+}
 
 // TestRecommendedInlineAssetMaxBytes is a regression test for #1190:
 // asset_max_bytes alone overstated what upload_page_asset's inline
