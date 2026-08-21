@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/caller"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 )
@@ -99,6 +100,60 @@ func TestComputePublicationSafetyExternalUnknownIsUnsafe(t *testing.T) {
 	}
 	if result.UnpublishedChangesCount != 1 {
 		t.Fatalf("UnpublishedChangesCount = %d, want 1", result.UnpublishedChangesCount)
+	}
+}
+
+// TestComputePublicationSafetySurfacesDeclaredUntrustedDerivationWithoutGating
+// is #1226's direct coverage: a self-declared untrusted-derivation flag on
+// the current change-set must surface verbatim in
+// CurrentChangeSet.DeclaredUntrustedDerivation, and — the load-bearing
+// half of this test — must have zero effect on SafeToPublish. Gating
+// publish safety on a self-report an injected agent could simply omit
+// would only punish honest declarations; see SECURITY.md and
+// docs/mcp-contract.md §6.27. The free-text note is deliberately NOT
+// asserted here — it is intentionally excluded from this surface (see
+// currentChangeSetRuntimeStatus's own doc comment: replaying arbitrary
+// caller-supplied text through an admin-scope response with no
+// content_provenance tagging would reopen the exact gap #1223 closed).
+func TestComputePublicationSafetySurfacesDeclaredUntrustedDerivationWithoutGating(t *testing.T) {
+	srcIdx, err := hugosite.NewSourceIndex(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSourceIndex() error = %v", err)
+	}
+
+	changeSets := changeset.NewRegistry(nil)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	id, err := changeSets.Create(caller.MutationKey(ctx), now)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	changeSets.SetDeclaredUntrustedDerivation(id, true, "drafted from a search_content result")
+
+	result, err := computePublicationSafety(ctx, changeSets, srcIdx, id, 0)
+	if err != nil {
+		t.Fatalf("computePublicationSafety() error = %v", err)
+	}
+	if !result.CurrentChangeSet.DeclaredUntrustedDerivation {
+		t.Fatal("CurrentChangeSet.DeclaredUntrustedDerivation = false, want true")
+	}
+	if !result.SafeToPublish {
+		t.Fatal("SafeToPublish = false solely due to a declared-untrusted-derivation flag with no other pending work — this field must never gate on the declaration")
+	}
+
+	// A change-set nobody declared anything for reports the zero value, not
+	// a stale value leaked from the id above.
+	other, err := changeSets.Create(caller.MutationKey(ctx), now)
+	if err != nil {
+		t.Fatalf("Create() (undeclared) error = %v", err)
+	}
+	resultOther, err := computePublicationSafety(ctx, changeSets, srcIdx, other, 0)
+	if err != nil {
+		t.Fatalf("computePublicationSafety() (undeclared) error = %v", err)
+	}
+	if resultOther.CurrentChangeSet.DeclaredUntrustedDerivation {
+		t.Fatalf("undeclared change-set reported DeclaredUntrustedDerivation=true, want false")
 	}
 }
 

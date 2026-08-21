@@ -155,6 +155,21 @@ type mutationJournalRuntimeStatus struct {
 type currentChangeSetRuntimeStatus struct {
 	ID      string `json:"id"`
 	Changes int    `json:"changes"`
+	// DeclaredUntrustedDerivation (#1226) surfaces this change-set's
+	// self-reported untrusted-derivation state, set optionally at
+	// create_change_set time. Unverified by this server — an audit signal
+	// only, never a basis for SafeToPublish below. See
+	// docs/mcp-contract.md §6.27. Deliberately a bool only: the paired
+	// free-text declared_untrusted_note is caller-supplied text this
+	// package carries no content_provenance tagging for (unlike
+	// internal/tools/read/internal/tools/anonymous) — echoing it back
+	// here would open an untagged channel for arbitrary
+	// attacker-influenceable text into an admin-scope response that looks
+	// like server metadata. The note is still recorded (create_change_set
+	// echoes it to the same caller that supplied it, and it's queryable
+	// directly from SQLite's change_sets table for an operator who needs
+	// it) — it is just not replayed through this surface.
+	DeclaredUntrustedDerivation bool `json:"declared_untrusted_derivation,omitempty"`
 }
 
 type otherChangeSetsRuntimeStatus struct {
@@ -577,8 +592,13 @@ func computePublicationSafety(ctx context.Context, changeSets *changeset.Registr
 		changesByOwner[ownerID]++
 	}
 
+	declared, _ := changeSets.DeclaredUntrustedDerivation(current)
 	result := &publicationSafetyRuntimeStatus{
-		CurrentChangeSet: currentChangeSetRuntimeStatus{ID: current, Changes: changesByOwner[current]},
+		CurrentChangeSet: currentChangeSetRuntimeStatus{
+			ID:                          current,
+			Changes:                     changesByOwner[current],
+			DeclaredUntrustedDerivation: declared,
+		},
 	}
 	ownerIDs := make([]string, 0, len(changesByOwner))
 	for id := range changesByOwner {
