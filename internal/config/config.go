@@ -127,6 +127,29 @@ type Config struct {
 	// Each affected tool's response still reports `data.dry_run: true` as
 	// normal, so the override is directly visible to the caller, not silent.
 	ForceDryRunAll bool `yaml:"force_dry_run_all"`
+	// RequireDeleteConfirmation, when true, makes delete_page reject a
+	// non-dry-run call against a real (non-test_content) page unless the
+	// caller explicitly sets `confirm_delete_of_published_page: true`.
+	// delete_page already requires `expected_revision` for any page with a
+	// source file, which forces a prior read — this flag adds a distinct
+	// thing on top: a named destructive act, a boolean whose only meaning
+	// is "I am deleting this," giving the calling agent's own system
+	// prompt/guardrails a deliberate hook to obtain real human confirmation
+	// before setting it. Like `declared_untrusted_derivation`
+	// (internal/changeset), this is self-declared and unverifiable — the
+	// server cannot confirm a human actually approved anything, only that
+	// the caller explicitly asserted intent rather than deleting by
+	// default. Exempted: pages carrying the `test_content` frontmatter
+	// marker (disposable-by-design, #661) and any page with no source file
+	// to inspect (the same boundary expected_revision's own requirement
+	// already draws). Deliberately config-gated and default-false: making
+	// this unconditional would be a breaking change to a stable public
+	// tool contract that every existing delete_page caller (including
+	// every test fixture in this repo) would fail against immediately —
+	// an operator who wants the ceremony turns it on for their own
+	// deployment, mirroring ForceDryRunAll's own precedent immediately
+	// above.
+	RequireDeleteConfirmation bool `yaml:"require_delete_confirmation"`
 	// StaleTestContentThresholdHours (#608) is the age (in hours) past which
 	// a still-published page whose slug matches contentmodel's reserved
 	// test-content prefix convention (mcp-audit-/test-audit-/codex-, #584)
