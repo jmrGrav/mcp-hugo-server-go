@@ -2081,11 +2081,13 @@ func commitDeletePageSource(ctx context.Context, in deletePageInput, dir string,
 		}
 		if fullyRemoved {
 			if err := os.RemoveAll(dir); err != nil {
+				slog.Error("delete_page: remove bundle dir failed", "slug", in.Slug, "error", err)
 				return false, nil, fmt.Errorf("delete_error: failed to delete page")
 			}
 		}
 	} else {
 		if err := os.RemoveAll(dir); err != nil {
+			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
 			return false, nil, fmt.Errorf("delete_error: failed to delete page")
 		}
 		if err := recoveryFilesystemBoundary("delete_page", "after_source_cleanup"); err != nil {
