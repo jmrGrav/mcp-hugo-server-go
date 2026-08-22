@@ -1,0 +1,22 @@
+{
+  "specVersion": "1.0",
+  "host": {
+    "displayName": "arleo.eu"
+  },
+  "entries": [
+    {
+      "identifier": "urn:air:arleo.eu:mcp:hugo-server",
+      "displayName": "arleo.eu MCP server",
+      "type": "application/mcp-server-card+json",
+      "url": "https://mcp.arleo.eu/.well-known/mcp/server-card.json",
+      "description": "Model Context Protocol server exposing arleo.eu's Hugo content for reading, search, and (with appropriate OAuth scope) editing."
+    },
+    {
+      "identifier": "urn:air:arleo.eu:agent-skills:index",
+      "displayName": "arleo.eu agent skills index",
+      "type": "application/json",
+      "url": "https://www.arleo.eu/.well-known/agent-skills/index.json",
+      "description": "Discoverable Markdown skill definitions (agentskills.io format) covering site discovery, search, page reads, tags, categories, feed, and sitemap."
+    }
+  ]
+}
