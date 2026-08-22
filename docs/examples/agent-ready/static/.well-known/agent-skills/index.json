@@ -1,0 +1,54 @@
+{
+  "$schema": "https://www.arleo.eu/.well-known/agent-skills/schema.json",
+  "skills": [
+    {
+      "name": "discover_hugo_site",
+      "type": "skill-md",
+      "description": "Discover the public Hugo site and its canonical entry points.",
+      "url": "https://www.arleo.eu/.well-known/agent-skills/discover_hugo_site.md",
+      "digest": "sha256:746095d5614e177c7c27965cc022e0224e401edc7ed6a74e0ec59d6852edb938"
+    },
+    {
+      "name": "search_public_pages",
+      "type": "skill-md",
+      "description": "Search the public index by title, summary, tags, categories, and canonical URL.",
+      "url": "https://www.arleo.eu/.well-known/agent-skills/search_public_pages.md",
+      "digest": "sha256:1bbe65c4ba4e87d7653ccd196f0b72e46300005cf0cf3b30881a4bfc75c3b15c"
+    },
+    {
+      "name": "read_public_page",
+      "type": "skill-md",
+      "description": "Read a published page by indexed slug.",
+      "url": "https://www.arleo.eu/.well-known/agent-skills/read_public_page.md",
+      "digest": "sha256:6bdaf1a042c426742ae47e025662af65fd90f97c4c49febfc458410bf3c236c9"
+    },
+    {
+      "name": "list_public_tags",
+      "type": "skill-md",
+      "description": "List tags discovered from the public index.",
+      "url": "https://www.arleo.eu/.well-known/agent-skills/list_public_tags.md",
+      "digest": "sha256:0d380bab032d9ae28098ab13b7a9248fab4fb02236e45d07e7ae26953ef9f4eb"
+    },
+    {
+      "name": "list_public_categories",
+      "type": "skill-md",
+      "description": "List categories discovered from the public index.",
+      "url": "https://www.arleo.eu/.well-known/agent-skills/list_public_categories.md",
+      "digest": "sha256:4c35c6c4dbd6579a5958f7202de20f326c1f41da3da9f15d4bf917f948259a97"
+    },
+    {
+      "name": "get_public_feed",
+      "type": "skill-md",
+      "description": "Return the published JSON feed.",
+      "url": "https://www.arleo.eu/.well-known/agent-skills/get_public_feed.md",
+      "digest": "sha256:0f64dcf3bf993d5ebab0ea940fd1b21944a46df8416680e0ff063679182f8d23"
+    },
+    {
+      "name": "get_public_sitemap",
+      "type": "skill-md",
+      "description": "Return the published sitemap.",
+      "url": "https://www.arleo.eu/.well-known/agent-skills/get_public_sitemap.md",
+      "digest": "sha256:8c27146bf19fcbe081af17cac97cc49d9f05f0005d9b3b43540fcc03a3920203"
+    }
+  ]
+}

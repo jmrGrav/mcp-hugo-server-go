@@ -8,6 +8,8 @@ AUTH_MD="$ROOT_DIR/docs/examples/agent-ready/static/auth.md"
 RESOURCE_JSON="$ROOT_DIR/docs/examples/agent-ready/static/.well-known/oauth-protected-resource"
 HOWTO="$ROOT_DIR/docs/agent-ready-howto.md"
 RFC_COMPLIANCE="$ROOT_DIR/docs/rfc-compliance.md"
+AGENT_SKILLS_INDEX="$ROOT_DIR/docs/examples/agent-ready/static/.well-known/agent-skills/index.json"
+AGENT_SKILLS_SCHEMA="$ROOT_DIR/docs/examples/agent-ready/static/.well-known/agent-skills/schema.json"
 
 need_pattern() {
   local file="$1"
@@ -45,3 +47,7 @@ forbid_pattern "$RESOURCE_JSON" '"system.admin"' "website protected-resource exc
 forbid_pattern "$RESOURCE_JSON" '"site.admin"' "website protected-resource excludes site.admin"
 forbid_pattern "$AUTH_MD" '"returns": ["client_id", "client_secret"]' "public DCR docs never promise a client secret"
 forbid_pattern "$RFC_COMPLIANCE" '`client_id` + `client_secret` returned' "RFC matrix never claims public DCR returns a client secret"
+need_pattern "$OPENRESTY_CONF" "location = /.well-known/agent-skills/schema.json {" "www route for self-hosted agent-skills schema (#1250)"
+forbid_pattern "$AGENT_SKILLS_INDEX" "schemas.agentskills.io" "agent-skills index.json never references the dead schemas.agentskills.io host"
+need_pattern "$AGENT_SKILLS_INDEX" "https://www.arleo.eu/.well-known/agent-skills/schema.json" "agent-skills index.json \$schema points at the self-hosted schema"
+need_pattern "$AGENT_SKILLS_SCHEMA" '"$id": "https://www.arleo.eu/.well-known/agent-skills/schema.json"' "self-hosted schema's \$id matches its own served URL"

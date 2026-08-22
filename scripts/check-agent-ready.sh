@@ -133,6 +133,17 @@ if [[ "$agent_skills_count" -lt 1 ]]; then
   exit 1
 fi
 
+# index.json's own $schema field must actually resolve (#1250: it previously
+# pointed at the non-existent schemas.agentskills.io) and stay pinned to the
+# self-hosted copy, not silently regress to some other host.
+agent_skills_schema_url="$(jq -r '."$schema" // empty' <<<"$www_agent_skills")"
+expect_eq "$agent_skills_schema_url" "$WWW_URL/.well-known/agent-skills/schema.json" "agent-skills/index.json \$schema"
+www_agent_skills_schema="$(json_get "$agent_skills_schema_url")"
+if ! jq -e '."$schema" and .["$id"] and .type == "object"' <<<"$www_agent_skills_schema" >/dev/null; then
+  echo "www agent-skills/schema.json: does not look like a JSON Schema document (missing \$schema/\$id/type)" >&2
+  exit 1
+fi
+
 for needle in \
   "registration_flow" \
   "registration_endpoint" \
