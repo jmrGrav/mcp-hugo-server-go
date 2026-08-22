@@ -81,6 +81,25 @@ func TestRejectUnsafeTextAllowsRGISubdivisionFlags(t *testing.T) {
 	}
 }
 
+// TestRejectUnsafeTextAllowsBareBlackFlagEmoji pins the base case a
+// subdivision-flag sequence builds on: the plain WAVING BLACK FLAG emoji
+// (U+1F3F4) with no following TAG-block characters at all — e.g. a pirate
+// flag, or a post about flags in general — must remain unaffected, since
+// rejectMalformedEmojiTags only inspects it as a possible tag-sequence base
+// and falls through untouched when no TAG rune follows.
+func TestRejectUnsafeTextAllowsBareBlackFlagEmoji(t *testing.T) {
+	for name, input := range map[string]string{
+		"mid text":  "a \U0001F3F4 flag",
+		"only rune": "\U0001F3F4",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := rejectUnsafeText(input); err != nil {
+				t.Fatalf("rejectUnsafeText(%q): want bare black flag emoji unchanged, got %v", input, err)
+			}
+		})
+	}
+}
+
 func TestRejectUnsafeTextAllowsRegionalIndicatorFlags(t *testing.T) {
 	flags := map[string]string{
 		"France":         "\U0001F1EB\U0001F1F7",
