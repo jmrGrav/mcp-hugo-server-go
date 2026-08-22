@@ -245,6 +245,71 @@ func TestHugoUpgradeFullStageActivateRollback(t *testing.T) {
 	}
 }
 
+func TestHugoActivationRecordFailureRestoresManagedLink(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		withPrevious     bool
+		wantTarget       string
+		wantLinkToRemain bool
+	}{
+		{name: "restore previous target", withPrevious: true, wantTarget: "versions/v1.0.0/hugo", wantLinkToRemain: true},
+		{name: "remove first activation link", withPrevious: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			installFakeCurrentHugo(t, "v1.0.0")
+			fake := newFakeHugoReleaseServer(t, "v9.9.9", fakeHugoArchive(t, "v9.9.9", false), nil)
+			defer fake.Close()
+			cfg := testHugoUpgradeConfig(t, fake.server.URL)
+			mgr := newHugoUpgradeManager(cfg)
+
+			if tc.withPrevious {
+				oldDir := filepath.Join(cfg.HugoUpgrade.ManagedDir, "versions", "v1.0.0")
+				if err := os.MkdirAll(oldDir, 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(oldDir, "hugo"), fakeHugoScript("v1.0.0"), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(cfg.HugoUpgrade.BinaryLink), 0o750); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(filepath.Join("..", "versions", "v1.0.0", "hugo"), cfg.HugoUpgrade.BinaryLink); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := mgr.stage(context.Background(), stageHugoUpgradeInput{TargetVersion: "v9.9.9", DryRun: boolPointer(false)}); err != nil {
+				t.Fatalf("stage: %v", err)
+			}
+			// AtomicWrite cannot rename its temporary file over a directory. The
+			// symlink swap has already happened at that point, forcing activate's
+			// compensating restoreManagedLink path deterministically.
+			if err := os.Mkdir(filepath.Join(cfg.HugoUpgrade.ManagedDir, hugoActivationFilename), 0o750); err != nil {
+				t.Fatal(err)
+			}
+
+			got, err := mgr.activate(context.Background(), activateHugoUpgradeInput{TargetVersion: "v9.9.9", DryRun: boolPointer(false)})
+			if err == nil || !strings.Contains(err.Error(), "activation_error") {
+				t.Fatalf("activate = %#v, %v; want activation_error", got, err)
+			}
+			if got.Activated {
+				t.Fatalf("failed activation reported success: %#v", got)
+			}
+
+			if !tc.wantLinkToRemain {
+				if _, statErr := os.Lstat(cfg.HugoUpgrade.BinaryLink); !os.IsNotExist(statErr) {
+					t.Fatalf("failed first activation left managed link behind: %v", statErr)
+				}
+				return
+			}
+			restored, _, targetErr := mgr.currentManagedTarget()
+			if targetErr != nil || restored != tc.wantTarget {
+				t.Fatalf("managed target after failed activation = %q, %v; want %q", restored, targetErr, tc.wantTarget)
+			}
+		})
+	}
+}
+
 func TestHugoStageRejectsChecksumMismatchWithoutArtifact(t *testing.T) {
 	installFakeCurrentHugo(t, "v1.0.0")
 	archive := fakeHugoArchive(t, "v9.9.9", false)

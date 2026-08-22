@@ -1,6 +1,7 @@
 package write_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,212 @@ func TestChunkedUploadEndToEndSuccess(t *testing.T) {
 	})
 	if !replayRes.IsError {
 		t.Fatal("second commit_asset_upload with the same upload_id unexpectedly succeeded")
+	}
+}
+
+func TestChunkedUploadIncompleteCommitRemainsRetryable(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	payload := fakeWebP(900)
+	begin := callTool(t, session, "begin_asset_upload", map[string]any{
+		"slug": "posts/article", "filename": "retry.webp", "size_bytes": len(payload),
+	})
+	if begin.IsError {
+		t.Fatalf("begin_asset_upload error: %s", marshalContent(t, begin))
+	}
+	uploadID := decodeWriteData(t, begin)["upload_id"].(string)
+	first := callTool(t, session, "upload_asset_chunk", map[string]any{
+		"upload_id": uploadID, "offset": 0, "content_base64": b64(payload[:300]),
+	})
+	if first.IsError {
+		t.Fatalf("first chunk error: %s", marshalContent(t, first))
+	}
+
+	incomplete := callTool(t, session, "commit_asset_upload", map[string]any{"upload_id": uploadID})
+	if !incomplete.IsError || !strings.Contains(marshalContent(t, incomplete), "incomplete_upload") {
+		t.Fatalf("incomplete commit must fail with incomplete_upload: %s", marshalContent(t, incomplete))
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "retry.webp")); !os.IsNotExist(err) {
+		t.Fatalf("incomplete commit created destination: %v", err)
+	}
+
+	second := callTool(t, session, "upload_asset_chunk", map[string]any{
+		"upload_id": uploadID, "offset": 300, "content_base64": b64(payload[300:]),
+	})
+	if second.IsError {
+		t.Fatalf("upload was consumed by incomplete commit: %s", marshalContent(t, second))
+	}
+	committed := callTool(t, session, "commit_asset_upload", map[string]any{"upload_id": uploadID})
+	if committed.IsError || decodeWriteData(t, committed)["status"] != "created" {
+		t.Fatalf("completed retry commit failed: %s", marshalContent(t, committed))
+	}
+}
+
+func TestChunkedUploadDryRunCommitPreservesUploadForRealCommit(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	payload := fakeWebP(600)
+	begin := callTool(t, session, "begin_asset_upload", map[string]any{
+		"slug": "posts/article", "filename": "preview.webp", "size_bytes": len(payload),
+	})
+	if begin.IsError {
+		t.Fatalf("begin_asset_upload error: %s", marshalContent(t, begin))
+	}
+	uploadID := decodeWriteData(t, begin)["upload_id"].(string)
+	chunk := callTool(t, session, "upload_asset_chunk", map[string]any{
+		"upload_id": uploadID, "offset": 0, "content_base64": b64(payload),
+	})
+	if chunk.IsError {
+		t.Fatalf("upload_asset_chunk error: %s", marshalContent(t, chunk))
+	}
+
+	dry := callTool(t, session, "commit_asset_upload", map[string]any{"upload_id": uploadID, "dry_run": true})
+	if dry.IsError || decodeWriteData(t, dry)["status"] != "would_create" {
+		t.Fatalf("dry-run commit failed: %s", marshalContent(t, dry))
+	}
+	dest := filepath.Join(contentRoot, "posts", "article", "preview.webp")
+	if _, err := os.Stat(dest); !os.IsNotExist(err) {
+		t.Fatalf("dry-run commit created destination: %v", err)
+	}
+
+	real := callTool(t, session, "commit_asset_upload", map[string]any{"upload_id": uploadID})
+	if real.IsError || decodeWriteData(t, real)["status"] != "created" {
+		t.Fatalf("dry-run consumed upload before real commit: %s", marshalContent(t, real))
+	}
+	if got, err := os.ReadFile(dest); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("real commit bytes after dry-run mismatch: len=%d err=%v", len(got), err)
+	}
+}
+
+func TestChunkedUploadCommitHashMismatchDiscardsUpload(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	payload := fakeWebP(600)
+	begin := callTool(t, session, "begin_asset_upload", map[string]any{
+		"slug": "posts/article", "filename": "hash.webp", "size_bytes": len(payload),
+	})
+	if begin.IsError {
+		t.Fatalf("begin_asset_upload error: %s", marshalContent(t, begin))
+	}
+	uploadID := decodeWriteData(t, begin)["upload_id"].(string)
+	chunk := callTool(t, session, "upload_asset_chunk", map[string]any{
+		"upload_id": uploadID, "offset": 0, "content_base64": b64(payload),
+	})
+	if chunk.IsError {
+		t.Fatalf("upload_asset_chunk error: %s", marshalContent(t, chunk))
+	}
+
+	wrongHash := "sha256:" + strings.Repeat("f", 64)
+	commit := callTool(t, session, "commit_asset_upload", map[string]any{
+		"upload_id": uploadID, "expected_sha256": wrongHash,
+	})
+	if !commit.IsError || !strings.Contains(marshalContent(t, commit), "sha256_mismatch") {
+		t.Fatalf("commit hash mismatch must fail: %s", marshalContent(t, commit))
+	}
+	if _, err := os.Stat(filepath.Join(contentRoot, "posts", "article", "hash.webp")); !os.IsNotExist(err) {
+		t.Fatalf("hash mismatch created destination: %v", err)
+	}
+	retry := callTool(t, session, "commit_asset_upload", map[string]any{"upload_id": uploadID})
+	if !retry.IsError || !strings.Contains(marshalContent(t, retry), "not_found") {
+		t.Fatalf("hash mismatch did not discard upload ID: %s", marshalContent(t, retry))
+	}
+}
+
+func TestChunkedUploadMissingStagingFileAbandonsUpload(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	payload := fakeWebP(600)
+	begin := callTool(t, session, "begin_asset_upload", map[string]any{
+		"slug": "posts/article", "filename": "missing.webp", "size_bytes": len(payload),
+	})
+	if begin.IsError {
+		t.Fatalf("begin_asset_upload error: %s", marshalContent(t, begin))
+	}
+	uploadID := decodeWriteData(t, begin)["upload_id"].(string)
+	chunk := callTool(t, session, "upload_asset_chunk", map[string]any{
+		"upload_id": uploadID, "offset": 0, "content_base64": b64(payload),
+	})
+	if chunk.IsError {
+		t.Fatalf("upload_asset_chunk error: %s", marshalContent(t, chunk))
+	}
+
+	dir := filepath.Join(contentRoot, "posts", "article")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	removed := false
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".upload-") && strings.HasSuffix(entry.Name(), ".part") {
+			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil {
+				t.Fatal(err)
+			}
+			removed = true
+		}
+	}
+	if !removed {
+		t.Fatal("test setup did not find the staged upload file")
+	}
+
+	commit := callTool(t, session, "commit_asset_upload", map[string]any{"upload_id": uploadID})
+	if !commit.IsError || !strings.Contains(marshalContent(t, commit), "read_error") {
+		t.Fatalf("missing staging file must fail with read_error: %s", marshalContent(t, commit))
+	}
+	if _, err := os.Stat(filepath.Join(dir, "missing.webp")); !os.IsNotExist(err) {
+		t.Fatalf("missing staging failure created destination: %v", err)
+	}
+	retry := callTool(t, session, "commit_asset_upload", map[string]any{"upload_id": uploadID})
+	if !retry.IsError || !strings.Contains(marshalContent(t, retry), "not_found") {
+		t.Fatalf("read failure did not abandon upload ID: %s", marshalContent(t, retry))
+	}
+}
+
+func TestChunkedUploadInvalidCommitHashRemainsRetryable(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/article")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	payload := fakeWebP(600)
+	begin := callTool(t, session, "begin_asset_upload", map[string]any{
+		"slug": "posts/article", "filename": "corrected.webp", "size_bytes": len(payload),
+	})
+	if begin.IsError {
+		t.Fatalf("begin_asset_upload error: %s", marshalContent(t, begin))
+	}
+	uploadID := decodeWriteData(t, begin)["upload_id"].(string)
+	chunk := callTool(t, session, "upload_asset_chunk", map[string]any{
+		"upload_id": uploadID, "offset": 0, "content_base64": b64(payload),
+	})
+	if chunk.IsError {
+		t.Fatalf("upload_asset_chunk error: %s", marshalContent(t, chunk))
+	}
+
+	invalid := callTool(t, session, "commit_asset_upload", map[string]any{
+		"upload_id": uploadID, "expected_sha256": "not-a-sha256",
+	})
+	if !invalid.IsError || !strings.Contains(marshalContent(t, invalid), "invalid_params") {
+		t.Fatalf("malformed commit hash must fail with invalid_params: %s", marshalContent(t, invalid))
+	}
+	// A malformed request is correctable caller input, unlike a valid but
+	// mismatched digest. It must not discard the already-uploaded bytes.
+	corrected := callTool(t, session, "commit_asset_upload", map[string]any{
+		"upload_id": uploadID, "expected_sha256": contentmodel.SourceRevisionBytes(payload),
+	})
+	if corrected.IsError || decodeWriteData(t, corrected)["status"] != "created" {
+		t.Fatalf("malformed hash consumed upload before corrected commit: %s", marshalContent(t, corrected))
 	}
 }
 
