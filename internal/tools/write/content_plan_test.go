@@ -22,6 +22,140 @@ func readFileString(t *testing.T, contentRoot, relPath string) string {
 	return string(data)
 }
 
+func TestContentPlanPreflightValidationDoesNotWrite(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/preflight")
+	before := readFileString(t, contentRoot, "posts/preflight/index.md")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	planCases := []map[string]any{
+		{"slug": "", "operations": []any{bodyOp("changed")}},
+		{"slug": "posts/preflight", "lang": "../../fr", "operations": []any{bodyOp("changed")}},
+		{"slug": "../preflight", "operations": []any{bodyOp("changed")}},
+		{"slug": "posts/preflight", "operations": []any{}},
+	}
+	for index, args := range planCases {
+		if res := callTool(t, session, "plan_content_change", args); !res.IsError {
+			t.Fatalf("plan preflight case %d succeeded: %s", index, marshalContent(t, res))
+		}
+	}
+	applyCases := []map[string]any{
+		{"plan_id": ""},
+		{"plan_id": "missing", "idempotency_key": "bad key"},
+	}
+	for index, args := range applyCases {
+		if res := callTool(t, session, "apply_content_plan", args); !res.IsError {
+			t.Fatalf("apply preflight case %d succeeded: %s", index, marshalContent(t, res))
+		}
+	}
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(contentRoot, "posts", "linked")); err != nil {
+		t.Fatal(err)
+	}
+	if res := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/linked", "operations": []any{bodyOp("changed")},
+	}); !res.IsError {
+		t.Fatalf("symlinked plan target succeeded: %s", marshalContent(t, res))
+	}
+	if after := readFileString(t, contentRoot, "posts/preflight/index.md"); after != before {
+		t.Fatal("preflight validation changed page content")
+	}
+}
+
+func TestApplyContentPlanRateLimitPrecedesMissingPlanLookup(t *testing.T) {
+	contentRoot := t.TempDir()
+	rateLimit := config.Default().RateLimit
+	rateLimit.CreateUpdatePerMin = 1
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{RateLimit: &rateLimit})
+	defer done()
+
+	first := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": "missing-one"})
+	if !first.IsError || !strings.Contains(marshalContent(t, first), "plan_not_found") {
+		t.Fatalf("first apply = %s", marshalContent(t, first))
+	}
+	second := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": "missing-two"})
+	if !second.IsError || !strings.Contains(marshalContent(t, second), "rate_limit") {
+		t.Fatalf("second apply = %s", marshalContent(t, second))
+	}
+}
+
+func TestPlanContentChangeRejectsMalformedCurrentFrontmatter(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/malformed")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+	path := filepath.Join(contentRoot, "posts/malformed/index.md")
+	if err := os.WriteFile(path, []byte("---\ntitle: [unterminated\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/malformed", "operations": []any{bodyOp("changed")},
+	})
+	if !res.IsError {
+		t.Fatalf("malformed frontmatter plan succeeded: %s", marshalContent(t, res))
+	}
+}
+
+func TestApplyContentPlanForceDryRunPreservesPlanAndFile(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/forced-dry-run-plan")
+	before := readFileString(t, contentRoot, "posts/forced-dry-run-plan/index.md")
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{ForceDryRunAll: true})
+	defer done()
+	plan := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/forced-dry-run-plan", "operations": []any{bodyOp("changed")},
+	})
+	planID := decodeWriteData(t, plan)["plan_id"].(string)
+	for attempt := 0; attempt < 2; attempt++ {
+		res := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+		if res.IsError || decodeWriteData(t, res)["dry_run"] != true {
+			t.Fatalf("forced dry-run attempt %d = %s", attempt, marshalContent(t, res))
+		}
+	}
+	if after := readFileString(t, contentRoot, "posts/forced-dry-run-plan/index.md"); after != before {
+		t.Fatal("forced dry-run changed page content")
+	}
+}
+
+func TestApplyContentPlanReadFailurePreservesPlan(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/read-failure-plan")
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+	plan := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/read-failure-plan", "operations": []any{bodyOp("changed")},
+	})
+	planID := decodeWriteData(t, plan)["plan_id"].(string)
+	if err := os.Remove(filepath.Join(contentRoot, "posts/read-failure-plan/index.md")); err != nil {
+		t.Fatal(err)
+	}
+	res := callTool(t, session, "apply_content_plan", map[string]any{"plan_id": planID})
+	if !res.IsError || !strings.Contains(marshalContent(t, res), "read_error") {
+		t.Fatalf("apply after source removal = %s", marshalContent(t, res))
+	}
+}
+
+func TestPlanContentChangeReportsPersistenceFailure(t *testing.T) {
+	contentRoot := t.TempDir()
+	writeBundle(t, contentRoot, "posts/persist-failure-plan")
+	journal, err := db.Open(filepath.Join(t.TempDir(), "state.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, _, done := newTestServer(t, contentRoot, testServerOpts{SiteDB: journal})
+	defer done()
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	res := callTool(t, session, "plan_content_change", map[string]any{
+		"slug": "posts/persist-failure-plan", "operations": []any{bodyOp("changed")},
+	})
+	if !res.IsError || !strings.Contains(marshalContent(t, res), "persistence_error") {
+		t.Fatalf("plan with closed persistence = %s", marshalContent(t, res))
+	}
+}
+
 func TestPlanContentChangeAndApplyRoundTrip(t *testing.T) {
 	contentRoot := t.TempDir()
 	writeBundle(t, contentRoot, "posts/article")
