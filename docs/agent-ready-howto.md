@@ -37,7 +37,7 @@ These public URLs must stay coherent:
 | URL | Expected behavior |
 | --- | --- |
 | `https://www.arleo.eu/auth.md` | `200 text/markdown`, contains `agent_auth_metadata` and ID-JAG credential types |
-| `https://www.arleo.eu/.well-known/oauth-protected-resource` | `200 application/json`, resource is `https://www.arleo.eu`, authorization server is `https://mcp.arleo.eu` |
+| `https://www.arleo.eu/.well-known/oauth-protected-resource` | `200 application/json`, resource is `https://www.arleo.eu`, authorization server is `https://mcp.arleo.eu`, `scopes_supported` is `["read","write","admin"]` (2026-08-22: found stale at `["content.read","content.write","site.admin"]`, see Regression Notes below) |
 | `https://www.arleo.eu/.well-known/oauth-protected-resource/mcp` | compatibility alias for the MCP protected-resource document; must not degrade to HTML `403` |
 | `https://www.arleo.eu/.well-known/mcp/server-card.json` | compatibility redirect to the canonical MCP server card on `mcp.arleo.eu` |
 | `https://mcp.arleo.eu/.well-known/oauth-authorization-server` | `200 application/json`, issuer is `https://mcp.arleo.eu`, contains `agent_auth` |
