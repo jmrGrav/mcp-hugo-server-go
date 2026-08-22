@@ -2,8 +2,6 @@ package admin
 
 import (
 	"context"
-	"os/exec"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -15,6 +13,7 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugoruntime"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
@@ -256,8 +255,6 @@ type runtimeStatusData struct {
 type getRuntimeStatusOutput struct {
 	toolcontract.ToolResponse[runtimeStatusData]
 }
-
-var hugoVersionPattern = regexp.MustCompile(`v(\d+\.\d+\.\d+(?:-\S+)?)`)
 
 func containsString(values []string, want string) bool {
 	for _, value := range values {
@@ -627,31 +624,15 @@ func computePublicationSafety(ctx context.Context, changeSets *changeset.Registr
 // signal probeHugo already computes for get_runtime_status, without
 // duplicating the probe/parse logic.
 func HugoVersionString(ctx context.Context, cfg config.Config) string {
-	return probeHugo(ctx, cfg).Version
+	return hugoruntime.VersionString(ctx, cfg)
 }
 
 // probeHugo shells out to `hugo version` with a bounded environment and
 // timeout, and parses the semantic version and extended-build flag out of
 // output like "hugo v0.150.0+extended linux/amd64 BuildDate=...".
 func probeHugo(ctx context.Context, cfg config.Config) hugoRuntimeStatus {
-	tctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(tctx, "hugo", "version")
-	cmd.Env = boundedCommandEnv()
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		reason := strings.TrimSpace(string(out))
-		if reason == "" {
-			reason = err.Error()
-		}
-		return hugoRuntimeStatus{Available: false, Error: sanitiseStderr([]byte(reason), cfg.HugoRoot, cfg.SiteRoot)}
-	}
-	text := strings.TrimSpace(string(out))
-	status := hugoRuntimeStatus{Available: true, Extended: strings.Contains(text, "+extended")}
-	if m := hugoVersionPattern.FindStringSubmatch(text); len(m) == 2 {
-		status.Version = m[1]
-	}
-	return status
+	status := hugoruntime.Probe(ctx, cfg)
+	return hugoRuntimeStatus{Available: status.Available, Version: status.Version, Extended: status.Extended, Error: status.Error}
 }
 
 // probeGitBaseline resolves the runtime Git baseline honoring

@@ -10,12 +10,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/assets"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -159,7 +159,7 @@ func listGeneratedHeroAssets(hugoRoot, slug string) []generatedPageAssetDTO {
 	if strings.TrimSpace(hugoRoot) == "" {
 		return nil
 	}
-	loc, err := admin.ResolveHeroImageLocation(hugoRoot, slug)
+	loc, err := assets.ResolveHeroImageLocation(hugoRoot, slug)
 	if err != nil {
 		return nil
 	}

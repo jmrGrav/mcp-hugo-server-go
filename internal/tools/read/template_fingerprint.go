@@ -12,14 +12,14 @@ import (
 	"sort"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugoruntime"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 )
 
 // ComputeTemplateFingerprint hashes every input that can change a page's
 // rendered <head> output without the page's own content changing: the
 // site's local layouts/ tree, the resolved theme's own layouts/ tree (a
-// separate resolution root — see admin.ResolvedThemeLayoutDirs), the Hugo
+// separate resolution root — see hugoruntime.ResolvedThemeLayoutDirs), the Hugo
 // binary version, and the site's config file. Deliberately does NOT use the
 // build's output_revision (a hash of the full rendered output): that
 // changes on every single content edit too, which would defeat the whole
@@ -34,7 +34,7 @@ import (
 // one layer down (a template change nobody's fingerprint saw). When in
 // doubt, this hashes more inputs, not fewer.
 //
-// The Hugo binary version is probed here directly (admin.HugoVersionString,
+// The Hugo binary version is probed here directly (hugoruntime.VersionString,
 // the same probe get_runtime_status uses) rather than accepted as a
 // parameter sourced from the build's own completion event: this is called
 // from the same post-build callback pass that computes PostBuildSync's
@@ -45,12 +45,12 @@ import (
 // negligible next to the build itself.
 func ComputeTemplateFingerprint(ctx context.Context, cfg config.Config) (string, error) {
 	h := sha256.New()
-	fmt.Fprintf(h, "hugo_version:%s\n", admin.HugoVersionString(ctx, cfg))
+	fmt.Fprintf(h, "hugo_version:%s\n", hugoruntime.VersionString(ctx, cfg))
 
 	if err := hashDirInto(h, filepath.Join(cfg.HugoRoot, "layouts")); err != nil {
 		return "", err
 	}
-	for _, dir := range admin.ResolvedThemeLayoutDirs(ctx, cfg) {
+	for _, dir := range hugoruntime.ResolvedThemeLayoutDirs(ctx, cfg) {
 		if err := hashDirInto(h, dir); err != nil {
 			return "", err
 		}

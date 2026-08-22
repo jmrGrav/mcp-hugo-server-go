@@ -1,20 +1,16 @@
 package admin
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugoruntime"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -101,7 +97,7 @@ func RegisterThemeStatus(s *mcp.Server, cfg config.Config) {
 		for _, name := range names {
 			data.Themes = append(data.Themes, themeStatusFor(ctx, cfg, name, source))
 		}
-		data.TableOverflowProtection = detectTableOverflowProtection(cfg, data.Themes)
+		data.TableOverflowProtection = hugoruntime.TableOverflowProtectionForThemes(cfg, names, source)
 
 		meta := toolcontract.NewMeta(buildinfo.Version, time.Now())
 		return nil, getThemeStatusOutput{ToolResponse: toolcontract.Success(data, meta)}, nil
@@ -116,12 +112,7 @@ func RegisterThemeStatus(s *mcp.Server, cfg config.Config) {
 // theme-constant signal to decide fix_scope without duplicating the theme
 // resolution/CSS-scanning logic.
 func TableOverflowProtection(ctx context.Context, cfg config.Config) *bool {
-	names, source, _ := resolveThemeNames(ctx, cfg)
-	themes := make([]themeInfo, 0, len(names))
-	for _, name := range names {
-		themes = append(themes, themeStatusFor(ctx, cfg, name, source))
-	}
-	return detectTableOverflowProtection(cfg, themes)
+	return hugoruntime.TableOverflowProtection(ctx, cfg)
 }
 
 // ResolvedThemeLayoutDirs returns the on-disk `layouts` directory of every
@@ -139,18 +130,7 @@ func TableOverflowProtection(ctx context.Context, cfg config.Config) *bool {
 // module theme's layout changes is a known, accepted scope limit — not
 // silently claiming coverage it doesn't have.
 func ResolvedThemeLayoutDirs(ctx context.Context, cfg config.Config) []string {
-	names, source, _ := resolveThemeNames(ctx, cfg)
-	if source != "themes_dir" {
-		return nil
-	}
-	dirs := make([]string, 0, len(names))
-	for _, name := range names {
-		dir := filepath.Join(cfg.HugoRoot, "themes", name, "layouts")
-		if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
-			dirs = append(dirs, dir)
-		}
-	}
-	return dirs
+	return hugoruntime.ResolvedThemeLayoutDirs(ctx, cfg)
 }
 
 // resolveThemeNames runs `hugo config --format json` (bounded env/timeout)
@@ -158,73 +138,7 @@ func ResolvedThemeLayoutDirs(ctx context.Context, cfg config.Config) []string {
 // Modules `module.imports`. Returns an empty slice (not an error) for a
 // themeless site — that is a valid, common configuration.
 func resolveThemeNames(ctx context.Context, cfg config.Config) (names []string, source string, errText string) {
-	if strings.TrimSpace(cfg.HugoRoot) == "" {
-		return nil, "", "hugo_root is not configured"
-	}
-	tctx, cancel := context.WithTimeout(ctx, probeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(tctx, "hugo", "config", "--format", "json")
-	cmd.Dir = cfg.HugoRoot
-	cmd.Env = boundedCommandEnv()
-	// Stdout only: Hugo routinely writes deprecation warnings to stderr on
-	// every invocation (e.g. the languageCode/languageName renames as of
-	// v0.158.0), completely independent of whether the config itself is
-	// valid. CombinedOutput would merge those warnings into the JSON blob
-	// this function must parse, breaking it deterministically on any config
-	// that trips a warning — which is not a "config is invalid" condition
-	// at all. Only stderr goes into the error report, and only on failure.
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		reason := strings.TrimSpace(stderr.String())
-		if reason == "" {
-			reason = err.Error()
-		}
-		return nil, "", sanitiseStderr([]byte(reason), cfg.HugoRoot, cfg.SiteRoot)
-	}
-
-	var parsed map[string]any
-	if jsonErr := json.Unmarshal(out, &parsed); jsonErr != nil {
-		return nil, "", "hugo config output was not valid JSON"
-	}
-
-	if themeVal, ok := parsed["theme"]; ok {
-		switch v := themeVal.(type) {
-		case string:
-			if v != "" {
-				return []string{v}, "themes_dir", ""
-			}
-		case []any:
-			for _, item := range v {
-				if s, ok := item.(string); ok && s != "" {
-					names = append(names, s)
-				}
-			}
-			if len(names) > 0 {
-				return names, "themes_dir", ""
-			}
-		}
-	}
-
-	if moduleVal, ok := parsed["module"].(map[string]any); ok {
-		if imports, ok := moduleVal["imports"].([]any); ok {
-			for _, imp := range imports {
-				impMap, ok := imp.(map[string]any)
-				if !ok {
-					continue
-				}
-				if path, ok := impMap["path"].(string); ok && path != "" {
-					names = append(names, path)
-				}
-			}
-			if len(names) > 0 {
-				return names, "hugo_module", ""
-			}
-		}
-	}
-
-	return nil, "", ""
+	return hugoruntime.ResolveThemeNames(ctx, cfg)
 }
 
 // themeStatusFor inspects an on-disk classic theme directory for a Git
@@ -262,99 +176,4 @@ func themeStatusFor(ctx context.Context, cfg config.Config, name, source string)
 		info.Dirty = strings.TrimSpace(porcelain) != ""
 	}
 	return info
-}
-
-const (
-	cssScanMaxFiles     = 500
-	cssScanMaxTotalSize = 4 << 20 // 4 MiB
-	cssScanMaxFileSize  = 1 << 20 // 1 MiB per file
-)
-
-var (
-	cssBlockRe      = regexp.MustCompile(`(?s)([^{}]+)\{([^{}]*)\}`)
-	cssOverflowXRe  = regexp.MustCompile(`overflow-x\s*:\s*(auto|scroll)`)
-	cssStyleFileExt = map[string]bool{".css": true, ".scss": true, ".sass": true}
-)
-
-// detectTableOverflowProtection scans each classic themes_dir theme's own
-// CSS/Sass source for a rule whose selector contains "table" and whose body
-// sets overflow-x to auto or scroll — the standard horizontal-scroll fix for
-// wide tables on narrow viewports. See themeStatusData.TableOverflowProtection
-// for the three-state contract this returns.
-func detectTableOverflowProtection(cfg config.Config, themes []themeInfo) *bool {
-	inspected := false
-	for _, t := range themes {
-		if t.Source != "themes_dir" || !t.Present {
-			continue
-		}
-		themeDir := filepath.Join(cfg.HugoRoot, "themes", t.Name)
-		found, ok := scanThemeCSSForTableOverflowProtection(themeDir)
-		if !ok {
-			continue
-		}
-		inspected = true
-		if found {
-			return fileutil.BoolPtr(true)
-		}
-	}
-	if !inspected {
-		return nil
-	}
-	return fileutil.BoolPtr(false)
-}
-
-// scanThemeCSSForTableOverflowProtection walks themeDir (bounded by file
-// count and size) and returns (found, ok). ok is false only if no
-// stylesheet under themeDir could be read at all (e.g. the directory does
-// not exist) — a genuine "nothing to inspect" case, distinct from
-// "inspected, found nothing" (found=false, ok=true).
-func scanThemeCSSForTableOverflowProtection(themeDir string) (found bool, ok bool) {
-	filesSeen := 0
-	bytesSeen := 0
-	readAny := false
-
-	_ = filepath.Walk(themeDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil //nolint:nilerr // best-effort scan; skip unreadable entries
-		}
-		if found || filesSeen >= cssScanMaxFiles || bytesSeen >= cssScanMaxTotalSize {
-			if info.IsDir() && found {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if !cssStyleFileExt[strings.ToLower(filepath.Ext(path))] {
-			return nil
-		}
-		if info.Size() > cssScanMaxFileSize {
-			return nil
-		}
-		f, openErr := os.Open(path)
-		if openErr != nil {
-			return nil
-		}
-		defer f.Close()
-		content, readErr := io.ReadAll(io.LimitReader(f, cssScanMaxFileSize))
-		if readErr != nil {
-			return nil
-		}
-		filesSeen++
-		bytesSeen += len(content)
-		readAny = true
-
-		for _, m := range cssBlockRe.FindAllStringSubmatch(string(content), -1) {
-			selector := strings.ToLower(m[1])
-			body := m[2]
-			if strings.Contains(selector, "table") && cssOverflowXRe.MatchString(body) {
-				found = true
-				break
-			}
-		}
-		return nil
-	})
-
-	return found, readAny
 }

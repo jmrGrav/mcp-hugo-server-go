@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/assets"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 )
 
 // minimalPNG is enough leading bytes for http.DetectContentType to sniff
@@ -1181,7 +1181,7 @@ func TestDeletePageAssetGeneratedScopeWithoutBundleIgnoresOwnerStillConsumesQuot
 	defer done()
 
 	slug := "posts/orphan-hero-895"
-	loc, err := admin.ResolveHeroImageLocation(hugoRoot, slug)
+	loc, err := assets.ResolveHeroImageLocation(hugoRoot, slug)
 	if err != nil {
 		t.Fatalf("ResolveHeroImageLocation: %v", err)
 	}
