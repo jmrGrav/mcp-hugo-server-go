@@ -1067,6 +1067,34 @@ func TestHealthEndpoint(t *testing.T) {
 	}
 }
 
+func TestHealthEndpointMethodNotAllowed(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodPost, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d want 405", rec.Code)
+	}
+	if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") || !strings.Contains(allow, "HEAD") {
+		t.Errorf("Allow header = %q, want to mention GET and HEAD", allow)
+	}
+}
+
+func TestHealthEndpointHead(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodHead, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD response body = %q, want empty", rec.Body.String())
+	}
+}
+
 func TestOpenAPIJSON(t *testing.T) {
 	srv := mustDiscoveryServer(t, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
@@ -1107,6 +1135,37 @@ func TestOpenAPIJSON(t *testing.T) {
 	}
 	if _, ok := paths["/register"]; !ok {
 		t.Fatalf("openapi.json missing /register path")
+	}
+}
+
+func TestOpenAPIJSONMethodNotAllowed(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodPost, "/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d want 405", rec.Code)
+	}
+	if allow := rec.Header().Get("Allow"); !strings.Contains(allow, "GET") || !strings.Contains(allow, "HEAD") {
+		t.Errorf("Allow header = %q, want to mention GET and HEAD", allow)
+	}
+}
+
+func TestOpenAPIJSONHead(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodHead, "/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("HEAD response body = %q, want empty", rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/openapi+json" {
+		t.Errorf("Content-Type = %q, want application/openapi+json", ct)
 	}
 }
 

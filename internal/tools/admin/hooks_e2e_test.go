@@ -1,12 +1,14 @@
 package admin_test
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 )
 
 // TestRunPostBuildHooksMultipleHooksWithRequestIntrospection verifies end-to-end
@@ -491,5 +493,39 @@ func TestRunPostBuildHooksNoRootFieldDuplication(t *testing.T) {
 		if _, present := out[field]; present {
 			t.Fatalf("root %s = %v, want absent — no more root/data duplication (#1118)", field, out[field])
 		}
+	}
+}
+
+// TestPingHeartbeatsExported directly covers admin.PingHeartbeats — the
+// function internal/server's build_site PostBuildCallback calls from a
+// detached goroutine. That call site's own tests (internal/server) don't
+// attribute coverage back to this package, so this package needs its own
+// direct call to actually exercise the exported entrypoint, not just its
+// unexported fireHeartbeats/heartbeatURL helpers.
+func TestPingHeartbeatsExported(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := config.Default()
+	cfg.HeartbeatHooks = []string{srv.URL}
+
+	results := admin.PingHeartbeats(context.Background(), cfg, false)
+	if len(results) != 1 || results[0].Error != "" {
+		t.Fatalf("PingHeartbeats(failed=false) = %+v, want one successful result", results)
+	}
+	if gotPath != "/" {
+		t.Errorf("path = %q, want / (unsuffixed on success)", gotPath)
+	}
+
+	results = admin.PingHeartbeats(context.Background(), cfg, true)
+	if len(results) != 1 || results[0].Error != "" {
+		t.Fatalf("PingHeartbeats(failed=true) = %+v, want one successful result", results)
+	}
+	if gotPath != "/fail" {
+		t.Errorf("path = %q, want /fail (suffixed on failure)", gotPath)
 	}
 }

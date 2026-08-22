@@ -1315,3 +1315,27 @@ func TestBearerResultFromContextMissingOrWrongType(t *testing.T) {
 		t.Fatalf("bearerResultFromContext(wrong-type) = (%#v, %v), want zero/false", gotResult, gotOK)
 	}
 }
+
+func TestURLHostInvalidURL(t *testing.T) {
+	// A control character makes url.Parse fail; urlHost must degrade to ""
+	// rather than panic or propagate the error, since buildProtectedResourceMeta
+	// uses this to decide whether to trust a match, and "" never matches a
+	// real requestHost.
+	if got := urlHost("http://\x7f"); got != "" {
+		t.Errorf("urlHost(invalid) = %q, want empty string", got)
+	}
+	if got := urlHost("https://mcp.arleo.eu"); got != "mcp.arleo.eu" {
+		t.Errorf("urlHost(valid) = %q, want mcp.arleo.eu", got)
+	}
+}
+
+func TestHostnameOnly(t *testing.T) {
+	if got := hostnameOnly("www.arleo.eu:8443"); got != "www.arleo.eu" {
+		t.Errorf("hostnameOnly(with port) = %q, want www.arleo.eu", got)
+	}
+	// No ":" at all: net.SplitHostPort errors, so the fallback path (return
+	// host unchanged) must be taken rather than dropping the value.
+	if got := hostnameOnly("www.arleo.eu"); got != "www.arleo.eu" {
+		t.Errorf("hostnameOnly(no port) = %q, want www.arleo.eu unchanged", got)
+	}
+}

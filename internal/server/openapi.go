@@ -189,9 +189,9 @@ func buildOpenAPISpec(cfg config.Config) map[string]any {
 			},
 			"/agent/identity/verify": map[string]any{
 				"get": map[string]any{
-					"summary":     "Operator approval form for an agent identity claim",
-					"parameters":  []map[string]any{{"name": "claim_token", "in": "query", "required": false, "schema": map[string]any{"type": "string"}}},
-					"responses":   map[string]any{"200": map[string]any{"description": "HTML approval form", "content": map[string]any{"text/html": map[string]any{}}}},
+					"summary":    "Operator approval form for an agent identity claim",
+					"parameters": []map[string]any{{"name": "claim_token", "in": "query", "required": false, "schema": map[string]any{"type": "string"}}},
+					"responses":  map[string]any{"200": map[string]any{"description": "HTML approval form", "content": map[string]any{"text/html": map[string]any{}}}},
 				},
 				"post": map[string]any{
 					"summary":     "Approve an agent identity claim (operator, write scope)",
