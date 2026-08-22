@@ -1327,6 +1327,11 @@ func TestInterruptedDeleteResumesBundleCleanupAndReplaysAfterRestart(t *testing.
 	cfg.SiteRoot = t.TempDir()
 	cfg.HugoRoot = t.TempDir()
 	cfg.DBPath = filepath.Join(t.TempDir(), "runtime.sqlite")
+	// This test exercises the post-unlink recovery-journal boundary, not the
+	// confirm_delete_of_published_page ceremony — opt out explicitly so the
+	// injected-fault delete_page call below reaches the fault seam instead of
+	// failing earlier at the confirmation check.
+	cfg.RequireDeleteConfirmation = false
 	firstSession, firstDone := newStdioServerSession(t, cfg)
 	created := callTool(t, firstSession, "create_page", map[string]any{
 		"slug": "posts/interrupted-delete", "title": "Delete me", "body": "Body", "tags": []any{}, "categories": []any{},

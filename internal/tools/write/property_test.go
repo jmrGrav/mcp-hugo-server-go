@@ -126,6 +126,10 @@ func newPropertyTestServer(t *testing.T, contentRoot string) (*mcp.ClientSession
 	}
 	cfg := config.Default()
 	cfg.ContentRoot = contentRoot
+	// This fuzzer-style property test exercises create/update/delete sequencing,
+	// not the confirm_delete_of_published_page ceremony — opt out explicitly so
+	// a future config.Default() security-default change doesn't fail deletes here.
+	cfg.RequireDeleteConfirmation = false
 
 	s := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "0.1"}, nil)
 	write.Register(s, pg, idx, cfg, nil, nil)

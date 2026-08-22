@@ -441,3 +441,23 @@ func TestHugoUpgradeManagedConfigurationLoads(t *testing.T) {
 		t.Fatalf("loaded Hugo upgrade config = %+v", cfg.HugoUpgrade)
 	}
 }
+
+func TestDefaultRequireDeleteConfirmationIsTrue(t *testing.T) {
+	if !config.Default().RequireDeleteConfirmation {
+		t.Fatal("config.Default().RequireDeleteConfirmation = false, want true — a fresh install should enforce the delete-confirmation ceremony without an operator opting in")
+	}
+}
+
+func TestLoadRequireDeleteConfirmationFalseOverridesDefault(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("require_delete_confirmation: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RequireDeleteConfirmation {
+		t.Fatal("Load with require_delete_confirmation: false left RequireDeleteConfirmation = true, want the explicit opt-out to override the default")
+	}
+}
