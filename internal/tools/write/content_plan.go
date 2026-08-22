@@ -570,7 +570,67 @@ func diffLineCounts(diff string) (added, removed int) {
 // a separate call is the actual enforcement, not this field.
 const planConfirmationLineThreshold = 20
 
+type contentPlanLock struct{ held bool }
+
+func (lock *contentPlanLock) acquire() error {
+	const lockWait = 10 * time.Second
+	deadline := time.Now().Add(lockWait)
+	for {
+		if hugosite.ContentMu.TryLock() {
+			lock.held = true
+			slog.Debug("apply_content_plan: lock_acquired")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			slog.Error("apply_content_plan: lock_timeout", "timeout_s", lockWait.Seconds())
+			return fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func (lock *contentPlanLock) release() {
+	if lock.held {
+		hugosite.ContentMu.Unlock()
+		slog.Debug("apply_content_plan: lock_released")
+	}
+}
+
+func consumeAppliedContentPlan(plans *planStore, planID, callerKey string) (string, string) {
+	_, ok, err := plans.consume(planID, callerKey)
+	if err == nil {
+		err = planConsumeFailure("apply_content_plan")
+	}
+	if err != nil {
+		slog.Warn("apply_content_plan: plan consumption failed after write", "plan_id", planID, "error", err)
+		return "partial_success", fmt.Sprintf("source updated but plan consumption could not be persisted: %v", err)
+	}
+	if !ok {
+		slog.Warn("apply_content_plan: plan consumption reported not-ok after write", "plan_id", planID)
+		return "partial_success", "source updated but plan consumption could not be persisted"
+	}
+	return "updated", ""
+}
+
 func registerContentPlanTools(
+	s *mcp.Server,
+	pg *security.PathGuard,
+	idx *hugosite.SourceIndex,
+	cfg config.Config,
+	siteDB *db.DB,
+	siteIdx *site.Index,
+	mutationMu *sync.Mutex,
+	mutationLimiters map[string]*rate.Limiter,
+	idem *idempotencyStore,
+	plans *planStore,
+	snapshots *snapshotStore,
+	changeSets *changeset.Registry,
+) {
+	registerPlanContentChangeTool(s, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, plans, snapshots, changeSets)
+	registerApplyContentPlanTool(s, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, plans, snapshots, changeSets)
+}
+
+func registerPlanContentChangeTool(
 	s *mcp.Server,
 	pg *security.PathGuard,
 	idx *hugosite.SourceIndex,
@@ -603,124 +663,145 @@ func registerContentPlanTools(
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in planContentChangeInput) (*mcp.CallToolResult, planContentChangeOutput, error) {
-		in.Slug = normalizeInputSlug(in.Slug)
-		wrapErr := func(err error) error {
-			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
-		}
-		if in.Slug == "" {
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
-		}
-		lang, err := validateLangParam(in.Lang)
-		if err != nil {
-			return nil, planContentChangeOutput{}, wrapErr(err)
-		}
-		if err := validateSlugFormat(in.Slug); err != nil {
-			return nil, planContentChangeOutput{}, wrapErr(err)
-		}
-		if len(in.Operations) == 0 {
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("invalid_params: operations must not be empty"))
-		}
-		if _, err := pg.SafeJoin(in.Slug); err != nil {
-			slog.Warn("plan_content_change: path validation failed", "slug", in.Slug, "error", err)
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
-		}
-
-		resolvedSource, langErr := resolveExistingSource(cfg.ContentRoot, in.Slug, lang)
-		if langErr != nil {
-			return nil, planContentChangeOutput{}, wrapErr(langErr)
-		}
-		filePath := resolvedSource.SourcePath
-
-		raw, err := os.ReadFile(filePath)
-		if err != nil {
-			slog.Error("plan_content_change: read failed", "slug", in.Slug, "path", filePath, "error", err)
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("read_error: failed to read page"))
-		}
-		revision := contentmodel.SourceRevisionBytes(raw)
-
-		// add_tag/remove_tag/add_category/remove_category compute a delta
-		// against the page's *current* tags/categories — read from the
-		// resolved file's own frontmatter, not idx.GetBySlug. The source
-		// index's bySlug lookup is not language-aware (for a bilingual page
-		// it returns whichever language happened to be indexed last), so
-		// using it here would compute the delta against the wrong
-		// language's tags and then overwrite the correct file's tags with
-		// that wrong-language-derived list (setYAMLSeq replaces, it doesn't
-		// merge). Reading straight from raw also can't be stale relative to
-		// the file this plan is about to pin its revision against.
-		currentTags, currentCategories := currentTaxonomyFromRaw(raw)
-
-		resolved, err := resolvePlanOperations(currentTags, currentCategories, in.Operations, cfg.BlockedShortcodes)
-		if err != nil {
-			return nil, planContentChangeOutput{}, wrapErr(err)
-		}
-
-		opts := pageUpdateOpts{
-			Tags:       resolved.Tags,
-			Categories: resolved.Categories,
-			Draft:      resolved.Draft,
-		}
-		if resolved.Description != "" {
-			opts.Description = strPtr(resolved.Description)
-		}
-		content, err := applyPageUpdates(string(raw), resolved.Title, resolved.Body, opts)
-		if err != nil {
-			slog.Error("plan_content_change: frontmatter update failed", "slug", in.Slug, "error", err)
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("parse_error: failed to update frontmatter"))
-		}
-		if err := validateFrontmatterRoundTrip(content); err != nil {
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("validation_error: %w", err))
-		}
-
-		diffLabel := in.Slug + "/" + filepath.Base(filePath)
-		diff := simpleDiff(diffLabel, string(raw), content)
-		added, removed := diffLineCounts(diff)
-
-		hadPublic := false
-		if siteIdx != nil {
-			_, hadPublic = siteIdx.GetBySlug(in.Slug)
-		}
-		state := updatePageState(siteIdx != nil, hadPublic)
-
-		planID, err := newPlanID()
-		if err != nil {
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("internal_error: failed to allocate plan id"))
-		}
-		now := time.Now().UTC()
-		if err := plans.put(planID, planEntry{
-			CallerKey:  isolationCallerKey(ctx),
-			Slug:       in.Slug,
-			Lang:       resolvedSource.Lang,
-			FilePath:   filePath,
-			Revision:   revision,
-			Content:    content,
-			Title:      resolved.Title,
-			Body:       resolved.Body,
-			Tags:       resolved.Tags,
-			Categories: resolved.Categories,
-			CreatedAt:  now,
-		}); err != nil {
-			return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("persistence_error: failed to persist content plan"))
-		}
-
-		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-		return nil, newPlanContentChangeOutput(planContentChangeData{
-			Target: planTargetDTO{
-				Slug:               canonicalPublicSlug(in.Slug),
-				ResolvedSourcePath: logicalPath,
-				Revision:           revision,
-				State:              state,
-			},
-			OperationsApplied:    resolved.Applied,
-			OperationsRejected:   resolved.Rejected,
-			Diff:                 diff,
-			EstimatedDiff:        planEstimatedDiffDTO{LinesAdded: added, LinesRemoved: removed},
-			PlanID:               planID,
-			PlanExpiresAt:        now.Add(planTTL).Format(time.RFC3339),
-			RequiresConfirmation: added+removed > planConfirmationLineThreshold,
-		}), nil
+		return handlePlanContentChange(ctx, in, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, plans, snapshots, changeSets)
 	}))
+}
 
+func handlePlanContentChange(ctx context.Context, in planContentChangeInput, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdx *site.Index, mutationMu *sync.Mutex, mutationLimiters map[string]*rate.Limiter, idem *idempotencyStore, plans *planStore, snapshots *snapshotStore, changeSets *changeset.Registry) (*mcp.CallToolResult, planContentChangeOutput, error) {
+
+	in.Slug = normalizeInputSlug(in.Slug)
+	wrapErr := func(err error) error {
+		return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
+	}
+	if in.Slug == "" {
+		return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("invalid_params: slug must not be empty"))
+	}
+	lang, err := validateLangParam(in.Lang)
+	if err != nil {
+		return nil, planContentChangeOutput{}, wrapErr(err)
+	}
+	if err := validateSlugFormat(in.Slug); err != nil {
+		return nil, planContentChangeOutput{}, wrapErr(err)
+	}
+	if len(in.Operations) == 0 {
+		return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("invalid_params: operations must not be empty"))
+	}
+	if _, err := pg.SafeJoin(in.Slug); err != nil {
+		slog.Warn("plan_content_change: path validation failed", "slug", in.Slug, "error", err)
+		return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("invalid_params: path validation failed"))
+	}
+
+	resolvedSource, langErr := resolveExistingSource(cfg.ContentRoot, in.Slug, lang)
+	if langErr != nil {
+		return nil, planContentChangeOutput{}, wrapErr(langErr)
+	}
+	filePath := resolvedSource.SourcePath
+
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		slog.Error("plan_content_change: read failed", "slug", in.Slug, "path", filePath, "error", err)
+		return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("read_error: failed to read page"))
+	}
+	revision := contentmodel.SourceRevisionBytes(raw)
+
+	// add_tag/remove_tag/add_category/remove_category compute a delta
+	// against the page's *current* tags/categories — read from the
+	// resolved file's own frontmatter, not idx.GetBySlug. The source
+	// index's bySlug lookup is not language-aware (for a bilingual page
+	// it returns whichever language happened to be indexed last), so
+	// using it here would compute the delta against the wrong
+	// language's tags and then overwrite the correct file's tags with
+	// that wrong-language-derived list (setYAMLSeq replaces, it doesn't
+	// merge). Reading straight from raw also can't be stale relative to
+	// the file this plan is about to pin its revision against.
+	currentTags, currentCategories := currentTaxonomyFromRaw(raw)
+
+	resolved, err := resolvePlanOperations(currentTags, currentCategories, in.Operations, cfg.BlockedShortcodes)
+	if err != nil {
+		return nil, planContentChangeOutput{}, wrapErr(err)
+	}
+
+	opts := pageUpdateOpts{
+		Tags:       resolved.Tags,
+		Categories: resolved.Categories,
+		Draft:      resolved.Draft,
+	}
+	if resolved.Description != "" {
+		opts.Description = strPtr(resolved.Description)
+	}
+	content, err := applyPageUpdates(string(raw), resolved.Title, resolved.Body, opts)
+	if err != nil {
+		slog.Error("plan_content_change: frontmatter update failed", "slug", in.Slug, "error", err)
+		return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("parse_error: failed to update frontmatter"))
+	}
+	if err := validateFrontmatterRoundTrip(content); err != nil {
+		return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("validation_error: %w", err))
+	}
+
+	diffLabel := in.Slug + "/" + filepath.Base(filePath)
+	diff := simpleDiff(diffLabel, string(raw), content)
+	added, removed := diffLineCounts(diff)
+
+	hadPublic := false
+	if siteIdx != nil {
+		_, hadPublic = siteIdx.GetBySlug(in.Slug)
+	}
+	state := updatePageState(siteIdx != nil, hadPublic)
+
+	planID, err := newPlanID()
+	if err != nil {
+		return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("internal_error: failed to allocate plan id"))
+	}
+	now := time.Now().UTC()
+	if err := plans.put(planID, planEntry{
+		CallerKey:  isolationCallerKey(ctx),
+		Slug:       in.Slug,
+		Lang:       resolvedSource.Lang,
+		FilePath:   filePath,
+		Revision:   revision,
+		Content:    content,
+		Title:      resolved.Title,
+		Body:       resolved.Body,
+		Tags:       resolved.Tags,
+		Categories: resolved.Categories,
+		CreatedAt:  now,
+	}); err != nil {
+		return nil, planContentChangeOutput{}, wrapErr(fmt.Errorf("persistence_error: failed to persist content plan"))
+	}
+
+	logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+	return nil, newPlanContentChangeOutput(planContentChangeData{
+		Target: planTargetDTO{
+			Slug:               canonicalPublicSlug(in.Slug),
+			ResolvedSourcePath: logicalPath,
+			Revision:           revision,
+			State:              state,
+		},
+		OperationsApplied:    resolved.Applied,
+		OperationsRejected:   resolved.Rejected,
+		Diff:                 diff,
+		EstimatedDiff:        planEstimatedDiffDTO{LinesAdded: added, LinesRemoved: removed},
+		PlanID:               planID,
+		PlanExpiresAt:        now.Add(planTTL).Format(time.RFC3339),
+		RequiresConfirmation: added+removed > planConfirmationLineThreshold,
+	}), nil
+
+}
+
+func registerApplyContentPlanTool(
+	s *mcp.Server,
+	pg *security.PathGuard,
+	idx *hugosite.SourceIndex,
+	cfg config.Config,
+	siteDB *db.DB,
+	siteIdx *site.Index,
+	mutationMu *sync.Mutex,
+	mutationLimiters map[string]*rate.Limiter,
+	idem *idempotencyStore,
+	plans *planStore,
+	snapshots *snapshotStore,
+	changeSets *changeset.Registry,
+) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "apply_content_plan",
 		Title: "Apply content plan",
@@ -741,256 +822,236 @@ func registerContentPlanTools(
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in applyContentPlanInput) (*mcp.CallToolResult, applyContentPlanOutput, error) {
-		if cfg.ForceDryRunAll {
-			in.DryRun = true
-		}
-		wrapErr := func(err error) error {
-			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{})
-		}
-		callerKey := mutationCallerKey(ctx)
-		limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
-		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithDataFields(
-				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
-				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
-			)
-		}
-		if strings.TrimSpace(in.PlanID) == "" {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: plan_id must not be empty"))
-		}
-		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
-		}
-		resolvedChangeSetID, err := changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
-		if err != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
-		}
-		if !in.DryRun && !limiter.Allow() {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(rateLimitExceededErr("apply_content_plan", cfg.RateLimit.CreateUpdatePerMin, limiter))
-		}
+		return handleApplyContentPlan(ctx, in, pg, idx, cfg, siteDB, siteIdx, mutationMu, mutationLimiters, idem, plans, snapshots, changeSets)
+	}))
+}
 
-		// Idempotency replay is checked before the plan lookup: a plan is
-		// single-use and deleted once a real (non-dry-run) apply attempt
-		// succeeds in passing the revision check — not merely attempted; a
-		// revision_conflict or build_in_progress preserves it (#1001). A
-		// genuine retry of an already-applied request must not depend on
-		// the plan still existing, or replay would be indistinguishable
-		// from plan_not_found on the second call — deliberately reordered
-		// from the design doc's literal listing (which checked plan
-		// existence first) once implementing surfaced that gap.
-		idemHash := ""
-		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
-			hash, hashErr := requestHash(struct {
-				PlanID string `json:"plan_id"`
-			}{PlanID: in.PlanID})
-			if hashErr != nil {
-				return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
-			}
-			idemHash = hash
-			var cached applyContentPlanOutput
-			hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "apply_content_plan", in.IdempotencyKey, idemHash, &cached)
-			if replayErr != nil {
-				return nil, applyContentPlanOutput{}, wrapErrWithLimiter(replayErr)
-			}
-			if hit {
-				return nil, cached, nil
-			}
-		}
+func handleApplyContentPlan(ctx context.Context, in applyContentPlanInput, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, siteIdx *site.Index, mutationMu *sync.Mutex, mutationLimiters map[string]*rate.Limiter, idem *idempotencyStore, plans *planStore, snapshots *snapshotStore, changeSets *changeset.Registry) (*mcp.CallToolResult, applyContentPlanOutput, error) {
 
-		// Keep retryable revision conflicts from consuming the plan (#1001):
-		// look the plan up without consuming it, and only consume it once
-		// the revision check below has passed.
-		entry, ok, planErr := plans.get(in.PlanID, isolationCallerKey(ctx))
-		if planErr != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to load content plan"))
-		}
-		if !ok {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_content_change again"))
-		}
-		// From here on, errors carry the slug/lang the plan resolved (#1001)
-		// — a caller reading request_context on a revision_conflict/
-		// build_in_progress/read_error no longer has to guess which page.
-		wrapErr = func(err error) error {
-			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: entry.Slug, RequestedLang: entry.Lang})
-		}
+	if cfg.ForceDryRunAll {
+		in.DryRun = true
+	}
+	wrapErr := func(err error) error {
+		return toolcontract.WithRequestContext(err, toolcontract.RequestContext{})
+	}
+	callerKey := mutationCallerKey(ctx)
+	limiter := callerLimiter(mutationMu, mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+	wrapErrWithLimiter := func(err error) error {
+		return toolcontract.WithDataFields(
+			toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+			rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
+		)
+	}
+	if strings.TrimSpace(in.PlanID) == "" {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: plan_id must not be empty"))
+	}
+	if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
+	}
+	resolvedChangeSetID, err := changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
+	if err != nil {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
+	}
+	if !in.DryRun && !limiter.Allow() {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(rateLimitExceededErr("apply_content_plan", cfg.RateLimit.CreateUpdatePerMin, limiter))
+	}
 
-		const lockWait = 10 * time.Second
-		deadline := time.Now().Add(lockWait)
-		for {
-			if hugosite.ContentMu.TryLock() {
-				slog.Debug("apply_content_plan: lock_acquired")
-				break
-			}
-			if time.Now().After(deadline) {
-				slog.Error("apply_content_plan: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
-			}
-			time.Sleep(50 * time.Millisecond)
+	// Idempotency replay is checked before the plan lookup: a plan is
+	// single-use and deleted once a real (non-dry-run) apply attempt
+	// succeeds in passing the revision check — not merely attempted; a
+	// revision_conflict or build_in_progress preserves it (#1001). A
+	// genuine retry of an already-applied request must not depend on
+	// the plan still existing, or replay would be indistinguishable
+	// from plan_not_found on the second call — deliberately reordered
+	// from the design doc's literal listing (which checked plan
+	// existence first) once implementing surfaced that gap.
+	idemHash := ""
+	if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+		hash, hashErr := requestHash(struct {
+			PlanID string `json:"plan_id"`
+		}{PlanID: in.PlanID})
+		if hashErr != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
 		}
-		defer func() {
-			hugosite.ContentMu.Unlock()
-			slog.Debug("apply_content_plan: lock_released")
-		}()
+		idemHash = hash
+		var cached applyContentPlanOutput
+		hit, replayErr := idem.replay(idempotencyCallerKey(ctx), "apply_content_plan", in.IdempotencyKey, idemHash, &cached)
+		if replayErr != nil {
+			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(replayErr)
+		}
+		if hit {
+			return nil, cached, nil
+		}
+	}
 
-		raw, err := os.ReadFile(entry.FilePath)
-		if err != nil {
-			slog.Error("apply_content_plan: read failed", "plan_id", in.PlanID, "path", entry.FilePath, "error", err)
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read page"))
-		}
-		currentRevision := contentmodel.SourceRevisionBytes(raw)
-		if entry.Revision != currentRevision {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since the plan was created; call plan_content_change again"))
-		}
-		if err := validateFrontmatterRoundTrip(entry.Content); err != nil {
-			slog.Error("apply_content_plan: round-trip guard failed", "plan_id", in.PlanID, "error", err)
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("validation_error: %w", err))
-		}
+	// Keep retryable revision conflicts from consuming the plan (#1001):
+	// look the plan up without consuming it, and only consume it once
+	// the revision check below has passed.
+	entry, ok, planErr := plans.get(in.PlanID, isolationCallerKey(ctx))
+	if planErr != nil {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to load content plan"))
+	}
+	if !ok {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("plan_not_found: plan_id is unknown or has expired; call plan_content_change again"))
+	}
+	// From here on, errors carry the slug/lang the plan resolved (#1001)
+	// — a caller reading request_context on a revision_conflict/
+	// build_in_progress/read_error no longer has to guess which page.
+	wrapErr = func(err error) error {
+		return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: entry.Slug, RequestedLang: entry.Lang})
+	}
 
-		if in.DryRun {
-			hadPublic := false
-			if siteIdx != nil {
-				_, hadPublic = siteIdx.GetBySlug(entry.Slug)
-			}
-			state := updatePageState(siteIdx != nil, hadPublic)
-			dryRunStatus := "unchanged"
-			if entry.Content != string(raw) {
-				dryRunStatus = "would_update"
-			}
-			return nil, newApplyContentPlanOutput(applyContentPlanData{
-				Status:         dryRunStatus,
-				PlanID:         in.PlanID,
-				Slug:           canonicalPublicSlug(entry.Slug),
-				DryRun:         true,
-				BeforeRevision: entry.Revision,
-				Validation:     "passed",
-				State:          &state,
-				RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
-			}, rateLimitRemaining(limiter)), nil
-		}
-		if err := snapshots.put(entry.FilePath, entry.Revision, isolationCallerKey(ctx), string(raw)); err != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to retain rollback snapshot: %w", err))
-		}
-		if err := pg.RevalidateForWrite(entry.FilePath); err != nil {
-			slog.Warn("apply_content_plan: symlink-swap detected before write", "plan_id", in.PlanID, "error", err)
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
-		}
-		afterRevision := contentmodel.SourceRevisionBytes([]byte(entry.Content))
-		recoveryOp, err := beginSourceWriteRecovery(siteDB, entry.FilePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "apply_content_plan", in.IdempotencyKey, idemHash, map[string]any{
-			"plan_id": in.PlanID, "slug": canonicalPublicSlug(entry.Slug),
-			"before_revision": currentRevision, "after_revision": afterRevision, "revision_kind": "content_snapshot",
-		}))
-		if err != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source write intent"))
-		}
-		if err := fileutil.AtomicWriteChecked(entry.FilePath, entry.Content, pg); err != nil {
-			slog.Error("apply_content_plan: write failed", "plan_id", in.PlanID, "error", err)
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
-		}
-		if err := recoveryFilesystemBoundary("apply_content_plan", "after_source_write"); err != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source write"))
-		}
-		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
-			slog.Warn("apply_content_plan: could not advance recovery journal", "plan_id", in.PlanID, "error", err)
-		}
-		status := "updated"
-		warning := ""
-		_, ok, err = plans.consume(in.PlanID, isolationCallerKey(ctx))
-		if err == nil {
-			err = planConsumeFailure("apply_content_plan")
-		}
-		if err != nil {
-			slog.Warn("apply_content_plan: plan consumption failed after write", "plan_id", in.PlanID, "error", err)
-			status = "partial_success"
-			warning = fmt.Sprintf("source updated but plan consumption could not be persisted: %v", err)
-		} else if !ok {
-			slog.Warn("apply_content_plan: plan consumption reported not-ok after write", "plan_id", in.PlanID)
-			status = "partial_success"
-			warning = "source updated but plan consumption could not be persisted"
-		}
-		var updated hugosite.SourcePage
-		if existing, hasExisting := idx.GetBySlug(entry.Slug); hasExisting {
-			updated = *existing
-		} else {
-			updated = hugosite.SourcePage{Slug: entry.Slug}
-		}
-		updated.FilePath = entry.FilePath
-		updated.Lang = entry.Lang
-		if entry.Title != "" {
-			updated.Title = entry.Title
-		}
-		if entry.Body != "" {
-			updated.Body = entry.Body
-		}
-		if entry.Tags != nil {
-			updated.Tags = entry.Tags
-		}
-		if entry.Categories != nil {
-			updated.Categories = entry.Categories
-		}
-		// Re-parse FrontmatterRaw wholesale from the content just written —
-		// see the identical fix/comment on update_page in tools.go (#810).
-		if fm := parseFrontmatterMap([]byte(entry.Content)); fm != nil {
-			updated.FrontmatterRaw = fm
-		}
-		updated.BuildPending = true
-		idx.Upsert(updated)
+	lock := &contentPlanLock{}
+	if err := lock.acquire(); err != nil {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(err)
+	}
+	defer lock.release()
 
+	raw, err := os.ReadFile(entry.FilePath)
+	if err != nil {
+		slog.Error("apply_content_plan: read failed", "plan_id", in.PlanID, "path", entry.FilePath, "error", err)
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read page"))
+	}
+	currentRevision := contentmodel.SourceRevisionBytes(raw)
+	if entry.Revision != currentRevision {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since the plan was created; call plan_content_change again"))
+	}
+	if err := validateFrontmatterRoundTrip(entry.Content); err != nil {
+		slog.Error("apply_content_plan: round-trip guard failed", "plan_id", in.PlanID, "error", err)
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("validation_error: %w", err))
+	}
+
+	if in.DryRun {
 		hadPublic := false
 		if siteIdx != nil {
-			if pub, ok := siteIdx.GetBySlug(entry.Slug); ok {
-				hadPublic = true
-				pubUpdated := *pub
-				if entry.Title != "" {
-					pubUpdated.Title = entry.Title
-				}
-				if entry.Tags != nil {
-					pubUpdated.Tags = entry.Tags
-				}
-				if entry.Categories != nil {
-					pubUpdated.Categories = entry.Categories
-				}
-				siteIdx.UpsertPage(pubUpdated)
-			}
+			_, hadPublic = siteIdx.GetBySlug(entry.Slug)
 		}
-
-		if siteDB != nil {
-			if err := siteDB.SyncSourcePage(updated); err != nil {
-				slog.Warn("apply_content_plan: db sync failed", "plan_id", in.PlanID, "error", err)
-				status = "partial_success"
-				dbWarning := fmt.Sprintf("source updated but derived DB could not be updated: %v", err)
-				if warning != "" {
-					warning = warning + "; " + dbWarning
-				} else {
-					warning = dbWarning
-				}
-			}
-		}
-
 		state := updatePageState(siteIdx != nil, hadPublic)
-		out := newApplyContentPlanOutput(applyContentPlanData{
-			Status:         status,
+		dryRunStatus := "unchanged"
+		if entry.Content != string(raw) {
+			dryRunStatus = "would_update"
+		}
+		return nil, newApplyContentPlanOutput(applyContentPlanData{
+			Status:         dryRunStatus,
 			PlanID:         in.PlanID,
 			Slug:           canonicalPublicSlug(entry.Slug),
+			DryRun:         true,
 			BeforeRevision: entry.Revision,
-			AfterRevision:  contentmodel.SourceRevisionBytes([]byte(entry.Content)),
-			RevisionKind:   "content_snapshot",
 			Validation:     "passed",
-			Warning:        appendLastBuildWarning(warning),
 			State:          &state,
 			RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
-		}, rateLimitRemaining(limiter))
-		if err := recoveryOp.stageResult(siteDB, out); err != nil {
-			return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+		}, rateLimitRemaining(limiter)), nil
+	}
+	if err := snapshots.put(entry.FilePath, entry.Revision, isolationCallerKey(ctx), string(raw)); err != nil {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to retain rollback snapshot: %w", err))
+	}
+	if err := pg.RevalidateForWrite(entry.FilePath); err != nil {
+		slog.Warn("apply_content_plan: symlink-swap detected before write", "plan_id", in.PlanID, "error", err)
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
+	}
+	afterRevision := contentmodel.SourceRevisionBytes([]byte(entry.Content))
+	recoveryOp, err := beginSourceWriteRecovery(siteDB, entry.FilePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "apply_content_plan", in.IdempotencyKey, idemHash, map[string]any{
+		"plan_id": in.PlanID, "slug": canonicalPublicSlug(entry.Slug),
+		"before_revision": currentRevision, "after_revision": afterRevision, "revision_kind": "content_snapshot",
+	}))
+	if err != nil {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source write intent"))
+	}
+	if err := fileutil.AtomicWriteChecked(entry.FilePath, entry.Content, pg); err != nil {
+		slog.Error("apply_content_plan: write failed", "plan_id", in.PlanID, "error", err)
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
+	}
+	if err := recoveryFilesystemBoundary("apply_content_plan", "after_source_write"); err != nil {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source write"))
+	}
+	if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+		slog.Warn("apply_content_plan: could not advance recovery journal", "plan_id", in.PlanID, "error", err)
+	}
+	status, warning := consumeAppliedContentPlan(plans, in.PlanID, isolationCallerKey(ctx))
+	var updated hugosite.SourcePage
+	if existing, hasExisting := idx.GetBySlug(entry.Slug); hasExisting {
+		updated = *existing
+	} else {
+		updated = hugosite.SourcePage{Slug: entry.Slug}
+	}
+	updated.FilePath = entry.FilePath
+	updated.Lang = entry.Lang
+	if entry.Title != "" {
+		updated.Title = entry.Title
+	}
+	if entry.Body != "" {
+		updated.Body = entry.Body
+	}
+	if entry.Tags != nil {
+		updated.Tags = entry.Tags
+	}
+	if entry.Categories != nil {
+		updated.Categories = entry.Categories
+	}
+	// Re-parse FrontmatterRaw wholesale from the content just written —
+	// see the identical fix/comment on update_page in tools.go (#810).
+	if fm := parseFrontmatterMap([]byte(entry.Content)); fm != nil {
+		updated.FrontmatterRaw = fm
+	}
+	updated.BuildPending = true
+	idx.Upsert(updated)
+
+	hadPublic := false
+	if siteIdx != nil {
+		if pub, ok := siteIdx.GetBySlug(entry.Slug); ok {
+			hadPublic = true
+			pubUpdated := *pub
+			if entry.Title != "" {
+				pubUpdated.Title = entry.Title
+			}
+			if entry.Tags != nil {
+				pubUpdated.Tags = entry.Tags
+			}
+			if entry.Categories != nil {
+				pubUpdated.Categories = entry.Categories
+			}
+			siteIdx.UpsertPage(pubUpdated)
 		}
-		if idemHash != "" {
-			if err := idem.remember(idempotencyCallerKey(ctx), "apply_content_plan", in.IdempotencyKey, idemHash, out); err != nil {
-				slog.Warn("apply_content_plan: could not persist idempotency result", "plan_id", in.PlanID, "error", err)
+	}
+
+	if siteDB != nil {
+		if err := siteDB.SyncSourcePage(updated); err != nil {
+			slog.Warn("apply_content_plan: db sync failed", "plan_id", in.PlanID, "error", err)
+			status = "partial_success"
+			dbWarning := fmt.Sprintf("source updated but derived DB could not be updated: %v", err)
+			if warning != "" {
+				warning = warning + "; " + dbWarning
+			} else {
+				warning = dbWarning
 			}
 		}
-		if err := recoveryOp.record(siteDB, "committed"); err != nil {
-			slog.Warn("apply_content_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
+	}
+
+	state := updatePageState(siteIdx != nil, hadPublic)
+	out := newApplyContentPlanOutput(applyContentPlanData{
+		Status:         status,
+		PlanID:         in.PlanID,
+		Slug:           canonicalPublicSlug(entry.Slug),
+		BeforeRevision: entry.Revision,
+		AfterRevision:  contentmodel.SourceRevisionBytes([]byte(entry.Content)),
+		RevisionKind:   "content_snapshot",
+		Validation:     "passed",
+		Warning:        appendLastBuildWarning(warning),
+		State:          &state,
+		RateLimit:      ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
+	}, rateLimitRemaining(limiter))
+	if err := recoveryOp.stageResult(siteDB, out); err != nil {
+		return nil, applyContentPlanOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+	}
+	if idemHash != "" {
+		if err := idem.remember(idempotencyCallerKey(ctx), "apply_content_plan", in.IdempotencyKey, idemHash, out); err != nil {
+			slog.Warn("apply_content_plan: could not persist idempotency result", "plan_id", in.PlanID, "error", err)
 		}
-		changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "apply_content_plan", entry.Slug, "update", time.Now().UTC())
-		return nil, out, nil
-	}))
+	}
+	if err := recoveryOp.record(siteDB, "committed"); err != nil {
+		slog.Warn("apply_content_plan: could not commit recovery journal", "plan_id", in.PlanID, "error", err)
+	}
+	changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "apply_content_plan", entry.Slug, "update", time.Now().UTC())
+	return nil, out, nil
+
 }
