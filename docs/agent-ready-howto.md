@@ -1,8 +1,10 @@
 # AgentReady 100% HowTo
 
 This page documents the working `www.arleo.eu` / `mcp.arleo.eu` setup that
-returned IsItAgentReady to 100/100 on 2026-07-05 and was revalidated after the
-2026-07-13 public discovery regression.
+returned IsItAgentReady to 100/100 on 2026-07-05, was revalidated after the
+2026-07-13 public discovery regression, and again after the 2026-08-22
+`OAuth Protected Resource`/`ARD` regression (scorer added the ARD check,
+pushing the category from 7 to 8 items).
 
 It is a recovery checklist and reference snapshot. Keep it practical: if a
 future change regresses AgentReady discovery, compare the live system with this
@@ -35,7 +37,7 @@ These public URLs must stay coherent:
 | URL | Expected behavior |
 | --- | --- |
 | `https://www.arleo.eu/auth.md` | `200 text/markdown`, contains `agent_auth_metadata` and ID-JAG credential types |
-| `https://www.arleo.eu/.well-known/oauth-protected-resource` | `200 application/json`, resource is `https://www.arleo.eu`, authorization server is `https://mcp.arleo.eu` |
+| `https://www.arleo.eu/.well-known/oauth-protected-resource` | `200 application/json`, resource is `https://www.arleo.eu`, authorization server is `https://mcp.arleo.eu`, `scopes_supported` is `["read","write","admin"]` (2026-08-22: found stale at `["content.read","content.write","site.admin"]`, see Regression Notes below) |
 | `https://www.arleo.eu/.well-known/oauth-protected-resource/mcp` | compatibility alias for the MCP protected-resource document; must not degrade to HTML `403` |
 | `https://www.arleo.eu/.well-known/mcp/server-card.json` | compatibility redirect to the canonical MCP server card on `mcp.arleo.eu` |
 | `https://mcp.arleo.eu/.well-known/oauth-authorization-server` | `200 application/json`, issuer is `https://mcp.arleo.eu`, contains `agent_auth` |
@@ -43,6 +45,7 @@ These public URLs must stay coherent:
 | `https://mcp.arleo.eu/.well-known/mcp/server-card.json` | `200 application/json`, transport endpoint is `/mcp` |
 | `https://mcp.arleo.eu/.well-known/mcp.json` | compatibility alias for server card |
 | `https://www.arleo.eu/.well-known/agent-skills/index.json` | `200 application/json` |
+| `https://www.arleo.eu/.well-known/ai-catalog.json` | `200 application/json`, ARD (Agentic Resource Discovery, [agenticresourcediscovery.org/spec](https://agenticresourcediscovery.org/spec/)) manifest listing the MCP server card and agent-skills index as `entries` |
 
 The ID-JAG block is easy to break. Both OAuth metadata and `/auth.md` must keep:
 
@@ -77,6 +80,7 @@ Key points:
 - `www.arleo.eu/.well-known/oauth-protected-resource` is a protected-resource document for the website resource.
 - `www.arleo.eu/.well-known/oauth-protected-resource/mcp` redirects to the MCP protected-resource alias on `mcp.arleo.eu`.
 - `www.arleo.eu/.well-known/mcp/server-card.json` redirects to the canonical MCP server card on `mcp.arleo.eu`.
+- `www.arleo.eu/.well-known/ai-catalog.json` is proxied to Hugo static content (like `api-catalog` and `agent-skills/index.json`), not hand-maintained inline in OpenResty.
 - `mcp.arleo.eu` proxies all paths to `mcp-hugo-server-go` on the Hugo VM.
 
 Do not leave backup copies of active vhosts inside the include glob used by
@@ -120,6 +124,7 @@ Reference examples live in:
 
 - [`docs/examples/agent-ready/static/auth.md`](examples/agent-ready/static/auth.md)
 - [`docs/examples/agent-ready/static/.well-known/oauth-protected-resource`](examples/agent-ready/static/.well-known/oauth-protected-resource)
+- [`docs/examples/agent-ready/static/.well-known/ai-catalog.json`](examples/agent-ready/static/.well-known/ai-catalog.json)
 - [`docs/examples/agent-ready/static/llms.txt`](examples/agent-ready/static/llms.txt)
 - [`docs/examples/agent-ready/static/robots.txt`](examples/agent-ready/static/robots.txt)
 
@@ -128,6 +133,7 @@ Production source paths on `hugo-vm`:
 ```bash
 /home/jm/hugo-site/static/auth.md
 /home/jm/hugo-site/static/.well-known/oauth-protected-resource
+/home/jm/hugo-site/static/.well-known/ai-catalog.json
 /home/jm/hugo-site/static/.well-known/api-catalog
 /home/jm/hugo-site/static/.well-known/agent-skills/index.json
 /home/jm/hugo-site/static/.well-known/agent-skills/*.md
@@ -176,6 +182,41 @@ The shortest reliable recovery path was:
 3. publish the corrected public files intentionally;
 4. revalidate `www.arleo.eu` and `mcp.arleo.eu` with curl before blaming cache.
 
+## 2026-08-22 Regression Notes
+
+Score dropped from 100/100 to 93/100 (`API, Auth, MCP & Skill Discovery` 7/8).
+Two independent causes, found by cross-referencing an external adversarial
+DCR-scope audit against this repo's own code and the live host config:
+
+1. `www.arleo.eu/.well-known/oauth-protected-resource`'s `scopes_supported`
+   was hand-maintained inline in the OpenResty `return 200 '...'` block (see
+   [Host OpenResty](#host-openresty) above) and had never been updated past
+   the pre-#450 scope model — it still advertised `content.read`,
+   `content.write`, `site.admin` instead of the canonical `read`, `write`,
+   `admin`. This is exactly the class of drift the comment now above that
+   `location` block warns about: this document is not proxied or generated
+   from the server's own scope list, so it silently goes stale whenever the
+   scope model changes and nobody remembers to touch this specific string.
+   Cross-check it against a live `curl https://mcp.arleo.eu/.well-known/oauth-protected-resource`
+   (the server's own dynamically-generated, always-current version) whenever
+   the OAuth scope model changes.
+2. `.well-known/ai-catalog.json` (the [ARD](https://agenticresourcediscovery.org/spec/)
+   manifest) had no `location` block at all in the `www.arleo.eu` vhost, so
+   it fell through to the catch-all `location ^~ /.well-known/ { deny all; }`
+   and returned `403` — indistinguishable at a glance from a Cloudflare-edge
+   block, which cost significant investigation time before the actual
+   OpenResty vhost on the operator host (not `hugo-vm`, see [Topology](#topology))
+   was checked directly.
+
+Neither was a Go runtime bug, a Cloudflare WAF/Bot Management rule, nor
+caching — both were static content: one a stale literal string, one a
+genuinely missing allowlist entry. When `isitagentready.com` (or any similar
+external scanner) reports a `.well-known/` path failing with a status that
+doesn't match what the Go server or Hugo static source would produce, check
+the OpenResty vhost's own `location` blocks for that exact path before
+suspecting anything upstream (Cloudflare Workers/Page Rules/WAF) or
+downstream (`hugo-vm`).
+
 ## MCP Server Generator
 
 The MCP server also generates Auth.md metadata when serving `https://mcp.arleo.eu/auth.md`.
@@ -211,5 +252,5 @@ https://isitagentready.com/www.arleo.eu
 Expected:
 
 - score `100/100`
-- `API, Auth, MCP & Skill Discovery = 7/7`
+- `API, Auth, MCP & Skill Discovery = 8/8` (includes ARD — Agentic Resource Discovery — since 2026-08-22)
 - `Auth.md agent registration` green
