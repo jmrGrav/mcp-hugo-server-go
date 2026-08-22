@@ -2,6 +2,40 @@
 
 All notable changes to this project are documented here.
 
+## [v1.9.3] - 2026-08-22
+
+Two threads since v1.9.2: a hardening pass against indirect prompt injection
+and tool-registry tampering, and a behavior-preserving maintainability
+campaign (#1215) that decomposed five large handler-registration functions
+(300-478 lines each) into named, independently testable stages with zero
+MCP contract change. Every campaign PR was verified against its predecessor
+with a direct or call-site-multiset diff before merge, not just by tests
+passing; a live regression audit against the deployed server (create, edit,
+plan/apply, bundle, build, delete cycles) confirmed no behavior drift from
+v1.9.2 before this release.
+
+### Feat
+- **Tool-registry digest for tool-poisoning / rug-pull detection** (#1225, #1229): `get_capabilities.data.tool_catalog.tool_registry_digest` is a `sha256:<hex>` fingerprint over every tool's `{name, description, input_schema, output_schema}` a session can see, computed from a real `tools/list` round-trip — a trust-on-first-use signal a client can pin and compare across connections to detect a tool's description or schema being silently rewritten without its name changing. Made exposure-profile- and scope-aware (#1230): the digest is computed after OAuth scope and `?profile=` narrowing, so it is per (deployment, scope, profile), not per deployment alone.
+- **Opt-in `confirm_delete_of_published_page` gate on `delete_page`** (#1231): on a deployment with `require_delete_confirmation:true` configured (off by default), a non-dry-run delete of a real (non-`test_content`) page now additionally requires `confirm_delete_of_published_page:true` — a distinct, named destructive-intent decision on top of the existing `expected_revision` requirement. Self-declared and unverifiable, like `declared_untrusted_derivation` below; it exists to give a calling agent's own guardrails a deliberate hook for real human confirmation, not as a security boundary on its own.
+
+### Fix
+- **`content_provenance` tagging generalized to close an indirect-prompt-injection gap** (#1223, #1224): every read-scope tool that echoes site-source or rendered-HTML text is now tagged, with a build-failing completeness test (`TestReadDefsHaveExplicitContentProvenanceClassification`) ensuring no future tool ships this untagged.
+- **Malformed or standalone Unicode TAG-block sequences (U+E0000-U+E007F) rejected on write input** (#1239, #1240): narrow input hygiene on `create_page`/`update_page` title, body, and description, closing an invisible-text-smuggling representation without touching ZWJ/ZWNJ or any other code point with a legitimate linguistic/emoji use. A well-formed RGI subdivision-flag emoji sequence (England/Scotland/Wales) still validates unchanged. Defense-in-depth only — documented in `SECURITY.md` as narrow hygiene, not a primary anti-injection control, alongside the project's existing rejection of semantic keyword/phrase filtering.
+
+### Refactor
+- **v1.9.3 maintainability campaign** (#1215, following a Brooks-Lint health review scoring 96/100 with no functional defect): five registration functions identified as handler-concentration warnings were decomposed into named, independently testable stages, with characterization tests pinning every previously-untested observable branch first. No MCP tool name, schema, description, annotation, scope, response shape, error code, quota, idempotency, revision guard, locking, rollback, recovery, or persistence behavior changed.
+  - Neutral Hugo/asset primitives (hero-image path resolution, Hugo version probing, theme layout discovery) moved out of `internal/tools/admin` into `internal/hugoruntime`/`internal/assets` (#1216).
+  - `update_page` (#1218), `delete_page` (#1219), bundle-lifecycle registration (`create_bundle`/`delete_bundle`, #1220), `runBuild` (#1221, the highest-risk extraction — callback ordering, recovery boundaries, and `ContentMu` ownership preserved exactly), and content-plan registration (`plan_content_change`/`apply_content_plan`, #1222) each reduced their registration function to a thin orchestrator over named stages.
+
+### Test
+- **Fast bounded `race-critical` target** (#1217): `make race-critical` runs a focused subset of real concurrent scenarios (content/build locking, change-set ownership, idempotency, mutation quotas, chunked uploads, previews, OAuth rate limiting, recovery journals) with `-race` in under 30 seconds, ahead of the handler-decomposition work above.
+- **Coverage hardening on transactional finalization/recovery boundaries** (#1241): Hugo-activation compensation after a persistence failure and chunked-asset-commit retryability/dry-run/hash-mismatch state transitions are now directly pinned, targeting risk-bearing gaps identified by a post-campaign coverage review rather than an aggregate-percentage sweep.
+
+### Docs
+- Threat model documented in `SECURITY.md`: the indirect-prompt-injection scenario this server is exposed to, and a decision record explicitly rejecting a keyword/phrase-filtering firewall (trivially bypassed, high false-positive rate on a site that may legitimately publish about prompt injection) (#1226, #1227). `create_change_set` gained an optional `declared_untrusted_derivation`/`declared_untrusted_note` self-report for a caller to mark an editing session as derived from untrusted-tagged content it read.
+- System-prompt snippet reference for consuming `content_provenance` client-side (#1228).
+- Clarified ChatGPT Plus MCP availability (#1213).
+
 ## [v1.9.2] - 2026-08-20
 
 Full triage sweep of the v1.9.2 backlog (12 issues from external live audits and real editorial usage), a coverage-margin push, a new per-PR diff-coverage CI gate, and a docs/wiki freshness pass.
