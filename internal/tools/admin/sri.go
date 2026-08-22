@@ -26,9 +26,18 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var sriIntegrityRe = regexp.MustCompile(`(?:integrity:\s*|integrity="|hash:\s*|sha:\s*)["']?(sha(?:256|384|512)-[A-Za-z0-9+/=]+)["']?`)
+// sriIntegrityRe and sriURLRe both tolerate an HTML5 unquoted attribute
+// value (e.g. href=https://cdn.example/x.js, integrity=sha256-abc), not
+// just the quoted form — Hugo's own --minify flag (tdewolff/minify)
+// strips quotes from attribute values that don't need them by default,
+// which is legal HTML5 and not something a scanner should treat as
+// absent. See #1252: files_with_sri_attributes silently dropped from
+// 276 to 2 on a live site the first time a --minify build actually
+// reached production, because these regexes previously required a
+// literal quote.
+var sriIntegrityRe = regexp.MustCompile(`(?:integrity:\s*|integrity=|hash:\s*|sha:\s*)["']?(sha(?:256|384|512)-[A-Za-z0-9+/=]+)["']?`)
 var sriHashRe = regexp.MustCompile(`sha(?:256|384|512)-[A-Za-z0-9+/=]+`)
-var sriURLRe = regexp.MustCompile(`(?:src|href)="(https?://[^"]+)"`)
+var sriURLRe = regexp.MustCompile(`(?:src|href)=["']?(https?://[^"'\s>]+)`)
 var sriDataLookupRe = regexp.MustCompile(`index\s+site\.Data\.sri\b`)
 var sriTagRe = regexp.MustCompile(`(?is)<(?:script|link)\b[^>]*>`)
 

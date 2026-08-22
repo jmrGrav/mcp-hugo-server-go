@@ -4,6 +4,9 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fix
+- **`check_sri_versions` (`internal/tools/admin/sri.go`) no longer undercounts `files_with_sri_attributes` against `hugo --minify` output** (#1252): `sriURLRe`/`sriIntegrityRe` required quoted `src="..."`/`href="..."`/`integrity="..."` attribute values, but Hugo's own `--minify` flag legally strips quotes from HTML5 attributes that don't need them (`href=https://...`). Live-reproduced: the count dropped from 276 to 2 on `www.arleo.eu` the first time a `--minify` build actually reached production. `data.findings`/`data.status` (the security-relevant hash comparison, sourced from `data/sri.yaml` directly) were never affected — this was a cosmetic undercount in a descriptive stat.
+
 ### Changed
 - **`require_delete_confirmation` now defaults to `true`** (v1.9.3 shipped it default-`false`/opt-in via #1231): a fresh install no longer needs an operator to remember this config line before `delete_page` enforces the `confirm_delete_of_published_page:true` ceremony on a non-dry-run delete of a real (non-`test_content`) page. An operator who wants the old behavior can still set `require_delete_confirmation: false` explicitly.
 - **`scripts/check-agent-ready.sh` now checks `www.arleo.eu`'s own `oauth-protected-resource`, `ai-catalog.json`, and `agent-skills/index.json`, not just `mcp.arleo.eu`'s copies.** The 2026-08-22 regression (stale `scopes_supported`, missing `ai-catalog.json`) sat undetected for weeks specifically because this script never checked the `www` host's discovery surface at all — only `auth.md` was checked there. It now also diffs `scopes_supported`/`bearer_methods_supported` between the two `oauth-protected-resource` documents so a future edit to one copy without the other fails loudly instead of drifting silently. `scripts/smoke-agent-interop.sh` inherits these checks for free since it already shells out to `check-agent-ready.sh`.
