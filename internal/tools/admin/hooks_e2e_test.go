@@ -319,6 +319,139 @@ func TestRunPostBuildHooksEmptyConfigNoHooksExecuted(t *testing.T) {
 	}
 }
 
+// TestRunPostBuildHooksHeartbeatSuffixOnFailure verifies that status:"fail"
+// appends "/fail" to configured heartbeat_hooks URLs, while a configured
+// post_build_hooks URL is contacted unsuffixed and unaffected — the two
+// configs are independent, and only heartbeat_hooks understands the
+// BetterStack heartbeat-failure path convention.
+func TestRunPostBuildHooksHeartbeatSuffixOnFailure(t *testing.T) {
+	var heartbeatPath string
+	heartbeatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		heartbeatPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer heartbeatSrv.Close()
+
+	var hookCalled bool
+	hookSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hookCalled = true
+		if r.URL.Path == "/fail" {
+			t.Errorf("post_build_hooks URL should never be suffixed with /fail")
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer hookSrv.Close()
+
+	cfg := config.Default()
+	cfg.PostBuildHooks = []string{hookSrv.URL}
+	cfg.HeartbeatHooks = []string{heartbeatSrv.URL}
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "run_post_build_hooks", map[string]any{"status": "fail"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("run_post_build_hooks returned error: %s", resultText(res))
+	}
+
+	if heartbeatPath != "/fail" {
+		t.Errorf("heartbeat request path = %q, want /fail", heartbeatPath)
+	}
+	if !hookCalled {
+		t.Error("post_build_hooks URL was not called")
+	}
+
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	heartbeatResults, ok := data["heartbeat_results"].([]any)
+	if !ok || len(heartbeatResults) != 1 {
+		t.Fatalf("expected 1 heartbeat result, got %#v", data["heartbeat_results"])
+	}
+	first := heartbeatResults[0].(map[string]any)
+	if got, want := first["url"], heartbeatSrv.URL+"/fail"; got != want {
+		t.Errorf("heartbeat result URL = %v, want %v", got, want)
+	}
+}
+
+// TestRunPostBuildHooksHeartbeatSuccessUnsuffixed verifies the default
+// (omitted status, or status:"success") case does not suffix heartbeat URLs.
+func TestRunPostBuildHooksHeartbeatSuccessUnsuffixed(t *testing.T) {
+	var heartbeatPath string
+	heartbeatSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		heartbeatPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer heartbeatSrv.Close()
+
+	cfg := config.Default()
+	cfg.HeartbeatHooks = []string{heartbeatSrv.URL}
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "run_post_build_hooks", map[string]any{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("run_post_build_hooks returned error: %s", resultText(res))
+	}
+	if heartbeatPath != "/" {
+		t.Errorf("heartbeat request path = %q, want / (unsuffixed)", heartbeatPath)
+	}
+}
+
+// TestRunPostBuildHooksInvalidStatusRejected verifies an unrecognized status
+// value is rejected rather than silently treated as success or concatenated
+// into a URL.
+func TestRunPostBuildHooksInvalidStatusRejected(t *testing.T) {
+	cfg := config.Default()
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "run_post_build_hooks", map[string]any{"status": "exploded"})
+	if err != nil {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatalf("expected tool error for invalid status, got success: %s", resultText(res))
+	}
+}
+
+// TestRunPostBuildHooksDryRunPreviewsEffectiveHeartbeatURL verifies dry_run
+// shows the /fail-suffixed URL that would actually be contacted, so the
+// preview cannot lie about what would be hit.
+func TestRunPostBuildHooksDryRunPreviewsEffectiveHeartbeatURL(t *testing.T) {
+	cfg := config.Default()
+	cfg.HeartbeatHooks = []string{"https://uptime.betterstack.com/api/v1/heartbeat/abc123"}
+
+	session, done := newTestServer(t, cfg)
+	defer done()
+
+	res, err := callTool(t, session, "run_post_build_hooks", map[string]any{"dry_run": true, "status": "fail"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.IsError {
+		t.Fatalf("run_post_build_hooks returned error: %s", resultText(res))
+	}
+
+	out := decodeStructuredResult(t, res)
+	data := out["data"].(map[string]any)
+	heartbeatResults, ok := data["heartbeat_results"].([]any)
+	if !ok || len(heartbeatResults) != 1 {
+		t.Fatalf("expected 1 heartbeat result, got %#v", data["heartbeat_results"])
+	}
+	first := heartbeatResults[0].(map[string]any)
+	want := "https://uptime.betterstack.com/api/v1/heartbeat/abc123/fail"
+	if got := first["url"]; got != want {
+		t.Errorf("dry_run heartbeat URL = %v, want %v", got, want)
+	}
+}
+
 // TestRunPostBuildHooksNoRootFieldDuplication is a regression test for #1118:
 // finishes #520/#573's convergence for this tool — the payload must live
 // only under data.*, with no root-level compatibility aliases (which #552

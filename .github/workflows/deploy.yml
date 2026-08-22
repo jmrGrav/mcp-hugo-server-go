@@ -21,8 +21,15 @@ name: Deploy to Production
 #     published, npm package published, version numbers matching everywhere.
 #
 # Required secrets (configure in repo Settings → Secrets → Actions):
-#   PRODUCTION_URL    — Base URL of the MCP server (e.g. https://mcp.arleo.eu)
-#   MCP_ACCESS_TOKEN  — Bearer token for post-deploy smoke test
+#   PRODUCTION_URL       — Base URL of the MCP server (e.g. https://mcp.arleo.eu)
+#   MCP_ACCESS_TOKEN     — Bearer token for post-deploy smoke test
+#   DEPLOY_HEARTBEAT_URL — Optional. A heartbeat monitor URL (e.g. BetterStack)
+#                          pinged after this deploy — unsuffixed on success,
+#                          with /fail appended on any failure in the deploy
+#                          job. Treat it as a secret: anyone holding it can
+#                          spam pings and mask real incidents or trigger false
+#                          ones, so it lives only here, never in a committed
+#                          file or a public doc. Leave unset to skip pinging.
 
 on:
   workflow_dispatch:
@@ -210,6 +217,42 @@ jobs:
           # read-only MCP handshake (#986).
           MCP_SMOKE_VERIFY_DEPLOY: "1"
         run: bash scripts/smoke-mcp-live.sh
+
+  # Reports pipeline health, not just the deploy job's own steps: an
+  # `if: failure()` step *inside* deploy only ever sees deploy's own steps —
+  # if `validate` fails (unit tests, go vet, release-notes gate — the most
+  # likely failure modes) or the production environment approval is never
+  # granted, `deploy` is skipped entirely and such a step would never run,
+  # leaving the monitor to go red on its own dead-man's-switch timer with no
+  # explanation. This job runs unconditionally (`if: always()`) and reads
+  # both upstream jobs' results explicitly instead.
+  #
+  # Scope: covers validate+deploy, i.e. "did the binary reach production and
+  # pass its smoke test" — not the downstream `release` job (tag push,
+  # GitHub release, npm publish). A deploy that lands cleanly but fails to
+  # publish an npm package is not what this heartbeat is watching for.
+  heartbeat_report:
+    name: Heartbeat — report pipeline result
+    if: always() && inputs.dry_run == 'false'
+    needs: [validate, deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping heartbeat monitor
+        env:
+          HEARTBEAT_URL: ${{ secrets.DEPLOY_HEARTBEAT_URL }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+        run: |
+          set +x
+          if [ -z "$HEARTBEAT_URL" ]; then
+            exit 0
+          fi
+          url="${HEARTBEAT_URL%/}"
+          if [ "$VALIDATE_RESULT" = "success" ] && [ "$DEPLOY_RESULT" = "success" ]; then
+            curl -fsS --max-time 10 -o /dev/null "$url" || echo "heartbeat ping failed (non-blocking)"
+          else
+            curl -fsS --max-time 10 -o /dev/null "$url/fail" || echo "heartbeat fail-ping failed (non-blocking)"
+          fi
 
   release:
     name: Tag and publish release

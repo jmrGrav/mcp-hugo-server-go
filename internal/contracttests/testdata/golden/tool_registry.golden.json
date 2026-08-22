@@ -5195,12 +5195,15 @@
   {
     "name": "run_post_build_hooks",
     "required_scope": "write",
-    "description": "Fire all configured post-build webhook URLs. Sends {\"event\":\"post_build\"} to each operator-configured hook and returns per-hook status or error. Set `dry_run:true` to inspect the configured hook targets without contacting them; this returns the same `results[]` URL list plus `configured_count`, making `no hooks configured` distinguishable from `hooks configured but intentionally not executed`. `data.status` is `no_hooks_configured` when zero hooks are configured, `dry_run` when hooks are configured but intentionally not contacted, and `completed` when one or more hooks were actually attempted. Only configured URLs are ever reported or contacted.",
+    "description": "Fire all configured post-build webhook URLs, plus any configured heartbeat monitor URLs. Sends {\"event\":\"post_build\"} to each operator-configured post_build_hooks URL and returns per-hook status or error in `results[]`. Separately, contacts each operator-configured heartbeat_hooks URL (e.g. a BetterStack heartbeat) and returns per-hook status or error in `heartbeat_results[]`; pass `status:\"fail\"` to report a failed build/deploy, which appends `/fail` to each heartbeat URL per the BetterStack heartbeat-failure convention (omit or pass `status:\"success\"` for the default unsuffixed ping). post_build_hooks URLs are never suffixed by `status` — only heartbeat_hooks are. Set `dry_run:true` to inspect the configured hook/heartbeat targets without contacting them; this returns the same URL lists (heartbeat URLs shown with the effective `/fail` suffix already applied when `status:\"fail\"`) plus `configured_count`/`heartbeat_configured_count`, making `no hooks configured` distinguishable from `hooks configured but intentionally not executed`. `data.status` is `no_hooks_configured` when zero post_build_hooks are configured, `dry_run` when hooks are configured but intentionally not contacted, and `completed` when one or more hooks were actually attempted. Only configured URLs (with the documented `/fail` suffix, when applicable) are ever reported or contacted.",
     "input_schema": {
       "additionalProperties": false,
       "properties": {
         "dry_run": {
           "type": "boolean"
+        },
+        "status": {
+          "type": "string"
         }
       },
       "type": "object"
@@ -5208,6 +5211,11 @@
     "output_schema_fields": [
       "data.configured_count:integer:required",
       "data.dry_run:boolean",
+      "data.heartbeat_configured_count:integer:required",
+      "data.heartbeat_results:unspecified:required",
+      "data.heartbeat_results[].error:string",
+      "data.heartbeat_results[].status:integer",
+      "data.heartbeat_results[].url:string:required",
       "data.results:unspecified:required",
       "data.results[].error:string",
       "data.results[].status:integer",
@@ -5243,7 +5251,7 @@
       "success:boolean:required",
       "warnings:unspecified:required"
     ],
-    "output_schema_sha256": "debaa5dc8e9928c4f53b831ab3d1f8803239aac3f07841c7a2510ee337090434"
+    "output_schema_sha256": "9c29fb903ee806ffbaed25d4eed7d9b335ed1f6319a1d5d12ec44cc8f81693bc"
   },
   {
     "name": "search_content",

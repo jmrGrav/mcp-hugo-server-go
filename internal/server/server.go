@@ -982,7 +982,45 @@ func postBuildCallbacks(
 		{Name: "stale_test_content_check", Fn: func() error {
 			return admin.CheckStaleTestContent(srcIdx, cfg.StaleTestContentThresholdHours)
 		}},
+		{Name: "heartbeat",
+			// Both hooks fire the network call in a detached goroutine with its
+			// own bounded timeout, deliberately decoupled from this callback's
+			// caller: OnBuildFailed runs synchronously while ContentMu is still
+			// held (notifyBuildFailed executes before execute()'s deferred
+			// Unlock), and Fn shares a 30s budget across every callback where a
+			// single slow/timed-out one aborts the rest (see runCallbacks). A
+			// blocking heartbeat POST in either path would stall real MCP
+			// mutations or starve cloudflare_purge/search_index_submit — a
+			// monitoring side-channel must never be able to do that.
+			Fn: func() error {
+				pingHeartbeatAsync(logger, action, cfg, false)
+				return nil
+			},
+			OnBuildFailed: func(admin.BuildProgress, string) error {
+				pingHeartbeatAsync(logger, action, cfg, true)
+				return nil
+			},
+		},
 	}
+}
+
+// pingHeartbeatAsync fires configured heartbeat_hooks in the background so a
+// slow or unreachable monitor (e.g. BetterStack) can never delay a build
+// result or hold up other post-build callbacks. See the "heartbeat"
+// PostBuildCallback above for why this must stay detached.
+func pingHeartbeatAsync(logger *slog.Logger, action string, cfg config.Config, failed bool) {
+	if len(cfg.HeartbeatHooks) == 0 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		for _, r := range admin.PingHeartbeats(ctx, cfg, failed) {
+			if r.Error != "" {
+				logger.Warn(action+": heartbeat ping failed", "url", r.URL, "error", r.Error, "failed", failed)
+			}
+		}
+	}()
 }
 
 // buildServerCore assembles the pieces shared by both the HTTP (New) and

@@ -717,6 +717,7 @@ func TestPostBuildCallbacksPreserveStableOrder(t *testing.T) {
 		"cloudflare_purge",
 		"search_index_submit",
 		"stale_test_content_check",
+		"heartbeat",
 	}
 	cfg := config.Default()
 	idx, err := site.NewIndex(cfg)

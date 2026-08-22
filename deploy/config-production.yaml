@@ -8,6 +8,7 @@
 #   image_gen_url    → your image-generation API endpoint (optional)
 #   image_gen_key    → your image-generation API key (optional)
 #   post_build_hooks → webhook URLs called after a Hugo build (optional)
+#   heartbeat_hooks  → dead-man's-switch URLs pinged after a Hugo build (optional)
 
 # --- Site paths ---
 site_root: /srv/hugo-site          # Hugo project root (hugo.toml lives here)
@@ -41,6 +42,17 @@ build_timeout_seconds: 120
 preview_external_verification: true
 # post_build_hooks:
 #   - https://your-webhook-host/rebuild-notify  # must be public HTTPS, no private IPs
+# heartbeat_hooks:
+#   - https://uptime.betterstack.com/api/v1/heartbeat/REPLACE-WITH-YOUR-HEARTBEAT-ID
+#   # Treat this URL as a secret, not a public identifier: anyone who learns it
+#   # can POST arbitrary success/fail pings to your monitor and mask real
+#   # incidents or trigger false ones. Never commit the real value — keep it
+#   # only in the host-local config.yaml (root-owned, outside git) and in the
+#   # deploy pipeline's secret store (see deploy.yml's *_HEARTBEAT_URL secret).
+#   # Pinged automatically on every build_site run (success/fail); pass
+#   # status:"fail" to run_post_build_hooks to report a failed build/deploy
+#   # by hand (appends /fail to each URL above) instead of the default
+#   # unsuffixed success ping.
 
 # --- Managed Hugo upgrades (disabled by default) ---
 hugo_upgrade:

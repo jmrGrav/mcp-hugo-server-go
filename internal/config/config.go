@@ -70,6 +70,7 @@ type Config struct {
 	ImageGenKey                string            `yaml:"image_gen_key"`
 	BuildTimeoutSeconds        int               `yaml:"build_timeout_seconds"`
 	PostBuildHooks             []string          `yaml:"post_build_hooks"`
+	HeartbeatHooks             []string          `yaml:"heartbeat_hooks"`
 	TaxonomyAliases            map[string]string `yaml:"taxonomy_aliases"`
 	SecurityContact            string            `yaml:"security_contact"`
 	DBPath                     string            `yaml:"db_path"`
@@ -469,6 +470,11 @@ func (c *Config) validate() error {
 	for _, hookURL := range c.PostBuildHooks {
 		if err := validateHookURL(hookURL); err != nil {
 			return fmt.Errorf("config: post_build_hooks: %w", err)
+		}
+	}
+	for _, hookURL := range c.HeartbeatHooks {
+		if err := validateHookURL(hookURL); err != nil {
+			return fmt.Errorf("config: heartbeat_hooks: %w", err)
 		}
 	}
 	if c.ImageGenURL != "" {
