@@ -1155,440 +1155,436 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in updatePageInput) (*mcp.CallToolResult, updatePageOutput, error) {
-		if cfg.ForceDryRunAll {
-			in.DryRun = true
-		}
-		in.Slug = normalizeInputSlug(in.Slug)
-		wrapErr := func(err error) error {
-			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
-		}
-		callerKey := mutationCallerKey(ctx)
-		limiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
-		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithDataFields(
-				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
-				rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
-			)
-		}
-		if in.Slug == "" {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
-		}
-		lang, err := validateLangParam(in.Lang)
-		if err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-		}
-		if err := validateSlugFormat(in.Slug); err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-		}
-		// Title/body are optional on update (empty means "leave unchanged" —
-		// see applyPageUpdates), so only validate format when the caller is
-		// actually setting a new value.
-		if in.Title != "" {
-			if err := validateTitleFormat(in.Title); err != nil {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-			}
-		}
-		if in.Body != "" {
-			if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-			}
-		}
-		if in.Description != nil {
-			if err := rejectUnsafeText(*in.Description); err != nil {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: description %w", err))
-			}
-		}
-		if in.FeaturedImage != nil {
-			if err := validateFeaturedImagePath(*in.FeaturedImage); err != nil {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-			}
-		}
-		if err := validateTaxonomyTerms("tag", in.Tags); err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-		}
-		if err := validateTaxonomyTerms("category", in.Categories); err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-		}
-		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-		}
-		resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
-		if err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(err)
-		}
-		// #887: Allow() is NOT consumed here anymore. Under the unified quota
-		// rule (see quotaConsumptionRule) it now sits below, after the target's
-		// existence is confirmed (not_found is free) and after the missing
-		// expected_revision input-shape check (also free), immediately before
-		// the stale-revision conflict check — so update_page matches
-		// delete_page: not_found and a missing required guard are free, while a
-		// genuine stale-revision conflict against the confirmed page consumes.
-		const lockWait = 10 * time.Second
-		deadline := time.Now().Add(lockWait)
-		for {
-			if hugosite.ContentMu.TryLock() {
-				slog.Debug("update_page: lock_acquired")
-				break
-			}
-			if time.Now().After(deadline) {
-				slog.Error("update_page: lock_timeout", "timeout_s", lockWait.Seconds())
-				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("build_in_progress: content lock is held, retry in a moment"))
-			}
-			time.Sleep(50 * time.Millisecond)
-		}
-		defer func() {
-			hugosite.ContentMu.Unlock()
-			slog.Debug("update_page: lock_released")
-		}()
-
-		existing, ok := idx.GetBySlug(in.Slug)
-		if !ok {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found"))
-		}
-
-		if _, err := pg.SafeJoin(in.Slug); err != nil {
-			slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
-		}
-
-		resolvedSource, langErr := resolveExistingSource(cfg.ContentRoot, in.Slug, lang)
-		if langErr != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(langErr)
-		}
-		filePath := resolvedSource.SourcePath
-		currentSource := existing
-		if p, ok := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); ok {
-			currentSource = p
-		}
-
-		// Idempotency replay must be checked before the expected_revision
-		// staleness check: a true replay of an already-applied mutation is
-		// not "the page changed" — it's the same logical request arriving
-		// twice, and must return the original result regardless of what
-		// happened to the file afterward. Checking revision first would
-		// wrongly turn a safe replay into a revision_conflict.
-		idemHash := ""
-		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
-			hash, hashErr := requestHash(struct {
-				Slug                   string   `json:"slug"`
-				Lang                   string   `json:"lang,omitempty"`
-				Title                  string   `json:"title,omitempty"`
-				Body                   string   `json:"body,omitempty"`
-				Tags                   []string `json:"tags,omitempty"`
-				Categories             []string `json:"categories,omitempty"`
-				Draft                  *bool    `json:"draft,omitempty"`
-				Description            *string  `json:"description,omitempty"`
-				FeaturedImage          *string  `json:"featured_image,omitempty"`
-				ExpectedRevision       string   `json:"expected_revision,omitempty"`
-				ExpectedBundleRevision string   `json:"expected_bundle_revision,omitempty"`
-			}{
-				Slug:                   in.Slug,
-				Lang:                   lang,
-				Title:                  in.Title,
-				Body:                   in.Body,
-				Tags:                   in.Tags,
-				Categories:             in.Categories,
-				Draft:                  in.Draft,
-				Description:            in.Description,
-				FeaturedImage:          in.FeaturedImage,
-				ExpectedRevision:       in.ExpectedRevision,
-				ExpectedBundleRevision: in.ExpectedBundleRevision,
-			})
-			if hashErr != nil {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
-			}
-			idemHash = hash
-			var cached updatePageOutput
-			hit, replayErr := rt.idem.replay(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, &cached)
-			if replayErr != nil {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(replayErr)
-			}
-			if hit {
-				return nil, cached, nil
-			}
-		}
-
-		raw, err := os.ReadFile(filePath)
-		if err != nil {
-			slog.Error("update_page: read failed", "slug", in.Slug, "path", filePath, "error", err)
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read page"))
-		}
-		currentRevision := contentmodel.SourceRevisionBytes(raw)
-		if !in.DryRun {
-			if strings.TrimSpace(in.ExpectedRevision) == "" {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run update_page"))
-			}
-			// #887 quota-consumption boundary: existence is confirmed and the
-			// caller supplied the required guard, so this is a genuine mutation
-			// attempt against the target page. Consume now, so the stale
-			// revision_conflict below costs a token (matching delete_page and
-			// the pre-existing TestUpdatePageRejectsStaleExpectedRevision) while
-			// not_found / missing-guard above stay free.
-			if !limiter.Allow() {
-				return nil, updatePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
-			}
-			if in.ExpectedRevision != currentRevision {
-				// #893: attach the current revision to the error's structured
-				// data so a caller reading the JSON can retry immediately with
-				// the fresh token instead of paying an extra read round-trip.
-				// The revision is not a secret (it's in every read response).
-				return nil, updatePageOutput{}, toolcontract.WithDataFields(
-					wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")),
-					map[string]any{"current_revision": currentRevision},
-				)
-			}
-			// Optional additive whole-bundle guard (#857 AC3): when the caller
-			// supplies expected_bundle_revision, reject the write if ANY sibling
-			// translation or bundle-local asset changed since they read the
-			// bundle. This is the same BundleRevision optimistic-concurrency
-			// anchor apply_bundle_plan uses; recomputed here under the held
-			// content lock. Reported as bundle_conflict (not revision_conflict)
-			// so a caller passing both tokens can tell which one is stale.
-			// Omitting the field leaves behavior 100% unchanged.
-			if strings.TrimSpace(in.ExpectedBundleRevision) != "" {
-				bundleDir, _, bundleErr := resolveBundleDir(pg, cfg.ContentRoot, in.Slug)
-				if bundleErr != nil {
-					return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_bundle_revision was supplied but %q is not a page bundle (content/<slug>/ with index.* files); use expected_revision alone for leaf pages", in.Slug))
-				}
-				currentBundleRevision, revErr := contentmodel.BundleRevision(bundleDir)
-				if revErr != nil {
-					return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to compute bundle revision"))
-				}
-				if in.ExpectedBundleRevision != currentBundleRevision {
-					// #893: attach the current bundle revision so a caller can
-					// retry the whole-bundle guard without an extra read.
-					return nil, updatePageOutput{}, toolcontract.WithDataFields(
-						wrapErrWithLimiter(fmt.Errorf("bundle_conflict: a sibling translation or bundle-local asset changed since the bundle was read; re-read bundle_revision (get_page_for_edit) and replan")),
-						map[string]any{"current_bundle_revision": currentBundleRevision},
-					)
-				}
-			}
-		}
-		// normalize_taxonomy_casing (#589) — see the comment on the identical
-		// block in create_page above; scoped to resolvedSource.Lang, the
-		// language this write actually targets.
-		writeTags, writeCategories := in.Tags, in.Categories
-		var taxonomyNormalized []taxonomyCasingChangeDTO
-		var taxonomyAmbiguous []taxonomyCasingSkippedDTO
-		if in.NormalizeTaxonomyCasing {
-			var tagChanges, catChanges []taxonomyCasingChangeDTO
-			var tagSkipped, catSkipped []taxonomyCasingSkippedDTO
-			writeTags, tagChanges, tagSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "tag"), "tag", resolvedSource.Lang, in.Tags)
-			writeCategories, catChanges, catSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "category"), "category", resolvedSource.Lang, in.Categories)
-			taxonomyNormalized = append(tagChanges, catChanges...)
-			taxonomyAmbiguous = append(tagSkipped, catSkipped...)
-		}
-		var tagsDelta, categoriesDelta *taxonomyDeltaDTO
-		if in.Tags != nil {
-			d := computeTaxonomyDelta(currentSource.Tags, writeTags)
-			tagsDelta = &d
-		}
-		if in.Categories != nil {
-			d := computeTaxonomyDelta(currentSource.Categories, writeCategories)
-			categoriesDelta = &d
-		}
-		opts := pageUpdateOpts{
-			Tags:          writeTags,
-			Categories:    writeCategories,
-			Draft:         in.Draft,
-			Description:   in.Description,
-			FeaturedImage: in.FeaturedImage,
-		}
-		content, err := applyPageUpdates(string(raw), in.Title, in.Body, opts)
-		if err != nil {
-			slog.Error("update_page: frontmatter update failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("parse_error: failed to update frontmatter"))
-		}
-		// Round-trip guard: reject content with malformed/duplicated frontmatter.
-		if err := validateFrontmatterRoundTrip(content); err != nil {
-			slog.Error("update_page: round-trip guard failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("validation_error: %w", err))
-		}
-		if in.DryRun {
-			// Use the resolved filename (e.g. index.fr.md) so the diff header
-			// matches the file that a real write would touch.
-			diffLabel := in.Slug + "/" + filepath.Base(filePath)
-			diff := simpleDiff(diffLabel, string(raw), content)
-			logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-			dryRunChanged := content != string(raw)
-			dryRunBundleRevision, _ := contentmodel.BundleRevision(filepath.Dir(filePath))
-			dryRunStatus := "unchanged"
-			if dryRunChanged {
-				dryRunStatus = "would_update"
-			}
-			return nil, newUpdatePageOutput(updatePageData{
-				Status:                   dryRunStatus,
-				Slug:                     canonicalPublicSlug(in.Slug),
-				SourceKey:                in.Slug,
-				ResolvedLang:             strPtr(resolvedSource.Lang),
-				ResolvedSourcePath:       strPtr(logicalPath),
-				DryRun:                   true,
-				Diff:                     diff,
-				Changed:                  &dryRunChanged,
-				RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
-				TaxonomyCasingNormalized: taxonomyNormalized,
-				TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
-				TagsDelta:                tagsDelta,
-				CategoriesDelta:          categoriesDelta,
-				BundleRevision:           dryRunBundleRevision,
-			}, rateLimitRemaining(limiter)), nil
-		}
-
-		if err := pg.RevalidateForWrite(filePath); err != nil {
-			slog.Warn("update_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
-		}
-		// Retain the exact pre-write bytes before the source rename. The
-		// snapshot journal is part of the rollback guarantee, not a derived
-		// index: accepting this mutation when it cannot be made durable would
-		// create a successful but unrollbackable update after a restart.
-		if err := rt.snapshots.put(filePath, currentRevision, isolationCallerKey(ctx), string(raw)); err != nil {
-			slog.Error("update_page: rollback snapshot persistence failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to retain rollback snapshot"))
-		}
-		afterRevision := contentmodel.SourceRevisionBytes([]byte(content))
-		logicalRecoveryPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-		recoveryOp, err := beginSourceWriteRecovery(siteDB, filePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "update_page", in.IdempotencyKey, idemHash, map[string]any{
-			"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug,
-			"resolved_lang": resolvedSource.Lang, "resolved_source_path": logicalRecoveryPath,
-			"changed": true, "new_revision": afterRevision, "revision_kind": "content_snapshot",
-		}))
-		if err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source write intent"))
-		}
-		if err := fileutil.AtomicWriteChecked(filePath, content, pg); err != nil {
-			slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
-		}
-		snapshotWarning := ""
-		if err := recoveryFilesystemBoundary("update_page", "after_source_write"); err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source write"))
-		}
-		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
-			slog.Warn("update_page: could not advance recovery journal after source write", "slug", in.Slug, "error", err)
-		}
-		updated := *currentSource
-		updated.FilePath = filePath
-		updated.Lang = resolvedSource.Lang
-		if in.Title != "" {
-			updated.Title = in.Title
-		}
-		if in.Body != "" {
-			updated.Body = in.Body
-		}
-		// Re-parse FrontmatterRaw wholesale from the content just written,
-		// instead of patching individual keys in by hand — the latter
-		// silently went stale for every field update_page can set besides
-		// title (description, featured_image, draft, ...): the file on disk
-		// was correct, but the in-memory index kept serving whatever
-		// FrontmatterRaw held before this write until the next full
-		// reindex, so e.g. check_ai_readiness/get_page_for_edit's readiness
-		// check reported description_present:false right after a
-		// successful update_page that set description (#810).
-		if fm := parseFrontmatterMap([]byte(content)); fm != nil {
-			updated.FrontmatterRaw = fm
-			updated.Date = frontmatterString(fm["date"])
-			updated.Draft = frontmatterBool(fm["draft"])
-			updated.PublishDate = frontmatterTime(fm["publishDate"])
-			updated.ExpiryDate = frontmatterTime(fm["expiryDate"])
-		}
-		if writeTags != nil {
-			updated.Tags = writeTags
-		}
-		if writeCategories != nil {
-			updated.Categories = writeCategories
-		}
-		updated.BuildPending = true
-		idx.Upsert(updated)
-		hadPublic := false
-		if rt.siteIdx != nil {
-			if pub, ok := rt.siteIdx.GetBySlug(in.Slug); ok {
-				hadPublic = true
-				pubUpdated := *pub
-				if in.Title != "" {
-					pubUpdated.Title = in.Title
-				}
-				if writeTags != nil {
-					pubUpdated.Tags = writeTags
-				}
-				if writeCategories != nil {
-					pubUpdated.Categories = writeCategories
-				}
-				rt.siteIdx.UpsertPage(pubUpdated)
-			}
-		}
-		realChanged := content != string(raw)
-		status := "unchanged"
-		if realChanged {
-			status = "updated"
-		}
-		warning := ""
-		if snapshotWarning != "" {
-			warning = snapshotWarning
-		}
-		if siteDB != nil {
-			if err := siteDB.SyncSourcePage(updated); err != nil {
-				slog.Warn("update_page: db sync failed", "slug", in.Slug, "error", err)
-				status = "partial_success"
-				warning = fmt.Sprintf("source updated but derived DB could not be updated: %v", err)
-			}
-		}
-		// Stale-hero-image advisory (#812 follow-up): the title just changed
-		// but featured_image wasn't part of this same call, and the page
-		// already had a featuredImage set — its baked-in title text (drawn
-		// by generate_hero_image) may no longer match the new title. Purely
-		// advisory, never blocks the write: not every hero image bakes the
-		// page title verbatim, and regenerating on every title edit would be
-		// unwanted churn for callers who don't want that coupling.
-		if in.Title != "" && in.FeaturedImage == nil {
-			if raw, ok := currentSource.FrontmatterRaw["featuredImage"]; ok {
-				if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
-					hint := "title changed but featuredImage was left unchanged — its baked-in text may no longer match; " +
-						"regenerate via generate_hero_image and set featured_image on update_page if it should reflect the new title"
-					if warning == "" {
-						warning = hint
-					} else {
-						warning = warning + "; " + hint
-					}
-				}
-			}
-		}
-
-		state := updatePageState(rt.siteIdx != nil, hadPublic)
-		logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
-		bundleRevision, _ := contentmodel.BundleRevision(filepath.Dir(filePath))
-		out := newUpdatePageOutput(updatePageData{
-			Status:                   status,
-			Slug:                     canonicalPublicSlug(in.Slug),
-			SourceKey:                in.Slug,
-			ResolvedLang:             strPtr(resolvedSource.Lang),
-			ResolvedSourcePath:       strPtr(logicalPath),
-			Changed:                  &realChanged,
-			NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
-			RevisionKind:             "content_snapshot",
-			Warning:                  appendLastBuildWarning(warning),
-			State:                    &state,
-			RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
-			TaxonomyCasingNormalized: taxonomyNormalized,
-			TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
-			TagsDelta:                tagsDelta,
-			CategoriesDelta:          categoriesDelta,
-			BundleRevision:           bundleRevision,
-		}, rateLimitRemaining(limiter))
-		if err := recoveryOp.stageResult(siteDB, out); err != nil {
-			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
-		}
-		if idemHash != "" {
-			if err := rt.idem.remember(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, out); err != nil {
-				slog.Warn("update_page: could not persist idempotency result", "slug", in.Slug, "error", err)
-			}
-		}
-		if err := recoveryOp.record(siteDB, "committed"); err != nil {
-			slog.Warn("update_page: could not commit recovery journal", "slug", in.Slug, "error", err)
-		}
-		rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "update_page", in.Slug, "update", time.Now().UTC())
-		return nil, out, nil
+		return handleUpdatePage(ctx, in, pg, idx, cfg, siteDB, rt)
 	}))
+}
+
+func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) (*mcp.CallToolResult, updatePageOutput, error) {
+	if cfg.ForceDryRunAll {
+		in.DryRun = true
+	}
+	in.Slug = normalizeInputSlug(in.Slug)
+	wrapErr := func(err error) error {
+		return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug, RequestedLang: in.Lang})
+	}
+	callerKey := mutationCallerKey(ctx)
+	limiter := callerLimiter(&rt.mutationMu, rt.mutationLimiters, callerKey, cfg.RateLimit.CreateUpdatePerMin)
+	wrapErrWithLimiter := func(err error) error {
+		return toolcontract.WithDataFields(
+			toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+			rateLimitDataFields(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC()),
+		)
+	}
+	lang, err := validateUpdatePageInput(in, cfg)
+	if err != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+	}
+	resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
+	if err != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+	}
+	// #887: Allow() is NOT consumed here anymore. Under the unified quota
+	// rule (see quotaConsumptionRule) it now sits below, after the target's
+	// existence is confirmed (not_found is free) and after the missing
+	// expected_revision input-shape check (also free), immediately before
+	// the stale-revision conflict check — so update_page matches
+	// delete_page: not_found and a missing required guard are free, while a
+	// genuine stale-revision conflict against the confirmed page consumes.
+	if err := acquireUpdatePageContentLock(); err != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+	}
+	defer func() {
+		hugosite.ContentMu.Unlock()
+		slog.Debug("update_page: lock_released")
+	}()
+
+	existing, ok := idx.GetBySlug(in.Slug)
+	if !ok {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found"))
+	}
+
+	if _, err := pg.SafeJoin(in.Slug); err != nil {
+		slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+	}
+
+	resolvedSource, langErr := resolveExistingSource(cfg.ContentRoot, in.Slug, lang)
+	if langErr != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(langErr)
+	}
+	filePath := resolvedSource.SourcePath
+	currentSource := existing
+	if p, ok := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); ok {
+		currentSource = p
+	}
+
+	idemHash, cached, err := replayUpdatePage(ctx, in, lang, rt)
+	if err != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+	}
+	if cached != nil {
+		return nil, *cached, nil
+	}
+
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		slog.Error("update_page: read failed", "slug", in.Slug, "path", filePath, "error", err)
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read page"))
+	}
+	currentRevision := contentmodel.SourceRevisionBytes(raw)
+	if err := verifyUpdatePageGuards(in, pg, cfg, currentRevision, limiter, wrapErrWithLimiter); err != nil {
+		return nil, updatePageOutput{}, err
+	}
+	prepared, err := prepareUpdatePage(in, idx, currentSource, resolvedSource.Lang, raw)
+	if err != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(err)
+	}
+	content := prepared.content
+	writeTags, writeCategories := prepared.tags, prepared.categories
+	taxonomyNormalized, taxonomyAmbiguous := prepared.normalized, prepared.ambiguous
+	tagsDelta, categoriesDelta := prepared.tagsDelta, prepared.categoriesDelta
+	if in.DryRun {
+		return nil, buildUpdatePageDryRunOutput(in, cfg, resolvedSource.Lang, filePath, raw, prepared, limiter), nil
+	}
+
+	if err := pg.RevalidateForWrite(filePath); err != nil {
+		slog.Warn("update_page: symlink-swap detected before write", "slug", in.Slug, "error", err)
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in write path"))
+	}
+	// Retain the exact pre-write bytes before the source rename. The
+	// snapshot journal is part of the rollback guarantee, not a derived
+	// index: accepting this mutation when it cannot be made durable would
+	// create a successful but unrollbackable update after a restart.
+	if err := rt.snapshots.put(filePath, currentRevision, isolationCallerKey(ctx), string(raw)); err != nil {
+		slog.Error("update_page: rollback snapshot persistence failed", "slug", in.Slug, "error", err)
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to retain rollback snapshot"))
+	}
+	afterRevision := contentmodel.SourceRevisionBytes([]byte(content))
+	logicalRecoveryPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+	recoveryOp, err := beginSourceWriteRecovery(siteDB, filePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "update_page", in.IdempotencyKey, idemHash, map[string]any{
+		"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug,
+		"resolved_lang": resolvedSource.Lang, "resolved_source_path": logicalRecoveryPath,
+		"changed": true, "new_revision": afterRevision, "revision_kind": "content_snapshot",
+	}))
+	if err != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source write intent"))
+	}
+	if err := fileutil.AtomicWriteChecked(filePath, content, pg); err != nil {
+		slog.Error("update_page: write failed", "slug", in.Slug, "error", err)
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("write_error: failed to write page"))
+	}
+	snapshotWarning := ""
+	if err := recoveryFilesystemBoundary("update_page", "after_source_write"); err != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source write"))
+	}
+	if err := recoveryOp.record(siteDB, "file_written"); err != nil {
+		slog.Warn("update_page: could not advance recovery journal after source write", "slug", in.Slug, "error", err)
+	}
+	updated, hadPublic := reconcileUpdatePageIndexes(in, currentSource, resolvedSource.Lang, filePath, content, writeTags, writeCategories, idx, rt.siteIdx)
+	realChanged := content != string(raw)
+	status := "unchanged"
+	if realChanged {
+		status = "updated"
+	}
+	warning := ""
+	if snapshotWarning != "" {
+		warning = snapshotWarning
+	}
+	if siteDB != nil {
+		if err := siteDB.SyncSourcePage(updated); err != nil {
+			slog.Warn("update_page: db sync failed", "slug", in.Slug, "error", err)
+			status = "partial_success"
+			warning = fmt.Sprintf("source updated but derived DB could not be updated: %v", err)
+		}
+	}
+	// Stale-hero-image advisory (#812 follow-up): the title just changed
+	// but featured_image wasn't part of this same call, and the page
+	// already had a featuredImage set — its baked-in title text (drawn
+	// by generate_hero_image) may no longer match the new title. Purely
+	// advisory, never blocks the write: not every hero image bakes the
+	// page title verbatim, and regenerating on every title edit would be
+	// unwanted churn for callers who don't want that coupling.
+	if in.Title != "" && in.FeaturedImage == nil {
+		if raw, ok := currentSource.FrontmatterRaw["featuredImage"]; ok {
+			if s, ok := raw.(string); ok && strings.TrimSpace(s) != "" {
+				hint := "title changed but featuredImage was left unchanged — its baked-in text may no longer match; " +
+					"regenerate via generate_hero_image and set featured_image on update_page if it should reflect the new title"
+				if warning == "" {
+					warning = hint
+				} else {
+					warning = warning + "; " + hint
+				}
+			}
+		}
+	}
+
+	state := updatePageState(rt.siteIdx != nil, hadPublic)
+	logicalPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
+	bundleRevision, _ := contentmodel.BundleRevision(filepath.Dir(filePath))
+	out := newUpdatePageOutput(updatePageData{
+		Status:                   status,
+		Slug:                     canonicalPublicSlug(in.Slug),
+		SourceKey:                in.Slug,
+		ResolvedLang:             strPtr(resolvedSource.Lang),
+		ResolvedSourcePath:       strPtr(logicalPath),
+		Changed:                  &realChanged,
+		NewRevision:              contentmodel.SourceRevisionBytes([]byte(content)),
+		RevisionKind:             "content_snapshot",
+		Warning:                  appendLastBuildWarning(warning),
+		State:                    &state,
+		RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
+		TaxonomyCasingNormalized: taxonomyNormalized,
+		TaxonomyCasingAmbiguous:  taxonomyAmbiguous,
+		TagsDelta:                tagsDelta,
+		CategoriesDelta:          categoriesDelta,
+		BundleRevision:           bundleRevision,
+	}, rateLimitRemaining(limiter))
+	if err := recoveryOp.stageResult(siteDB, out); err != nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+	}
+	if idemHash != "" {
+		if err := rt.idem.remember(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, idemHash, out); err != nil {
+			slog.Warn("update_page: could not persist idempotency result", "slug", in.Slug, "error", err)
+		}
+	}
+	if err := recoveryOp.record(siteDB, "committed"); err != nil {
+		slog.Warn("update_page: could not commit recovery journal", "slug", in.Slug, "error", err)
+	}
+	rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "update_page", in.Slug, "update", time.Now().UTC())
+	return nil, out, nil
+}
+
+// validateUpdatePageInput pins the input-only stage before any shared-state
+// lookup, lock acquisition, quota consumption, or filesystem access.
+func validateUpdatePageInput(in updatePageInput, cfg config.Config) (string, error) {
+	if in.Slug == "" {
+		return "", fmt.Errorf("invalid_params: slug must not be empty")
+	}
+	lang, err := validateLangParam(in.Lang)
+	if err != nil {
+		return "", err
+	}
+	if err := validateSlugFormat(in.Slug); err != nil {
+		return "", err
+	}
+	if in.Title != "" {
+		if err := validateTitleFormat(in.Title); err != nil {
+			return "", err
+		}
+	}
+	if in.Body != "" {
+		if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
+			return "", err
+		}
+	}
+	if in.Description != nil {
+		if err := rejectUnsafeText(*in.Description); err != nil {
+			return "", fmt.Errorf("invalid_params: description %w", err)
+		}
+	}
+	if in.FeaturedImage != nil {
+		if err := validateFeaturedImagePath(*in.FeaturedImage); err != nil {
+			return "", err
+		}
+	}
+	if err := validateTaxonomyTerms("tag", in.Tags); err != nil {
+		return "", err
+	}
+	if err := validateTaxonomyTerms("category", in.Categories); err != nil {
+		return "", err
+	}
+	if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+		return "", err
+	}
+	return lang, nil
+}
+
+type preparedUpdatePage struct {
+	content                    string
+	tags, categories           []string
+	normalized                 []taxonomyCasingChangeDTO
+	ambiguous                  []taxonomyCasingSkippedDTO
+	tagsDelta, categoriesDelta *taxonomyDeltaDTO
+}
+
+func prepareUpdatePage(in updatePageInput, idx *hugosite.SourceIndex, current *hugosite.SourcePage, lang string, raw []byte) (preparedUpdatePage, error) {
+	prepared := preparedUpdatePage{tags: in.Tags, categories: in.Categories}
+	if in.NormalizeTaxonomyCasing {
+		var tagChanges, categoryChanges []taxonomyCasingChangeDTO
+		var tagSkipped, categorySkipped []taxonomyCasingSkippedDTO
+		prepared.tags, tagChanges, tagSkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "tag"), "tag", lang, in.Tags)
+		prepared.categories, categoryChanges, categorySkipped = normalizeTaxonomyCasing(taxonomyRawForms(idx, "category"), "category", lang, in.Categories)
+		prepared.normalized = append(tagChanges, categoryChanges...)
+		prepared.ambiguous = append(tagSkipped, categorySkipped...)
+	}
+	if in.Tags != nil {
+		delta := computeTaxonomyDelta(current.Tags, prepared.tags)
+		prepared.tagsDelta = &delta
+	}
+	if in.Categories != nil {
+		delta := computeTaxonomyDelta(current.Categories, prepared.categories)
+		prepared.categoriesDelta = &delta
+	}
+	content, err := applyPageUpdates(string(raw), in.Title, in.Body, pageUpdateOpts{
+		Tags: prepared.tags, Categories: prepared.categories, Draft: in.Draft,
+		Description: in.Description, FeaturedImage: in.FeaturedImage,
+	})
+	if err != nil {
+		slog.Error("update_page: frontmatter update failed", "slug", in.Slug, "error", err)
+		return preparedUpdatePage{}, fmt.Errorf("parse_error: failed to update frontmatter")
+	}
+	if err := validateFrontmatterRoundTrip(content); err != nil {
+		slog.Error("update_page: round-trip guard failed", "slug", in.Slug, "error", err)
+		return preparedUpdatePage{}, fmt.Errorf("validation_error: %w", err)
+	}
+	prepared.content = content
+	return prepared, nil
+}
+
+func buildUpdatePageDryRunOutput(in updatePageInput, cfg config.Config, lang, filePath string, raw []byte, prepared preparedUpdatePage, limiter *rate.Limiter) updatePageOutput {
+	changed := prepared.content != string(raw)
+	status := "unchanged"
+	if changed {
+		status = "would_update"
+	}
+	bundleRevision, _ := contentmodel.BundleRevision(filepath.Dir(filePath))
+	return newUpdatePageOutput(updatePageData{
+		Status: status, Slug: canonicalPublicSlug(in.Slug), SourceKey: in.Slug,
+		ResolvedLang: strPtr(lang), ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, filePath)),
+		DryRun: true, Diff: simpleDiff(in.Slug+"/"+filepath.Base(filePath), string(raw), prepared.content), Changed: &changed,
+		RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
+		TaxonomyCasingNormalized: prepared.normalized, TaxonomyCasingAmbiguous: prepared.ambiguous,
+		TagsDelta: prepared.tagsDelta, CategoriesDelta: prepared.categoriesDelta, BundleRevision: bundleRevision,
+	}, rateLimitRemaining(limiter))
+}
+
+func verifyUpdatePageGuards(in updatePageInput, pg *security.PathGuard, cfg config.Config, currentRevision string, limiter *rate.Limiter, wrap func(error) error) error {
+	if in.DryRun {
+		return nil
+	}
+	if strings.TrimSpace(in.ExpectedRevision) == "" {
+		return wrap(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run update_page"))
+	}
+	if !limiter.Allow() {
+		return wrap(rateLimitExceededErr("update_page", cfg.RateLimit.CreateUpdatePerMin, limiter))
+	}
+	if in.ExpectedRevision != currentRevision {
+		return toolcontract.WithDataFields(wrap(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan")), map[string]any{"current_revision": currentRevision})
+	}
+	if strings.TrimSpace(in.ExpectedBundleRevision) == "" {
+		return nil
+	}
+	bundleDir, _, err := resolveBundleDir(pg, cfg.ContentRoot, in.Slug)
+	if err != nil {
+		return wrap(fmt.Errorf("invalid_params: expected_bundle_revision was supplied but %q is not a page bundle (content/<slug>/ with index.* files); use expected_revision alone for leaf pages", in.Slug))
+	}
+	currentBundleRevision, err := contentmodel.BundleRevision(bundleDir)
+	if err != nil {
+		return wrap(fmt.Errorf("read_error: failed to compute bundle revision"))
+	}
+	if in.ExpectedBundleRevision != currentBundleRevision {
+		return toolcontract.WithDataFields(wrap(fmt.Errorf("bundle_conflict: a sibling translation or bundle-local asset changed since the bundle was read; re-read bundle_revision (get_page_for_edit) and replan")), map[string]any{"current_bundle_revision": currentBundleRevision})
+	}
+	return nil
+}
+
+func reconcileUpdatePageIndexes(in updatePageInput, current *hugosite.SourcePage, lang, filePath, content string, tags, categories []string, idx *hugosite.SourceIndex, siteIdx *site.Index) (hugosite.SourcePage, bool) {
+	updated := *current
+	updated.FilePath, updated.Lang = filePath, lang
+	if in.Title != "" {
+		updated.Title = in.Title
+	}
+	if in.Body != "" {
+		updated.Body = in.Body
+	}
+	if fm := parseFrontmatterMap([]byte(content)); fm != nil {
+		updated.FrontmatterRaw = fm
+		updated.Date = frontmatterString(fm["date"])
+		updated.Draft = frontmatterBool(fm["draft"])
+		updated.PublishDate = frontmatterTime(fm["publishDate"])
+		updated.ExpiryDate = frontmatterTime(fm["expiryDate"])
+	}
+	if tags != nil {
+		updated.Tags = tags
+	}
+	if categories != nil {
+		updated.Categories = categories
+	}
+	updated.BuildPending = true
+	idx.Upsert(updated)
+	if siteIdx == nil {
+		return updated, false
+	}
+	public, ok := siteIdx.GetBySlug(in.Slug)
+	if !ok {
+		return updated, false
+	}
+	publicUpdated := *public
+	if in.Title != "" {
+		publicUpdated.Title = in.Title
+	}
+	if tags != nil {
+		publicUpdated.Tags = tags
+	}
+	if categories != nil {
+		publicUpdated.Categories = categories
+	}
+	siteIdx.UpsertPage(publicUpdated)
+	return updated, true
+}
+
+func acquireUpdatePageContentLock() error {
+	const lockWait = 10 * time.Second
+	deadline := time.Now().Add(lockWait)
+	for {
+		if hugosite.ContentMu.TryLock() {
+			slog.Debug("update_page: lock_acquired")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			slog.Error("update_page: lock_timeout", "timeout_s", lockWait.Seconds())
+			return fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// replayUpdatePage is deliberately evaluated before revision guards: a replay
+// is the same logical mutation, even when the file changed after its success.
+func replayUpdatePage(ctx context.Context, in updatePageInput, lang string, rt *writeRegisterRuntime) (string, *updatePageOutput, error) {
+	if in.DryRun || strings.TrimSpace(in.IdempotencyKey) == "" {
+		return "", nil, nil
+	}
+	hash, err := requestHash(struct {
+		Slug                   string   `json:"slug"`
+		Lang                   string   `json:"lang,omitempty"`
+		Title                  string   `json:"title,omitempty"`
+		Body                   string   `json:"body,omitempty"`
+		Tags                   []string `json:"tags,omitempty"`
+		Categories             []string `json:"categories,omitempty"`
+		Draft                  *bool    `json:"draft,omitempty"`
+		Description            *string  `json:"description,omitempty"`
+		FeaturedImage          *string  `json:"featured_image,omitempty"`
+		ExpectedRevision       string   `json:"expected_revision,omitempty"`
+		ExpectedBundleRevision string   `json:"expected_bundle_revision,omitempty"`
+	}{
+		Slug: in.Slug, Lang: lang, Title: in.Title, Body: in.Body,
+		Tags: in.Tags, Categories: in.Categories, Draft: in.Draft,
+		Description: in.Description, FeaturedImage: in.FeaturedImage,
+		ExpectedRevision: in.ExpectedRevision, ExpectedBundleRevision: in.ExpectedBundleRevision,
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("internal_error: failed to hash idempotency request")
+	}
+	var cached updatePageOutput
+	hit, err := rt.idem.replay(idempotencyCallerKey(ctx), "update_page", in.IdempotencyKey, hash, &cached)
+	if err != nil {
+		return "", nil, err
+	}
+	if hit {
+		return hash, &cached, nil
+	}
+	return hash, nil, nil
 }
 
 func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) {
