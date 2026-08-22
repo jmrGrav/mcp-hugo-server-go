@@ -47,6 +47,76 @@ func TestRejectUnsafeTextRejectsBidiControlChars(t *testing.T) {
 	}
 }
 
+func TestRejectUnsafeTextRejectsMalformedEmojiTagSequences(t *testing.T) {
+	tests := map[string]string{
+		"bare tag letter":       "visible\U000E0061text",
+		"unterminated sequence": "\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074",
+		"tag letters no base":   "\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F",
+		"non flag base":         "A\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F",
+		"bare cancel tag":       "visible\U000E007Ftext",
+		"non RGI tag sequence":  "\U0001F3F4\U000E0066\U000E0072\U000E007F",
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			if err := rejectUnsafeText(input); err == nil {
+				t.Fatalf("rejectUnsafeText(%q): want malformed TAG error, got nil", input)
+			}
+		})
+	}
+}
+
+func TestRejectUnsafeTextAllowsRGISubdivisionFlags(t *testing.T) {
+	flags := map[string]string{
+		"England":  "\U0001F3F4\U000E0067\U000E0062\U000E0065\U000E006E\U000E0067\U000E007F",
+		"Scotland": "\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F",
+		"Wales":    "\U0001F3F4\U000E0067\U000E0062\U000E0077\U000E006C\U000E0073\U000E007F",
+	}
+	for name, flag := range flags {
+		t.Run(name, func(t *testing.T) {
+			input := "A real flag: " + flag
+			if err := rejectUnsafeText(input); err != nil {
+				t.Fatalf("rejectUnsafeText(%q): want valid RGI flag unchanged, got %v", input, err)
+			}
+		})
+	}
+}
+
+// TestRejectUnsafeTextAllowsBareBlackFlagEmoji pins the base case a
+// subdivision-flag sequence builds on: the plain WAVING BLACK FLAG emoji
+// (U+1F3F4) with no following TAG-block characters at all — e.g. a pirate
+// flag, or a post about flags in general — must remain unaffected, since
+// rejectMalformedEmojiTags only inspects it as a possible tag-sequence base
+// and falls through untouched when no TAG rune follows.
+func TestRejectUnsafeTextAllowsBareBlackFlagEmoji(t *testing.T) {
+	for name, input := range map[string]string{
+		"mid text":  "a \U0001F3F4 flag",
+		"only rune": "\U0001F3F4",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := rejectUnsafeText(input); err != nil {
+				t.Fatalf("rejectUnsafeText(%q): want bare black flag emoji unchanged, got %v", input, err)
+			}
+		})
+	}
+}
+
+func TestRejectUnsafeTextAllowsRegionalIndicatorFlags(t *testing.T) {
+	flags := map[string]string{
+		"France":         "\U0001F1EB\U0001F1F7",
+		"United States":  "\U0001F1FA\U0001F1F8",
+		"Germany":        "\U0001F1E9\U0001F1EA",
+		"European Union": "\U0001F1EA\U0001F1FA",
+	}
+	for name, flag := range flags {
+		t.Run(name, func(t *testing.T) {
+			input := "A regional flag: " + flag
+			if err := rejectUnsafeText(input); err != nil {
+				t.Fatalf("rejectUnsafeText(%q): want regional-indicator flag unchanged, got %v", input, err)
+			}
+		})
+	}
+}
+
 func TestRejectUnsafeTextAllowsNewlinesTabsCarriageReturns(t *testing.T) {
 	if err := rejectUnsafeText("line one\nline two\ttabbed\r\n"); err != nil {
 		t.Fatalf("rejectUnsafeText: want nil for \\n\\t\\r, got %v", err)

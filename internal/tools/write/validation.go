@@ -152,15 +152,68 @@ func isBidiControlRune(r rune) bool {
 	return (r >= 0x202A && r <= 0x202E) || (r >= 0x2066 && r <= 0x2069)
 }
 
+const (
+	emojiTagBase  = '\U0001F3F4' // WAVING BLACK FLAG
+	tagLetterA    = '\U000E0061'
+	tagLetterZ    = '\U000E007A'
+	cancelTagRune = '\U000E007F'
+	tagBlockStart = '\U000E0000'
+	tagBlockEnd   = '\U000E007F'
+)
+
+// validEmojiTagSpecs is the complete RGI emoji-tag-sequence repertoire in
+// Unicode Emoji 17.0: the subdivision flags for England, Scotland, and Wales.
+// Keeping the allowlist explicit rejects invisible TAG payloads that merely
+// have the right framing but do not encode a real emoji.
+var validEmojiTagSpecs = map[string]struct{}{
+	"gbeng": {},
+	"gbsct": {},
+	"gbwls": {},
+}
+
+// rejectMalformedEmojiTags permits only complete RGI subdivision-flag emoji
+// sequences. Every other TAG-block code point is invisible formatting data,
+// not editorial text, so accepting it would allow hidden ASCII-like payloads
+// to survive in Markdown. Content is rejected, never silently rewritten.
+func rejectMalformedEmojiTags(s string) error {
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == emojiTagBase && i+1 < len(runes) && runes[i+1] >= tagBlockStart && runes[i+1] <= tagBlockEnd {
+			start := i + 1
+			j := start
+			var spec strings.Builder
+			for ; j < len(runes) && runes[j] >= tagLetterA && runes[j] <= tagLetterZ; j++ {
+				spec.WriteRune(runes[j] - 0xE0000)
+			}
+			if j == start || j >= len(runes) || runes[j] != cancelTagRune {
+				return fmt.Errorf("must not contain malformed Unicode TAG sequences")
+			}
+			if _, ok := validEmojiTagSpecs[spec.String()]; !ok {
+				return fmt.Errorf("must not contain non-RGI Unicode TAG sequences")
+			}
+			i = j
+			continue
+		}
+		if runes[i] >= tagBlockStart && runes[i] <= tagBlockEnd {
+			return fmt.Errorf("must not contain standalone Unicode TAG characters (found U+%04X)", runes[i])
+		}
+	}
+	return nil
+}
+
 // rejectUnsafeText rejects null bytes, C0/C1 control characters other than
-// \n, \r, \t, and Unicode bidirectional control characters, per #380 and
-// #1158. Content is validated as UTF-8 by Go's JSON decoding already
+// \n, \r, \t, Unicode bidirectional control characters, and malformed or
+// standalone Unicode TAG characters, per #380, #1158, and #1239. Content is
+// validated as UTF-8 by Go's JSON decoding already
 // (invalid UTF-8 in a JSON string fails to decode), so this only needs to
 // police the control-character range within otherwise valid text — a null
 // byte or raw control code has no legitimate place in a Markdown body or
 // frontmatter title and can corrupt downstream parsing (YAML, HTML
 // rendering) in ways that are hard to diagnose after the fact.
 func rejectUnsafeText(s string) error {
+	if err := rejectMalformedEmojiTags(s); err != nil {
+		return err
+	}
 	for _, r := range s {
 		if r == 0 {
 			return fmt.Errorf("must not contain null bytes")

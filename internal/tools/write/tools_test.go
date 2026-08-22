@@ -520,6 +520,62 @@ func TestCreatePageRejectsHostileSlugCorpus(t *testing.T) {
 	}
 }
 
+func TestWriteToolsRejectMalformedUnicodeTagsInEditorialText(t *testing.T) {
+	malformed := "hidden\U000E0061text"
+	for _, tc := range []struct {
+		name  string
+		field string
+	}{
+		{name: "create title", field: "title"},
+		{name: "create body", field: "body"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			contentRoot := t.TempDir()
+			session, _, done := newTestServer(t, contentRoot)
+			defer done()
+
+			input := map[string]any{
+				"slug": "tag-smuggling", "title": "Safe title", "body": "Safe body",
+				"tags": []any{}, "categories": []any{},
+			}
+			input[tc.field] = malformed
+			res := callTool(t, session, "create_page", input)
+			raw := marshalContent(t, res)
+			if !res.IsError || !strings.Contains(raw, "invalid_params") {
+				t.Fatalf("create_page malformed %s must return invalid_params, got %s", tc.field, raw)
+			}
+			if entries, err := os.ReadDir(contentRoot); err != nil || len(entries) != 0 {
+				t.Fatalf("create_page malformed %s wrote content: entries=%v err=%v", tc.field, entries, err)
+			}
+		})
+	}
+
+	t.Run("update description", func(t *testing.T) {
+		contentRoot := t.TempDir()
+		pageDir := filepath.Join(contentRoot, "tag-smuggling")
+		if err := os.MkdirAll(pageDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		pagePath := filepath.Join(pageDir, "index.md")
+		original := []byte("---\ntitle: Safe title\n---\nSafe body.\n")
+		if err := os.WriteFile(pagePath, original, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		session, _, done := newTestServer(t, contentRoot)
+		defer done()
+
+		res := callTool(t, session, "update_page", map[string]any{
+			"slug": "tag-smuggling", "description": malformed,
+		})
+		if !res.IsError || !strings.Contains(marshalContent(t, res), "invalid_params") {
+			t.Fatal("update_page malformed description must return invalid_params")
+		}
+		if got, err := os.ReadFile(pagePath); err != nil || string(got) != string(original) {
+			t.Fatalf("update_page malformed description changed content: got=%q err=%v", got, err)
+		}
+	})
+}
+
 func TestUpdatePageRejectsHostileSlugCorpus(t *testing.T) {
 	cases := []struct {
 		name string

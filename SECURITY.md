@@ -84,6 +84,15 @@ untrusted content it read (see §6.27's cross-reference) — a self-report
 for audit purposes, not something this server can verify, since it never
 sees what informed the text in a `create_page`/`update_page` call.
 
+As narrow input hygiene, the shared write validator also rejects standalone
+or malformed Unicode TAG-block characters while preserving the complete RGI
+subdivision-flag emoji sequences defined by Unicode. This closes an invisible
+text-smuggling representation without filtering instruction meaning, stripping
+content, or touching ZWJ/ZWNJ and other characters with legitimate linguistic
+or emoji uses. It is defense-in-depth only: visible ASCII instructions remain
+equally capable of carrying an indirect prompt injection, so this validation
+does not replace provenance handling, least privilege, or independent review.
+
 **What this server deliberately does not do, and why:** it does not scan
 tool output for injection-shaped phrases (`SYSTEM:`, `IGNORE PREVIOUS
 INSTRUCTIONS`, imperative verbs, etc.) and block or strip on match. A
@@ -144,4 +153,3 @@ this is a signal for the calling client to pin and compare; this server
 does not itself refuse to serve a tool whose description changed, since a
 legitimate deployment (a version upgrade, an operator-authored extension)
 changes tool descriptions too.
-

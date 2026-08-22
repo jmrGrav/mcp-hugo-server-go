@@ -520,10 +520,13 @@ remain design-only until the plan/apply foundation exists in production.
   not instead of, the path-safety check `pg.SafeJoin` already performs.
 - **Title**: at most 255 characters (Unicode code points, not bytes).
 - **Body**: at most 1MB (bytes).
-- **Text sanitization** (title, body, and `update_page`'s `description`):
-  null bytes and C0/C1 control characters other than `\n`, `\r`, `\t` are
-  rejected with `invalid_params`. Valid multibyte UTF-8 (accents, CJK,
-  emoji) is unaffected — only the control-character range is policed.
+- **Text validation** (title, body, and `update_page`'s `description`): null
+  bytes, C0/C1 control characters other than `\n`, `\r`, `\t`, Unicode bidi
+  controls, and standalone or malformed Unicode TAG-block sequences are
+  rejected with `invalid_params`. Valid multibyte UTF-8 (accents, CJK, emoji)
+  is unaffected; in particular, RGI subdivision flags encoded with TAG
+  characters and ordinary regional-indicator flags remain valid. Input is
+  rejected rather than silently stripped or normalized.
 - **Frontmatter well-formedness**: unchanged from the existing
   `validateFrontmatterRoundTrip` check, which parses the generated
   frontmatter block and rejects malformed/duplicated YAML.
