@@ -44,6 +44,24 @@ staticcheck ./...
 govulncheck ./...
 ```
 
+Before changing mutation, build, preview, OAuth, or recovery shared-state
+paths, use the bounded focused race target for a fast local signal:
+
+```bash
+make race-critical
+```
+
+It exercises selected real concurrent scenarios for content/build locking,
+change-set ownership, idempotency, mutation quotas, chunked uploads, previews,
+OAuth rate limiting and refresh, and recovery journals. It runs each selected
+package with Go's race detector, disables cached test results, and defaults to
+a 90-second per-package timeout. Override that bound when diagnosing a slower
+machine with `make race-critical RACE_CRITICAL_TIMEOUT=2m`.
+
+This focused target does not prove every package race-free and does not replace
+`go test ./...` or the broader `go test -race ./...` validation when that is
+practical for the change.
+
 For release-facing or discovery-facing changes, also verify the relevant docs
 and helper checks:
 

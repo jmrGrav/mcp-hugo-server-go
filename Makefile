@@ -1,4 +1,4 @@
-.PHONY: build test test-contracts lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core gosec source-loc source-loc-badge check-loc-badge install-scc check-deps-fresh check-npm-version-sync
+.PHONY: build test test-contracts race race-critical lint vet fmt check clean check-agent-ready smoke-agent-interop check-changelog check-readme-release check-release fuzz-smoke soak-local bench-core gosec source-loc source-loc-badge check-loc-badge install-scc check-deps-fresh check-npm-version-sync
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 RELEASE_VERSION ?=
@@ -8,6 +8,8 @@ LDFLAGS := -X github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo.Version=$
 BIN := mcp-hugo-server-go
 SCC_VERSION := v3.7.0
 SCC_BIN := $(shell go env GOPATH)/bin/scc
+RACE_CRITICAL_TIMEOUT ?= 90s
+RACE_CRITICAL_TESTS := ^(TestConcurrentUpdatePageSamePageDeterministicOutcome|TestCreatePageIdempotencyKeyRaceOnConcurrentRetries|TestChunkedUploadStoreOverlappingRetryDoesNotDoubleAppend|TestBuildSiteConcurrentReject|TestStoreGetBySessionConcurrentWithEstablishNoRace|TestStoreSessionActivationDoesNotRace|TestRateLimiterConcurrentAccessIsRaceFreeAndBucketAccurate|TestRefreshTokenGrantIsSingleUseUnderConcurrentRace|TestGuardForeignChangeSetConcurrentWithCreatePageIsRaceFree|TestConcurrentApplyBundlePlanByDistinctPrincipalsIsolatesMutationStatus|TestConcurrentCreatePageByDistinctPrincipalsRacesRateLimitBucketsCorrectly|TestRecoveryJournalSurvivesReopenAndAdvancesStateInPlace)$$
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/mcp-hugo-server-go
@@ -20,6 +22,15 @@ test-contracts:
 
 race:
 	go test -race ./internal/...
+
+# Fast, deterministic concurrency feedback for the shared-state paths most
+# exposed by mutation/build refactors. This is intentionally a focused subset,
+# not a replacement for `make race` or the full test suite.
+race-critical:
+	go test -race -count=1 -timeout=$(RACE_CRITICAL_TIMEOUT) \
+		-run '$(RACE_CRITICAL_TESTS)' \
+		./internal/tools/write ./internal/tools/admin ./internal/previewstore \
+		./internal/oauth ./internal/server ./internal/db
 
 cover:
 	go test -cover -coverprofile=coverage.out ./internal/...
