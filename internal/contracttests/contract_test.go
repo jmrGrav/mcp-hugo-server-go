@@ -678,6 +678,10 @@ func fixtureConfig() config.Config {
 	cfg.RejectSymlinks = true
 	cfg.RejectHiddenPath = true
 	cfg.ContentRoot = filepath.Join("..", "..", "testdata", "fixtures", "content")
+	// Contract tests assert envelope/response shape, not the
+	// confirm_delete_of_published_page ceremony — opt out explicitly so a
+	// bare delete_page call here still exercises the real delete path.
+	cfg.RequireDeleteConfirmation = false
 	return cfg
 }
 

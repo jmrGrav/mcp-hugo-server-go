@@ -142,13 +142,15 @@ type Config struct {
 	// default. Exempted: pages carrying the `test_content` frontmatter
 	// marker (disposable-by-design, #661) and any page with no source file
 	// to inspect (the same boundary expected_revision's own requirement
-	// already draws). Deliberately config-gated and default-false: making
-	// this unconditional would be a breaking change to a stable public
-	// tool contract that every existing delete_page caller (including
-	// every test fixture in this repo) would fail against immediately —
-	// an operator who wants the ceremony turns it on for their own
-	// deployment, mirroring ForceDryRunAll's own precedent immediately
-	// above.
+	// already draws). Config-gated (an operator can still opt out with
+	// `require_delete_confirmation: false`) but defaults to true: a fresh
+	// install should not be one missed config line away from an agent
+	// silently deleting published content on its first real delete_page
+	// call. Test fixtures in this repo build
+	// config.Config literals or config.Default() through the local
+	// testServerOpts.RequireDeleteConfirmation override (tools_test.go), so
+	// they are unaffected by this default and remain false unless a test
+	// opts in.
 	RequireDeleteConfirmation bool `yaml:"require_delete_confirmation"`
 	// StaleTestContentThresholdHours (#608) is the age (in hours) past which
 	// a still-published page whose slug matches contentmodel's reserved
@@ -320,12 +322,13 @@ func Default() Config {
 			Branch: "main",
 			Remote: "origin",
 		},
-		MaxIndexEntries:     5000,
-		MaxResultItems:      50,
-		MaxRequestBytes:     1 << 20,
-		RejectSymlinks:      true,
-		RejectHiddenPath:    true,
-		BuildTimeoutSeconds: 120,
+		MaxIndexEntries:           5000,
+		MaxResultItems:            50,
+		MaxRequestBytes:           1 << 20,
+		RejectSymlinks:            true,
+		RejectHiddenPath:          true,
+		BuildTimeoutSeconds:       120,
+		RequireDeleteConfirmation: true,
 		// MCP rate limiting is enforced on logical tools/call requests rather than
 		// Streamable HTTP session-control traffic.
 		RateLimit: RateLimitConfig{

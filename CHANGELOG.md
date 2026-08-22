@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here.
 
+## [Unreleased]
+
+### Changed
+- **`require_delete_confirmation` now defaults to `true`** (v1.9.3 shipped it default-`false`/opt-in via #1231): a fresh install no longer needs an operator to remember this config line before `delete_page` enforces the `confirm_delete_of_published_page:true` ceremony on a non-dry-run delete of a real (non-`test_content`) page. An operator who wants the old behavior can still set `require_delete_confirmation: false` explicitly.
+
 ## [v1.9.3] - 2026-08-22
 
 Two threads since v1.9.2: a hardening pass against indirect prompt injection
