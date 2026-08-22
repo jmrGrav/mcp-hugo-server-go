@@ -290,6 +290,8 @@ The POST to `/agent/identity/verify` requires operator authentication via the `A
 | `/robots.txt` | GET | Robots exclusion |
 | `/llms.txt` | GET | LLM discovery |
 | `/auth.md` | GET | Authentication guide |
+| `/openapi.json` | GET | OpenAPI 3.1.0 document (OAuth/discovery endpoints only — the MCP tool catalog is dynamic and not enumerated here) |
+| `/health` | GET | Liveness probe |
 | `/metrics` | GET | Prometheus metrics |
 | `/register` | POST | OAuth dynamic client registration |
 | `/authorize` | GET/POST | OAuth authorization endpoint |
@@ -309,6 +311,7 @@ The POST to `/agent/identity/verify` requires operator authentication via the `A
 - [Release checklist](docs/release-checklist.md)
 - [Staging runbook](docs/staging-runbook.md)
 - [Tool inventory](docs/tools.md)
+- [Public URL topology](docs/public-url-topology.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Code of conduct](CODE_OF_CONDUCT.md)
 - [Security policy](SECURITY.md)
