@@ -9,11 +9,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/oauth"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 )
 
@@ -471,6 +474,7 @@ func handleAuthMd(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 		return
 	}
 	data = appendCanonicalAuthMdRegistrationBlock(data, cfg)
+	data = rewriteAuthMdReturnsFields(data)
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("Cache-Control", "public, max-age=300")
 	w.WriteHeader(http.StatusOK)
@@ -478,6 +482,60 @@ func handleAuthMd(w http.ResponseWriter, r *http.Request, cfg config.Config) {
 		return
 	}
 	_, _ = w.Write(data)
+}
+
+// authMdReturnsPattern matches a `"returns": [...]` array inside auth.md's
+// registration-flow JSON code block. It assumes no nested "]" within the
+// array, which holds for the flat string lists auth.md documents.
+var authMdReturnsPattern = regexp.MustCompile(`"returns":\s*\[[^\]]*\]`)
+
+// rewriteAuthMdReturnsFields corrects auth.md's documented "returns" field
+// lists in-place from the real Go response structs (RegistrationResponse,
+// TokenResponse), rather than trusting whatever an operator hand-typed.
+// auth.md is hand-authored prose living in a separate content repo (hugo-site,
+// not this one) — it drifted once already (#1247-adjacent: it listed
+// "client_id"/"client_secret" for /register long after the server stopped
+// issuing client secrets, and omitted "scope" from /token responses). A
+// human editing markdown has no compiler to catch that; this does.
+//
+// The first "returns" array in the document is assumed to describe
+// /register (RegistrationResponse); every subsequent one is assumed to
+// describe /token or /token refresh (TokenResponse) — both grant types
+// return the identical shape, so there is nothing to disambiguate between
+// them. This only rewrites the array contents; the rest of the operator's
+// prose, examples, and structure are left untouched.
+func rewriteAuthMdReturnsFields(data []byte) []byte {
+	registerFields := jsonFieldNames(oauth.RegistrationResponse{})
+	tokenFields := jsonFieldNames(oauth.TokenResponse{})
+	n := 0
+	return authMdReturnsPattern.ReplaceAllFunc(data, func(match []byte) []byte {
+		n++
+		fields := tokenFields
+		if n == 1 {
+			fields = registerFields
+		}
+		quoted := make([]string, len(fields))
+		for i, f := range fields {
+			quoted[i] = `"` + f + `"`
+		}
+		return []byte(`"returns": [` + strings.Join(quoted, ", ") + `]`)
+	})
+}
+
+// jsonFieldNames returns the top-level JSON field names of a struct, in
+// declaration order, derived from its `json:"..."` tags.
+func jsonFieldNames(v any) []string {
+	t := reflect.TypeOf(v)
+	names := make([]string, 0, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		tag := t.Field(i).Tag.Get("json")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		name, _, _ := strings.Cut(tag, ",")
+		names = append(names, name)
+	}
+	return names
 }
 
 func appendCanonicalAuthMdRegistrationBlock(data []byte, cfg config.Config) []byte {

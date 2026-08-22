@@ -1133,6 +1133,53 @@ func TestAuthMdServed(t *testing.T) {
 	}
 }
 
+// TestAuthMdCorrectsStaleReturnsFields is a regression test: auth.md is
+// hand-authored prose in a separate content repo and has drifted from the
+// real /register and /token response shapes before (it once claimed
+// /register returned only "client_id" and omitted "scope" from /token).
+// The server must self-correct these field lists from the real
+// RegistrationResponse/TokenResponse structs rather than trusting
+// whatever an operator hand-typed.
+func TestAuthMdCorrectsStaleReturnsFields(t *testing.T) {
+	dir := t.TempDir()
+	const stale = "# auth.md\n\n" +
+		"```json\n" +
+		"{\n" +
+		"  \"step_1_register\": {\n" +
+		"    \"returns\": [\"client_id\", \"client_secret\"]\n" +
+		"  },\n" +
+		"  \"step_3_token\": {\n" +
+		"    \"returns\": [\"access_token\", \"token_type\"]\n" +
+		"  }\n" +
+		"}\n" +
+		"```\n"
+	if err := os.WriteFile(filepath.Join(dir, "auth.md"), []byte(stale), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	srv := mustDiscoveryServer(t, dir)
+	req := httptest.NewRequest(http.MethodGet, "/auth.md", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "client_secret") {
+		t.Errorf("stale client_secret field survived rewrite, got: %q", body)
+	}
+	for _, want := range []string{"client_id_issued_at", "grant_types", "response_types",
+		"token_endpoint_auth_method", "code_challenge_methods_supported"} {
+		if !strings.Contains(body, `"`+want+`"`) {
+			t.Errorf("body missing %q from real RegistrationResponse fields, got: %q", want, body)
+		}
+	}
+	if !strings.Contains(body, `"scope"`) {
+		t.Errorf("body missing scope field from real TokenResponse, got: %q", body)
+	}
+}
+
 func TestAuthMdNotFound(t *testing.T) {
 	srv := mustDiscoveryServer(t, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/auth.md", nil)
