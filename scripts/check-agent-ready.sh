@@ -56,6 +56,18 @@ server_card="$(json_get "$BASE_URL/.well-known/mcp/server-card.json")"
 mcp_alias="$(json_get "$BASE_URL/.well-known/mcp.json")"
 auth_md="$(curl -fsS "$WWW_URL/auth.md")"
 
+# www.arleo.eu's own oauth-protected-resource is a DISTINCT document (its
+# `resource` names the website, not the MCP endpoint) that has historically
+# been a hardcoded literal in the OpenResty vhost rather than derived from
+# this server at request time — it silently drifted to the pre-#450 legacy
+# scope strings for weeks before the 2026-08-22 regression was caught, and
+# nothing in this script would have caught it, because this script never
+# checked www's copy at all. See docs/agent-ready-howto.md's invariant table
+# and the wiki's "2026-08-22 Regression" entry on AgentReady Pitfalls.
+www_resource_meta="$(json_get "$WWW_URL/.well-known/oauth-protected-resource")"
+www_ai_catalog="$(json_get "$WWW_URL/.well-known/ai-catalog.json")"
+www_agent_skills="$(json_get "$WWW_URL/.well-known/agent-skills/index.json")"
+
 issuer="$(jq -r '.issuer // empty' <<<"$auth_meta")"
 auth_endpoint="$(jq -r '.authorization_endpoint // empty' <<<"$auth_meta")"
 token_endpoint="$(jq -r '.token_endpoint // empty' <<<"$auth_meta")"
@@ -80,6 +92,46 @@ expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "read" "aut
 expect_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "write" "auth scopes"
 expect_not_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "site.admin" "auth scopes"
 expect_not_contains "$(jq -c '.scopes_supported // []' <<<"$auth_meta")" "system.admin" "auth scopes"
+
+www_resource="$(jq -r '.resource // empty' <<<"$www_resource_meta")"
+expect_eq "$www_resource" "$WWW_URL" "www oauth-protected-resource resource"
+www_scopes="$(jq -c '.scopes_supported // []' <<<"$www_resource_meta")"
+expect_contains "$www_scopes" "read" "www oauth-protected-resource scopes"
+expect_contains "$www_scopes" "write" "www oauth-protected-resource scopes"
+expect_contains "$www_scopes" "admin" "www oauth-protected-resource scopes"
+expect_not_contains "$www_scopes" "site.admin" "www oauth-protected-resource scopes"
+expect_not_contains "$www_scopes" "system.admin" "www oauth-protected-resource scopes"
+expect_not_contains "$www_scopes" "content.read" "www oauth-protected-resource scopes"
+expect_not_contains "$www_scopes" "content.write" "www oauth-protected-resource scopes"
+
+# The two oauth-protected-resource documents share every field except
+# `resource` (host-specific by design, see docs/agent-ready-howto.md). Diff
+# everything else so a future edit to one copy without the other is caught
+# here instead of silently drifting for weeks, which is exactly what
+# happened before the 2026-08-22 regression.
+resource_scopes="$(jq -c '.scopes_supported // []' <<<"$resource_meta")"
+if [[ "$www_scopes" != "$resource_scopes" ]]; then
+  echo "scopes_supported drift: www='$www_scopes' mcp='$resource_scopes'" >&2
+  exit 1
+fi
+www_bearer="$(jq -c '.bearer_methods_supported // []' <<<"$www_resource_meta")"
+mcp_bearer="$(jq -c '.bearer_methods_supported // []' <<<"$resource_meta")"
+if [[ "$www_bearer" != "$mcp_bearer" ]]; then
+  echo "bearer_methods_supported drift: www='$www_bearer' mcp='$mcp_bearer'" >&2
+  exit 1
+fi
+
+ai_catalog_entries="$(jq -r '.entries // [] | length' <<<"$www_ai_catalog")"
+if [[ "$ai_catalog_entries" -lt 1 ]]; then
+  echo "www ai-catalog.json: entries array is empty or missing" >&2
+  exit 1
+fi
+
+agent_skills_count="$(jq -r '.skills // [] | length' <<<"$www_agent_skills")"
+if [[ "$agent_skills_count" -lt 1 ]]; then
+  echo "www agent-skills/index.json: skills array is empty or missing" >&2
+  exit 1
+fi
 
 for needle in \
   "registration_flow" \
