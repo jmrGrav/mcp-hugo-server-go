@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,11 +168,39 @@ func tokenEndpointAuthMethods(cfg config.Config) []string {
 	return methods
 }
 
-func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
+// buildProtectedResourceMeta builds the RFC 9728 protected-resource-metadata
+// document. requestHost (typically r.Host) makes the "resource" field
+// reflect the origin the caller actually queried, but ONLY when requestHost
+// is exactly cfg.SiteURL's hostname — the one legitimate alternate host
+// this document is reverse-proxied to (www.arleo.eu; see the nginx vhost
+// and deploy/config-production.yaml). requestHost is caller-controlled
+// (the HTTP Host header); reflecting an arbitrary value into a document
+// agents use to decide where to send OAuth tokens would let any request
+// with a spoofed Host header assert an attacker-chosen "resource". Every
+// other requestHost — including the issuer's own host — leaves the
+// configured (or defaulted) resource untouched.
+//
+// A caller reaching this handler via the issuer's own host (mcp.arleo.eu)
+// therefore always gets the configured/default resource unchanged; a
+// caller reaching it via cfg.SiteURL's host gets that host's own origin
+// instead. Without this, a validator that checks "resource" against the
+// origin it queried (several do, per RFC 9728) sees a mismatch on every
+// host except the issuer's — even though cfg.OAuth.Resource is deliberately
+// set to "<issuer>/mcp" in production, not left empty, so a check on
+// cfg.OAuth.Resource == "" alone would never fire here.
+func buildProtectedResourceMeta(cfg config.Config, requestHost string) protectedResourceMeta {
 	issuer := strings.TrimRight(cfg.OAuth.Issuer, "/")
 	resource := strings.TrimSpace(cfg.OAuth.Resource)
 	if resource == "" {
 		resource = issuer + "/mcp"
+	}
+	if requestHost != "" {
+		reqHost := hostnameOnly(requestHost)
+		siteHost := urlHost(cfg.SiteURL)
+		isuHost := urlHost(issuer)
+		if siteHost != "" && strings.EqualFold(reqHost, siteHost) && !strings.EqualFold(reqHost, isuHost) {
+			resource = "https://" + requestHost
+		}
 	}
 	return protectedResourceMeta{
 		Resource:               resource,
@@ -180,6 +210,27 @@ func buildProtectedResourceMeta(cfg config.Config) protectedResourceMeta {
 		AccessProfiles:         discoveryAccessProfiles(cfg),
 		ResourceDocumentation:  issuer + "/auth.md",
 	}
+}
+
+// urlHost extracts the hostname (no scheme, no port) from a URL (an
+// OAuth issuer or a site URL). Returns "" on a malformed input, which never
+// matches a real requestHost — buildProtectedResourceMeta then leaves the
+// resource identifier untouched in that case, which is safe.
+func urlHost(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// hostnameOnly strips a trailing ":port" from an http.Request.Host-shaped
+// value so it can be compared against urlHost's bare hostname.
+func hostnameOnly(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
 }
 
 type mcpServerCard struct {
@@ -339,8 +390,38 @@ func handleOAuthAuthServer(w http.ResponseWriter, r *http.Request, cfg config.Co
 	serveDiscoveryJSON(w, r, buildAuthServerMeta(cfg))
 }
 
+// handleHealth is a minimal liveness probe: reaching this handler at all
+// proves the process is up and its HTTP router is functioning. It is
+// referenced by static/.well-known/api-catalog's "status" link — that
+// linkset promised a health endpoint before one existed here (#openapi.json
+// follow-up), which previously 404'd.
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodHead {
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": buildinfo.Version})
+}
+
 func handleOAuthProtectedResource(w http.ResponseWriter, r *http.Request, cfg config.Config) {
-	serveDiscoveryJSON(w, r, buildProtectedResourceMeta(cfg))
+	serveDiscoveryJSON(w, r, buildProtectedResourceMeta(cfg, r.Host))
+}
+
+// handleOAuthProtectedResourceMCP serves the /mcp-suffixed alias
+// (/.well-known/oauth-protected-resource/mcp), whose path mirrors the
+// protected resource's own path per RFC 9728 §3.1. That resource is always
+// "<issuer>/mcp" — it does not move when the document is reached through a
+// reverse-proxied alternate host — so, unlike the base path, this alias
+// never substitutes requestHost into "resource".
+func handleOAuthProtectedResourceMCP(w http.ResponseWriter, r *http.Request, cfg config.Config) {
+	serveDiscoveryJSON(w, r, buildProtectedResourceMeta(cfg, ""))
 }
 
 func handleSecurityTxt(w http.ResponseWriter, r *http.Request, cfg config.Config) {

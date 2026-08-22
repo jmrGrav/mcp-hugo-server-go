@@ -821,7 +821,7 @@ func TestDiscoveryBuildersFallbacks(t *testing.T) {
 		t.Fatalf("buildAuthServerMeta service documentation = %q", authMeta.ServiceDocumentation)
 	}
 
-	resourceMeta := buildProtectedResourceMeta(cfg)
+	resourceMeta := buildProtectedResourceMeta(cfg, "")
 	if resourceMeta.Resource != "https://mcp.test/mcp" {
 		t.Fatalf("buildProtectedResourceMeta resource = %q", resourceMeta.Resource)
 	}

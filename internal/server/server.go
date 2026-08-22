@@ -736,7 +736,7 @@ func newRootHandler(
 		case "/.well-known/oauth-protected-resource":
 			handleOAuthProtectedResource(w, r, cfg)
 		case "/.well-known/oauth-protected-resource/mcp":
-			handleOAuthProtectedResource(w, r, cfg)
+			handleOAuthProtectedResourceMCP(w, r, cfg)
 		case "/.well-known/mcp/server-card.json":
 			handleMCPServerCard(w, r, cfg)
 		case "/.well-known/mcp/server-card/mcp":
@@ -745,6 +745,10 @@ func newRootHandler(
 			handleMCPJSON(w, r, cfg)
 		case "/.well-known/agent.json":
 			handleAgentJSON(w, r, cfg)
+		case "/openapi.json":
+			handleOpenAPI(w, r, cfg)
+		case "/health":
+			handleHealth(w, r)
 		case "/metrics":
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)

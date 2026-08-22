@@ -332,6 +332,7 @@ func TestDiscoveryMinimalPublicSurfaceSnapshots(t *testing.T) {
 	}
 
 	prReq := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+	prReq.Host = "mcp.arleo.eu" // matches production: the issuer's own host
 	prRec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(prRec, prReq)
 	if prRec.Code != http.StatusOK {
@@ -600,6 +601,7 @@ func TestWellKnownOAuthServerMethodNotAllowed(t *testing.T) {
 func TestWellKnownProtectedResource(t *testing.T) {
 	srv := mustDiscoveryServer(t, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+	req.Host = "mcp.arleo.eu" // matches production: the issuer's own host
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
@@ -671,9 +673,69 @@ func TestWellKnownProtectedResource(t *testing.T) {
 	}
 }
 
+// TestWellKnownProtectedResourceMatchesReverseProxiedHost is a regression
+// test: this endpoint is reverse-proxied (not redirected) from
+// www.arleo.eu so the two hosts share one implementation instead of
+// drifting. An external validator that checks
+// "resource" against the origin it queried (isitagentready.com's OAuth
+// Protected Resource Metadata check does exactly this, per RFC 9728) must
+// see a "resource" matching www.arleo.eu when it queries www.arleo.eu, not
+// the issuer's own https://mcp.arleo.eu/mcp value — that mismatch is what
+// broke the live check after this endpoint was first simplified into a 308
+// redirect to the issuer's host.
+func TestWellKnownProtectedResourceMatchesReverseProxiedHost(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+	req.Host = "www.arleo.eu"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	var meta struct {
+		Resource string `json:"resource"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if meta.Resource != "https://www.arleo.eu" {
+		t.Fatalf("resource = %q, want https://www.arleo.eu (must match the queried origin, not the issuer's own /mcp resource)", meta.Resource)
+	}
+}
+
+// TestWellKnownProtectedResourceIgnoresUnrecognizedHost is a security
+// regression test: requestHost is a caller-controlled HTTP Host header.
+// buildProtectedResourceMeta must only substitute it into "resource" when
+// it exactly matches cfg.SiteURL's hostname (the one legitimate
+// reverse-proxied alternate) — never for an arbitrary/spoofed Host, or a
+// request could make this server assert an attacker-chosen "resource" in a
+// document agents use to decide where to send OAuth tokens.
+func TestWellKnownProtectedResourceIgnoresUnrecognizedHost(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource", nil)
+	req.Host = "evil.example"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	var meta struct {
+		Resource string `json:"resource"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if meta.Resource != "https://mcp.arleo.eu/mcp" {
+		t.Fatalf("resource = %q, want the configured default unchanged (https://mcp.arleo.eu/mcp) — an unrecognized Host header must never be reflected", meta.Resource)
+	}
+}
+
 func TestWellKnownProtectedResourceAliasMCP(t *testing.T) {
 	srv := mustDiscoveryServer(t, t.TempDir())
 	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource/mcp", nil)
+	req.Host = "mcp.arleo.eu" // matches production: the issuer's own host
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
@@ -696,6 +758,33 @@ func TestWellKnownProtectedResourceAliasMCP(t *testing.T) {
 	}
 	if len(meta.AuthorizationServers) != 1 || meta.AuthorizationServers[0] != "https://mcp.arleo.eu" {
 		t.Fatalf("authorization_servers = %v want [https://mcp.arleo.eu]", meta.AuthorizationServers)
+	}
+}
+
+// TestWellKnownProtectedResourceAliasMCPIgnoresReverseProxiedHost is a
+// regression test: the /mcp-suffixed alias's path mirrors the protected
+// resource's own path (RFC 9728 §3.1), which is always "<issuer>/mcp" —
+// unlike the base path, it must NOT substitute the queried host into
+// "resource" even when reached through the www.arleo.eu reverse proxy,
+// or the document would claim a resource that doesn't match its own path.
+func TestWellKnownProtectedResourceAliasMCPIgnoresReverseProxiedHost(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-protected-resource/mcp", nil)
+	req.Host = "www.arleo.eu"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	var meta struct {
+		Resource string `json:"resource"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &meta); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if meta.Resource != "https://mcp.arleo.eu/mcp" {
+		t.Fatalf("resource = %q, want https://mcp.arleo.eu/mcp (the /mcp alias must not vary by requested host)", meta.Resource)
 	}
 }
 
@@ -957,6 +1046,67 @@ func TestAgentJSON(t *testing.T) {
 	}
 	if got["name"] == "" || got["url"] == "" {
 		t.Fatalf("agent.json missing required fields: %#v", got)
+	}
+}
+
+func TestHealthEndpoint(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got["status"] != "ok" {
+		t.Fatalf(`status field = %q, want "ok"`, got["status"])
+	}
+}
+
+func TestOpenAPIJSON(t *testing.T) {
+	srv := mustDiscoveryServer(t, t.TempDir())
+	req := httptest.NewRequest(http.MethodGet, "/openapi.json", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d want 200", rec.Code)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if got["openapi"] != "3.1.0" {
+		t.Fatalf("openapi version = %v, want 3.1.0", got["openapi"])
+	}
+	paths, ok := got["paths"].(map[string]any)
+	if !ok {
+		t.Fatalf("paths missing or wrong type: %#v", got["paths"])
+	}
+	// The tool catalog must never be enumerated here — it's dynamic (see
+	// buildOpenAPISpec's doc comment) and documenting it would go stale on
+	// every release. Guard against a future edit accidentally listing tools
+	// as paths — check against real tool names rather than an allowlist of
+	// known-good paths, since the allowlist grows with every legitimate new
+	// path added and would otherwise drift toward never failing.
+	knownToolPaths := []string{
+		"/get_page", "/build_site", "/list_pages", "/create_page", "/update_page",
+		"/delete_page", "/search_pages", "/get_sitemap", "/get_feed", "/validate_site",
+	}
+	for _, tp := range knownToolPaths {
+		if _, ok := paths[tp]; ok {
+			t.Errorf("openapi.json enumerates MCP tool %q as a REST path — tools are dynamic, see buildOpenAPISpec doc comment", tp)
+		}
+	}
+	if _, ok := paths["/mcp"]; !ok {
+		t.Fatalf("openapi.json missing /mcp path")
+	}
+	if _, ok := paths["/register"]; !ok {
+		t.Fatalf("openapi.json missing /register path")
 	}
 }
 
