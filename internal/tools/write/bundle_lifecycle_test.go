@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
@@ -86,6 +87,93 @@ func mergeArgs(base, extra map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+func TestBundleLifecyclePreflightRejectsBeforeWriting(t *testing.T) {
+	root := t.TempDir()
+	session, _, done := newTestServer(t, root)
+	defer done()
+
+	validPage := func() map[string]any {
+		return map[string]any{"lang": "fr", "title": "Bonjour", "body": "Corps"}
+	}
+	createCases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"empty slug", map[string]any{"slug": "", "pages": []any{validPage()}}},
+		{"invalid idempotency key", map[string]any{"slug": "posts/preflight", "idempotency_key": "bad key", "pages": []any{validPage()}}},
+		{"invalid slug", map[string]any{"slug": "../preflight", "pages": []any{validPage()}}},
+		{"reserved slug", map[string]any{"slug": "posts/404", "pages": []any{validPage()}}},
+		{"empty pages", map[string]any{"slug": "posts/preflight", "pages": []any{}}},
+		{"invalid language", map[string]any{"slug": "posts/preflight", "pages": []any{map[string]any{"lang": "../../fr", "title": "Bonjour", "body": "Corps"}}}},
+		{"duplicate language", map[string]any{"slug": "posts/preflight", "pages": []any{validPage(), validPage()}}},
+		{"empty title", map[string]any{"slug": "posts/preflight", "pages": []any{map[string]any{"lang": "fr", "title": "", "body": "Corps"}}}},
+		{"unsafe description", map[string]any{"slug": "posts/preflight", "pages": []any{map[string]any{"lang": "fr", "title": "Bonjour", "body": "Corps", "description": "bad\x00description"}}}},
+		{"invalid featured image", map[string]any{"slug": "posts/preflight", "pages": []any{map[string]any{"lang": "fr", "title": "Bonjour", "body": "Corps", "featured_image": "../bad.jpg"}}}},
+		{"invalid test ttl", map[string]any{"slug": "posts/preflight", "pages": []any{map[string]any{"lang": "fr", "title": "Bonjour", "body": "Corps", "test_content": map[string]any{"ttl_hours": 0}}}}},
+	}
+	for _, tc := range createCases {
+		t.Run("create/"+tc.name, func(t *testing.T) {
+			if res := callTool(t, session, "create_bundle", tc.args); !res.IsError {
+				t.Fatalf("create_bundle accepted invalid preflight: %s", marshalContent(t, res))
+			}
+		})
+	}
+
+	deleteCases := []struct {
+		name string
+		args map[string]any
+	}{
+		{"empty slug", map[string]any{"slug": "", "languages": []any{"fr"}, "expected_revisions": map[string]any{"fr": "x"}}},
+		{"invalid idempotency key", map[string]any{"slug": "posts/missing", "idempotency_key": "bad key", "languages": []any{"fr"}, "expected_revisions": map[string]any{"fr": "x"}}},
+		{"empty languages", map[string]any{"slug": "posts/missing", "languages": []any{}, "expected_revisions": map[string]any{}}},
+		{"duplicate language", map[string]any{"slug": "posts/missing", "languages": []any{"fr", "fr"}, "expected_revisions": map[string]any{"fr": "x"}}},
+		{"missing translation", map[string]any{"slug": "posts/missing", "languages": []any{"fr"}, "expected_revisions": map[string]any{"fr": "x"}}},
+	}
+	for _, tc := range deleteCases {
+		t.Run("delete/"+tc.name, func(t *testing.T) {
+			if res := callTool(t, session, "delete_bundle", tc.args); !res.IsError {
+				t.Fatalf("delete_bundle accepted invalid preflight: %s", marshalContent(t, res))
+			}
+		})
+	}
+
+	if entries, err := os.ReadDir(root); err != nil || len(entries) != 0 {
+		t.Fatalf("preflight rejection mutated content root: entries=%v err=%v", entries, err)
+	}
+}
+
+func TestDeleteBundleRequiresRevisionBeforeUnlink(t *testing.T) {
+	root := t.TempDir()
+	writeBilingualBundle(t, root, "posts/revision-preflight")
+	session, _, done := newTestServer(t, root)
+	defer done()
+
+	res := callTool(t, session, "delete_bundle", map[string]any{
+		"slug":               "posts/revision-preflight",
+		"languages":          []any{"fr"},
+		"expected_revisions": map[string]any{},
+	})
+	if !res.IsError || !strings.Contains(marshalContent(t, res), "expected_revisions") {
+		t.Fatalf("missing revision result = %s", marshalContent(t, res))
+	}
+	if _, err := os.Stat(filepath.Join(root, "posts/revision-preflight", "index.fr.md")); err != nil {
+		t.Fatalf("revision preflight unlinked translation: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "posts/revision-preflight", "index.fr.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := contentmodel.SourceRevisionBytes(raw)
+	res = callTool(t, session, "delete_bundle", map[string]any{
+		"slug":               "posts/revision-preflight",
+		"languages":          []any{"fr", "fr"},
+		"expected_revisions": map[string]any{"fr": revision},
+	})
+	if !res.IsError || !strings.Contains(marshalContent(t, res), "duplicate language") {
+		t.Fatalf("duplicate language result = %s", marshalContent(t, res))
+	}
 }
 
 func TestCreateBundleIsAtomicAcrossTranslations(t *testing.T) {
