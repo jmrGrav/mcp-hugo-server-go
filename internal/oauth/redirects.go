@@ -23,6 +23,9 @@ func validateRegisteredRedirectURI(raw string) error {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("invalid redirect_uri")
 	}
+	if u.User != nil || u.Fragment != "" {
+		return fmt.Errorf("invalid redirect_uri")
+	}
 	switch u.Scheme {
 	case "https":
 		if strings.Contains(u.Host, "*") {

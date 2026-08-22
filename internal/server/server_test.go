@@ -811,14 +811,14 @@ func TestScopeDeniedToolCallEmitsStructuredAuditLog(t *testing.T) {
 // entry for a tool that never actually registers) would make the
 // stale-discovery detector itself unreliable, firing false mismatches on
 // every healthy session. Compares visible_count directly against a real
-// tools/list call on the same session, for both write and admin scope
-// (the two scopes where extra registration functions beyond the base
-// anonymous/read/write packages run).
+// tools/list call on the same session for every canonical scope. The read
+// case is essential: writeEnabled is deployment state, not permission to
+// register the write package on a read-scoped server (#1244).
 func TestToolCatalogVisibleCountMatchesActualToolsList(t *testing.T) {
 	storePath := filepath.Join(t.TempDir(), "tokens.db")
 	srv := mustOAuthSQLiteServer(t, storePath)
 
-	for _, scope := range []string{"write", "admin"} {
+	for _, scope := range []string{"read", "write", "admin"} {
 		t.Run(scope, func(t *testing.T) {
 			bearer := "tool-catalog-" + scope + "-token"
 			addBearerToken(t, storePath, bearer, scope)
@@ -885,6 +885,30 @@ func TestOversizedRequestBodyReturnsActionableError(t *testing.T) {
 	}
 	if !strings.Contains(raw, `"event_type":"request_rejected"`) {
 		t.Fatalf("missing event_type=request_rejected in audit log: %s", raw)
+	}
+}
+
+func TestOversizedJSONRPCBatchReturnsActionableError(t *testing.T) {
+	srv := mustOAuthServer(t)
+	bearer := obtainBearerToken(t, srv)
+	batch := make([]map[string]any, 51)
+	for i := range batch {
+		batch[i] = map[string]any{
+			"jsonrpc": "2.0",
+			"id":      i + 1,
+			"method":  "tools/list",
+		}
+	}
+	payload, err := json.Marshal(batch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := doMCPCall(t, srv, bearer, payload)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body = %q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "batch_too_large: maximum 50 requests") {
+		t.Fatalf("oversized batch response is not actionable: %q", rec.Body.String())
 	}
 }
 

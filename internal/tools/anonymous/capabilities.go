@@ -264,7 +264,10 @@ func visibleToolCatalog(scopeName string, writeEnabled bool, registryDigest stri
 	for _, d := range readpkg.Defs() {
 		reg.Register(d)
 	}
-	if writeEnabled {
+	// Mirror newScopedServer's physical package-registration boundary. The
+	// deployment-level writeEnabled flag alone is insufficient: read servers
+	// never register writepkg, including its two ungated planning definitions.
+	if writeEnabled && (scopeName == "write" || scopeName == "admin") {
 		for _, d := range writepkg.Defs() {
 			reg.Register(d)
 		}
