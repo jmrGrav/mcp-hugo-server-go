@@ -48,7 +48,7 @@ the server during v1.x.
         "response_types": ["code"],
         "token_endpoint_auth_method": "none"
       },
-      "returns": ["client_id", "client_secret"]
+      "returns": ["client_id", "client_id_issued_at", "redirect_uris", "grant_types", "response_types", "token_endpoint_auth_method", "code_challenge_methods_supported", "scope"]
     },
     "step_2_authorize": {
       "method": "GET",

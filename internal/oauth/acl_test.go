@@ -176,6 +176,9 @@ func TestACLBatchSizeCapRejected(t *testing.T) {
 	if p.AllowRequest(body, "") {
 		t.Fatal("expected batch of 51 to be rejected")
 	}
+	if reason := p.DenyReason(body, ""); reason != "batch_too_large: maximum 50 requests" {
+		t.Fatalf("oversized batch reason = %q, want actionable maximum", reason)
+	}
 }
 
 func TestACLBatchSizeCapAllowed(t *testing.T) {

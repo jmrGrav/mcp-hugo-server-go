@@ -57,7 +57,7 @@ Items marked **(live)** were verified against the production server with `script
 | `POST /register` endpoint | ✅ | Live when OAuth enabled |
 | `client_name` required | ✅ | Validated at registration |
 | `redirect_uris` required | ✅ | |
-| `client_id` + `client_secret` returned | ✅ | |
+| Public-client registration response | ✅ | Returns `client_id` and public-client metadata; never a `client_secret` |
 | Public clients (`none` auth method) | ✅ | When `dynamic_client_registration: true` |
 | Confidential clients (secret auth) | ✅ | Loaded from `client_registry_path` |
 
