@@ -1601,486 +1601,503 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			OpenWorldHint:   fileutil.BoolPtr(true),
 		},
 	}, toolcontract.WrapTool(func(ctx context.Context, _ *mcp.CallToolRequest, in deletePageInput) (*mcp.CallToolResult, deletePageOutput, error) {
-		if cfg.ForceDryRunAll {
-			in.DryRun = true
-		}
-		in.Slug = normalizeInputSlug(in.Slug)
-		wrapErr := func(err error) error {
-			return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug})
-		}
-		callerKey := mutationCallerKey(ctx)
-		limiter := callerLimiter(&rt.deleteMu, rt.deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
-		wrapErrWithLimiter := func(err error) error {
-			return toolcontract.WithDataFields(
-				toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
-				rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
-			)
-		}
-		if in.Slug == "" {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: slug must not be empty"))
-		}
+		return handleDeletePage(ctx, in, pg, idx, cfg, siteDB, rt)
+	}))
+}
 
-		// Validate lang the same way create_page/update_page already do
-		// (validateLangParam) before it ever reaches path resolution —
-		// contentmodel.ResolvePageSource builds candidate paths with
-		// filepath.Join("index."+lang+".md"), so an unvalidated lang like
-		// "../../victim" would let a caller resolve (and then delete)
-		// an arbitrary file outside the requested slug's bundle, bypassing
-		// the slug's own PathGuard check entirely (caught by Strix on the
-		// first version of this fix).
-		validatedLang, langErr := validateLangParam(in.Lang)
-		if langErr != nil {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(langErr)
-		}
-		mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
-		if err != nil {
+func handleDeletePage(ctx context.Context, in deletePageInput, pg *security.PathGuard, idx *hugosite.SourceIndex, cfg config.Config, siteDB *db.DB, rt *writeRegisterRuntime) (*mcp.CallToolResult, deletePageOutput, error) {
+	if cfg.ForceDryRunAll {
+		in.DryRun = true
+	}
+	in.Slug = normalizeInputSlug(in.Slug)
+	wrapErr := func(err error) error {
+		return toolcontract.WithRequestContext(err, toolcontract.RequestContext{Slug: in.Slug})
+	}
+	callerKey := mutationCallerKey(ctx)
+	limiter := callerLimiter(&rt.deleteMu, rt.deleteLimiters, callerKey, cfg.RateLimit.DestructivePerMin)
+	wrapErrWithLimiter := func(err error) error {
+		return toolcontract.WithDataFields(
+			toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
+			rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
+		)
+	}
+	validatedLang, mode, err := validateDeletePageInput(in)
+	if err != nil {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+	}
+	resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
+	if err != nil {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+	}
+
+	lock := &deletePageContentLock{}
+	if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
+		if err := lock.acquire(); err != nil {
 			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
 		}
-		if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
-		}
-		resolvedChangeSetID, err := rt.changeSets.Resolve(ctx, in.ChangeSetID, time.Now().UTC())
+	}
+	defer lock.release()
+
+	// Idempotency replay must run before any current-state existence checks:
+	// a successful first delete removes the slug, so checking os.Stat(dir)
+	// first would turn the exact same retry into not_found instead of the
+	// promised replay of the original success (#724). It also stays under
+	// the content lock so same-key concurrent retries serialize correctly.
+	//
+	// For a keyed request, ContentMu is held continuously from this point
+	// through SafeJoin/os.Stat/ResolvePageSource/Allow() below, all the way
+	// to the actual delete + idempotency-cache write — not just around this
+	// replay check. That's deliberate, not scope creep: releasing the lock
+	// between the replay-miss and the delete would reopen the exact race
+	// #724 closed (two concurrent identical-key retries both missing the
+	// cache, then both racing to delete). The extra section the lock now
+	// spans is bounded to local stat/candidate-file lookups and in-memory
+	// rate-limiter bookkeeping — no network I/O, no Hugo build — so the
+	// added contention on other concurrent writers is a handful of
+	// filesystem stats' worth of hold time, not an unbounded one.
+	idemHash, cached, err := replayDeletePage(ctx, in, validatedLang, rt)
+	if err != nil {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+	}
+	if cached != nil {
+		return nil, *cached, nil
+	}
+
+	dir, err := pg.SafeJoin(in.Slug)
+	if err != nil {
+		slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
+		return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
+	}
+
+	// Return not_found when the source directory does not exist (#266).
+	// This still avoids burning the destructive quota because Allow() has
+	// not run yet, while now preserving the full rate_limit envelope (#725)
+	// and letting successful idempotent replays short-circuit before it.
+	if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
+	}
+
+	// Resolve to a single language file via the same
+	// contentmodel.ResolvePageSource machinery update_page already uses
+	// (#682), instead of the old inspectDeleteSource helper which just
+	// picked the alphabetically-first index.*.md file and never errored
+	// on ambiguity — that let one call silently target either language
+	// of a bilingual bundle depending on file naming. A page with no
+	// source file at all (public-only content) is not an error here;
+	// delete_page has always tolerated that case — but only when the
+	// caller never asked for a specific lang. If lang was explicitly
+	// given and simply doesn't match any file, that must be rejected
+	// outright, not silently downgraded to the source-less path: the
+	// source-less path skips the expected_revision requirement and
+	// drives the whole-bundle-deletion branch, which would let an
+	// invalid lang wipe every translation instead of failing cleanly
+	// (also caught by Strix on the first version of this fix).
+	resolvedSource, err := resolveDeletePageSource(in.Slug, validatedLang, cfg.ContentRoot)
+	if err != nil {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+	}
+
+	// dry_run: return page content + backlinks that would break, without touching disk (#267).
+	if in.DryRun {
+		return nil, buildDeletePageDryRunOutput(in, mode, dir, resolvedSource, cfg, rt.siteIdx, limiter), nil
+	}
+	if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
+	}
+
+	// require_delete_confirmation (config.Config, opt-in, default off):
+	// a real (non-test_content) page with a source file must carry an
+	// explicit confirm_delete_of_published_page:true, on top of the
+	// expected_revision requirement above. expected_revision forces a
+	// prior read; this forces a distinct, named destructive-intent
+	// decision the calling agent's own system prompt/guardrails can
+	// hook a real human confirmation onto. Scoped to
+	// resolvedSource.SourcePath != "" — the same boundary
+	// expected_revision's own requirement already draws — since a
+	// source-less page has no frontmatter to check for the
+	// test_content exemption. Checked before Allow() so a rejected,
+	// unconfirmed call never consumes the destructive-action quota.
+	if err := validateDeletePageConfirmation(in, cfg, resolvedSource); err != nil {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+	}
+
+	// #887: Allow() fires here — after not_found and the missing-guard
+	// check above (both free), immediately before the revision_conflict
+	// check below (which consumes). This is the reference placement the
+	// whole #887 fix aligns the other tools to.
+	//
+	if !limiter.Allow() {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
+	}
+
+	if err := lock.acquire(); err != nil {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+	}
+
+	currentRevision := ""
+	if resolvedSource.SourcePath != "" {
+		currentRevision, err = contentmodel.SourceRevision(resolvedSource.SourcePath)
 		if err != nil {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+			slog.Error("delete_page: read revision failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
+			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read page revision"))
 		}
+	}
+	if in.ExpectedRevision != currentRevision {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
+	}
 
-		lockHeld := false
-		acquireDeleteLock := func() error {
-			if lockHeld {
-				return nil
-			}
-			const lockWait = 10 * time.Second
-			deadline := time.Now().Add(lockWait)
-			for {
-				if hugosite.ContentMu.TryLock() {
-					slog.Debug("delete_page: lock_acquired")
-					lockHeld = true
-					return nil
-				}
-				if time.Now().After(deadline) {
-					slog.Error("delete_page: lock_timeout", "timeout_s", lockWait.Seconds())
-					return fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
-				}
-				time.Sleep(50 * time.Millisecond)
-			}
-		}
-		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
-			if err := acquireDeleteLock(); err != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(err)
-			}
-		}
-		defer func() {
-			if lockHeld {
-				hugosite.ContentMu.Unlock()
-				slog.Debug("delete_page: lock_released")
-			}
-		}()
+	// Delete only the resolved language's source file, not the whole
+	// bundle directory (#682) — a bilingual bundle (index.fr.md +
+	// index.en.md) must survive the deletion of one translation. The
+	// bundle directory (and any shared assets) is only removed once no
+	// index.*.md file remains, or when there was never a source file to
+	// begin with (public-only content, matching the pre-#682 behavior
+	// for that case).
+	bundleFullyRemoved, recoveryOp, err := commitDeletePageSource(ctx, in, dir, resolvedSource, currentRevision, idemHash, pg, cfg, siteDB)
+	if err != nil {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+	}
 
-		// Idempotency replay must run before any current-state existence checks:
-		// a successful first delete removes the slug, so checking os.Stat(dir)
-		// first would turn the exact same retry into not_found instead of the
-		// promised replay of the original success (#724). It also stays under
-		// the content lock so same-key concurrent retries serialize correctly.
-		//
-		// For a keyed request, ContentMu is held continuously from this point
-		// through SafeJoin/os.Stat/ResolvePageSource/Allow() below, all the way
-		// to the actual delete + idempotency-cache write — not just around this
-		// replay check. That's deliberate, not scope creep: releasing the lock
-		// between the replay-miss and the delete would reopen the exact race
-		// #724 closed (two concurrent identical-key retries both missing the
-		// cache, then both racing to delete). The extra section the lock now
-		// spans is bounded to local stat/candidate-file lookups and in-memory
-		// rate-limiter bookkeeping — no network I/O, no Hugo build — so the
-		// added contention on other concurrent writers is a handful of
-		// filesystem stats' worth of hold time, not an unbounded one.
-		idemHash := ""
-		if !in.DryRun && strings.TrimSpace(in.IdempotencyKey) != "" {
-			hash, hashErr := requestHash(struct {
-				Slug             string `json:"slug"`
-				Lang             string `json:"lang,omitempty"`
-				ExpectedRevision string `json:"expected_revision,omitempty"`
-			}{
-				Slug:             in.Slug,
-				Lang:             validatedLang,
-				ExpectedRevision: in.ExpectedRevision,
-			})
-			if hashErr != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("internal_error: failed to hash idempotency request"))
-			}
-			idemHash = hash
-			var cached deletePageOutput
-			hit, replayErr := rt.idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, &cached)
-			if replayErr != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(replayErr)
-			}
-			if hit {
-				return nil, cached, nil
-			}
-		}
-
-		dir, err := pg.SafeJoin(in.Slug)
-		if err != nil {
-			slog.Warn("delete_page: path validation failed", "slug", in.Slug, "error", err)
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
-		}
-
-		// Return not_found when the source directory does not exist (#266).
-		// This still avoids burning the destructive quota because Allow() has
-		// not run yet, while now preserving the full rate_limit envelope (#725)
-		// and letting successful idempotent replays short-circuit before it.
-		if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found for slug %q", in.Slug))
-		}
-
-		// Resolve to a single language file via the same
-		// contentmodel.ResolvePageSource machinery update_page already uses
-		// (#682), instead of the old inspectDeleteSource helper which just
-		// picked the alphabetically-first index.*.md file and never errored
-		// on ambiguity — that let one call silently target either language
-		// of a bilingual bundle depending on file naming. A page with no
-		// source file at all (public-only content) is not an error here;
-		// delete_page has always tolerated that case — but only when the
-		// caller never asked for a specific lang. If lang was explicitly
-		// given and simply doesn't match any file, that must be rejected
-		// outright, not silently downgraded to the source-less path: the
-		// source-less path skips the expected_revision requirement and
-		// drives the whole-bundle-deletion branch, which would let an
-		// invalid lang wipe every translation instead of failing cleanly
-		// (also caught by Strix on the first version of this fix).
-		resolved, resolveErr := contentmodel.ResolvePageSource(in.Slug, validatedLang, cfg.ContentRoot)
-		var resolvedSource contentmodel.ResolvedSource
-		switch {
-		case resolveErr == nil:
-			resolvedSource = resolved
-		case strings.HasPrefix(resolveErr.Error(), "ambiguous_language:"):
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("%s", resolveErr.Error()))
-		case strings.HasPrefix(resolveErr.Error(), "source_file_not_found:"):
-			if validatedLang != "" {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(resolveErr)
-			}
-			resolvedSource = contentmodel.ResolvedSource{}
-		default:
-			return nil, deletePageOutput{}, wrapErrWithLimiter(resolveErr)
-		}
-
-		// dry_run: return page content + backlinks that would break, without touching disk (#267).
-		if in.DryRun {
-			content := ""
-			if resolvedSource.SourcePath != "" {
-				if raw, readErr := os.ReadFile(resolvedSource.SourcePath); readErr == nil {
-					content = string(raw)
-				}
-			}
-			bls := []deletePageBacklinkDTO{}
-			if rt.siteIdx != nil {
-				for _, e := range rt.siteIdx.GetBacklinks(in.Slug) {
-					bls = append(bls, deletePageBacklinkDTO{Slug: e.FromSlug, Title: e.FromTitle, URL: e.FromURL})
-				}
-			}
-			includeContent := mode != toolcontract.ResponseModeCompact
-			includeBacklinks := mode != toolcontract.ResponseModeCompact
-			var contentValue string
-			var backlinksValue *[]deletePageBacklinkDTO
-			if includeContent {
-				contentValue = content
-			}
-			if includeBacklinks {
-				backlinksValue = &bls
-			}
-			bundleWillBeFullyRemoved := bundleWouldBeFullyRemovedAfterDelete(dir, resolvedSource.SourcePath)
-			generatedAssets := previewGeneratedHeroAssets(cfg.HugoRoot, in.Slug, bundleWouldBeFullyRemovedAfterDelete(dir, resolvedSource.SourcePath))
-			var generatedAssetsValue *[]deletePageGeneratedAssetDTO
-			if len(generatedAssets) > 0 {
-				generatedAssetsValue = &generatedAssets
-			}
-			backlinksCount := len(bls)
-			return nil, newDeletePageOutput(deletePageData{
-				Status:                   "would_delete",
-				Slug:                     canonicalPublicSlug(in.Slug),
-				SourceKey:                in.Slug,
-				ResolvedLang:             strPtr(resolvedSource.Lang),
-				ResolvedSourcePath:       strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
-				DryRun:                   true,
-				Content:                  contentValue,
-				Backlinks:                backlinksValue,
-				GeneratedAssets:          generatedAssetsValue,
-				BacklinksCount:           &backlinksCount,
-				BundleWillBeFullyRemoved: &bundleWillBeFullyRemoved,
-				RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
-			}, rateLimitRemaining(limiter)), nil
-		}
-		if resolvedSource.SourcePath != "" && strings.TrimSpace(in.ExpectedRevision) == "" {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: expected_revision is required for non-dry-run delete_page"))
-		}
-
-		// require_delete_confirmation (config.Config, opt-in, default off):
-		// a real (non-test_content) page with a source file must carry an
-		// explicit confirm_delete_of_published_page:true, on top of the
-		// expected_revision requirement above. expected_revision forces a
-		// prior read; this forces a distinct, named destructive-intent
-		// decision the calling agent's own system prompt/guardrails can
-		// hook a real human confirmation onto. Scoped to
-		// resolvedSource.SourcePath != "" — the same boundary
-		// expected_revision's own requirement already draws — since a
-		// source-less page has no frontmatter to check for the
-		// test_content exemption. Checked before Allow() so a rejected,
-		// unconfirmed call never consumes the destructive-action quota.
-		if cfg.RequireDeleteConfirmation && resolvedSource.SourcePath != "" && !in.ConfirmDeleteOfPublishedPage {
-			fm, fmErr := hugosite.ParseFrontmatterFile(resolvedSource.SourcePath)
-			if fmErr != nil {
-				slog.Warn("delete_page: could not read frontmatter to check test_content exemption; failing closed (treating as a real page)", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", fmErr)
-			}
-			isTestContent := fmErr == nil && frontmatterBool(fm["test_content"])
-			if !isTestContent {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: this deployment requires confirm_delete_of_published_page:true to delete a real (non-test_content) page; set it explicitly to confirm this destructive action"))
-			}
-		}
-
-		// #887: Allow() fires here — after not_found and the missing-guard
-		// check above (both free), immediately before the revision_conflict
-		// check below (which consumes). This is the reference placement the
-		// whole #887 fix aligns the other tools to.
-		//
-		if !limiter.Allow() {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(rateLimitExceededErr("delete_page", cfg.RateLimit.DestructivePerMin, limiter))
-		}
-
-		if err := acquireDeleteLock(); err != nil {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(err)
-		}
-
-		currentRevision := ""
-		if resolvedSource.SourcePath != "" {
-			currentRevision, err = contentmodel.SourceRevision(resolvedSource.SourcePath)
-			if err != nil {
-				slog.Error("delete_page: read revision failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("read_error: failed to read page revision"))
-			}
-		}
-		if in.ExpectedRevision != currentRevision {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("revision_conflict: page changed since it was read; read the latest revision and replan"))
-		}
-
-		// Delete only the resolved language's source file, not the whole
-		// bundle directory (#682) — a bilingual bundle (index.fr.md +
-		// index.en.md) must survive the deletion of one translation. The
-		// bundle directory (and any shared assets) is only removed once no
-		// index.*.md file remains, or when there was never a source file to
-		// begin with (public-only content, matching the pre-#682 behavior
-		// for that case).
-		bundleFullyRemoved := true
-		recoveryPath := resolvedSource.SourcePath
-		var recoveryCleanup []string
-		if recoveryPath == "" {
-			recoveryPath = dir
-		} else if !bundleHasOtherLangFiles(dir, resolvedSource.SourcePath) {
-			recoveryCleanup = append(recoveryCleanup, dir)
-		}
-		recoveryOp, err := beginSourceWriteRecovery(siteDB, recoveryPath, currentRevision, "", recoveryIdempotencyFor(ctx, "delete_page", in.IdempotencyKey, idemHash, map[string]any{
-			"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug,
-			"resolved_lang": resolvedSource.Lang, "resolved_source_path": fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath),
-			"bundle_fully_removed": len(recoveryCleanup) > 0,
-		}), recoveryCleanup...)
-		if err != nil {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to record source delete intent"))
-		}
-		if resolvedSource.SourcePath != "" {
-			// Revalidate immediately before the single-file unlink, closing
-			// the TOCTOU window between the earlier SafeJoin/resolve and
-			// this delete: the slug directory could have been swapped for a
-			// symlink in between, which would otherwise let os.Remove
-			// follow it and delete a file outside content_root (Strix
-			// finding on the #682 fix — every other write path already
-			// revalidates this way right before touching disk).
-			if err := pg.RevalidateForWrite(resolvedSource.SourcePath); err != nil {
-				slog.Warn("delete_page: symlink detected before delete", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("security_error: symlink detected in delete path"))
-			}
-			if err := os.Remove(resolvedSource.SourcePath); err != nil {
-				slog.Error("delete_page: remove source file failed", "slug", in.Slug, "path", resolvedSource.SourcePath, "error", err)
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
-			}
-			bundleFullyRemoved = !bundleHasRemainingLangFiles(dir)
-			if err := recoveryFilesystemBoundary("delete_page", "after_source_unlink"); err != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source unlink"))
-			}
-			if bundleFullyRemoved {
-				if err := os.RemoveAll(dir); err != nil {
-					slog.Error("delete_page: remove bundle dir failed", "slug", in.Slug, "error", err)
-					return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
-				}
-			}
-		} else {
-			if err := os.RemoveAll(dir); err != nil {
-				slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("delete_error: failed to delete page"))
-			}
-			if err := recoveryFilesystemBoundary("delete_page", "after_source_cleanup"); err != nil {
-				return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: interrupted after source cleanup"))
-			}
-		}
-		if err := recoveryOp.record(siteDB, "file_written"); err != nil {
-			slog.Warn("delete_page: could not advance recovery journal", "slug", in.Slug, "error", err)
-		}
-
+	if bundleFullyRemoved {
+		idx.Delete(in.Slug)
+	} else {
+		idx.DeleteLang(in.Slug, resolvedSource.Lang)
+	}
+	var deleteWarning string
+	degradedDelete := false
+	dbDeleteFailed := false
+	if bundleFullyRemoved && rt.siteIdx != nil {
+		rt.siteIdx.RemoveBySlug(in.Slug)
+	}
+	if siteDB != nil {
+		var dbDeleteErr error
 		if bundleFullyRemoved {
-			idx.Delete(in.Slug)
+			if err := siteDB.DeleteBundleRepresentations(in.Slug, "source"); err != nil {
+				dbDeleteErr = err
+			} else {
+				dbDeleteErr = siteDB.DeletePage(in.Slug)
+			}
 		} else {
-			idx.DeleteLang(in.Slug, resolvedSource.Lang)
+			dbDeleteErr = siteDB.DeleteContentRepresentation(in.Slug, resolvedSource.Lang, "source")
 		}
-		var deleteWarning string
-		degradedDelete := false
-		dbDeleteFailed := false
-		if bundleFullyRemoved && rt.siteIdx != nil {
-			rt.siteIdx.RemoveBySlug(in.Slug)
+		if dbDeleteErr != nil {
+			// Source and in-memory indexes are already gone; surface the DB
+			// staleness explicitly so callers know get_broken_links may be
+			// stale until the next build (#242).
+			deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", dbDeleteErr)
+			dbDeleteFailed = true
+			degradedDelete = true
+			slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", dbDeleteErr)
 		}
-		if siteDB != nil {
-			var dbDeleteErr error
-			if bundleFullyRemoved {
-				if err := siteDB.DeleteBundleRepresentations(in.Slug, "source"); err != nil {
-					dbDeleteErr = err
-				} else {
-					dbDeleteErr = siteDB.DeletePage(in.Slug)
-				}
-			} else {
-				dbDeleteErr = siteDB.DeleteContentRepresentation(in.Slug, resolvedSource.Lang, "source")
-			}
-			if dbDeleteErr != nil {
-				// Source and in-memory indexes are already gone; surface the DB
-				// staleness explicitly so callers know get_broken_links may be
-				// stale until the next build (#242).
-				deleteWarning = fmt.Sprintf("source deleted but derived DB could not be updated: %v", dbDeleteErr)
-				dbDeleteFailed = true
-				degradedDelete = true
-				slog.Warn("delete_page: db delete failed", "slug", in.Slug, "error", dbDeleteErr)
-			}
+	}
+	publicCleanupFailed := false
+	if !bundleFullyRemoved {
+		// A translation survives on disk — removing SiteRoot/slug would
+		// wipe that survivor's live public output too, since Hugo's
+		// rendered output for a bundle is not scoped per language file
+		// the same way the source tree is (#682). Getting per-language
+		// public-output mapping exactly right is a separate, harder
+		// problem; for now, surface that a rebuild is needed instead of
+		// silently deleting the surviving language's public page.
+		publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
+		if _, statErr := os.Stat(publicPath); statErr == nil {
+			deleteWarning = "public output for the removed language was not touched — the page bundle still has other language(s); run build_site/publish_changes to reconcile public output"
 		}
-		publicCleanupFailed := false
-		if !bundleFullyRemoved {
-			// A translation survives on disk — removing SiteRoot/slug would
-			// wipe that survivor's live public output too, since Hugo's
-			// rendered output for a bundle is not scoped per language file
-			// the same way the source tree is (#682). Getting per-language
-			// public-output mapping exactly right is a separate, harder
-			// problem; for now, surface that a rebuild is needed instead of
-			// silently deleting the surviving language's public page.
-			publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
-			if _, statErr := os.Stat(publicPath); statErr == nil {
-				deleteWarning = "public output for the removed language was not touched — the page bundle still has other language(s); run build_site/publish_changes to reconcile public output"
-			}
-		} else if cfg.SiteRoot != "" {
-			publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
-			if rmErr := os.RemoveAll(publicPath); rmErr != nil {
-				// Source is already gone; surface the zombie so the caller knows
-				// the public output is still live (#239).
-				msg := fmt.Sprintf("source deleted but public output cleanup failed: %v", rmErr)
-				if deleteWarning != "" {
-					deleteWarning += "; " + msg
-				} else {
-					deleteWarning = msg
-				}
-				publicCleanupFailed = true
-				degradedDelete = true
-				slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
-			} else if siteDB != nil {
-				if err := siteDB.DeleteBundleRepresentations(in.Slug, "public"); err != nil {
-					msg := fmt.Sprintf("public output removed but derived public shadow could not be updated: %v", err)
-					if deleteWarning != "" {
-						deleteWarning += "; " + msg
-					} else {
-						deleteWarning = msg
-					}
-					degradedDelete = true
-					slog.Warn("delete_page: public shadow cleanup failed", "slug", in.Slug, "error", err)
-				}
-			}
-		}
-
-		// Best-effort removal of any hero image generate_hero_image left
-		// behind for this slug (#606). generate_hero_image writes to
-		// {HugoRoot}/static/images/{slug}-featured.jpg, a location outside
-		// the page's own content bundle, so the bundle removal above never
-		// touches it and it would otherwise accumulate as an orphaned file
-		// every time a page with a generated hero image is deleted. Skipped
-		// entirely when the bundle survives (#682) — the hero image is a
-		// whole-page-level asset shared across translations, not scoped to
-		// one language. Never fatal — mirrors the public-dir/DB/audit-log
-		// cleanup steps above, which all surface failures as a non-blocking
-		// warning rather than failing the delete outright, since the source
-		// is already gone by this point and there's nothing to roll back to.
-		generatedAssets := previewGeneratedHeroAssets(cfg.HugoRoot, in.Slug, bundleFullyRemoved)
-		if bundleFullyRemoved && cfg.HugoRoot != "" {
-			if removed, rmErr := removeHeroImage(cfg.HugoRoot, in.Slug); rmErr != nil {
-				msg := fmt.Sprintf("hero image cleanup failed: %v", rmErr)
-				if deleteWarning != "" {
-					deleteWarning += "; " + msg
-				} else {
-					deleteWarning = msg
-				}
-				degradedDelete = true
-				slog.Warn("delete_page: hero image cleanup failed", "slug", in.Slug, "error", rmErr)
-			} else if removed {
-				slog.Debug("delete_page: removed orphaned hero image", "slug", in.Slug)
-			}
-		}
-
-		auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
-		entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
-		if auditErr := appendAuditLog(auditLog, entry); auditErr != nil {
-			// Deletion already committed — surface the audit failure as a warning
-			// rather than a hard error; retrying would be a no-op.
-			slog.Warn("delete_page: audit log write failed (delete already committed)", "slug", in.Slug, "error", auditErr)
-			auditMsg := "audit_error: " + auditErr.Error()
+	} else if cfg.SiteRoot != "" {
+		publicPath := filepath.Join(cfg.SiteRoot, in.Slug)
+		if rmErr := os.RemoveAll(publicPath); rmErr != nil {
+			// Source is already gone; surface the zombie so the caller knows
+			// the public output is still live (#239).
+			msg := fmt.Sprintf("source deleted but public output cleanup failed: %v", rmErr)
 			if deleteWarning != "" {
-				deleteWarning += "; " + auditMsg
+				deleteWarning += "; " + msg
 			} else {
-				deleteWarning = auditMsg
+				deleteWarning = msg
+			}
+			publicCleanupFailed = true
+			degradedDelete = true
+			slog.Warn("delete_page: could not remove public dir", "path", publicPath, "error", rmErr)
+		} else if siteDB != nil {
+			if err := siteDB.DeleteBundleRepresentations(in.Slug, "public"); err != nil {
+				msg := fmt.Sprintf("public output removed but derived public shadow could not be updated: %v", err)
+				if deleteWarning != "" {
+					deleteWarning += "; " + msg
+				} else {
+					deleteWarning = msg
+				}
+				degradedDelete = true
+				slog.Warn("delete_page: public shadow cleanup failed", "slug", in.Slug, "error", err)
+			}
+		}
+	}
+
+	// Best-effort removal of any hero image generate_hero_image left
+	// behind for this slug (#606). generate_hero_image writes to
+	// {HugoRoot}/static/images/{slug}-featured.jpg, a location outside
+	// the page's own content bundle, so the bundle removal above never
+	// touches it and it would otherwise accumulate as an orphaned file
+	// every time a page with a generated hero image is deleted. Skipped
+	// entirely when the bundle survives (#682) — the hero image is a
+	// whole-page-level asset shared across translations, not scoped to
+	// one language. Never fatal — mirrors the public-dir/DB/audit-log
+	// cleanup steps above, which all surface failures as a non-blocking
+	// warning rather than failing the delete outright, since the source
+	// is already gone by this point and there's nothing to roll back to.
+	generatedAssets := previewGeneratedHeroAssets(cfg.HugoRoot, in.Slug, bundleFullyRemoved)
+	if bundleFullyRemoved && cfg.HugoRoot != "" {
+		if removed, rmErr := removeHeroImage(cfg.HugoRoot, in.Slug); rmErr != nil {
+			msg := fmt.Sprintf("hero image cleanup failed: %v", rmErr)
+			if deleteWarning != "" {
+				deleteWarning += "; " + msg
+			} else {
+				deleteWarning = msg
 			}
 			degradedDelete = true
+			slog.Warn("delete_page: hero image cleanup failed", "slug", in.Slug, "error", rmErr)
+		} else if removed {
+			slog.Debug("delete_page: removed orphaned hero image", "slug", in.Slug)
 		}
+	}
 
-		if cfg.Cloudflare.Enabled() {
-			pageURL := strings.TrimRight(cfg.SiteURL, "/") + "/" + in.Slug + "/"
-			if err := cloudflare.PurgeURLs(cfg.Cloudflare, []string{pageURL}); err != nil {
-				slog.Warn("delete_page: cloudflare purge failed", "slug", in.Slug, "error", err)
+	auditLog := filepath.Join(cfg.ContentRoot, ".mcp-audit.log")
+	entry := fmt.Sprintf("%s DELETE %s\n", time.Now().UTC().Format(time.RFC3339), in.Slug)
+	if auditErr := appendAuditLog(auditLog, entry); auditErr != nil {
+		// Deletion already committed — surface the audit failure as a warning
+		// rather than a hard error; retrying would be a no-op.
+		slog.Warn("delete_page: audit log write failed (delete already committed)", "slug", in.Slug, "error", auditErr)
+		auditMsg := "audit_error: " + auditErr.Error()
+		if deleteWarning != "" {
+			deleteWarning += "; " + auditMsg
+		} else {
+			deleteWarning = auditMsg
+		}
+		degradedDelete = true
+	}
+
+	if cfg.Cloudflare.Enabled() {
+		pageURL := strings.TrimRight(cfg.SiteURL, "/") + "/" + in.Slug + "/"
+		if err := cloudflare.PurgeURLs(cfg.Cloudflare, []string{pageURL}); err != nil {
+			slog.Warn("delete_page: cloudflare purge failed", "slug", in.Slug, "error", err)
+		}
+	}
+
+	state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
+	status := "deleted"
+	if degradedDelete {
+		status = "partial_success"
+	}
+	var generatedAssetsValue *[]deletePageGeneratedAssetDTO
+	if len(generatedAssets) > 0 {
+		generatedAssetsValue = &generatedAssets
+	}
+	out := newDeletePageOutput(deletePageData{
+		Status:             status,
+		Slug:               canonicalPublicSlug(in.Slug),
+		SourceKey:          in.Slug,
+		ResolvedLang:       strPtr(resolvedSource.Lang),
+		ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
+		Warning:            deleteWarning,
+		State:              &state,
+		GeneratedAssets:    generatedAssetsValue,
+		BundleFullyRemoved: fileutil.BoolPtr(bundleFullyRemoved),
+		RateLimit:          ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
+	}, rateLimitRemaining(limiter))
+	if err := recoveryOp.stageResult(siteDB, out); err != nil {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
+	}
+	if idemHash != "" {
+		if err := rt.idem.remember(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, out); err != nil {
+			slog.Warn("delete_page: could not persist idempotency result", "slug", in.Slug, "error", err)
+		}
+	}
+	if err := recoveryOp.record(siteDB, "committed"); err != nil {
+		slog.Warn("delete_page: could not commit recovery journal", "slug", in.Slug, "error", err)
+	}
+	rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_page", in.Slug, "delete", time.Now().UTC())
+	return nil, out, nil
+}
+
+func validateDeletePageInput(in deletePageInput) (string, toolcontract.ResponseMode, error) {
+	if in.Slug == "" {
+		return "", "", fmt.Errorf("invalid_params: slug must not be empty")
+	}
+	lang, err := validateLangParam(in.Lang)
+	if err != nil {
+		return "", "", err
+	}
+	mode, err := toolcontract.ResolveResponseMode(in.ResponseMode)
+	if err != nil {
+		return "", "", err
+	}
+	if err := validateIdempotencyKey(in.IdempotencyKey); err != nil {
+		return "", "", err
+	}
+	return lang, mode, nil
+}
+
+type deletePageContentLock struct{ held bool }
+
+func (lock *deletePageContentLock) acquire() error {
+	if lock.held {
+		return nil
+	}
+	const lockWait = 10 * time.Second
+	deadline := time.Now().Add(lockWait)
+	for {
+		if hugosite.ContentMu.TryLock() {
+			lock.held = true
+			slog.Debug("delete_page: lock_acquired")
+			return nil
+		}
+		if time.Now().After(deadline) {
+			slog.Error("delete_page: lock_timeout", "timeout_s", lockWait.Seconds())
+			return fmt.Errorf("build_in_progress: content lock is held, retry in a moment")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func (lock *deletePageContentLock) release() {
+	if lock.held {
+		hugosite.ContentMu.Unlock()
+		slog.Debug("delete_page: lock_released")
+	}
+}
+
+func replayDeletePage(ctx context.Context, in deletePageInput, lang string, rt *writeRegisterRuntime) (string, *deletePageOutput, error) {
+	if in.DryRun || strings.TrimSpace(in.IdempotencyKey) == "" {
+		return "", nil, nil
+	}
+	hash, err := requestHash(struct {
+		Slug             string `json:"slug"`
+		Lang             string `json:"lang,omitempty"`
+		ExpectedRevision string `json:"expected_revision,omitempty"`
+	}{Slug: in.Slug, Lang: lang, ExpectedRevision: in.ExpectedRevision})
+	if err != nil {
+		return "", nil, fmt.Errorf("internal_error: failed to hash idempotency request")
+	}
+	var cached deletePageOutput
+	hit, err := rt.idem.replay(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, hash, &cached)
+	if err != nil {
+		return "", nil, err
+	}
+	if hit {
+		return hash, &cached, nil
+	}
+	return hash, nil, nil
+}
+
+func buildDeletePageDryRunOutput(in deletePageInput, mode toolcontract.ResponseMode, dir string, resolved contentmodel.ResolvedSource, cfg config.Config, siteIdx *site.Index, limiter *rate.Limiter) deletePageOutput {
+	content := ""
+	if resolved.SourcePath != "" {
+		if raw, err := os.ReadFile(resolved.SourcePath); err == nil {
+			content = string(raw)
+		}
+	}
+	backlinks := []deletePageBacklinkDTO{}
+	if siteIdx != nil {
+		for _, edge := range siteIdx.GetBacklinks(in.Slug) {
+			backlinks = append(backlinks, deletePageBacklinkDTO{Slug: edge.FromSlug, Title: edge.FromTitle, URL: edge.FromURL})
+		}
+	}
+	var contentValue string
+	var backlinksValue *[]deletePageBacklinkDTO
+	if mode != toolcontract.ResponseModeCompact {
+		contentValue, backlinksValue = content, &backlinks
+	}
+	fullyRemoved := bundleWouldBeFullyRemovedAfterDelete(dir, resolved.SourcePath)
+	generated := previewGeneratedHeroAssets(cfg.HugoRoot, in.Slug, fullyRemoved)
+	var generatedValue *[]deletePageGeneratedAssetDTO
+	if len(generated) > 0 {
+		generatedValue = &generated
+	}
+	backlinksCount := len(backlinks)
+	return newDeletePageOutput(deletePageData{
+		Status: "would_delete", Slug: canonicalPublicSlug(in.Slug), SourceKey: in.Slug,
+		ResolvedLang: strPtr(resolved.Lang), ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolved.SourcePath)),
+		DryRun: true, Content: contentValue, Backlinks: backlinksValue, GeneratedAssets: generatedValue,
+		BacklinksCount: &backlinksCount, BundleWillBeFullyRemoved: &fullyRemoved,
+		RateLimit: ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
+	}, rateLimitRemaining(limiter))
+}
+
+func resolveDeletePageSource(slug, lang, contentRoot string) (contentmodel.ResolvedSource, error) {
+	resolved, err := contentmodel.ResolvePageSource(slug, lang, contentRoot)
+	switch {
+	case err == nil:
+		return resolved, nil
+	case strings.HasPrefix(err.Error(), "ambiguous_language:"):
+		return contentmodel.ResolvedSource{}, fmt.Errorf("%s", err.Error())
+	case strings.HasPrefix(err.Error(), "source_file_not_found:") && lang == "":
+		return contentmodel.ResolvedSource{}, nil
+	default:
+		return contentmodel.ResolvedSource{}, err
+	}
+}
+
+func validateDeletePageConfirmation(in deletePageInput, cfg config.Config, resolved contentmodel.ResolvedSource) error {
+	if !cfg.RequireDeleteConfirmation || resolved.SourcePath == "" || in.ConfirmDeleteOfPublishedPage {
+		return nil
+	}
+	frontmatter, err := hugosite.ParseFrontmatterFile(resolved.SourcePath)
+	if err != nil {
+		slog.Warn("delete_page: could not read frontmatter to check test_content exemption; failing closed (treating as a real page)", "slug", in.Slug, "path", resolved.SourcePath, "error", err)
+	}
+	if err == nil && frontmatterBool(frontmatter["test_content"]) {
+		return nil
+	}
+	return fmt.Errorf("invalid_params: this deployment requires confirm_delete_of_published_page:true to delete a real (non-test_content) page; set it explicitly to confirm this destructive action")
+}
+
+func commitDeletePageSource(ctx context.Context, in deletePageInput, dir string, resolved contentmodel.ResolvedSource, currentRevision, idemHash string, pg *security.PathGuard, cfg config.Config, siteDB *db.DB) (bool, *recoveryOperation, error) {
+	recoveryPath := resolved.SourcePath
+	var cleanup []string
+	if recoveryPath == "" {
+		recoveryPath = dir
+	} else if !bundleHasOtherLangFiles(dir, resolved.SourcePath) {
+		cleanup = append(cleanup, dir)
+	}
+	op, err := beginSourceWriteRecovery(siteDB, recoveryPath, currentRevision, "", recoveryIdempotencyFor(ctx, "delete_page", in.IdempotencyKey, idemHash, map[string]any{
+		"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug,
+		"resolved_lang": resolved.Lang, "resolved_source_path": fileutil.LogicalContentPath(cfg.ContentRoot, resolved.SourcePath),
+		"bundle_fully_removed": len(cleanup) > 0,
+	}), cleanup...)
+	if err != nil {
+		return false, nil, fmt.Errorf("persistence_error: failed to record source delete intent")
+	}
+	fullyRemoved := true
+	if resolved.SourcePath != "" {
+		if err := pg.RevalidateForWrite(resolved.SourcePath); err != nil {
+			slog.Warn("delete_page: symlink detected before delete", "slug", in.Slug, "path", resolved.SourcePath, "error", err)
+			return false, nil, fmt.Errorf("security_error: symlink detected in delete path")
+		}
+		if err := os.Remove(resolved.SourcePath); err != nil {
+			slog.Error("delete_page: remove source file failed", "slug", in.Slug, "path", resolved.SourcePath, "error", err)
+			return false, nil, fmt.Errorf("delete_error: failed to delete page")
+		}
+		fullyRemoved = !bundleHasRemainingLangFiles(dir)
+		if err := recoveryFilesystemBoundary("delete_page", "after_source_unlink"); err != nil {
+			return false, nil, fmt.Errorf("persistence_error: interrupted after source unlink")
+		}
+		if fullyRemoved {
+			if err := os.RemoveAll(dir); err != nil {
+				slog.Error("delete_page: remove bundle dir failed", "slug", in.Slug, "error", err)
+				return false, nil, fmt.Errorf("delete_error: failed to delete page")
 			}
 		}
-
-		state := deletePageState(cfg.SiteRoot != "", publicCleanupFailed, dbDeleteFailed)
-		status := "deleted"
-		if degradedDelete {
-			status = "partial_success"
+	} else {
+		if err := os.RemoveAll(dir); err != nil {
+			slog.Error("delete_page: remove failed", "slug", in.Slug, "error", err)
+			return false, nil, fmt.Errorf("delete_error: failed to delete page")
 		}
-		var generatedAssetsValue *[]deletePageGeneratedAssetDTO
-		if len(generatedAssets) > 0 {
-			generatedAssetsValue = &generatedAssets
+		if err := recoveryFilesystemBoundary("delete_page", "after_source_cleanup"); err != nil {
+			return false, nil, fmt.Errorf("persistence_error: interrupted after source cleanup")
 		}
-		out := newDeletePageOutput(deletePageData{
-			Status:             status,
-			Slug:               canonicalPublicSlug(in.Slug),
-			SourceKey:          in.Slug,
-			ResolvedLang:       strPtr(resolvedSource.Lang),
-			ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, resolvedSource.SourcePath)),
-			Warning:            deleteWarning,
-			State:              &state,
-			GeneratedAssets:    generatedAssetsValue,
-			BundleFullyRemoved: fileutil.BoolPtr(bundleFullyRemoved),
-			RateLimit:          ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC())),
-		}, rateLimitRemaining(limiter))
-		if err := recoveryOp.stageResult(siteDB, out); err != nil {
-			return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("persistence_error: failed to stage recoverable mutation result"))
-		}
-		if idemHash != "" {
-			if err := rt.idem.remember(idempotencyCallerKey(ctx), "delete_page", in.IdempotencyKey, idemHash, out); err != nil {
-				slog.Warn("delete_page: could not persist idempotency result", "slug", in.Slug, "error", err)
-			}
-		}
-		if err := recoveryOp.record(siteDB, "committed"); err != nil {
-			slog.Warn("delete_page: could not commit recovery journal", "slug", in.Slug, "error", err)
-		}
-		rt.changeSets.RecordMutation(resolvedChangeSetID, mutationCallerKey(ctx), "delete_page", in.Slug, "delete", time.Now().UTC())
-		return nil, out, nil
-	}))
+	}
+	if err := op.record(siteDB, "file_written"); err != nil {
+		slog.Warn("delete_page: could not advance recovery journal", "slug", in.Slug, "error", err)
+	}
+	return fullyRemoved, op, nil
 }
 
 func createPageState() site.LifecycleState {
