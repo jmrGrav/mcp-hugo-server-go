@@ -817,6 +817,324 @@ func isTruthyFrontmatter(v any) bool {
 // is returned — the existing `defer os.RemoveAll(buildDir)` cleans it up,
 // so nothing unstable is ever promoted.
 func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceIndex, expectedSourceRevision, expectedPublicRevision string, siteReload ...PostBuildCallback) (buildSiteData, error) {
+	run := buildRun{
+		ctx:                    ctx,
+		cfg:                    cfg,
+		srcIdx:                 srcIdx,
+		expectedSourceRevision: expectedSourceRevision,
+		expectedPublicRevision: expectedPublicRevision,
+		callbacks:              siteReload,
+	}
+	return run.execute()
+}
+
+type buildRun struct {
+	ctx                    context.Context
+	cfg                    config.Config
+	srcIdx                 *hugosite.SourceIndex
+	expectedSourceRevision string
+	expectedPublicRevision string
+	callbacks              []PostBuildCallback
+}
+
+type buildPreparation struct {
+	sourceRevision string
+	buildDir       string
+	cacheDir       string
+	hugoVersion    string
+	timeoutSeconds int
+}
+
+func callbackName(callback PostBuildCallback, index int) string {
+	if callback.Name != "" {
+		return callback.Name
+	}
+	return fmt.Sprintf("callback %d", index)
+}
+
+// prepareCallbacks captures reconciliation changes before recording build
+// start. A failure notifies all failure observers exactly once.
+func (run *buildRun) prepareCallbacks(progress BuildProgress) ([]BuildPageChange, bool, error) {
+	var changes []BuildPageChange
+	hasChanges := false
+	for index, callback := range run.callbacks {
+		if callback.OnBuildPrepared == nil {
+			continue
+		}
+		prepared, err := callback.OnBuildPrepared(progress)
+		if err != nil {
+			notifyBuildFailed(run.callbacks, progress, "failed:reconciliation")
+			return nil, false, fmt.Errorf("build_reconciliation_failed: %s: %w", callbackName(callback, index), err)
+		}
+		changes = append(changes, prepared...)
+		hasChanges = true
+	}
+	for index, callback := range run.callbacks {
+		if callback.OnBuildStart == nil {
+			continue
+		}
+		if err := callback.OnBuildStart(progress); err != nil {
+			notifyBuildFailed(run.callbacks, progress, "failed:recovery_record")
+			return nil, false, fmt.Errorf("build_recovery_record_failed: %s: %w", callbackName(callback, index), err)
+		}
+	}
+	return changes, hasChanges, nil
+}
+
+func (run *buildRun) verifySourceStability(sourceRevision string, progress BuildProgress) error {
+	if sourceRevision == "" {
+		return nil
+	}
+	after, err := hashTree(run.cfg.ContentRoot)
+	if err != nil {
+		buildstatus.RecordFailure("source_fingerprint_failed", time.Now())
+		notifyBuildFailed(run.callbacks, progress, "failed:source_fingerprint")
+		return fmt.Errorf("internal_error: failed to verify source stability before promotion: %w", err)
+	}
+	if after != sourceRevision {
+		buildstatus.RecordFailure("source_changed_during_build", time.Now())
+		notifyBuildFailed(run.callbacks, progress, "failed:source_changed_during_build")
+		return fmt.Errorf("source_changed_during_build: source changed while this build was running — this build's output was discarded and never promoted; rebuild once the source is stable")
+	}
+	return nil
+}
+
+type hugoExecution struct {
+	args       []string
+	stdout     bytes.Buffer
+	stderr     bytes.Buffer
+	err        error
+	durationMs int64
+	exitCode   int
+}
+
+func (run *buildRun) executeHugo(ctx context.Context, buildDir, cacheDir string, startedAt time.Time) hugoExecution {
+	result := hugoExecution{args: append(buildCommandArgs(cacheDir, false), "--destination", buildDir)}
+	// #nosec G204 -- executable is fixed to hugo; args come from validated config.
+	cmd := exec.CommandContext(ctx, "hugo", result.args...)
+	cmd.Dir = run.cfg.HugoRoot
+	cmd.Env = boundedCommandEnv()
+	setNewProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		killProcessGroup(cmd)
+		return nil
+	}
+	cmd.Stderr = &result.stderr
+	cmd.Stdout = &result.stdout
+	result.err = cmd.Run()
+	result.durationMs = time.Since(startedAt).Milliseconds()
+	if cmd.ProcessState != nil {
+		result.exitCode = cmd.ProcessState.ExitCode()
+	}
+	return result
+}
+
+func (run *buildRun) promote(buildDir string, progress *BuildProgress) (string, error) {
+	warning, err := swapBuildOutput(buildDir, run.cfg.SiteRoot)
+	if err != nil {
+		buildstatus.RecordFailure("output_swap", time.Now())
+		notifyBuildFailed(run.callbacks, *progress, "failed:output_swap")
+		return "", err
+	}
+	progress.ObservedAt = time.Now().UTC()
+	for index, callback := range run.callbacks {
+		if callback.OnOutputSwapped == nil {
+			continue
+		}
+		name := callbackName(callback, index)
+		if err := callback.OnOutputSwapped(*progress); err != nil {
+			message := fmt.Sprintf("post-output-swap callback %q failed: %v", name, err)
+			if warning == "" {
+				warning = message
+			} else {
+				warning += "; " + message
+			}
+			slog.Warn("build_site: post-output-swap callback failed", "callback", name, "error", err)
+		}
+	}
+	if stillUnreadable := fixUnreadableOutputPaths(run.cfg.SiteRoot); len(stillUnreadable) > 0 {
+		message := fmt.Sprintf(
+			"output_unreadable: %d path(s) under the published output could not be made servable (likely owned by a different uid) and will 403 for a reverse proxy running as a different user: %s. Fix: sudo chown -R <service-account> %s",
+			len(stillUnreadable), strings.Join(stillUnreadable, "; "), run.cfg.SiteRoot,
+		)
+		if warning == "" {
+			warning = message
+		} else {
+			warning += "; " + message
+		}
+	}
+	return warning, nil
+}
+
+func (run *buildRun) runCallbacks(initialWarning string) (map[string]string, string) {
+	const callbackTimeout = 30 * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), callbackTimeout)
+	defer cancel()
+	warning := initialWarning
+	outcomes := map[string]string{}
+
+callbackLoop:
+	for index, callback := range run.callbacks {
+		if callback.Fn == nil {
+			continue
+		}
+		name := callbackName(callback, index)
+		done := make(chan error, 1)
+		go func(f func() error) { done <- f() }(callback.Fn)
+		select {
+		case err := <-done:
+			if err != nil {
+				outcomes[name] = "failed"
+				warning = fmt.Sprintf("post-build callback %q failed: %v", name, err)
+				slog.Warn("build_site: post-build callback failed", "callback", name, "error", err)
+			} else {
+				outcomes[name] = "ok"
+			}
+		case <-ctx.Done():
+			outcomes[name] = "timeout"
+			warning = fmt.Sprintf("post-build callback %q timed out after %s", name, callbackTimeout)
+			slog.Warn("build_site: post-build callback timed out", "callback", name, "timeout", callbackTimeout)
+			break callbackLoop
+		}
+	}
+	for _, callback := range run.callbacks {
+		if (callback.Fn == nil && callback.OnBuildComplete == nil) || callback.Name == "" {
+			continue
+		}
+		if _, seen := outcomes[callback.Name]; !seen {
+			outcomes[callback.Name] = "skipped"
+		}
+	}
+	return outcomes, warning
+}
+
+func (run *buildRun) reportCommandFailure(ctx context.Context, execution hugoExecution, cacheDir, buildID string, progress BuildProgress) error {
+	cfg := run.cfg
+	summary := buildOutputSummary(execution.stderr.Bytes(), execution.stdout.Bytes(), cfg.HugoRoot, cfg.SiteRoot)
+	errClass := classifyBuildFailure(ctx, summary)
+	slog.Error("build_site failed",
+		"build_id", buildID,
+		"tool", "build_site",
+		"user", currentUserForLog(),
+		"command", commandString("hugo", execution.args),
+		"cwd", cfg.HugoRoot,
+		"cache_dir", cacheDir,
+		"duration_ms", execution.durationMs,
+		"exit_code", execution.exitCode,
+		"error_class", errClass,
+		"stdout_tail", outputTail(execution.stdout.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+		"stderr_tail", outputTail(execution.stderr.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+		"output_summary", summary,
+		"error", execution.err,
+	)
+	errKind := "build_error"
+	if ctx.Err() != nil {
+		errKind = "build_timeout"
+	}
+	payload := buildErrorPayload{
+		Error:            errKind,
+		ErrorClass:       errClass,
+		ExitCode:         execution.exitCode,
+		Command:          commandString("hugo", execution.args),
+		WorkingDirectory: cfg.HugoRoot,
+		CacheDirectory:   cacheDir,
+		DurationMs:       execution.durationMs,
+		StderrSummary:    summary,
+		StdoutSummary:    outputTail(execution.stdout.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
+		BuildID:          buildID,
+		LogHint:          "Search server logs for build_id=" + buildID,
+	}
+	if errClass == "permission_denied" {
+		if suggestion, ok := ownershipDriftSuggestion(summary); ok {
+			payload.Suggestion = suggestion
+		} else {
+			payload.Suggestion = "Verify that site_root and hugo_root/resources are listed in ReadWritePaths in the systemd service override. Run: systemctl cat mcp-hugo-server-go"
+		}
+		payload.DocsURL = buildDocsURL
+	}
+	jsonPayload, _ := json.Marshal(payload)
+	buildstatus.RecordFailure(errClass, time.Now())
+	notifyBuildFailed(run.callbacks, progress, "failed:"+errClass)
+	return fmt.Errorf("build_error: %s", jsonPayload)
+}
+
+// prepare validates the deployment and optimistic revisions, then creates the
+// isolated output and cache directories. The caller holds ContentMu throughout.
+func (run *buildRun) prepare() (buildPreparation, error) {
+	cfg := run.cfg
+	if run.srcIdx != nil && strings.TrimSpace(cfg.ContentRoot) != "" {
+		if err := run.srcIdx.Reload(cfg.ContentRoot); err != nil {
+			return buildPreparation{}, fmt.Errorf("source_index_reload_failed: refresh source before build: %w", err)
+		}
+	}
+	if err := checkDirWritable(filepath.Dir(cfg.SiteRoot)); err != nil {
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildPreparation{}, err
+	}
+	if err := checkBuildWritable(filepath.Join(cfg.HugoRoot, "resources")); err != nil {
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildPreparation{}, err
+	}
+
+	var sourceRevision string
+	if strings.TrimSpace(cfg.ContentRoot) != "" {
+		revision, err := hashTree(cfg.ContentRoot)
+		if err != nil {
+			return buildPreparation{}, fmt.Errorf("internal_error: failed to compute source revision: %w", err)
+		}
+		sourceRevision = revision
+		if run.expectedSourceRevision != "" && revision != run.expectedSourceRevision {
+			return buildPreparation{}, fmt.Errorf("source_revision_conflict: source has changed since expected_source_revision was captured (expected %s, actual %s) — re-read the current source revision (get_runtime_status with include_revisions:true) and retry deliberately if the new state is still what you intend to build", run.expectedSourceRevision, revision)
+		}
+	} else if run.expectedSourceRevision != "" {
+		return buildPreparation{}, fmt.Errorf("config_error: expected_source_revision was supplied but content_root is not configured, so it cannot be verified")
+	}
+	if run.expectedPublicRevision != "" {
+		if strings.TrimSpace(cfg.SiteRoot) == "" {
+			return buildPreparation{}, fmt.Errorf("config_error: expected_public_revision was supplied but site_root is not configured, so it cannot be verified")
+		}
+		revision, err := hashTree(cfg.SiteRoot)
+		if err != nil {
+			return buildPreparation{}, fmt.Errorf("internal_error: failed to compute public revision: %w", err)
+		}
+		if revision != run.expectedPublicRevision {
+			return buildPreparation{}, fmt.Errorf("public_revision_conflict: public output has changed since expected_public_revision was captured (expected %s, actual %s) — someone else may have published in the meantime; re-read the current public revision and retry deliberately if that's intended", run.expectedPublicRevision, revision)
+		}
+	}
+
+	buildDir, err := os.MkdirTemp(filepath.Dir(cfg.SiteRoot), ".mcp-build-output-")
+	if err != nil {
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildPreparation{}, buildPreflightError(filepath.Dir(cfg.SiteRoot))
+	}
+	if err := os.Chmod(buildDir, 0o755); err != nil { // #nosec G302 -- public build output must be world-readable
+		_ = os.RemoveAll(buildDir)
+		buildstatus.RecordFailure("permission_denied", time.Now())
+		return buildPreparation{}, buildPreflightError(buildDir)
+	}
+	timeout := cfg.BuildTimeoutSeconds
+	if timeout <= 0 {
+		timeout = 120
+	}
+	cacheDir := hugoCacheDir(cfg)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil { // #nosec G301 -- Hugo cache is a configured service-owned path
+		_ = os.RemoveAll(buildDir)
+		return buildPreparation{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
+	}
+	return buildPreparation{
+		sourceRevision: sourceRevision,
+		buildDir:       buildDir,
+		cacheDir:       cacheDir,
+		hugoVersion:    hugoVersionFromBinary(),
+		timeoutSeconds: timeout,
+	}, nil
+}
+
+func (run *buildRun) execute() (buildSiteData, error) {
+	ctx := run.ctx
+	cfg := run.cfg
+	srcIdx := run.srcIdx
+	siteReload := run.callbacks
 	if cfg.HugoRoot == "" {
 		return buildSiteData{}, fmt.Errorf("config_error: hugo_root is not configured")
 	}
@@ -824,197 +1142,32 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		return buildSiteData{}, fmt.Errorf("build_in_progress: a content mutation or build is already running")
 	}
 	defer hugosite.ContentMu.Unlock()
-	if srcIdx != nil && strings.TrimSpace(cfg.ContentRoot) != "" {
-		if err := srcIdx.Reload(cfg.ContentRoot); err != nil {
-			return buildSiteData{}, fmt.Errorf("source_index_reload_failed: refresh source before build: %w", err)
-		}
-	}
-
-	if err := checkDirWritable(filepath.Dir(cfg.SiteRoot)); err != nil {
-		buildstatus.RecordFailure("permission_denied", time.Now())
+	prepared, err := run.prepare()
+	if err != nil {
 		return buildSiteData{}, err
 	}
-	if err := checkBuildWritable(filepath.Join(cfg.HugoRoot, "resources")); err != nil {
-		buildstatus.RecordFailure("permission_denied", time.Now())
-		return buildSiteData{}, err
-	}
-
-	// #1141: verify the caller's optimistic-concurrency expectations, and
-	// capture the source fingerprint this build will use for its own
-	// during-build stability check further below, all while still holding
-	// ContentMu so nothing can land between this check and the build
-	// actually starting. Deliberately placed after the writability checks
-	// above: a misconfigured/unwritable deployment should fail with its
-	// own honest permission_denied first, not pay a full-tree hash (or
-	// report a revision conflict) on a build that was never going to
-	// succeed anyway.
-	var sourceRevisionBeforeBuild string
-	if strings.TrimSpace(cfg.ContentRoot) != "" {
-		rev, err := hashTree(cfg.ContentRoot)
-		if err != nil {
-			return buildSiteData{}, fmt.Errorf("internal_error: failed to compute source revision: %w", err)
-		}
-		sourceRevisionBeforeBuild = rev
-		if expectedSourceRevision != "" && rev != expectedSourceRevision {
-			return buildSiteData{}, fmt.Errorf("source_revision_conflict: source has changed since expected_source_revision was captured (expected %s, actual %s) — re-read the current source revision (get_runtime_status with include_revisions:true) and retry deliberately if the new state is still what you intend to build", expectedSourceRevision, rev)
-		}
-	} else if expectedSourceRevision != "" {
-		return buildSiteData{}, fmt.Errorf("config_error: expected_source_revision was supplied but content_root is not configured, so it cannot be verified")
-	}
-	if expectedPublicRevision != "" {
-		if strings.TrimSpace(cfg.SiteRoot) == "" {
-			return buildSiteData{}, fmt.Errorf("config_error: expected_public_revision was supplied but site_root is not configured, so it cannot be verified")
-		}
-		rev, err := hashTree(cfg.SiteRoot)
-		if err != nil {
-			return buildSiteData{}, fmt.Errorf("internal_error: failed to compute public revision: %w", err)
-		}
-		if rev != expectedPublicRevision {
-			return buildSiteData{}, fmt.Errorf("public_revision_conflict: public output has changed since expected_public_revision was captured (expected %s, actual %s) — someone else may have published in the meantime; re-read the current public revision and retry deliberately if that's intended", expectedPublicRevision, rev)
-		}
-	}
-
-	buildDir, buildDirErr := os.MkdirTemp(filepath.Dir(cfg.SiteRoot), ".mcp-build-output-")
-	if buildDirErr != nil {
-		buildstatus.RecordFailure("permission_denied", time.Now())
-		return buildSiteData{}, buildPreflightError(filepath.Dir(cfg.SiteRoot))
-	}
+	sourceRevisionBeforeBuild := prepared.sourceRevision
+	buildDir := prepared.buildDir
+	cacheDir := prepared.cacheDir
+	hugoVersion := prepared.hugoVersion
 	defer func() { _ = os.RemoveAll(buildDir) }()
-	// os.MkdirTemp creates directories with mode 0700 (owner-only), and that
-	// mode survives the rename into place unchanged — swapBuildOutput moves
-	// this exact directory to become the new SiteRoot. Left at 0700, every
-	// build silently makes the public site 403 to its own reverse proxy
-	// (different uid/gid) until an operator notices and chmods it by hand.
-	// Match the 0755 this codebase already uses for every other
-	// operator-facing directory it creates (see checkDirWritable above).
-	if err := os.Chmod(buildDir, 0o755); err != nil { // #nosec G302 -- public build output must be world-readable
-		buildstatus.RecordFailure("permission_denied", time.Now())
-		return buildSiteData{}, buildPreflightError(buildDir)
-	}
-
-	timeout := cfg.BuildTimeoutSeconds
-	if timeout <= 0 {
-		timeout = 120
-	}
-	cacheDir := hugoCacheDir(cfg)
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil { // #nosec G301 -- Hugo cache is a configured service-owned path
-		return buildSiteData{}, fmt.Errorf("config_error: failed to prepare Hugo cache directory")
-	}
-	// Persist the actual binary version without executing an extra wrapper.
-	// Metadata can be absent on non-Go wrappers; that is an honest empty fact,
-	// never a reason to block the build itself.
-	hugoVersion := hugoVersionFromBinary()
-	tctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	tctx, cancel := context.WithTimeout(ctx, time.Duration(prepared.timeoutSeconds)*time.Second)
 	defer cancel()
 
 	start := time.Now()
 	runID := newBuildID(start)
 	progress := BuildProgress{BuildID: runID, ObservedAt: start.UTC()}
-	var preparedChanges []BuildPageChange
-	hasPreparedChanges := false
-	for i, cb := range siteReload {
-		if cb.OnBuildPrepared == nil {
-			continue
-		}
-		name := cb.Name
-		if name == "" {
-			name = fmt.Sprintf("callback %d", i)
-		}
-		changes, err := cb.OnBuildPrepared(progress)
-		if err != nil {
-			notifyBuildFailed(siteReload, progress, "failed:reconciliation")
-			return buildSiteData{}, fmt.Errorf("build_reconciliation_failed: %s: %w", name, err)
-		}
-		preparedChanges = append(preparedChanges, changes...)
-		hasPreparedChanges = true
-	}
-	for i, cb := range siteReload {
-		if cb.OnBuildStart == nil {
-			continue
-		}
-		name := cb.Name
-		if name == "" {
-			name = fmt.Sprintf("callback %d", i)
-		}
-		if err := cb.OnBuildStart(progress); err != nil {
-			notifyBuildFailed(siteReload, progress, "failed:recovery_record")
-			return buildSiteData{}, fmt.Errorf("build_recovery_record_failed: %s: %w", name, err)
-		}
-	}
-	args := append(buildCommandArgs(cacheDir, false), "--destination", buildDir)
-	// #nosec G204 -- executable is fixed to hugo; args come from
-	// buildCommandArgs and validated config, not from MCP caller input.
-	cmd := exec.CommandContext(tctx, "hugo", args...)
-	cmd.Dir = cfg.HugoRoot
-	cmd.Env = boundedCommandEnv()
-	setNewProcessGroup(cmd)
-	// Kill the whole process group on timeout/cancellation so that shell
-	// wrappers and any children spawned by hugo are also terminated (#240/#243).
-	cmd.Cancel = func() error {
-		killProcessGroup(cmd)
-		return nil
-	}
-	var stderrBuf bytes.Buffer
-	var stdoutBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-	cmd.Stdout = &stdoutBuf
-	err := cmd.Run()
-	durationMs := time.Since(start).Milliseconds()
-
-	exitCode := 0
-	if cmd.ProcessState != nil {
-		exitCode = cmd.ProcessState.ExitCode()
-	}
-
+	preparedChanges, hasPreparedChanges, err := run.prepareCallbacks(progress)
 	if err != nil {
-		summary := buildOutputSummary(stderrBuf.Bytes(), stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot)
-		errClass := classifyBuildFailure(tctx, summary)
-		slog.Error("build_site failed",
-			"build_id", runID,
-			"tool", "build_site",
-			"user", currentUserForLog(),
-			"command", commandString("hugo", args),
-			"cwd", cfg.HugoRoot,
-			"cache_dir", cacheDir,
-			"duration_ms", durationMs,
-			"exit_code", exitCode,
-			"error_class", errClass,
-			"stdout_tail", outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
-			"stderr_tail", outputTail(stderrBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
-			"output_summary", summary,
-			"error", err,
-		)
+		return buildSiteData{}, err
+	}
+	execution := run.executeHugo(tctx, buildDir, cacheDir, start)
+	args := execution.args
+	durationMs := execution.durationMs
+	exitCode := execution.exitCode
 
-		errKind := "build_error"
-		if tctx.Err() != nil {
-			errKind = "build_timeout"
-		}
-
-		payload := buildErrorPayload{
-			Error:            errKind,
-			ErrorClass:       errClass,
-			ExitCode:         exitCode,
-			Command:          commandString("hugo", args),
-			WorkingDirectory: cfg.HugoRoot,
-			CacheDirectory:   cacheDir,
-			DurationMs:       durationMs,
-			StderrSummary:    summary,
-			StdoutSummary:    outputTail(stdoutBuf.Bytes(), cfg.HugoRoot, cfg.SiteRoot),
-			BuildID:          runID,
-			LogHint:          "Search server logs for build_id=" + runID,
-		}
-		if errClass == "permission_denied" {
-			if suggestion, ok := ownershipDriftSuggestion(summary); ok {
-				payload.Suggestion = suggestion
-			} else {
-				payload.Suggestion = "Verify that site_root and hugo_root/resources are listed in ReadWritePaths in the systemd service override. Run: systemctl cat mcp-hugo-server-go"
-			}
-			payload.DocsURL = buildDocsURL
-		}
-		jsonPayload, _ := json.Marshal(payload)
-		buildstatus.RecordFailure(errClass, time.Now())
-		notifyBuildFailed(siteReload, progress, "failed:"+errClass)
-		return buildSiteData{}, fmt.Errorf("build_error: %s", jsonPayload)
+	if execution.err != nil {
+		return buildSiteData{}, run.reportCommandFailure(tctx, execution, cacheDir, runID, progress)
 	}
 	buildstatus.RecordSuccess(time.Now())
 	// #1141: re-hash the source tree one last time before promoting, and
@@ -1026,75 +1179,12 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 	// that never went through Hugo. Promoting the temp build in that case
 	// would silently publish a stale/incomplete render of a source state
 	// that no longer exists.
-	if sourceRevisionBeforeBuild != "" {
-		sourceRevisionAfterBuild, hashErr := hashTree(cfg.ContentRoot)
-		if hashErr != nil {
-			buildstatus.RecordFailure("source_fingerprint_failed", time.Now())
-			notifyBuildFailed(siteReload, progress, "failed:source_fingerprint")
-			return buildSiteData{}, fmt.Errorf("internal_error: failed to verify source stability before promotion: %w", hashErr)
-		}
-		if sourceRevisionAfterBuild != sourceRevisionBeforeBuild {
-			buildstatus.RecordFailure("source_changed_during_build", time.Now())
-			notifyBuildFailed(siteReload, progress, "failed:source_changed_during_build")
-			return buildSiteData{}, fmt.Errorf("source_changed_during_build: source changed while this build was running — this build's output was discarded and never promoted; rebuild once the source is stable")
-		}
+	if err := run.verifySourceStability(sourceRevisionBeforeBuild, progress); err != nil {
+		return buildSiteData{}, err
 	}
-	swapWarning, swapErr := swapBuildOutput(buildDir, cfg.SiteRoot)
-	if swapErr != nil {
-		buildstatus.RecordFailure("output_swap", time.Now())
-		notifyBuildFailed(siteReload, progress, "failed:output_swap")
-		return buildSiteData{}, swapErr
-	}
-	progress.ObservedAt = time.Now().UTC()
-	for i, cb := range siteReload {
-		if cb.OnOutputSwapped == nil {
-			continue
-		}
-		name := cb.Name
-		if name == "" {
-			name = fmt.Sprintf("callback %d", i)
-		}
-		if err := cb.OnOutputSwapped(progress); err != nil {
-			// The output has already been installed. Preserve that fact in the
-			// response rather than claiming an all-or-nothing filesystem/SQLite
-			// transaction that the platform cannot provide.
-			warning := fmt.Sprintf("post-output-swap callback %q failed: %v", name, err)
-			if swapWarning == "" {
-				swapWarning = warning
-			} else {
-				swapWarning += "; " + warning
-			}
-			slog.Warn("build_site: post-output-swap callback failed", "callback", name, "error", err)
-		}
-	}
-	// Post-swap servability self-check (#983 incident): swapBuildOutput's
-	// chmod is the actual fix for MkdirTemp's 0700 default, but a *future*
-	// regression (a refactor that drops that chmod, an unusual mount option,
-	// an operator-run manual build) could silently reintroduce an
-	// unreadable output tree — and nothing else in this response would ever
-	// say so, because hugo_build/output_swap both legitimately report "ok":
-	// the content is correctly built and installed, it just isn't reachable
-	// by whatever serves it (a reverse proxy running as a different uid).
-	// That's exactly the shape of the incident that caused this: a
-	// structurally successful build silently taking the live site offline.
-	//
-	// Every path under SiteRoot was just written by this same process as
-	// part of this same build, so self-healing a permission bit here is not
-	// new privilege — it's finishing a write this process already owns, the
-	// same way swapBuildOutput's own chmod does. fixUnreadableOutputPaths
-	// attempts exactly that and reports only what it could NOT fix (e.g. a
-	// genuine ownership mismatch on a file this process doesn't own), so an
-	// operator only ever hears about problems that need their attention.
-	if stillUnreadable := fixUnreadableOutputPaths(cfg.SiteRoot); len(stillUnreadable) > 0 {
-		msg := fmt.Sprintf(
-			"output_unreadable: %d path(s) under the published output could not be made servable (likely owned by a different uid) and will 403 for a reverse proxy running as a different user: %s. Fix: sudo chown -R <service-account> %s",
-			len(stillUnreadable), strings.Join(stillUnreadable, "; "), cfg.SiteRoot,
-		)
-		if swapWarning != "" {
-			swapWarning = swapWarning + "; " + msg
-		} else {
-			swapWarning = msg
-		}
+	swapWarning, err := run.promote(buildDir, &progress)
+	if err != nil {
+		return buildSiteData{}, err
 	}
 
 	// Capture the page-aware "changed set" BEFORE the callback loop runs: the
@@ -1107,59 +1197,7 @@ func runBuild(ctx context.Context, cfg config.Config, srcIdx *hugosite.SourceInd
 		pages = classifyPendingPages(srcIdx.PendingPages())
 	}
 
-	// Run post-build callbacks within a bounded deadline (#241). Optional
-	// side-effect callbacks (CDN purge, search indexing) swallow their errors
-	// at the call site in server.go; any error here means a required step
-	// (index reload, DB sync) failed. Surface as partial_success so callers
-	// know the build succeeded but read state may be stale (#238/#244).
-	const callbackTimeout = 30 * time.Second
-	cbCtx, cbCancel := context.WithTimeout(context.Background(), callbackTimeout)
-	defer cbCancel()
-	var cbWarning string
-	if swapWarning != "" {
-		cbWarning = swapWarning
-	}
-	// callbackOutcomes records each named callback's individual result for the
-	// stage-aware report (#858 AC2). Any callback not reached (because an
-	// earlier one timed out and broke the loop) is left absent, then filled in
-	// as "skipped" below.
-	callbackOutcomes := map[string]string{}
-cbLoop:
-	for i, cb := range siteReload {
-		if cb.Fn == nil {
-			continue
-		}
-		name := cb.Name
-		if name == "" {
-			name = fmt.Sprintf("callback %d", i)
-		}
-		done := make(chan error, 1)
-		go func(f func() error) { done <- f() }(cb.Fn)
-		select {
-		case cbErr := <-done:
-			if cbErr != nil {
-				callbackOutcomes[name] = "failed"
-				cbWarning = fmt.Sprintf("post-build callback %q failed: %v", name, cbErr)
-				slog.Warn("build_site: post-build callback failed", "callback", name, "error", cbErr)
-			} else {
-				callbackOutcomes[name] = "ok"
-			}
-		case <-cbCtx.Done():
-			callbackOutcomes[name] = "timeout"
-			cbWarning = fmt.Sprintf("post-build callback %q timed out after %s", name, callbackTimeout)
-			slog.Warn("build_site: post-build callback timed out", "callback", name, "timeout", callbackTimeout)
-			break cbLoop
-		}
-	}
-	// Mark registered-but-not-reached callbacks (post-break) as skipped.
-	for _, cb := range siteReload {
-		if (cb.Fn == nil && cb.OnBuildComplete == nil) || cb.Name == "" {
-			continue
-		}
-		if _, seen := callbackOutcomes[cb.Name]; !seen {
-			callbackOutcomes[cb.Name] = "skipped"
-		}
-	}
+	callbackOutcomes, cbWarning := run.runCallbacks(swapWarning)
 	stages := buildStages(callbackOutcomes)
 
 	status := "ok"

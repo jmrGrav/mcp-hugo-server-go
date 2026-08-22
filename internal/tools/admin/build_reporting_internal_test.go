@@ -15,6 +15,15 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 )
 
+func TestCallbackNameUsesConfiguredNameOrStableFallback(t *testing.T) {
+	if got := callbackName(PostBuildCallback{Name: "index_reload"}, 3); got != "index_reload" {
+		t.Fatalf("configured callback name = %q", got)
+	}
+	if got := callbackName(PostBuildCallback{}, 3); got != "callback 3" {
+		t.Fatalf("fallback callback name = %q", got)
+	}
+}
+
 func TestFormatHugoBuildVersionFromBinaryMetadata(t *testing.T) {
 	info := &gobuildinfo.BuildInfo{
 		Main:     debug.Module{Path: "github.com/gohugoio/hugo", Version: "v0.164.0"},
