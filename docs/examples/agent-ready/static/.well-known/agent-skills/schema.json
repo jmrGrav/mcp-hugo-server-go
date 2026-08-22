@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://www.arleo.eu/.well-known/agent-skills/schema.json",
+  "title": "arleo.eu Agent Skills Discovery Index",
+  "description": "Schema for the arleo.eu /.well-known/agent-skills/index.json discovery document: a flat list of agentskills.io-style skill-md files this site publishes for agent discovery (see https://agentskills.io/specification for the SKILL.md format each entry's `url` points at). Self-hosted because agentskills.io's own specification does not define a machine-readable discovery-index format or a canonical schema host (see issue #1250) - this schema exists so the $schema field in index.json actually resolves, unlike the previous https://schemas.agentskills.io/... reference which pointed at a non-existent domain.",
+  "type": "object",
+  "required": ["skills"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "format": "uri",
+      "description": "Must equal this schema's own $id so a validator can find it without prior configuration."
+    },
+    "skills": {
+      "type": "array",
+      "description": "Every skill-md file this site publishes for agent discovery.",
+      "items": { "$ref": "#/$defs/skillEntry" }
+    }
+  },
+  "$defs": {
+    "skillEntry": {
+      "type": "object",
+      "required": ["name", "type", "description", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Skill identifier, matching the corresponding SKILL.md frontmatter `name`."
+        },
+        "type": {
+          "type": "string",
+          "enum": ["skill-md"],
+          "description": "Only skill-md (a single Markdown file at `url` with agentskills.io SKILL.md-style frontmatter) is defined today; the enum is intentionally closed so a future entry type is a deliberate schema change, not silent drift."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "What the skill does and when to use it, mirroring the SKILL.md frontmatter description agents use for progressive-disclosure discovery."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "pattern": "^https://",
+          "description": "Absolute HTTPS URL to the skill-md file's content."
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "Optional integrity digest of the file at `url`, so a caching agent can detect a stale local copy without refetching."
+        }
+      }
+    }
+  }
+}

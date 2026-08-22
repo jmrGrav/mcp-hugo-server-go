@@ -44,7 +44,8 @@ These public URLs must stay coherent:
 | `https://mcp.arleo.eu/.well-known/oauth-protected-resource` | `200 application/json`, resource is `https://mcp.arleo.eu/mcp` |
 | `https://mcp.arleo.eu/.well-known/mcp/server-card.json` | `200 application/json`, transport endpoint is `/mcp` |
 | `https://mcp.arleo.eu/.well-known/mcp.json` | compatibility alias for server card |
-| `https://www.arleo.eu/.well-known/agent-skills/index.json` | `200 application/json` |
+| `https://www.arleo.eu/.well-known/agent-skills/index.json` | `200 application/json`, `$schema` is `https://www.arleo.eu/.well-known/agent-skills/schema.json` (2026-08-22: found pointing at the non-existent `schemas.agentskills.io`, see issue #1250) |
+| `https://www.arleo.eu/.well-known/agent-skills/schema.json` | `200 application/schema+json`, valid Draft 2020-12 JSON Schema; `index.json` must validate against it |
 | `https://www.arleo.eu/.well-known/ai-catalog.json` | `200 application/json`, ARD (Agentic Resource Discovery, [agenticresourcediscovery.org/spec](https://agenticresourcediscovery.org/spec/)) manifest listing the MCP server card and agent-skills index as `entries` |
 
 The ID-JAG block is easy to break. Both OAuth metadata and `/auth.md` must keep:
@@ -81,6 +82,7 @@ Key points:
 - `www.arleo.eu/.well-known/oauth-protected-resource/mcp` redirects to the MCP protected-resource alias on `mcp.arleo.eu`.
 - `www.arleo.eu/.well-known/mcp/server-card.json` redirects to the canonical MCP server card on `mcp.arleo.eu`.
 - `www.arleo.eu/.well-known/ai-catalog.json` is proxied to Hugo static content (like `api-catalog` and `agent-skills/index.json`), not hand-maintained inline in OpenResty.
+- `www.arleo.eu/.well-known/agent-skills/schema.json` needs its own exact-match `location` (like `index.json`) because the `^~ /.well-known/agent-skills/` prefix block forces `text/markdown` for the `*.md` skill files it otherwise proxies.
 - `mcp.arleo.eu` proxies all paths to `mcp-hugo-server-go` on the Hugo VM.
 
 Do not leave backup copies of active vhosts inside the include glob used by
@@ -125,6 +127,8 @@ Reference examples live in:
 - [`docs/examples/agent-ready/static/auth.md`](examples/agent-ready/static/auth.md)
 - [`docs/examples/agent-ready/static/.well-known/oauth-protected-resource`](examples/agent-ready/static/.well-known/oauth-protected-resource)
 - [`docs/examples/agent-ready/static/.well-known/ai-catalog.json`](examples/agent-ready/static/.well-known/ai-catalog.json)
+- [`docs/examples/agent-ready/static/.well-known/agent-skills/index.json`](examples/agent-ready/static/.well-known/agent-skills/index.json)
+- [`docs/examples/agent-ready/static/.well-known/agent-skills/schema.json`](examples/agent-ready/static/.well-known/agent-skills/schema.json)
 - [`docs/examples/agent-ready/static/llms.txt`](examples/agent-ready/static/llms.txt)
 - [`docs/examples/agent-ready/static/robots.txt`](examples/agent-ready/static/robots.txt)
 
@@ -136,6 +140,7 @@ Production source paths on `hugo-vm`:
 /home/jm/hugo-site/static/.well-known/ai-catalog.json
 /home/jm/hugo-site/static/.well-known/api-catalog
 /home/jm/hugo-site/static/.well-known/agent-skills/index.json
+/home/jm/hugo-site/static/.well-known/agent-skills/schema.json
 /home/jm/hugo-site/static/.well-known/agent-skills/*.md
 /home/jm/hugo-site/static/llms.txt
 /home/jm/hugo-site/static/robots.txt
