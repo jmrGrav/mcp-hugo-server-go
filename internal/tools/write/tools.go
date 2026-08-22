@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/assets"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildstatus"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/caller"
@@ -30,7 +31,6 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
 	"gopkg.in/yaml.v3"
@@ -2135,11 +2135,11 @@ func deletePageState(hasSiteRoot, publicCleanupFailed, dbDeleteFailed bool) site
 	return state
 }
 
-// removeHeroImage best-effort removes the {slug}{admin.HeroImageSuffix} hero
+// removeHeroImage best-effort removes the {slug}{assets.HeroImageSuffix} hero
 // image admin.registerGenerateFeaturedImage (generate_hero_image) writes to
 // {hugoRoot}/static/images/, keyed only by slug rather than living inside
 // the page's own content bundle (#606). Deleting it here by re-deriving the
-// path from the shared admin.HeroImageSuffix constant — rather than
+// path from the shared assets.HeroImageSuffix constant — rather than
 // duplicating the "-featured.jpg" literal — keeps this in lockstep with
 // generate_hero_image's own path construction, so a future rename there
 // can't silently desync this cleanup logic from the code that actually
@@ -2154,7 +2154,7 @@ func deletePageState(hasSiteRoot, publicCleanupFailed, dbDeleteFailed bool) site
 // deleted; a hero image that was never generated for this slug is not an
 // error — most deleted pages won't have one.
 func removeHeroImage(hugoRoot, slug string) (bool, error) {
-	loc, err := admin.ResolveHeroImageLocation(hugoRoot, slug)
+	loc, err := assets.ResolveHeroImageLocation(hugoRoot, slug)
 	if err != nil {
 		return false, err
 	}
@@ -2171,7 +2171,7 @@ func previewGeneratedHeroAssets(hugoRoot, slug string, include bool) []deletePag
 	if !include || strings.TrimSpace(hugoRoot) == "" {
 		return nil
 	}
-	loc, err := admin.ResolveHeroImageLocation(hugoRoot, slug)
+	loc, err := assets.ResolveHeroImageLocation(hugoRoot, slug)
 	if err != nil {
 		return nil
 	}

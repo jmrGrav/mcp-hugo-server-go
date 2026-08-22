@@ -17,12 +17,12 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/db"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/gitutil"
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugoruntime"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/taxonomy"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/net/html"
 )
@@ -2358,7 +2358,7 @@ func computeResponsiveSummary(ctx context.Context, cfg config.Config, idx *site.
 		// Only resolved when needed: fixScopeFor ignores this argument
 		// entirely when pagesAtRisk == 0, and resolving it always would
 		// spend an unconditional `hugo config` exec on every clean site.
-		protection = admin.TableOverflowProtection(ctx, cfg)
+		protection = hugoruntime.TableOverflowProtection(ctx, cfg)
 	}
 	return &responsiveSummaryDTO{PagesAtRisk: pagesAtRisk, FixScope: fixScopeFor(pagesAtRisk, protection)}
 }

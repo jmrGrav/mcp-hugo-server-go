@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/assets"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/buildinfo"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/fileutil"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/hugosite"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/site"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -38,7 +38,7 @@ const maxImageBytes = 10 << 20
 // literal — a single source of truth means a future rename here can't
 // silently desync the cleanup logic from the write path that produced the
 // file in the first place.
-const HeroImageSuffix = "-featured.jpg"
+const HeroImageSuffix = assets.HeroImageSuffix
 
 type generateFeaturedImageInput struct {
 	Slug     string   `json:"slug"`
@@ -103,11 +103,7 @@ type imageWriteErrorPayload struct {
 
 // HeroImageLocation is the canonical generated-hero-image location for one
 // source slug under HugoRoot's static/images tree.
-type HeroImageLocation struct {
-	AbsPath     string
-	LogicalPath string
-	Name        string
-}
+type HeroImageLocation = assets.HeroImageLocation
 
 func imageSuccessEnvelope[T any](data T) toolcontract.ToolResponse[T] {
 	return toolcontract.Success(data, toolcontract.NewMeta(buildinfo.Version, time.Now().UTC()))
@@ -138,26 +134,13 @@ func logicalHugoRootPath(hugoRoot, absPath string) string {
 // itself writes to. Exported so read/write tools can report or explicitly
 // operate on the generated file without re-deriving a second path contract.
 func ResolveHeroImageLocation(hugoRoot, slug string) (HeroImageLocation, error) {
-	imagesRoot := filepath.Join(hugoRoot, "static", "images")
-	guard, err := security.New(imagesRoot, true)
-	if err != nil {
-		return HeroImageLocation{}, err
-	}
-	target, err := guard.SafeJoin(slug + HeroImageSuffix)
-	if err != nil {
-		return HeroImageLocation{}, err
-	}
-	return HeroImageLocation{
-		AbsPath:     target,
-		LogicalPath: logicalHugoRootPath(hugoRoot, target),
-		Name:        filepath.Base(target),
-	}, nil
+	return assets.ResolveHeroImageLocation(hugoRoot, slug)
 }
 
 // NormalizeHeroImageSlug returns the canonical source-key form accepted by
 // generate_hero_image and related generated-asset cleanup code.
 func NormalizeHeroImageSlug(raw string) (string, error) {
-	return normalizeHeroImageSlug(raw)
+	return assets.NormalizeHeroImageSlug(raw)
 }
 
 // publicImagePathFromLogical rewrites a hugo_root-relative logical path
@@ -461,21 +444,7 @@ func fallbackHeroImageTitle(slug, title, prompt string) string {
 }
 
 func normalizeHeroImageSlug(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", nil
-	}
-	if strings.HasPrefix(raw, "/") {
-		if !strings.HasSuffix(raw, "/") {
-			return "", fmt.Errorf("invalid_params: slug must be either a source key like %q or a canonical public slug like %q", "posts/example", "/posts/example/")
-		}
-		raw = strings.Trim(raw, "/")
-	}
-	candidates := site.SourceSlugCandidates(raw)
-	if len(candidates) == 0 {
-		return "", fmt.Errorf("invalid_params: slug must not be empty")
-	}
-	return candidates[len(candidates)-1], nil
+	return assets.NormalizeHeroImageSlug(raw)
 }
 
 func generateViaAPI(ctx context.Context, cfg config.Config, in generateFeaturedImageInput) (*mcp.CallToolResult, generateFeaturedImageOutput, error) {

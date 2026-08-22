@@ -4,9 +4,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/assets"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 )
 
 func TestResolveDeleteAssetTargetBundleAndGenerated(t *testing.T) {
@@ -40,7 +40,7 @@ func TestResolveDeleteAssetTargetBundleAndGenerated(t *testing.T) {
 	if generated.scope != deleteAssetScopeGenerated || generated.kind != "global_static" {
 		t.Fatalf("generated target = %#v", generated)
 	}
-	if want := filepath.Join(hugoRoot, "static", "images", "posts", "demo"+admin.HeroImageSuffix); generated.filePath != want {
+	if want := filepath.Join(hugoRoot, "static", "images", "posts", "demo"+assets.HeroImageSuffix); generated.filePath != want {
 		t.Fatalf("generated.filePath = %q, want %q", generated.filePath, want)
 	}
 	if generated.logicalPath != "static/images/posts/demo-featured.jpg" {

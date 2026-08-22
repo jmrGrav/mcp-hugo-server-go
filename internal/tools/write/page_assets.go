@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jmrGrav/mcp-hugo-server-go/internal/assets"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/changeset"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/config"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/contentmodel"
@@ -23,7 +24,6 @@ import (
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/security"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/toolcontract"
 	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools"
-	"github.com/jmrGrav/mcp-hugo-server-go/internal/tools/admin"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/time/rate"
 )
@@ -652,7 +652,7 @@ func resolveDeleteAssetTarget(pg *security.PathGuard, cfg config.Config, slug, f
 		if strings.TrimSpace(cfg.HugoRoot) == "" {
 			return deleteAssetTarget{}, fmt.Errorf("not_found: generated assets are unavailable because hugo_root is not configured")
 		}
-		loc, err := admin.ResolveHeroImageLocation(cfg.HugoRoot, slug)
+		loc, err := assets.ResolveHeroImageLocation(cfg.HugoRoot, slug)
 		if err != nil {
 			return deleteAssetTarget{}, fmt.Errorf("invalid_params: path validation failed")
 		}
@@ -677,7 +677,7 @@ func generatedHeroReferenceID(slug string) string {
 	if slug == "" {
 		return ""
 	}
-	return "/images/" + slug + admin.HeroImageSuffix
+	return "/images/" + slug + assets.HeroImageSuffix
 }
 
 func deleteAssetNotFoundErr(scope, filename, slug string) error {
@@ -787,7 +787,7 @@ func registerDeletePageAsset(s *mcp.Server, pg *security.PathGuard, idx *hugosit
 			// path generate_hero_image wrote. The bundle is optional here (#872):
 			// an orphaned hero image can still be deleted even when no page
 			// bundle exists, so only wire dir/hasBundleDir when it does.
-			slug, err = admin.NormalizeHeroImageSlug(rawSlug)
+			slug, err = assets.NormalizeHeroImageSlug(rawSlug)
 			if err != nil {
 				return nil, deletePageAssetOutput{}, wrapErrWithLimiter(err)
 			}
