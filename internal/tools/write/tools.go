@@ -137,12 +137,16 @@ type updatePageInput struct {
 	// fields must be supplied together, OldStr must occur exactly once in the
 	// current Markdown body, and Body must be omitted. Pointers distinguish an
 	// omitted new_str from an explicitly empty replacement (deletion).
-	OldStr      *string  `json:"old_str,omitempty"`
-	NewStr      *string  `json:"new_str,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Categories  []string `json:"categories,omitempty"`
-	Draft       *bool    `json:"draft,omitempty"`
-	Description *string  `json:"description,omitempty"`
+	OldStr *string `json:"old_str,omitempty"`
+	NewStr *string `json:"new_str,omitempty"`
+	// ConfirmSectionIndex is required when targeting an existing Hugo section
+	// index, including the homepage. Structural pages have a larger blast
+	// radius than ordinary leaf content (#1254).
+	ConfirmSectionIndex bool     `json:"confirm_section_index,omitempty"`
+	Tags                []string `json:"tags,omitempty"`
+	Categories          []string `json:"categories,omitempty"`
+	Draft               *bool    `json:"draft,omitempty"`
+	Description         *string  `json:"description,omitempty"`
 	// FeaturedImage (#809) sets the theme's `featuredImage` frontmatter key
 	// verbatim — e.g. the path generate_hero_image's `data.path` response
 	// resolves to (typically "/images/{slug}-featured.jpg"). Without it, a
@@ -456,6 +460,9 @@ func appendLastBuildWarning(warning string) string {
 // relative path under content_root.
 func normalizeInputSlug(s string) string {
 	s = strings.TrimSpace(s)
+	if s == "/" {
+		return "/"
+	}
 	switch {
 	case strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/"):
 		return strings.Trim(s, "/")
@@ -482,9 +489,19 @@ func normalizeInputSlug(s string) string {
 func canonicalPublicSlug(sourceSlug string) string {
 	slug := strings.Trim(sourceSlug, "/")
 	if slug == "" {
+		if strings.TrimSpace(sourceSlug) == "/" {
+			return "/"
+		}
 		return ""
 	}
 	return "/" + slug + "/"
+}
+
+func sourceKeyForInputSlug(sourceSlug string) string {
+	if strings.TrimSpace(sourceSlug) == "/" {
+		return ""
+	}
+	return strings.Trim(sourceSlug, "/")
 }
 
 // reservedSlugs are Hugo-reserved content names that must never appear as a
@@ -1139,7 +1156,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		Name:  "update_page",
 		Title: "Update page",
 		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
-			"Use title/body to revise content. For a localized body edit, supply `old_str` and `new_str` instead of `body`: both are required, `old_str` must match the current Markdown body exactly once, and only that match is replaced (an empty `new_str` deletes it); zero or multiple matches fail with `invalid_params` rather than guessing (#1255). Use tags/categories/draft/description/featured_image to update front matter fields. " +
+			"Use title/body to revise content. For a localized body edit, supply `old_str` and `new_str` instead of `body`: both are required, `old_str` must match the current Markdown body exactly once, and only that match is replaced (an empty `new_str` deletes it); zero or multiple matches fail with `invalid_params` rather than guessing (#1255). Use tags/categories/draft/description/featured_image to update front matter fields. Section indexes (`_index.md`/`_index.<lang>.md`, including the homepage) require `confirm_section_index:true` and an exact `old_str`/`new_str` body patch; full-body replacement is not supported for these structural pages (#1254). " +
 			"`data.changed` (#860) is an explicit no-op signal: it is `false` when the resulting content is byte-identical to what was already on disk (the call succeeded but changed nothing) and `true` when the page was actually modified — present on both `dry_run` and real writes, so a caller never has to diff revisions itself to tell a no-op apart from a real edit. " +
 			"`featured_image` sets the theme's `featuredImage` frontmatter key to a local public path — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); sending `featured_image:\"\"` explicitly clears that frontmatter key, while omitting the field leaves it unchanged (#825, #835). " +
 			"`tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). " +
@@ -1207,11 +1224,6 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 		slog.Debug("update_page: lock_released")
 	}()
 
-	existing, ok := idx.GetBySlug(in.Slug)
-	if !ok {
-		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found"))
-	}
-
 	if _, err := pg.SafeJoin(in.Slug); err != nil {
 		slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
 		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
@@ -1222,9 +1234,24 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 		return nil, updatePageOutput{}, wrapErrWithLimiter(langErr)
 	}
 	filePath := resolvedSource.SourcePath
-	currentSource := existing
-	if p, ok := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); ok {
-		currentSource = p
+	var currentSource *hugosite.SourcePage
+	var ok bool
+	if resolvedSource.SectionIndex {
+		if !in.ConfirmSectionIndex {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: confirm_section_index:true is required to update a Hugo section index"))
+		}
+		if in.OldStr == nil || in.NewStr == nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: section indexes require an old_str/new_str body patch; full-body replacement is not supported"))
+		}
+		currentSource, ok = idx.GetByFilePath(filePath)
+	} else {
+		currentSource, ok = idx.GetBySlug(in.Slug)
+		if p, found := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); found {
+			currentSource = p
+		}
+	}
+	if !ok || currentSource == nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found"))
 	}
 
 	idemHash, cached, err := replayUpdatePage(ctx, in, lang, rt)
@@ -1271,7 +1298,7 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 	afterRevision := contentmodel.SourceRevisionBytes([]byte(content))
 	logicalRecoveryPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 	recoveryOp, err := beginSourceWriteRecovery(siteDB, filePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "update_page", in.IdempotencyKey, idemHash, map[string]any{
-		"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug,
+		"slug": canonicalPublicSlug(in.Slug), "source_key": sourceKeyForInputSlug(in.Slug),
 		"resolved_lang": resolvedSource.Lang, "resolved_source_path": logicalRecoveryPath,
 		"changed": true, "new_revision": afterRevision, "revision_kind": "content_snapshot",
 	}))
@@ -1333,7 +1360,7 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 	out := newUpdatePageOutput(updatePageData{
 		Status:                   status,
 		Slug:                     canonicalPublicSlug(in.Slug),
-		SourceKey:                in.Slug,
+		SourceKey:                sourceKeyForInputSlug(in.Slug),
 		ResolvedLang:             strPtr(resolvedSource.Lang),
 		ResolvedSourcePath:       strPtr(logicalPath),
 		Changed:                  &realChanged,
@@ -1373,8 +1400,10 @@ func validateUpdatePageInput(in updatePageInput, cfg config.Config) (string, err
 	if err != nil {
 		return "", err
 	}
-	if err := validateSlugFormat(in.Slug); err != nil {
-		return "", err
+	if in.Slug != "/" {
+		if err := validateSlugFormat(in.Slug); err != nil {
+			return "", err
+		}
 	}
 	if in.Title != "" {
 		if err := validateTitleFormat(in.Title); err != nil {
@@ -1522,7 +1551,7 @@ func buildUpdatePageDryRunOutput(in updatePageInput, cfg config.Config, lang, fi
 	}
 	bundleRevision, _ := contentmodel.BundleRevision(filepath.Dir(filePath))
 	return newUpdatePageOutput(updatePageData{
-		Status: status, Slug: canonicalPublicSlug(in.Slug), SourceKey: in.Slug,
+		Status: status, Slug: canonicalPublicSlug(in.Slug), SourceKey: sourceKeyForInputSlug(in.Slug),
 		ResolvedLang: strPtr(lang), ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, filePath)),
 		DryRun: true, Diff: simpleDiff(in.Slug+"/"+filepath.Base(filePath), string(raw), prepared.content), Changed: &changed,
 		RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -1635,6 +1664,7 @@ func replayUpdatePage(ctx context.Context, in updatePageInput, lang string, rt *
 		Body                   *string  `json:"body,omitempty"`
 		OldStr                 *string  `json:"old_str,omitempty"`
 		NewStr                 *string  `json:"new_str,omitempty"`
+		ConfirmSectionIndex    bool     `json:"confirm_section_index,omitempty"`
 		Tags                   []string `json:"tags,omitempty"`
 		Categories             []string `json:"categories,omitempty"`
 		Draft                  *bool    `json:"draft,omitempty"`
@@ -1645,7 +1675,7 @@ func replayUpdatePage(ctx context.Context, in updatePageInput, lang string, rt *
 	}{
 		Slug: in.Slug, Lang: lang, Title: in.Title, Body: in.Body, OldStr: in.OldStr, NewStr: in.NewStr,
 		Tags: in.Tags, Categories: in.Categories, Draft: in.Draft,
-		Description: in.Description, FeaturedImage: in.FeaturedImage,
+		Description: in.Description, FeaturedImage: in.FeaturedImage, ConfirmSectionIndex: in.ConfirmSectionIndex,
 		ExpectedRevision: in.ExpectedRevision, ExpectedBundleRevision: in.ExpectedBundleRevision,
 	})
 	if err != nil {
