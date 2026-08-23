@@ -115,7 +115,7 @@ new integrations.
 
 - `create_page` - Publish page
 - `create_bundle` - Create multilingual bundle (atomically creates every translation passed in; every page is validated before any file is written, so a validation failure on any one translation leaves no partial bundle on disk; see #1038)
-- `update_page` - Update page (accepts optional `expected_bundle_revision` alongside `expected_revision` to additionally reject the write if a sibling translation or bundle-local asset changed since the caller last read the bundle; omitting it is a no-op — see #857)
+- `update_page` - Update page (accepts optional `old_str`/`new_str` for an exact, unique, body-only snippet replacement instead of retransmitting the full `body`; zero or multiple matches fail closed; also accepts optional `expected_bundle_revision` alongside `expected_revision` to additionally reject the write if a sibling translation or bundle-local asset changed since the caller last read the bundle; omitting it is a no-op — see #857/#1255)
 - `delete_page` - Delete page
 - `delete_page_asset` - Delete page asset
 - `delete_bundle` - Delete multilingual bundle (atomically deletes selected translations; all revisions are checked before the first unlink, so a failure leaves the bundle unchanged)

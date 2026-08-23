@@ -126,10 +126,19 @@ type createPageData struct {
 }
 
 type updatePageInput struct {
-	Slug        string   `json:"slug"`
-	Lang        string   `json:"lang,omitempty"`
-	Title       string   `json:"title,omitempty"`
-	Body        string   `json:"body,omitempty"`
+	Slug  string `json:"slug"`
+	Lang  string `json:"lang,omitempty"`
+	Title string `json:"title,omitempty"`
+	// Body is a pointer so the handler can distinguish omission from an
+	// explicitly supplied empty string when enforcing mutual exclusion with
+	// OldStr/NewStr. The longstanding empty-body behavior remains a no-op.
+	Body *string `json:"body,omitempty"`
+	// OldStr/NewStr provide a surgical body-only replacement (#1255). Both
+	// fields must be supplied together, OldStr must occur exactly once in the
+	// current Markdown body, and Body must be omitted. Pointers distinguish an
+	// omitted new_str from an explicitly empty replacement (deletion).
+	OldStr      *string  `json:"old_str,omitempty"`
+	NewStr      *string  `json:"new_str,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
 	Categories  []string `json:"categories,omitempty"`
 	Draft       *bool    `json:"draft,omitempty"`
@@ -1130,7 +1139,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		Name:  "update_page",
 		Title: "Update page",
 		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
-			"Use title/body to revise content. Use tags/categories/draft/description/featured_image to update front matter fields. " +
+			"Use title/body to revise content. For a localized body edit, supply `old_str` and `new_str` instead of `body`: both are required, `old_str` must match the current Markdown body exactly once, and only that match is replaced (an empty `new_str` deletes it); zero or multiple matches fail with `invalid_params` rather than guessing (#1255). Use tags/categories/draft/description/featured_image to update front matter fields. " +
 			"`data.changed` (#860) is an explicit no-op signal: it is `false` when the resulting content is byte-identical to what was already on disk (the call succeeded but changed nothing) and `true` when the page was actually modified — present on both `dry_run` and real writes, so a caller never has to diff revisions itself to tell a no-op apart from a real edit. " +
 			"`featured_image` sets the theme's `featuredImage` frontmatter key to a local public path — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); sending `featured_image:\"\"` explicitly clears that frontmatter key, while omitting the field leaves it unchanged (#825, #835). " +
 			"`tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). " +
@@ -1144,7 +1153,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 			"If the page still carries `test_content: true`, attempts to set `draft: false` are rejected — the explicit test-content marker remains an ongoing publication-safety invariant while that marker is present, not just a creation-time convenience (#728). " +
 			"IMPORTANT for `normalize_taxonomy_casing`: it is scoped to the *exact* `lang` you pass on this call (or the empty-string bucket if you omit `lang`); on a bilingual site where every real page specifies `lang` explicitly, omitting `lang` here typically no-ops — the empty bucket has no existing forms to match against — so always pass `lang` explicitly when using it (#604, #677). " +
 			"Set `normalize_taxonomy_casing: true` (default off) to rewrite each submitted tag/category that only differs in casing from a single existing spelling elsewhere in the index to that existing spelling — preventing new drift instead of just letting get_site_health report it afterward (#589); rewrites are reported in `data.taxonomy_casing_normalized`, and a term left untouched because the index already has two or more conflicting spellings for it (pre-existing drift, never guessed at) is reported in `data.taxonomy_casing_ambiguous` instead. " +
-			"`body` is rejected with `invalid_params` (including on `dry_run`) if it invokes a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590). " +
+			"`body`, and the final body produced by `old_str`/`new_str`, are rejected with `invalid_params` (including on `dry_run`) if they invoke a server-configured blocked shortcode (default: `raw`, `rawhtml`, `script`, `style`) — a best-effort denylist of theme shortcodes known to render unescaped HTML/JavaScript/CSS on the public page, bypassing Hugo's own Markdown-level sanitization; not a guarantee every theme's shortcode surface is safe, and this check cannot be opted out of per call (#590, #1255). " +
 			"`rate_limit_remaining` reports the caller's remaining budget on this shared create/update/upload quota (#466); if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing.",
 		InputSchema:  tools.MustSchema[updatePageInput](),
 		OutputSchema: tools.MustSchema[updatePageOutput](),
@@ -1235,7 +1244,7 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 	if err := verifyUpdatePageGuards(in, pg, cfg, currentRevision, limiter, wrapErrWithLimiter); err != nil {
 		return nil, updatePageOutput{}, err
 	}
-	prepared, err := prepareUpdatePage(in, idx, currentSource, resolvedSource.Lang, raw)
+	prepared, err := prepareUpdatePage(in, idx, currentSource, resolvedSource.Lang, raw, cfg.BlockedShortcodes)
 	if err != nil {
 		return nil, updatePageOutput{}, wrapErrWithLimiter(err)
 	}
@@ -1280,7 +1289,7 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 	if err := recoveryOp.record(siteDB, "file_written"); err != nil {
 		slog.Warn("update_page: could not advance recovery journal after source write", "slug", in.Slug, "error", err)
 	}
-	updated, hadPublic := reconcileUpdatePageIndexes(in, currentSource, resolvedSource.Lang, filePath, content, writeTags, writeCategories, idx, rt.siteIdx)
+	updated, hadPublic := reconcileUpdatePageIndexes(in, currentSource, resolvedSource.Lang, filePath, content, prepared.effectiveBody, writeTags, writeCategories, idx, rt.siteIdx)
 	realChanged := content != string(raw)
 	status := "unchanged"
 	if realChanged {
@@ -1372,9 +1381,26 @@ func validateUpdatePageInput(in updatePageInput, cfg config.Config) (string, err
 			return "", err
 		}
 	}
-	if in.Body != "" {
-		if err := validateBodyFormat(in.Body, cfg.BlockedShortcodes); err != nil {
+	if in.Body != nil && *in.Body != "" {
+		if err := validateBodyFormat(*in.Body, cfg.BlockedShortcodes); err != nil {
 			return "", err
+		}
+	}
+	if (in.OldStr == nil) != (in.NewStr == nil) {
+		return "", fmt.Errorf("invalid_params: old_str and new_str must be supplied together")
+	}
+	if in.OldStr != nil {
+		if in.Body != nil {
+			return "", fmt.Errorf("invalid_params: body is mutually exclusive with old_str/new_str")
+		}
+		if *in.OldStr == "" {
+			return "", fmt.Errorf("invalid_params: old_str must not be empty")
+		}
+		if err := rejectUnsafeText(*in.OldStr); err != nil {
+			return "", fmt.Errorf("invalid_params: old_str %w", err)
+		}
+		if err := rejectUnsafeText(*in.NewStr); err != nil {
+			return "", fmt.Errorf("invalid_params: new_str %w", err)
 		}
 	}
 	if in.Description != nil {
@@ -1401,13 +1427,14 @@ func validateUpdatePageInput(in updatePageInput, cfg config.Config) (string, err
 
 type preparedUpdatePage struct {
 	content                    string
+	effectiveBody              *string
 	tags, categories           []string
 	normalized                 []taxonomyCasingChangeDTO
 	ambiguous                  []taxonomyCasingSkippedDTO
 	tagsDelta, categoriesDelta *taxonomyDeltaDTO
 }
 
-func prepareUpdatePage(in updatePageInput, idx *hugosite.SourceIndex, current *hugosite.SourcePage, lang string, raw []byte) (preparedUpdatePage, error) {
+func prepareUpdatePage(in updatePageInput, idx *hugosite.SourceIndex, current *hugosite.SourcePage, lang string, raw []byte, blockedShortcodes []string) (preparedUpdatePage, error) {
 	prepared := preparedUpdatePage{tags: in.Tags, categories: in.Categories}
 	if in.NormalizeTaxonomyCasing {
 		var tagChanges, categoryChanges []taxonomyCasingChangeDTO
@@ -1425,7 +1452,27 @@ func prepareUpdatePage(in updatePageInput, idx *hugosite.SourceIndex, current *h
 		delta := computeTaxonomyDelta(current.Categories, prepared.categories)
 		prepared.categoriesDelta = &delta
 	}
-	content, err := applyPageUpdates(string(raw), in.Title, in.Body, pageUpdateOpts{
+	inputContent := string(raw)
+	if in.OldStr != nil {
+		var err error
+		var patchedBody string
+		inputContent, patchedBody, err = applyBodySnippetPatch(inputContent, *in.OldStr, *in.NewStr)
+		if err != nil {
+			return preparedUpdatePage{}, err
+		}
+		if err := validateBodyFormat(patchedBody, blockedShortcodes); err != nil {
+			return preparedUpdatePage{}, err
+		}
+		bodyForIndex := strings.TrimSpace(patchedBody)
+		prepared.effectiveBody = &bodyForIndex
+	} else if in.Body != nil && *in.Body != "" {
+		prepared.effectiveBody = in.Body
+	}
+	body := ""
+	if in.Body != nil {
+		body = *in.Body
+	}
+	content, err := applyPageUpdates(inputContent, in.Title, body, pageUpdateOpts{
 		Tags: prepared.tags, Categories: prepared.categories, Draft: in.Draft,
 		Description: in.Description, FeaturedImage: in.FeaturedImage,
 	})
@@ -1439,6 +1486,32 @@ func prepareUpdatePage(in updatePageInput, idx *hugosite.SourceIndex, current *h
 	}
 	prepared.content = content
 	return prepared, nil
+}
+
+// applyBodySnippetPatch replaces oldStr only inside the Markdown body. The
+// frontmatter bytes and every non-matching body byte are preserved exactly.
+// Refusing zero or multiple matches makes the operation fail closed when the
+// caller's view is stale or the snippet is not a unique edit anchor (#1255).
+func applyBodySnippetPatch(fileContent, oldStr, newStr string) (string, string, error) {
+	if !strings.HasPrefix(fileContent, "---\n") {
+		return "", "", fmt.Errorf("parse_error: failed to locate YAML frontmatter")
+	}
+	rest := fileContent[4:]
+	end := strings.Index(rest, "\n---")
+	if end < 0 {
+		return "", "", fmt.Errorf("parse_error: failed to locate YAML frontmatter")
+	}
+	bodyStart := 4 + end + 4
+	body := fileContent[bodyStart:]
+	matches := strings.Count(body, oldStr)
+	if matches == 0 {
+		return "", "", fmt.Errorf("invalid_params: old_str does not match the current body")
+	}
+	if matches != 1 {
+		return "", "", fmt.Errorf("invalid_params: old_str must match the current body exactly once (matched %d times)", matches)
+	}
+	patchedBody := strings.Replace(body, oldStr, newStr, 1)
+	return fileContent[:bodyStart] + patchedBody, patchedBody, nil
 }
 
 func buildUpdatePageDryRunOutput(in updatePageInput, cfg config.Config, lang, filePath string, raw []byte, prepared preparedUpdatePage, limiter *rate.Limiter) updatePageOutput {
@@ -1488,14 +1561,14 @@ func verifyUpdatePageGuards(in updatePageInput, pg *security.PathGuard, cfg conf
 	return nil
 }
 
-func reconcileUpdatePageIndexes(in updatePageInput, current *hugosite.SourcePage, lang, filePath, content string, tags, categories []string, idx *hugosite.SourceIndex, siteIdx *site.Index) (hugosite.SourcePage, bool) {
+func reconcileUpdatePageIndexes(in updatePageInput, current *hugosite.SourcePage, lang, filePath, content string, effectiveBody *string, tags, categories []string, idx *hugosite.SourceIndex, siteIdx *site.Index) (hugosite.SourcePage, bool) {
 	updated := *current
 	updated.FilePath, updated.Lang = filePath, lang
 	if in.Title != "" {
 		updated.Title = in.Title
 	}
-	if in.Body != "" {
-		updated.Body = in.Body
+	if effectiveBody != nil {
+		updated.Body = *effectiveBody
 	}
 	if fm := parseFrontmatterMap([]byte(content)); fm != nil {
 		updated.FrontmatterRaw = fm
@@ -1559,7 +1632,9 @@ func replayUpdatePage(ctx context.Context, in updatePageInput, lang string, rt *
 		Slug                   string   `json:"slug"`
 		Lang                   string   `json:"lang,omitempty"`
 		Title                  string   `json:"title,omitempty"`
-		Body                   string   `json:"body,omitempty"`
+		Body                   *string  `json:"body,omitempty"`
+		OldStr                 *string  `json:"old_str,omitempty"`
+		NewStr                 *string  `json:"new_str,omitempty"`
 		Tags                   []string `json:"tags,omitempty"`
 		Categories             []string `json:"categories,omitempty"`
 		Draft                  *bool    `json:"draft,omitempty"`
@@ -1568,7 +1643,7 @@ func replayUpdatePage(ctx context.Context, in updatePageInput, lang string, rt *
 		ExpectedRevision       string   `json:"expected_revision,omitempty"`
 		ExpectedBundleRevision string   `json:"expected_bundle_revision,omitempty"`
 	}{
-		Slug: in.Slug, Lang: lang, Title: in.Title, Body: in.Body,
+		Slug: in.Slug, Lang: lang, Title: in.Title, Body: in.Body, OldStr: in.OldStr, NewStr: in.NewStr,
 		Tags: in.Tags, Categories: in.Categories, Draft: in.Draft,
 		Description: in.Description, FeaturedImage: in.FeaturedImage,
 		ExpectedRevision: in.ExpectedRevision, ExpectedBundleRevision: in.ExpectedBundleRevision,
