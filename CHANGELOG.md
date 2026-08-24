@@ -4,6 +4,25 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+## [v1.9.5] - 2026-08-24
+
+`update_page` gains a surgical, snippet-level body edit — including guarded
+support for Hugo section indexes (`_index.md`, including the homepage) for
+the first time. Two content-destroying gaps were introduced and fixed
+within this same unreleased window while building that support; **no
+released version prior to v1.9.5 was ever affected** (`v1.9.4` and earlier
+never carried the code that made either reachable).
+
+### Fix
+- **`delete_page("/")` could remove the site's entire content tree with no confirmation** (#1259 follow-up): teaching the shared slug resolver to recognize `_index.md`/homepage paths for `update_page`'s new patch support also made `delete_page` resolve the same slug — and when no root `_index.md` file exists, the delete handler's "no source file" branch runs `os.RemoveAll` on the resolved directory, which for slug `"/"` is the content root itself, with neither `expected_revision` nor `confirm_delete_of_published_page` required (both are scoped to a resolved source file existing). `delete_page` now rejects slug `"/"` outright, before any resolution or filesystem work, on both `dry_run` and a real call.
+- **`delete_bundle("/")` had the same latent gap**: it builds each language's path directly rather than through the shared resolver, so it never inherited the fix above automatically — closed with the same unconditional root-slug rejection.
+- Both gaps were caught during review of the section-index PR below, before merge, via independent reproduction (a temp-directory test that actually wiped an unrelated page and the content root) rather than static inspection; every other caller of the shared resolver in `internal/tools/write` was audited for the same pattern and confirmed already safe (`create_page`, `plan_content_change`, `rollback_change`, `create_bundle`, `plan_bundle_change`/`apply_bundle_plan`, and the asset upload/delete tools all reject a root/section-index slug through their own existing validation).
+
+### Feat
+- **`update_page` `old_str`/`new_str` surgical body patch** (#1255): an alternative to full-`body` replacement for a localized edit — `old_str` must match the current Markdown body exactly once (zero or multiple matches fail closed with `invalid_params`), and only that match is replaced; an empty `new_str` deletes it. Motivated by a real failure mode: an MCP client retransmitting an entire article body for a one-line edit risks silent truncation/corruption on the retransmit path. The blocked-shortcode check and the existing unsafe-text guard both apply to the patched result, not just to `body`, and on `dry_run` too.
+- **Guarded `update_page` support for existing Hugo section indexes** (#1254), including the homepage: targeting `_index.md`/`_index.<lang>.md` (root slug `"/"` for the homepage) now requires explicit `confirm_section_index:true` and only accepts the `old_str`/`new_str` patch form — full-`body` replacement is rejected for these structural pages, on `dry_run` too. `create_page`/`delete_page` still cannot create or delete a section index; that remains open in #1254 for a separate design pass.
+- **Regression coverage for the pre-existing `body`-field safety guard** (#1257, #1258): `create_page`/`update_page`'s ordinary `body` field was already routed through the same null-byte/bidi-override/malformed-Unicode-TAG rejection as `old_str`/`new_str` (since #1158/#1240, unrelated to this release) — this only adds end-to-end regression tests proving it, after a review pass initially (and incorrectly) suspected a gap there.
+
 ## [v1.9.4] - 2026-08-22
 
 Two threads: a BetterStack dead-man's-switch heartbeat integration for
