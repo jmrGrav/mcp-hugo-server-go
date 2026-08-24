@@ -176,6 +176,54 @@ func TestDeleteBundleRequiresRevisionBeforeUnlink(t *testing.T) {
 	}
 }
 
+// TestDeleteBundleRejectsRootSlug is the regression coverage for the
+// #1259-introduced gap where normalizeInputSlug started preserving "/"
+// instead of collapsing it to "" (needed for update_page's guarded
+// homepage support). delete_bundle builds each language's path directly as
+// dir/index.<lang>.md and never consults contentmodel.ResolvePageSource's
+// section-index awareness, so it had no signal to gate on: for slug "/",
+// dir is cfg.ContentRoot itself, and deleting every requested "language"
+// removes it outright via os.RemoveAll(dir) once no index.*.md sibling
+// remains — a real index.en.md sitting at the content root (unusual, but
+// nothing prevents it) with a caller-supplied matching revision would wipe
+// the site's entire content tree. Verifies the unrelated page and the
+// content root itself both survive the attempt.
+func TestDeleteBundleRejectsRootSlug(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.en.md"), []byte("---\ntitle: Root\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	survivor := filepath.Join(root, "posts", "hello", "index.md")
+	if err := os.MkdirAll(filepath.Dir(survivor), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(survivor, []byte("---\ntitle: Hello\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rootRevision := contentmodel.SourceRevisionBytes([]byte("---\ntitle: Root\n---\nbody\n"))
+
+	session, _, done := newTestServer(t, root)
+	defer done()
+
+	res := callTool(t, session, "delete_bundle", map[string]any{
+		"slug":               "/",
+		"languages":          []any{"en"},
+		"expected_revisions": map[string]any{"en": rootRevision},
+	})
+	if !res.IsError {
+		t.Fatalf("delete_bundle(\"/\") succeeded, want invalid_params rejection: %s", marshalContent(t, res))
+	}
+	if got := marshalContent(t, res); !strings.Contains(got, "invalid_params") {
+		t.Fatalf("error = %s, want invalid_params", got)
+	}
+	if _, err := os.Stat(survivor); err != nil {
+		t.Fatalf("unrelated page was removed or became unreadable: %v", err)
+	}
+	if entries, err := os.ReadDir(root); err != nil || len(entries) == 0 {
+		t.Fatalf("content root itself was removed: entries=%v err=%v", entries, err)
+	}
+}
+
 func TestCreateBundleIsAtomicAcrossTranslations(t *testing.T) {
 	root := t.TempDir()
 	session, _, done := newTestServer(t, root)

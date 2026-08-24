@@ -137,12 +137,16 @@ type updatePageInput struct {
 	// fields must be supplied together, OldStr must occur exactly once in the
 	// current Markdown body, and Body must be omitted. Pointers distinguish an
 	// omitted new_str from an explicitly empty replacement (deletion).
-	OldStr      *string  `json:"old_str,omitempty"`
-	NewStr      *string  `json:"new_str,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Categories  []string `json:"categories,omitempty"`
-	Draft       *bool    `json:"draft,omitempty"`
-	Description *string  `json:"description,omitempty"`
+	OldStr *string `json:"old_str,omitempty"`
+	NewStr *string `json:"new_str,omitempty"`
+	// ConfirmSectionIndex is required when targeting an existing Hugo section
+	// index, including the homepage. Structural pages have a larger blast
+	// radius than ordinary leaf content (#1254).
+	ConfirmSectionIndex bool     `json:"confirm_section_index,omitempty"`
+	Tags                []string `json:"tags,omitempty"`
+	Categories          []string `json:"categories,omitempty"`
+	Draft               *bool    `json:"draft,omitempty"`
+	Description         *string  `json:"description,omitempty"`
 	// FeaturedImage (#809) sets the theme's `featuredImage` frontmatter key
 	// verbatim — e.g. the path generate_hero_image's `data.path` response
 	// resolves to (typically "/images/{slug}-featured.jpg"). Without it, a
@@ -456,6 +460,9 @@ func appendLastBuildWarning(warning string) string {
 // relative path under content_root.
 func normalizeInputSlug(s string) string {
 	s = strings.TrimSpace(s)
+	if s == "/" {
+		return "/"
+	}
 	switch {
 	case strings.HasPrefix(s, "/") && strings.HasSuffix(s, "/"):
 		return strings.Trim(s, "/")
@@ -482,9 +489,19 @@ func normalizeInputSlug(s string) string {
 func canonicalPublicSlug(sourceSlug string) string {
 	slug := strings.Trim(sourceSlug, "/")
 	if slug == "" {
+		if strings.TrimSpace(sourceSlug) == "/" {
+			return "/"
+		}
 		return ""
 	}
 	return "/" + slug + "/"
+}
+
+func sourceKeyForInputSlug(sourceSlug string) string {
+	if strings.TrimSpace(sourceSlug) == "/" {
+		return ""
+	}
+	return strings.Trim(sourceSlug, "/")
 }
 
 // reservedSlugs are Hugo-reserved content names that must never appear as a
@@ -1139,7 +1156,7 @@ func registerUpdatePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 		Name:  "update_page",
 		Title: "Update page",
 		Description: "Update an existing Hugo content page while preserving unspecified front matter fields. " +
-			"Use title/body to revise content. For a localized body edit, supply `old_str` and `new_str` instead of `body`: both are required, `old_str` must match the current Markdown body exactly once, and only that match is replaced (an empty `new_str` deletes it); zero or multiple matches fail with `invalid_params` rather than guessing (#1255). Use tags/categories/draft/description/featured_image to update front matter fields. " +
+			"Use title/body to revise content. For a localized body edit, supply `old_str` and `new_str` instead of `body`: both are required, `old_str` must match the current Markdown body exactly once, and only that match is replaced (an empty `new_str` deletes it); zero or multiple matches fail with `invalid_params` rather than guessing (#1255). Use tags/categories/draft/description/featured_image to update front matter fields. Section indexes (`_index.md`/`_index.<lang>.md`, including the homepage) require `confirm_section_index:true` and an exact `old_str`/`new_str` body patch; full-body replacement is not supported for these structural pages (#1254). " +
 			"`data.changed` (#860) is an explicit no-op signal: it is `false` when the resulting content is byte-identical to what was already on disk (the call succeeded but changed nothing) and `true` when the page was actually modified — present on both `dry_run` and real writes, so a caller never has to diff revisions itself to tell a no-op apart from a real edit. " +
 			"`featured_image` sets the theme's `featuredImage` frontmatter key to a local public path — typically the path from a prior generate_hero_image call's `data.path` response (e.g. \"/images/{slug}-featured.jpg\"); sending `featured_image:\"\"` explicitly clears that frontmatter key, while omitting the field leaves it unchanged (#825, #835). " +
 			"`tags`/`categories` are a whole-list replacement, not an add/remove delta — but the response reports one anyway: `data.tags_delta`/`data.categories_delta` (`added`/`removed`/`unchanged`) compare the submitted list against the page's current value, on both dry_run and a real write, whenever `tags`/`categories` is included in the request at all (an empty list is a valid, explicit \"clear them all\"; omitting the key entirely leaves the field unchanged and reports no delta) (#645). " +
@@ -1207,11 +1224,6 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 		slog.Debug("update_page: lock_released")
 	}()
 
-	existing, ok := idx.GetBySlug(in.Slug)
-	if !ok {
-		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found"))
-	}
-
 	if _, err := pg.SafeJoin(in.Slug); err != nil {
 		slog.Warn("update_page: path validation failed", "slug", in.Slug, "error", err)
 		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: path validation failed"))
@@ -1222,9 +1234,24 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 		return nil, updatePageOutput{}, wrapErrWithLimiter(langErr)
 	}
 	filePath := resolvedSource.SourcePath
-	currentSource := existing
-	if p, ok := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); ok {
-		currentSource = p
+	var currentSource *hugosite.SourcePage
+	var ok bool
+	if resolvedSource.SectionIndex {
+		if !in.ConfirmSectionIndex {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: confirm_section_index:true is required to update a Hugo section index"))
+		}
+		if in.OldStr == nil || in.NewStr == nil {
+			return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: section indexes require an old_str/new_str body patch; full-body replacement is not supported"))
+		}
+		currentSource, ok = idx.GetByFilePath(filePath)
+	} else {
+		currentSource, ok = idx.GetBySlug(in.Slug)
+		if p, found := idx.GetBySlugLang(in.Slug, resolvedSource.Lang); found {
+			currentSource = p
+		}
+	}
+	if !ok || currentSource == nil {
+		return nil, updatePageOutput{}, wrapErrWithLimiter(fmt.Errorf("not_found: page not found"))
 	}
 
 	idemHash, cached, err := replayUpdatePage(ctx, in, lang, rt)
@@ -1271,7 +1298,7 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 	afterRevision := contentmodel.SourceRevisionBytes([]byte(content))
 	logicalRecoveryPath := fileutil.LogicalContentPath(cfg.ContentRoot, filePath)
 	recoveryOp, err := beginSourceWriteRecovery(siteDB, filePath, currentRevision, afterRevision, recoveryIdempotencyFor(ctx, "update_page", in.IdempotencyKey, idemHash, map[string]any{
-		"slug": canonicalPublicSlug(in.Slug), "source_key": in.Slug,
+		"slug": canonicalPublicSlug(in.Slug), "source_key": sourceKeyForInputSlug(in.Slug),
 		"resolved_lang": resolvedSource.Lang, "resolved_source_path": logicalRecoveryPath,
 		"changed": true, "new_revision": afterRevision, "revision_kind": "content_snapshot",
 	}))
@@ -1333,7 +1360,7 @@ func handleUpdatePage(ctx context.Context, in updatePageInput, pg *security.Path
 	out := newUpdatePageOutput(updatePageData{
 		Status:                   status,
 		Slug:                     canonicalPublicSlug(in.Slug),
-		SourceKey:                in.Slug,
+		SourceKey:                sourceKeyForInputSlug(in.Slug),
 		ResolvedLang:             strPtr(resolvedSource.Lang),
 		ResolvedSourcePath:       strPtr(logicalPath),
 		Changed:                  &realChanged,
@@ -1373,8 +1400,10 @@ func validateUpdatePageInput(in updatePageInput, cfg config.Config) (string, err
 	if err != nil {
 		return "", err
 	}
-	if err := validateSlugFormat(in.Slug); err != nil {
-		return "", err
+	if in.Slug != "/" {
+		if err := validateSlugFormat(in.Slug); err != nil {
+			return "", err
+		}
 	}
 	if in.Title != "" {
 		if err := validateTitleFormat(in.Title); err != nil {
@@ -1522,7 +1551,7 @@ func buildUpdatePageDryRunOutput(in updatePageInput, cfg config.Config, lang, fi
 	}
 	bundleRevision, _ := contentmodel.BundleRevision(filepath.Dir(filePath))
 	return newUpdatePageOutput(updatePageData{
-		Status: status, Slug: canonicalPublicSlug(in.Slug), SourceKey: in.Slug,
+		Status: status, Slug: canonicalPublicSlug(in.Slug), SourceKey: sourceKeyForInputSlug(in.Slug),
 		ResolvedLang: strPtr(lang), ResolvedSourcePath: strPtr(fileutil.LogicalContentPath(cfg.ContentRoot, filePath)),
 		DryRun: true, Diff: simpleDiff(in.Slug+"/"+filepath.Base(filePath), string(raw), prepared.content), Changed: &changed,
 		RateLimit:                ptrRateLimitBucket(newRateLimitBucket(limiter, cfg.RateLimit.CreateUpdatePerMin, rateLimitScopeCreateUpdateUpload, time.Now().UTC())),
@@ -1635,6 +1664,7 @@ func replayUpdatePage(ctx context.Context, in updatePageInput, lang string, rt *
 		Body                   *string  `json:"body,omitempty"`
 		OldStr                 *string  `json:"old_str,omitempty"`
 		NewStr                 *string  `json:"new_str,omitempty"`
+		ConfirmSectionIndex    bool     `json:"confirm_section_index,omitempty"`
 		Tags                   []string `json:"tags,omitempty"`
 		Categories             []string `json:"categories,omitempty"`
 		Draft                  *bool    `json:"draft,omitempty"`
@@ -1645,7 +1675,7 @@ func replayUpdatePage(ctx context.Context, in updatePageInput, lang string, rt *
 	}{
 		Slug: in.Slug, Lang: lang, Title: in.Title, Body: in.Body, OldStr: in.OldStr, NewStr: in.NewStr,
 		Tags: in.Tags, Categories: in.Categories, Draft: in.Draft,
-		Description: in.Description, FeaturedImage: in.FeaturedImage,
+		Description: in.Description, FeaturedImage: in.FeaturedImage, ConfirmSectionIndex: in.ConfirmSectionIndex,
 		ExpectedRevision: in.ExpectedRevision, ExpectedBundleRevision: in.ExpectedBundleRevision,
 	})
 	if err != nil {
@@ -1666,7 +1696,7 @@ func registerDeletePageTool(s *mcp.Server, pg *security.PathGuard, idx *hugosite
 	mcp.AddTool(s, &mcp.Tool{
 		Name:         "delete_page",
 		Title:        "Delete page",
-		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. Optional `owner` is advisory metadata only: it can be echoed into disposable test-content frontmatter via create_page's `test_content: {owner}` and later used for filtering or audit correlation, but delete_page never derives identity, authorization, or quota treatment from that string. On a deployment with `require_delete_confirmation:true` configured (off by default), a non-dry-run delete of a real page (one with a source file that is not marked `test_content`) additionally requires `confirm_delete_of_published_page:true`, on top of `expected_revision` — the revision requirement forces a prior read, this forces a distinct, named destructive-intent decision; the response is `invalid_params` if omitted. Self-declared and unverifiable, like `create_change_set`'s `declared_untrusted_derivation`: the server cannot confirm a human approved anything, only that the caller explicitly asserted intent. A `test_content` page, or one with no source file, is exempt regardless of this setting.",
+		Description:  "Delete a Hugo content page. This is destructive and rate limited to 5 deletions per minute. IMPORTANT for bilingual/multilingual bundles (index.fr.md + index.en.md under the same slug): pass `lang` to delete exactly that translation; omitting `lang` on a bundle with more than one language file fails with `ambiguous_language` rather than guessing (#682). Only the resolved language's source file is removed — the bundle directory, any shared assets, and other translations are left untouched unless the deleted language was the last one remaining, in which case the whole bundle is removed. On real execution, `data.bundle_fully_removed` reports which of those happened. On `dry_run:true`, the predictive field is instead `data.bundle_will_be_fully_removed`, so callers do not have to special-case the meaning of the real-execution field. `dry_run:true` also previews backlinks and, when the whole bundle would be removed, any generated hero image under `data.generated_assets` so agents can see global static cleanup impact before committing. Deleting the last (or only) language of a bundle removes public output/derived-index/DB entries too; deleting one of several surviving languages leaves public output untouched (surfaced as a warning) since reconciling it needs a rebuild. Non-dry-run calls require `expected_revision`, the `revision` value from a prior read of this page (e.g. get_page), unless the page has no source file to protect; a stale value fails with `revision_conflict`, telling the agent to re-read and replan. Callers may provide `idempotency_key` to safely replay the exact same non-dry-run delete after a timeout or uncertain delivery. Successful non-dry-run responses include a `state` object that tells agents whether source, public output, and derived indexes were all removed cleanly. `rate_limit_remaining` reports the caller's remaining delete budget (#466), separate from create_page/update_page/upload_page_asset's shared quota; if exceeded, the error's `resolution.retry_after_seconds` gives a concrete wait time instead of forcing you to guess a safe pacing. Optional `owner` is advisory metadata only: it can be echoed into disposable test-content frontmatter via create_page's `test_content: {owner}` and later used for filtering or audit correlation, but delete_page never derives identity, authorization, or quota treatment from that string. On a deployment with `require_delete_confirmation:true` configured (off by default), a non-dry-run delete of a real page (one with a source file that is not marked `test_content`) additionally requires `confirm_delete_of_published_page:true`, on top of `expected_revision` — the revision requirement forces a prior read, this forces a distinct, named destructive-intent decision; the response is `invalid_params` if omitted. Self-declared and unverifiable, like `create_change_set`'s `declared_untrusted_derivation`: the server cannot confirm a human approved anything, only that the caller explicitly asserted intent. A `test_content` page, or one with no source file, is exempt regardless of this setting. delete_page cannot delete a Hugo section index (`_index.md`/`_index.<lang>.md`, including the homepage via slug `\"/\"`): these are structural pages, not creatable/deletable content, and every such request fails with `invalid_params` on both `dry_run` and a real call (#1254, #1259).",
 		InputSchema:  tools.MustSchema[deletePageInput](),
 		OutputSchema: tools.MustSchema[deletePageOutput](),
 		Annotations: &mcp.ToolAnnotations{
@@ -1695,6 +1725,26 @@ func handleDeletePage(ctx context.Context, in deletePageInput, pg *security.Path
 			toolcontract.WithRootFields(wrapErr(err), rateLimitRootFields(limiter)),
 			rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
 		)
+	}
+	// #1254/#1259 taught normalizeInputSlug to preserve "/" instead of
+	// collapsing it to "" (needed so update_page can target the homepage).
+	// Before that change, slug "/" always normalized to "" and was rejected
+	// by validateDeletePageInput's empty-slug check below, so delete_page
+	// could never reach resolution/deletion logic for the site root at all.
+	// With "/" now surviving, and with no root _index.md present,
+	// resolveDeletePageSource legitimately reports "no source file" (its
+	// documented, pre-existing behavior for any slug with no matching file),
+	// and commitDeletePageSource's "no source file" branch removes the
+	// resolved directory outright with no expected_revision/confirmation
+	// requirement (both are scoped to resolvedSource.SourcePath != ""). For
+	// every other slug that directory is one page's own bundle folder; for
+	// "/" it is cfg.ContentRoot itself — os.RemoveAll of the site's entire
+	// content tree, unconfirmed. This has to be rejected before any
+	// resolution or filesystem work happens, not folded into the
+	// SectionIndex check further down (that check never fires here, since
+	// no file was found to resolve).
+	if in.Slug == "/" {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: delete_page cannot target the site root or any Hugo section index (including the homepage); this destructive capability is intentionally not supported"))
 	}
 	validatedLang, mode, err := validateDeletePageInput(in)
 	if err != nil {
@@ -1770,6 +1820,22 @@ func handleDeletePage(ctx context.Context, in deletePageInput, pg *security.Path
 	resolvedSource, err := resolveDeletePageSource(in.Slug, validatedLang, cfg.ContentRoot)
 	if err != nil {
 		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
+	}
+
+	// #1254/#1259 taught contentmodel.ResolvePageSource to resolve Hugo
+	// section indexes (_index.md/_index.<lang>.md, including the root
+	// homepage via slug "/") for update_page's guarded patch support. That
+	// resolver is shared with delete_page, so without this check the same
+	// change would silently let delete_page target and remove a section
+	// index — including the homepage, the single highest-blast-radius file
+	// on the site — behind nothing but the ordinary
+	// confirm_delete_of_published_page gate any leaf page already accepts.
+	// delete_page has no lifecycle/confirmation design for structural pages
+	// (per #1259's own stated scope), so this stays a hard reject rather
+	// than a softer guard, and applies before dry_run too so a caller can't
+	// even preview what deleting a section index would look like.
+	if resolvedSource.SectionIndex {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: delete_page cannot delete a Hugo section index (including the homepage); this destructive capability is intentionally not supported"))
 	}
 
 	// dry_run: return page content + backlinks that would break, without touching disk (#267).

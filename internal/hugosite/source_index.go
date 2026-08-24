@@ -145,6 +145,22 @@ func (idx *SourceIndex) GetBySlugLang(slug, lang string) (*SourcePage, bool) {
 	return &p, true
 }
 
+// GetByFilePath returns the indexed source page for an exact on-disk path.
+// Section indexes use their containing section as their source key in the
+// resolver, while SlugFromRel intentionally retains the historical `_index`
+// basename, so write-side resolution needs this path-based bridge.
+func (idx *SourceIndex) GetByFilePath(path string) (*SourcePage, bool) {
+	if idx == nil {
+		return nil, false
+	}
+	for i := range idx.pages {
+		if idx.pages[i].FilePath == path {
+			return &idx.pages[i], true
+		}
+	}
+	return nil, false
+}
+
 func (idx *SourceIndex) GetDefaultBySlug(slug string) (*SourcePage, bool) {
 	if idx == nil {
 		return nil, false

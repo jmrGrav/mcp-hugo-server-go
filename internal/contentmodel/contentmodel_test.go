@@ -60,6 +60,40 @@ func TestResolvePageSourceBundleExplicitLang(t *testing.T) {
 	}
 }
 
+func TestResolvePageSourceSectionIndexAndHomepage(t *testing.T) {
+	root := t.TempDir()
+	for _, rel := range []string{"_index.en.md", "posts/_index.fr.md", "posts/_index.en.md"} {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(full, []byte("---\ntitle: Section\n---\nbody\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+	}
+	if _, err := ResolvePageSource("posts", "", root); err == nil || !strings.Contains(err.Error(), "ambiguous_language") {
+		t.Fatalf("ResolvePageSource(posts without lang) error = %v, want ambiguous_language", err)
+	}
+
+	tests := []struct {
+		name, slug, lang, wantSlug, wantPath string
+	}{
+		{"homepage", "/", "en", "", filepath.Join(root, "_index.en.md")},
+		{"nested section", "posts", "fr", "posts", filepath.Join(root, "posts", "_index.fr.md")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolvePageSource(tc.slug, tc.lang, root)
+			if err != nil {
+				t.Fatalf("ResolvePageSource() error = %v", err)
+			}
+			if got.Slug != tc.wantSlug || got.SourcePath != tc.wantPath || !got.SectionIndex {
+				t.Fatalf("ResolvePageSource() = %#v, want slug=%q path=%q section_index", got, tc.wantSlug, tc.wantPath)
+			}
+		})
+	}
+}
+
 func TestResolvePageSourceAmbiguousDefaultAndLocalized(t *testing.T) {
 	root := t.TempDir()
 	for _, rel := range []string{

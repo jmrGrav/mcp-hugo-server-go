@@ -34,7 +34,8 @@ type PageIdentity struct {
 // ResolvedSource identifies the concrete source file selected for a slug/lang
 // lookup under a Hugo content root.
 type ResolvedSource struct {
-	Slug       string `json:"slug"`
-	Lang       string `json:"lang"`
-	SourcePath string `json:"source_path"`
+	Slug         string `json:"slug"`
+	Lang         string `json:"lang"`
+	SourcePath   string `json:"source_path"`
+	SectionIndex bool   `json:"section_index,omitempty"`
 }

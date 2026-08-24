@@ -9,27 +9,29 @@ import (
 )
 
 // ResolvePageSource resolves slug/lang to a concrete Markdown source file under
-// contentDir. It supports both leaf pages (`slug.md`, `slug.<lang>.md`) and
-// bundle pages (`slug/index.md`, `slug/index.<lang>.md`).
+// contentDir. It supports leaf pages, branch bundles, and section indexes
+// (`_index.md`/`_index.<lang>.md`, including the root homepage).
 func ResolvePageSource(slug, lang, contentDir string) (ResolvedSource, error) {
 	rawSlug := slug
+	rootSection := strings.TrimSpace(rawSlug) != "" && strings.Trim(rawSlug, "/") == ""
 	slug = normalizeSlug(slug)
 	if strings.TrimSpace(rawSlug) == "" {
 		return ResolvedSource{}, fmt.Errorf("slug_not_found: slug must not be empty")
 	}
-	if slug == "" {
+	if slug == "" && !rootSection {
 		return ResolvedSource{}, fmt.Errorf("invalid_slug: slug must stay under the content root")
 	}
 	lang = strings.TrimSpace(lang)
 
 	if lang != "" {
 		candidates := []candidate{
+			{path: filepath.Join(contentDir, slug, "_index."+lang+".md"), lang: lang, sectionIndex: true},
 			{path: filepath.Join(contentDir, slug, "index."+lang+".md"), lang: lang},
 			{path: filepath.Join(contentDir, slug+"."+lang+".md"), lang: lang},
 		}
 		for _, c := range candidates {
 			if fileExists(c.path) {
-				return ResolvedSource{Slug: slug, Lang: c.lang, SourcePath: c.path}, nil
+				return ResolvedSource{Slug: slug, Lang: c.lang, SourcePath: c.path, SectionIndex: c.sectionIndex}, nil
 			}
 		}
 		return ResolvedSource{}, fmt.Errorf("source_file_not_found: no source file found for slug %q and lang %q", slug, lang)
@@ -46,21 +48,24 @@ func ResolvePageSource(slug, lang, contentDir string) (ResolvedSource, error) {
 		}
 		return ResolvedSource{}, fmt.Errorf("ambiguous_language: page %q has multiple language files; specify lang (available: %s)", slug, strings.Join(langs, ", "))
 	}
-	return ResolvedSource{Slug: slug, Lang: matches[0].lang, SourcePath: matches[0].path}, nil
+	return ResolvedSource{Slug: slug, Lang: matches[0].lang, SourcePath: matches[0].path, SectionIndex: matches[0].sectionIndex}, nil
 }
 
 type candidate struct {
-	path string
-	lang string
+	path         string
+	lang         string
+	sectionIndex bool
 }
 
 func collectCandidates(slug, contentDir string) []candidate {
 	candidates := []candidate{
+		{path: filepath.Join(contentDir, slug, "_index.md"), sectionIndex: true},
 		{path: filepath.Join(contentDir, slug+".md")},
 		{path: filepath.Join(contentDir, slug, "index.md")},
 	}
 
 	langGlobs := []string{
+		filepath.Join(contentDir, slug, "_index.*.md"),
 		filepath.Join(contentDir, slug+".*.md"),
 		filepath.Join(contentDir, slug, "index.*.md"),
 	}
@@ -74,7 +79,7 @@ func collectCandidates(slug, contentDir string) []candidate {
 			if strings.HasSuffix(match, "index.md") {
 				continue
 			}
-			candidates = append(candidates, candidate{path: match, lang: extractLang(match)})
+			candidates = append(candidates, candidate{path: match, lang: extractLang(match), sectionIndex: strings.HasPrefix(filepath.Base(match), "_index.")})
 		}
 	}
 
