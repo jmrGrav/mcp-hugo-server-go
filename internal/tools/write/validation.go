@@ -49,6 +49,25 @@ func validateSlugFormat(slug string) error {
 	return nil
 }
 
+// rejectRootSlug rejects slug "/" for tool, a destructive write tool with no
+// confirmation/lifecycle design for the site's structural root page.
+// normalizeInputSlug started preserving "/" instead of collapsing it to ""
+// (#1254/#1259, needed only so update_page can offer guarded section-index
+// support) — every *other* mutating tool that builds a filesystem path from
+// the slug must reject "/" explicitly, since nothing else stops it from
+// resolving to cfg.ContentRoot itself. Two independent handlers
+// (delete_page, delete_bundle) each grew their own copy of this exact check
+// during #1259's review after both were found to still reach
+// os.RemoveAll(cfg.ContentRoot) for slug "/" despite looking unrelated to
+// each other; sharing one implementation means the next such handler gets
+// this by calling it, not by an independent audit finding the gap again.
+func rejectRootSlug(tool, slug string) error {
+	if slug != "/" {
+		return nil
+	}
+	return fmt.Errorf("invalid_params: %s cannot target the site root; this destructive capability is intentionally not supported", tool)
+}
+
 func validateTitleFormat(title string) error {
 	if err := rejectUnsafeText(title); err != nil {
 		return fmt.Errorf("invalid_params: title %w", err)

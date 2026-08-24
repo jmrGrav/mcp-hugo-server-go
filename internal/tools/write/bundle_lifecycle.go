@@ -402,24 +402,19 @@ func handleDeleteBundle(ctx context.Context, in deleteBundleInput, pg *security.
 	wrap := func(e error) error {
 		return toolcontract.WithRequestContext(e, toolcontract.RequestContext{Slug: in.Slug})
 	}
-	// #1254/#1259 taught normalizeInputSlug to preserve "/" instead of
-	// collapsing it to "" (needed so update_page can target the homepage).
-	// Before that change, slug "/" always normalized to "" and was caught
-	// by the empty-slug check right below, so delete_bundle could never
-	// reach dir/language resolution for the site root. This function
-	// doesn't use contentmodel.ResolvePageSource's section-index awareness
-	// at all — it builds each language's path directly as
-	// dir/index.<lang>.md via bundleLangFile — so it has no matching
+	// This function doesn't use contentmodel.ResolvePageSource's
+	// section-index awareness at all — it builds each language's path
+	// directly as dir/index.<lang>.md via bundleLangFile — so it has no
 	// SectionIndex-style signal to gate on. If a site ever has literal
 	// index.<lang>.md files sitting at its content root (unusual, but
 	// nothing stops it) and a caller supplies the matching
 	// expected_revisions, deleting every requested language empties dir
 	// and then removes it outright via os.RemoveAll(dir) further down —
 	// for slug "/", dir is cfg.ContentRoot itself, i.e. the site's entire
-	// content tree. Reject the root slug outright rather than rely on that
-	// combination never occurring.
-	if in.Slug == "/" {
-		return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: delete_bundle cannot target the site root; this destructive capability is intentionally not supported"))
+	// content tree. rejectRootSlug closes this before any of that resolution
+	// runs.
+	if err := rejectRootSlug("delete_bundle", in.Slug); err != nil {
+		return nil, bundleLifecycleOutput{}, wrap(err)
 	}
 	if in.Slug == "" {
 		return nil, bundleLifecycleOutput{}, wrap(fmt.Errorf("invalid_params: slug must not be empty"))
