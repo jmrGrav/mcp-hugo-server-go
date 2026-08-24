@@ -22,15 +22,16 @@ import (
 // validateBundleSlug guard).
 //
 // This test asserts the invariant structurally, once, for every mutating
-// write tool: slug "/" must be rejected by every one of them except
-// update_page (#1254) and list_page_snapshots. list_page_snapshots is
-// ReadOnlyHint:true/DestructiveHint:false — it only lists rollback
-// snapshots for whatever path the slug resolves to, so resolving "/"
-// carries none of the risk this test otherwise guards against; forcing it
-// to reject "/" would invent an inconsistency rather than fix a real gap.
-// A future change to the shared resolver that reopens this bug class for
-// any handler — new or existing — fails this test instead of depending on
-// a human catching it in review again.
+// write tool: slug "/" must be rejected — with the exact error code that
+// tool's own guard actually produces (see wantCode below) — by every one
+// of them except update_page (#1254) and list_page_snapshots.
+// list_page_snapshots is ReadOnlyHint:true/DestructiveHint:false — it only
+// lists rollback snapshots for whatever path the slug resolves to, so
+// resolving "/" carries none of the risk this test otherwise guards
+// against; forcing it to reject "/" would invent an inconsistency rather
+// than fix a real gap. A future change to the shared resolver that reopens
+// this bug class for any handler — new or existing — fails this test
+// instead of depending on a human catching it in review again.
 func TestWriteToolsRejectRootSlugExceptUpdatePage(t *testing.T) {
 	contentRoot := t.TempDir()
 	if err := os.WriteFile(filepath.Join(contentRoot, "_index.en.md"), []byte("---\ntitle: Home\ndraft: false\n---\n\nunique home body\n"), 0o644); err != nil {
@@ -47,18 +48,26 @@ func TestWriteToolsRejectRootSlugExceptUpdatePage(t *testing.T) {
 	cases := []struct {
 		tool string
 		args map[string]any
+		// wantCode is the exact structured error code every one of these
+		// rejections must carry. Most reject via validateSlugFormat/
+		// rejectRootSlug's invalid_params. The three asset tools instead
+		// reject via validateBundleSlug's not_found: "/" never resolves to
+		// an existing indexed bundle, so they fail eligibility before any
+		// slug-format check runs — a different code path, but the same
+		// hard guarantee (never uploads/deletes anything for slug "/").
+		wantCode string
 	}{
-		{"create_page", map[string]any{"slug": "/", "title": "Root", "body": "body", "tags": []any{}, "categories": []any{}, "dry_run": true}},
-		{"delete_page", map[string]any{"slug": "/", "dry_run": true}},
-		{"delete_bundle", map[string]any{"slug": "/", "languages": []any{"en"}, "expected_revisions": map[string]any{"en": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}, "dry_run": true}},
-		{"create_bundle", map[string]any{"slug": "/", "pages": []any{map[string]any{"lang": "en", "title": "Root", "body": "body"}}, "dry_run": true}},
-		{"plan_content_change", map[string]any{"slug": "/", "operations": []any{}}},
-		{"rollback_change", map[string]any{"slug": "/", "to_revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "dry_run": true}},
-		{"plan_bundle_change", map[string]any{"slug": "/", "translations": []any{}}},
-		{"rollback_bundle", map[string]any{"slug": "/", "to_bundle_revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "dry_run": true}},
-		{"begin_asset_upload", map[string]any{"slug": "/", "filename": "test.png", "size_bytes": 10}},
-		{"upload_page_asset", map[string]any{"slug": "/", "filename": "test.png", "content_base64": "AAAA", "dry_run": true}},
-		{"delete_page_asset", map[string]any{"slug": "/", "filename": "test.png", "dry_run": true}},
+		{"create_page", map[string]any{"slug": "/", "title": "Root", "body": "body", "tags": []any{}, "categories": []any{}, "dry_run": true}, "invalid_params"},
+		{"delete_page", map[string]any{"slug": "/", "dry_run": true}, "invalid_params"},
+		{"delete_bundle", map[string]any{"slug": "/", "languages": []any{"en"}, "expected_revisions": map[string]any{"en": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}, "dry_run": true}, "invalid_params"},
+		{"create_bundle", map[string]any{"slug": "/", "pages": []any{map[string]any{"lang": "en", "title": "Root", "body": "body"}}, "dry_run": true}, "invalid_params"},
+		{"plan_content_change", map[string]any{"slug": "/", "operations": []any{}}, "invalid_params"},
+		{"rollback_change", map[string]any{"slug": "/", "to_revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "dry_run": true}, "invalid_params"},
+		{"plan_bundle_change", map[string]any{"slug": "/", "translations": []any{}}, "invalid_params"},
+		{"rollback_bundle", map[string]any{"slug": "/", "to_bundle_revision": "sha256:0000000000000000000000000000000000000000000000000000000000000000", "dry_run": true}, "invalid_params"},
+		{"begin_asset_upload", map[string]any{"slug": "/", "filename": "test.png", "size_bytes": 10}, "not_found"},
+		{"upload_page_asset", map[string]any{"slug": "/", "filename": "test.png", "content_base64": "AAAA", "dry_run": true}, "not_found"},
+		{"delete_page_asset", map[string]any{"slug": "/", "filename": "test.png", "dry_run": true}, "not_found"},
 	}
 
 	for _, tc := range cases {
@@ -68,6 +77,9 @@ func TestWriteToolsRejectRootSlugExceptUpdatePage(t *testing.T) {
 			res := callTool(t, session, tc.tool, tc.args)
 			if !res.IsError {
 				t.Fatalf("%s(slug=\"/\") succeeded, want rejection: %s", tc.tool, marshalContent(t, res))
+			}
+			if code, _ := firstStructuredErrorCodeAndField(t, res); code != tc.wantCode {
+				t.Fatalf("%s(slug=\"/\") error code = %q, want %q: %s", tc.tool, code, tc.wantCode, marshalContent(t, res))
 			}
 		})
 	}
