@@ -75,3 +75,42 @@ func TestDeletePageRejectsSectionIndex(t *testing.T) {
 		})
 	}
 }
+
+// TestDeletePageRootSlugRejectedEvenWithNoHomepageFile is the regression
+// coverage for the more severe variant of the same #1259 gap: when slug "/"
+// resolves to no file at all (no root _index.md), delete_page's "no source
+// file" branch removed the *resolved directory* outright via
+// os.RemoveAll(dir) with neither expected_revision nor
+// confirm_delete_of_published_page required (both are scoped to
+// resolvedSource.SourcePath != ""). For every other slug that directory is
+// one page's own bundle folder; for "/" it is cfg.ContentRoot itself — the
+// site's entire content tree, unrelated pages included. Reproduced before
+// fixing: an ordinary page survived on disk right up until this call wiped
+// it along with everything else.
+func TestDeletePageRootSlugRejectedEvenWithNoHomepageFile(t *testing.T) {
+	contentRoot := t.TempDir()
+	survivor := filepath.Join(contentRoot, "posts", "hello", "index.md")
+	if err := os.MkdirAll(filepath.Dir(survivor), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(survivor, []byte("---\ntitle: Hello\n---\nbody\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, _, done := newTestServer(t, contentRoot)
+	defer done()
+
+	res := callTool(t, session, "delete_page", map[string]any{"slug": "/"})
+	if !res.IsError {
+		t.Fatalf("delete_page(\"/\") with no root _index.md succeeded, want invalid_params rejection: %s", marshalContent(t, res))
+	}
+	if code, _ := firstStructuredErrorCodeAndField(t, res); code != "invalid_params" {
+		t.Fatalf("error code = %q, want invalid_params", code)
+	}
+	if _, err := os.Stat(survivor); err != nil {
+		t.Fatalf("unrelated page was removed or became unreadable: %v", err)
+	}
+	if entries, err := os.ReadDir(contentRoot); err != nil || len(entries) == 0 {
+		t.Fatalf("content root itself was removed: entries=%v err=%v", entries, err)
+	}
+}

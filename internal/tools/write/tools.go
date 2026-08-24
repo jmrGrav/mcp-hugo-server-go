@@ -1726,6 +1726,26 @@ func handleDeletePage(ctx context.Context, in deletePageInput, pg *security.Path
 			rateLimitDataFields(limiter, cfg.RateLimit.DestructivePerMin, rateLimitScopeDestructive, time.Now().UTC()),
 		)
 	}
+	// #1254/#1259 taught normalizeInputSlug to preserve "/" instead of
+	// collapsing it to "" (needed so update_page can target the homepage).
+	// Before that change, slug "/" always normalized to "" and was rejected
+	// by validateDeletePageInput's empty-slug check below, so delete_page
+	// could never reach resolution/deletion logic for the site root at all.
+	// With "/" now surviving, and with no root _index.md present,
+	// resolveDeletePageSource legitimately reports "no source file" (its
+	// documented, pre-existing behavior for any slug with no matching file),
+	// and commitDeletePageSource's "no source file" branch removes the
+	// resolved directory outright with no expected_revision/confirmation
+	// requirement (both are scoped to resolvedSource.SourcePath != ""). For
+	// every other slug that directory is one page's own bundle folder; for
+	// "/" it is cfg.ContentRoot itself — os.RemoveAll of the site's entire
+	// content tree, unconfirmed. This has to be rejected before any
+	// resolution or filesystem work happens, not folded into the
+	// SectionIndex check further down (that check never fires here, since
+	// no file was found to resolve).
+	if in.Slug == "/" {
+		return nil, deletePageOutput{}, wrapErrWithLimiter(fmt.Errorf("invalid_params: delete_page cannot target the site root or any Hugo section index (including the homepage); this destructive capability is intentionally not supported"))
+	}
 	validatedLang, mode, err := validateDeletePageInput(in)
 	if err != nil {
 		return nil, deletePageOutput{}, wrapErrWithLimiter(err)
